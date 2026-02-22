@@ -27,7 +27,8 @@ ADDR="localhost:50051"
 # List all posts (no filters)
 find_posts() {
 grpcurl -plaintext -d '{
-  "collection": "posts"
+  "collection": "posts",
+  "depth": "1"
 }' "$ADDR" crap.ContentAPI/Find
 }
 
@@ -238,12 +239,40 @@ create_post_with_relations() {
   }" "$ADDR" crap.ContentAPI/Create
 }
 
-# Find a post by ID (returns hydrated relationship and array data)
+# Find a post by ID (returns hydrated relationship and array data, depth=1 default)
 find_post_hydrated() {
   local id="${1:?Usage: find_post_hydrated <id>}"
   grpcurl -plaintext -d "{
     \"collection\": \"posts\",
     \"id\": \"$id\"
+  }" "$ADDR" crap.ContentAPI/FindByID
+}
+
+# Find posts with depth=1 (populate immediate relationships)
+find_posts_depth() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "depth": 1
+}' "$ADDR" crap.ContentAPI/Find
+}
+
+# Find a post by ID with depth=2 (populate nested relationships)
+find_post_depth2() {
+  local id="${1:?Usage: find_post_depth2 <id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"id\": \"$id\",
+    \"depth\": 2
+  }" "$ADDR" crap.ContentAPI/FindByID
+}
+
+# Find a post by ID with depth=0 (IDs only, no population)
+find_post_depth0() {
+  local id="${1:?Usage: find_post_depth0 <id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"id\": \"$id\",
+    \"depth\": 0
   }" "$ADDR" crap.ContentAPI/FindByID
 }
 
@@ -379,6 +408,26 @@ delete_post_authed() {
     \"collection\": \"posts\",
     \"id\": \"$id\"
   }" "$ADDR" crap.ContentAPI/Delete
+}
+
+# ── Schema Discovery ─────────────────────────────────────────
+
+# List all collections and globals (lightweight overview)
+list_collections() {
+  grpcurl -plaintext -d '{}' "$ADDR" crap.ContentAPI/ListCollections
+}
+
+# Describe a collection's full field schema
+describe_collection() {
+  local slug="${1:?Usage: describe_collection <slug> [--global]}"
+  local is_global="false"
+  if [[ "${2:-}" == "--global" ]]; then
+    is_global="true"
+  fi
+  grpcurl -plaintext -d "{
+    \"slug\": \"$slug\",
+    \"is_global\": $is_global
+  }" "$ADDR" crap.ContentAPI/DescribeCollection
 }
 
 # ── Reflection / Discovery ────────────────────────────────────

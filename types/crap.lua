@@ -39,6 +39,7 @@ crap = {}
 --- @class crap.RelationshipConfig
 --- @field collection string   Target collection slug (required).
 --- @field has_many?  boolean  Many-to-many relationship via junction table (default: false).
+--- @field max_depth? integer  Per-field max population depth. Limits depth regardless of request-level depth.
 
 --- @class crap.SelectOption
 --- @field label string Display text in the admin UI.
@@ -203,6 +204,7 @@ crap = {}
 --- @field order_by? string                 Sort field (prefix with "-" for desc).
 --- @field limit?    integer                Max results to return.
 --- @field offset?   integer                Number of results to skip.
+--- @field depth?    integer                Population depth for relationship fields (default: 0). 0 = IDs only.
 
 --- @class crap.FindResult
 --- @field documents crap.Document[]  Matching documents.
@@ -277,12 +279,16 @@ function crap.collections.define(slug, config) end
 --- @return crap.FindResult
 function crap.collections.find(collection, query) end
 
+--- @class crap.FindByIdOptions
+--- @field depth? integer  Population depth for relationship fields (default: 0). 0 = IDs only.
+
 --- Find a single document by ID.
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string  Collection slug.
 --- @param id         string  Document ID.
+--- @param opts?      crap.FindByIdOptions  Optional options (e.g., `{ depth = 1 }`).
 --- @return crap.Document?
-function crap.collections.find_by_id(collection, id) end
+function crap.collections.find_by_id(collection, id, opts) end
 
 --- Create a new document.
 --- Inside hooks, runs within the parent operation's transaction.

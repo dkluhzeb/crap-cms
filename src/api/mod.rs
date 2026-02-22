@@ -20,10 +20,11 @@ pub async fn start_server(
     registry: SharedRegistry,
     hook_runner: HookRunner,
     jwt_secret: String,
+    depth_config: &crate::config::DepthConfig,
 ) -> Result<()> {
     let addr = addr.parse()?;
 
-    let content_service = service::ContentService::new(pool, registry, hook_runner, jwt_secret);
+    let content_service = service::ContentService::new(pool, registry, hook_runner, jwt_secret, depth_config);
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(content::FILE_DESCRIPTOR_SET)

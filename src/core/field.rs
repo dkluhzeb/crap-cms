@@ -20,6 +20,10 @@ pub enum FieldType {
 pub struct RelationshipConfig {
     pub collection: String,
     pub has_many: bool,
+    /// Per-field max depth. If set, limits population depth for this field
+    /// regardless of the request-level depth.
+    #[serde(default)]
+    pub max_depth: Option<i32>,
 }
 
 impl FieldType {

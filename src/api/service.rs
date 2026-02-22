@@ -17,11 +17,26 @@ pub struct ContentService {
     registry: SharedRegistry,
     hook_runner: HookRunner,
     jwt_secret: String,
+    default_depth: i32,
+    max_depth: i32,
 }
 
 impl ContentService {
-    pub fn new(pool: DbPool, registry: SharedRegistry, hook_runner: HookRunner, jwt_secret: String) -> Self {
-        Self { pool, registry, hook_runner, jwt_secret }
+    pub fn new(
+        pool: DbPool,
+        registry: SharedRegistry,
+        hook_runner: HookRunner,
+        jwt_secret: String,
+        depth_config: &crate::config::DepthConfig,
+    ) -> Self {
+        Self {
+            pool,
+            registry,
+            hook_runner,
+            jwt_secret,
+            default_depth: depth_config.default_depth,
+            max_depth: depth_config.max_depth,
+        }
     }
 
     #[allow(clippy::result_large_err)]
@@ -192,6 +207,23 @@ fn prost_value_to_json(v: &prost_types::Value) -> serde_json::Value {
     }
 }
 
+fn field_def_to_proto(field: &crate::core::field::FieldDefinition) -> content::FieldInfo {
+    content::FieldInfo {
+        name: field.name.clone(),
+        r#type: field.field_type.as_str().to_string(),
+        required: field.required,
+        unique: field.unique,
+        relationship_collection: field.relationship.as_ref().map(|r| r.collection.clone()),
+        relationship_has_many: field.relationship.as_ref().map(|r| r.has_many),
+        options: field.options.iter().map(|o| content::SelectOptionInfo {
+            label: o.label.clone(),
+            value: o.value.clone(),
+        }).collect(),
+        fields: field.fields.iter().map(field_def_to_proto).collect(),
+        relationship_max_depth: field.relationship.as_ref().and_then(|r| r.max_depth),
+    }
+}
+
 #[tonic::async_trait]
 impl ContentApi for ContentService {
     async fn find(
@@ -242,12 +274,15 @@ impl ContentApi for ContentService {
         query::validate_query_fields(&def, &find_query)
             .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
+        let depth = req.depth.unwrap_or(0).max(0).min(self.max_depth);
+
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
         let hooks = def.hooks.clone();
         let def_fields = def.fields.clone();
         let fields = def_fields.clone();
         let collection = req.collection.clone();
+        let registry = self.registry.clone();
         let def_owned = def;
         let (documents, total) = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &collection, "find", HashMap::new())?;
@@ -259,6 +294,19 @@ impl ContentApi for ContentService {
                 query::hydrate_document(&conn, &collection, &def_owned, doc)?;
             }
             let docs = runner.apply_after_read_many(&hooks, &fields, &collection, "find", docs);
+            // Populate relationships if depth > 0
+            if depth > 0 {
+                let reg = registry.read()
+                    .map_err(|e| anyhow::anyhow!("Registry lock: {}", e))?;
+                let mut docs = docs;
+                for doc in &mut docs {
+                    let mut visited = std::collections::HashSet::new();
+                    query::populate_relationships(
+                        &conn, &reg, &collection, &def_owned, doc, depth, &mut visited,
+                    )?;
+                }
+                return Ok((docs, total));
+            }
             Ok::<_, anyhow::Error>((docs, total))
         }).await
             .map_err(|e| Status::internal(format!("Task error: {}", e)))?
@@ -296,6 +344,8 @@ impl ContentApi for ContentService {
             return Err(Status::permission_denied("Read access denied"));
         }
 
+        let depth = req.depth.unwrap_or(self.default_depth).max(0).min(self.max_depth);
+
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
         let hooks = def.hooks.clone();
@@ -308,6 +358,7 @@ impl ContentApi for ContentService {
             None
         };
         let def_fields = def.fields.clone();
+        let registry = self.registry.clone();
         let def_owned = def;
         let doc = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &collection, "find_by_id", HashMap::new())?;
@@ -329,7 +380,19 @@ impl ContentApi for ContentService {
                 let conn = pool.get().context("DB connection for hydration")?;
                 query::hydrate_document(&conn, &collection, &def_owned, d)?;
             }
-            let doc = doc.map(|d| runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d));
+            let mut doc = doc.map(|d| runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d));
+            // Populate relationships if depth > 0
+            if depth > 0 {
+                if let Some(ref mut d) = doc {
+                    let conn = pool.get().context("DB connection for population")?;
+                    let reg = registry.read()
+                        .map_err(|e| anyhow::anyhow!("Registry lock: {}", e))?;
+                    let mut visited = std::collections::HashSet::new();
+                    query::populate_relationships(
+                        &conn, &reg, &collection, &def_owned, d, depth, &mut visited,
+                    )?;
+                }
+            }
             Ok::<_, anyhow::Error>(doc)
         }).await
             .map_err(|e| Status::internal(format!("Task error: {}", e)))?
@@ -796,6 +859,68 @@ impl ContentApi for ContentService {
             token,
             user: Some(document_to_proto(&user, &req.collection)),
         }))
+    }
+
+    async fn list_collections(
+        &self,
+        _request: Request<content::ListCollectionsRequest>,
+    ) -> Result<Response<content::ListCollectionsResponse>, Status> {
+        let reg = self.registry.read()
+            .map_err(|e| Status::internal(format!("Registry lock poisoned: {}", e)))?;
+
+        let mut collections: Vec<content::CollectionInfo> = reg.collections.values()
+            .map(|def| content::CollectionInfo {
+                slug: def.slug.clone(),
+                singular_label: def.labels.singular.clone(),
+                plural_label: def.labels.plural.clone(),
+                timestamps: def.timestamps,
+                auth: def.is_auth_collection(),
+            })
+            .collect();
+        collections.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+        let mut globals: Vec<content::GlobalInfo> = reg.globals.values()
+            .map(|def| content::GlobalInfo {
+                slug: def.slug.clone(),
+                singular_label: def.labels.singular.clone(),
+                plural_label: def.labels.plural.clone(),
+            })
+            .collect();
+        globals.sort_by(|a, b| a.slug.cmp(&b.slug));
+
+        Ok(Response::new(content::ListCollectionsResponse {
+            collections,
+            globals,
+        }))
+    }
+
+    async fn describe_collection(
+        &self,
+        request: Request<content::DescribeCollectionRequest>,
+    ) -> Result<Response<content::DescribeCollectionResponse>, Status> {
+        let req = request.into_inner();
+
+        if req.is_global {
+            let def = self.get_global_def(&req.slug)?;
+            Ok(Response::new(content::DescribeCollectionResponse {
+                slug: def.slug.clone(),
+                singular_label: def.labels.singular.clone(),
+                plural_label: def.labels.plural.clone(),
+                timestamps: false,
+                auth: false,
+                fields: def.fields.iter().map(field_def_to_proto).collect(),
+            }))
+        } else {
+            let def = self.get_collection_def(&req.slug)?;
+            Ok(Response::new(content::DescribeCollectionResponse {
+                slug: def.slug.clone(),
+                singular_label: def.labels.singular.clone(),
+                plural_label: def.labels.plural.clone(),
+                timestamps: def.timestamps,
+                auth: def.is_auth_collection(),
+                fields: def.fields.iter().map(field_def_to_proto).collect(),
+            }))
+        }
     }
 
     async fn me(

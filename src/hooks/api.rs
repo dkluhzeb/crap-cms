@@ -424,12 +424,13 @@ fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             if let Ok(rel_tbl) = get_table(&field_tbl, "relationship") {
                 let collection = get_string(&rel_tbl, "collection").unwrap_or_default();
                 let has_many = get_bool(&rel_tbl, "has_many", false);
-                Some(crate::core::field::RelationshipConfig { collection, has_many })
+                let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
+                Some(crate::core::field::RelationshipConfig { collection, has_many, max_depth })
             } else {
                 // Legacy flat syntax: relation_to + has_many on the field itself
                 get_string(&field_tbl, "relation_to").map(|collection| {
                     let has_many = get_bool(&field_tbl, "has_many", false);
-                    crate::core::field::RelationshipConfig { collection, has_many }
+                    crate::core::field::RelationshipConfig { collection, has_many, max_depth: None }
                 })
             }
         } else {

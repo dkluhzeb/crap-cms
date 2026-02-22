@@ -1101,12 +1101,18 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry) -> Result<()> {
     let collections: mlua::Table = crap.get("collections")?;
 
     // crap.collections.find(collection, query?)
+    // query.depth (optional, default 0): populate relationship fields to this depth
     {
         let reg = registry.clone();
         let find_fn = lua.create_function(move |lua, (collection, query_table): (String, Option<mlua::Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
             // Safety: pointer is valid while TxContext is in app_data
             let conn = unsafe { &*conn_ptr };
+
+            let depth: i32 = query_table.as_ref()
+                .and_then(|qt| qt.get::<i32>("depth").ok())
+                .unwrap_or(0)
+                .min(10).max(0);
 
             let def = {
                 let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
@@ -1127,22 +1133,45 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry) -> Result<()> {
             query::validate_query_fields(&def, &find_query)
                 .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?;
 
-            let docs = query::find(conn, &collection, &def, &find_query)
+            let mut docs = query::find(conn, &collection, &def, &find_query)
                 .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?;
             let total = query::count(conn, &collection, &def, &find_query.filters)
                 .map_err(|e| mlua::Error::RuntimeError(format!("count error: {}", e)))?;
+
+            // Hydrate join table data + populate relationships
+            for doc in &mut docs {
+                query::hydrate_document(conn, &collection, &def, doc)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
+            }
+            if depth > 0 {
+                let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
+                    format!("Registry lock: {}", e)
+                ))?;
+                for doc in &mut docs {
+                    let mut visited = std::collections::HashSet::new();
+                    query::populate_relationships(
+                        conn, &r, &collection, &def, doc, depth, &mut visited,
+                    ).map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
+                }
+            }
 
             find_result_to_lua(lua, &docs, total)
         })?;
         collections.set("find", find_fn)?;
     }
 
-    // crap.collections.find_by_id(collection, id)
+    // crap.collections.find_by_id(collection, id, opts?)
+    // opts.depth (optional, default 0): populate relationship fields to this depth
     {
         let reg = registry.clone();
-        let find_by_id_fn = lua.create_function(move |lua, (collection, id): (String, String)| {
+        let find_by_id_fn = lua.create_function(move |lua, (collection, id, opts): (String, String, Option<mlua::Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
             let conn = unsafe { &*conn_ptr };
+
+            let depth: i32 = opts.as_ref()
+                .and_then(|o| o.get::<i32>("depth").ok())
+                .unwrap_or(0)
+                .min(10).max(0);
 
             let def = {
                 let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
@@ -1155,8 +1184,22 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry) -> Result<()> {
                     ))?
             };
 
-            let doc = query::find_by_id(conn, &collection, &def, &id)
+            let mut doc = query::find_by_id(conn, &collection, &def, &id)
                 .map_err(|e| mlua::Error::RuntimeError(format!("find_by_id error: {}", e)))?;
+
+            if let Some(ref mut d) = doc {
+                query::hydrate_document(conn, &collection, &def, d)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
+                if depth > 0 {
+                    let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
+                        format!("Registry lock: {}", e)
+                    ))?;
+                    let mut visited = std::collections::HashSet::new();
+                    query::populate_relationships(
+                        conn, &r, &collection, &def, d, depth, &mut visited,
+                    ).map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
+                }
+            }
 
             match doc {
                 Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

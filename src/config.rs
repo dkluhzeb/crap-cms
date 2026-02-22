@@ -10,6 +10,26 @@ pub struct CrapConfig {
     pub admin: AdminConfig,
     pub hooks: HooksConfig,
     pub auth: AuthConfig,
+    pub depth: DepthConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct DepthConfig {
+    /// Default population depth when request doesn't specify one.
+    /// Used as default for FindByID. Find defaults to 0 regardless.
+    pub default_depth: i32,
+    /// Maximum allowed depth application-wide. Prevents abuse.
+    pub max_depth: i32,
+}
+
+impl Default for DepthConfig {
+    fn default() -> Self {
+        Self {
+            default_depth: 1,
+            max_depth: 10,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

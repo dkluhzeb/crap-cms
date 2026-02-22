@@ -788,6 +788,126 @@ pub fn hydrate_document(
     Ok(())
 }
 
+/// Convert a Document into a serde_json::Value for embedding in a parent's fields.
+fn document_to_json(doc: &Document, collection: &str) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert("id".to_string(), serde_json::Value::String(doc.id.clone()));
+    map.insert("collection".to_string(), serde_json::Value::String(collection.to_string()));
+    for (k, v) in &doc.fields {
+        map.insert(k.clone(), v.clone());
+    }
+    if let Some(ref ts) = doc.created_at {
+        map.insert("created_at".to_string(), serde_json::Value::String(ts.clone()));
+    }
+    if let Some(ref ts) = doc.updated_at {
+        map.insert("updated_at".to_string(), serde_json::Value::String(ts.clone()));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Recursively populate relationship fields with full document objects.
+/// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.
+pub fn populate_relationships(
+    conn: &rusqlite::Connection,
+    registry: &crate::core::Registry,
+    collection_slug: &str,
+    def: &CollectionDefinition,
+    doc: &mut Document,
+    depth: i32,
+    visited: &mut HashSet<(String, String)>,
+) -> Result<()> {
+    if depth <= 0 {
+        return Ok(());
+    }
+
+    let visit_key = (collection_slug.to_string(), doc.id.clone());
+    if visited.contains(&visit_key) {
+        return Ok(());
+    }
+    visited.insert(visit_key);
+
+    for field in &def.fields {
+        if field.field_type != FieldType::Relationship {
+            continue;
+        }
+        let rel = match &field.relationship {
+            Some(rc) => rc,
+            None => continue,
+        };
+
+        // Field-level max_depth caps the effective depth for this field
+        let effective_depth = match rel.max_depth {
+            Some(max) if max < depth => max,
+            _ => depth,
+        };
+        if effective_depth <= 0 {
+            continue;
+        }
+
+        let rel_def = match registry.get_collection(&rel.collection) {
+            Some(d) => d.clone(),
+            None => continue,
+        };
+
+        if rel.has_many {
+            // Has-many: doc.fields[name] is already a JSON array of ID strings (from hydration)
+            let ids: Vec<String> = match doc.fields.get(&field.name) {
+                Some(serde_json::Value::Array(arr)) => {
+                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                }
+                _ => continue,
+            };
+
+            let mut populated = Vec::new();
+            for id in &ids {
+                if visited.contains(&(rel.collection.clone(), id.clone())) {
+                    // Already visited — keep as ID string
+                    populated.push(serde_json::Value::String(id.clone()));
+                    continue;
+                }
+                match find_by_id(conn, &rel.collection, &rel_def, id)? {
+                    Some(mut related_doc) => {
+                        hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc)?;
+                        populate_relationships(
+                            conn, registry, &rel.collection, &rel_def,
+                            &mut related_doc, effective_depth - 1, visited,
+                        )?;
+                        populated.push(document_to_json(&related_doc, &rel.collection));
+                    }
+                    None => {
+                        populated.push(serde_json::Value::String(id.clone()));
+                    }
+                }
+            }
+            doc.fields.insert(field.name.clone(), serde_json::Value::Array(populated));
+        } else {
+            // Has-one: doc.fields[name] is a string ID
+            let id = match doc.fields.get(&field.name) {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+                _ => continue,
+            };
+
+            if visited.contains(&(rel.collection.clone(), id.clone())) {
+                continue; // Already visited — keep as ID string
+            }
+
+            match find_by_id(conn, &rel.collection, &rel_def, &id)? {
+                Some(mut related_doc) => {
+                    hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc)?;
+                    populate_relationships(
+                        conn, registry, &rel.collection, &rel_def,
+                        &mut related_doc, effective_depth - 1, visited,
+                    )?;
+                    doc.fields.insert(field.name.clone(), document_to_json(&related_doc, &rel.collection));
+                }
+                None => {} // ID not found — keep as-is
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Save join table data for has-many relationships and arrays.
 /// Extracts relevant data from the data map and writes to join tables.
 pub fn save_join_table_data(

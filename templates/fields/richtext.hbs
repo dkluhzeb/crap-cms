@@ -2,15 +2,18 @@
   {{label}}
   {{#if required}}<span class="required">*</span>{{/if}}
 </label>
-<textarea
-  id="field-{{name}}"
-  name="{{name}}"
-  rows="16"
-  data-field-type="richtext"
-  {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
-  {{#if required}}required{{/if}}
-  {{#if readonly}}readonly{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
->{{value}}</textarea>
+<crap-richtext>
+  <textarea
+    id="field-{{name}}"
+    name="{{name}}"
+    rows="16"
+    data-field-type="richtext"
+    style="display: none"
+    {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
+    {{#if required}}required{{/if}}
+    {{#if readonly}}readonly{{/if}}
+    {{#if error}}class="form__input--error"{{/if}}
+  >{{value}}</textarea>
+</crap-richtext>
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

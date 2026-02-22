@@ -14,6 +14,8 @@ service ContentAPI {
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
   rpc Me (MeRequest) returns (MeResponse);
+  rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
+  rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
 }
 
 message FindRequest {
@@ -23,6 +25,7 @@ message FindRequest {
   optional int64 limit = 4;
   optional int64 offset = 5;
   optional string where = 6;
+  optional int32 depth = 7;
 }
 
 message FindResponse {
@@ -33,6 +36,7 @@ message FindResponse {
 message FindByIDRequest {
   string collection = 1;
   string id = 2;
+  optional int32 depth = 3;
 }
 
 message FindByIDResponse {
@@ -109,4 +113,56 @@ message Document {
   google.protobuf.Struct fields = 3;
   optional string created_at = 4;
   optional string updated_at = 5;
+}
+
+message ListCollectionsRequest {}
+
+message ListCollectionsResponse {
+  repeated CollectionInfo collections = 1;
+  repeated GlobalInfo globals = 2;
+}
+
+message CollectionInfo {
+  string slug = 1;
+  optional string singular_label = 2;
+  optional string plural_label = 3;
+  bool timestamps = 4;
+  bool auth = 5;
+}
+
+message GlobalInfo {
+  string slug = 1;
+  optional string singular_label = 2;
+  optional string plural_label = 3;
+}
+
+message DescribeCollectionRequest {
+  string slug = 1;
+  bool is_global = 2;
+}
+
+message DescribeCollectionResponse {
+  string slug = 1;
+  optional string singular_label = 2;
+  optional string plural_label = 3;
+  bool timestamps = 4;
+  bool auth = 5;
+  repeated FieldInfo fields = 6;
+}
+
+message FieldInfo {
+  string name = 1;
+  string type = 2;
+  bool required = 3;
+  bool unique = 4;
+  optional string relationship_collection = 5;
+  optional bool relationship_has_many = 6;
+  repeated SelectOptionInfo options = 7;
+  repeated FieldInfo fields = 8;
+  optional int32 relationship_max_depth = 9;
+}
+
+message SelectOptionInfo {
+  string label = 1;
+  string value = 2;
 }
