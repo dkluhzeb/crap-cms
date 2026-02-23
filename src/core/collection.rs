@@ -1,7 +1,10 @@
+//! Collection and global definition types parsed from Lua configuration files.
+
 use serde::{Deserialize, Serialize};
 use super::field::FieldDefinition;
 use super::upload::CollectionUpload;
 
+/// Lua function references for collection-level access control (read/create/update/delete).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CollectionAccess {
     #[serde(default)]
@@ -14,6 +17,7 @@ pub struct CollectionAccess {
     pub delete: Option<String>,
 }
 
+/// A custom authentication strategy (name + Lua function reference).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStrategy {
     pub name: String,
@@ -21,6 +25,7 @@ pub struct AuthStrategy {
     pub authenticate: String,
 }
 
+/// Authentication configuration for a collection (JWT, strategies, local login).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionAuth {
     pub enabled: bool,
@@ -47,6 +52,7 @@ impl Default for CollectionAuth {
     }
 }
 
+/// Human-readable singular/plural labels for the admin UI.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CollectionLabels {
     #[serde(default)]
@@ -55,6 +61,7 @@ pub struct CollectionLabels {
     pub plural: Option<String>,
 }
 
+/// Admin UI display options (title field, default sort, visibility, searchable fields).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CollectionAdmin {
     #[serde(default)]
@@ -67,6 +74,7 @@ pub struct CollectionAdmin {
     pub list_searchable_fields: Vec<String>,
 }
 
+/// Lua function references for collection-level lifecycle hooks.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CollectionHooks {
     #[serde(default)]
@@ -85,6 +93,7 @@ pub struct CollectionHooks {
     pub after_delete: Vec<String>,
 }
 
+/// Full definition of a collection, parsed from a Lua file. Maps to one SQLite table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionDefinition {
     pub slug: String,

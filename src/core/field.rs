@@ -1,5 +1,8 @@
+//! Field types and definitions. Each field maps to a column (or join table) in SQLite.
+
 use serde::{Deserialize, Serialize};
 
+/// Supported field types. Each variant maps to a SQLite column type (or join table for Array/has-many).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldType {
@@ -16,6 +19,7 @@ pub enum FieldType {
     Array,
 }
 
+/// Configuration for relationship fields (target collection, cardinality, depth cap).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationshipConfig {
     pub collection: String,
@@ -81,12 +85,14 @@ impl FieldType {
     }
 }
 
+/// A label/value pair for select field options.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SelectOption {
     pub label: String,
     pub value: String,
 }
 
+/// Admin UI display hints for a field (placeholder, description, visibility, width).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FieldAdmin {
     #[serde(default)]
@@ -101,6 +107,7 @@ pub struct FieldAdmin {
     pub width: Option<String>,
 }
 
+/// Lua function references for field-level access control (read/create/update).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FieldAccess {
     #[serde(default)]
@@ -111,6 +118,7 @@ pub struct FieldAccess {
     pub update: Option<String>,
 }
 
+/// Lua function references for field-level lifecycle hooks.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FieldHooks {
     #[serde(default)]
@@ -133,6 +141,7 @@ impl FieldHooks {
     }
 }
 
+/// Complete definition of a single field within a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDefinition {
     pub name: String,

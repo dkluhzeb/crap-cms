@@ -1,3 +1,5 @@
+//! Axum router setup, auth middleware, and admin server startup.
+
 use anyhow::Result;
 use axum::{
     Router,

@@ -1,3 +1,5 @@
+//! Dashboard handler showing collection/global cards with document counts.
+
 use axum::{
     extract::State,
     response::Html,
@@ -7,6 +9,7 @@ use axum::{
 use crate::admin::AdminState;
 use crate::core::auth::Claims;
 
+/// Render the admin dashboard with collection and global summary cards.
 pub async fn index(
     State(state): State<AdminState>,
     claims: Option<Extension<Claims>>,

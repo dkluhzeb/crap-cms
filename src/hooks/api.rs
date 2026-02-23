@@ -1,3 +1,5 @@
+//! Registers the `crap.*` Lua API namespace (collections, globals, hooks, log, util).
+
 use anyhow::{Context, Result};
 use mlua::{Lua, Table, Value, Function};
 use std::path::Path;

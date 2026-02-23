@@ -1,3 +1,5 @@
+//! Handlebars template loading with overlay (config dir overrides compiled defaults).
+
 use anyhow::{Context, Result};
 use handlebars::{Handlebars, RenderError, RenderContext, Helper, HelperDef, ScopedJson};
 use include_dir::{include_dir, Dir};

@@ -1,3 +1,5 @@
+//! Dynamic schema migration: syncs SQLite tables to match Lua collection definitions.
+
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 

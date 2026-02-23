@@ -1,3 +1,5 @@
+//! Serves uploaded files with access-control-aware caching.
+
 use axum::{
     extract::{Path, State},
     http::{StatusCode, header},
@@ -9,6 +11,7 @@ use crate::admin::server::{extract_cookie, load_auth_user};
 use crate::core::auth;
 use crate::db::query::AccessResult;
 
+/// Serve an uploaded file, checking collection read access if configured.
 pub async fn serve_upload(
     State(state): State<AdminState>,
     Path((collection_slug, filename)): Path<(String, String)>,

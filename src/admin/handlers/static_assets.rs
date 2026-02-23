@@ -1,3 +1,5 @@
+//! Static asset serving with config-dir overlay over compiled-in defaults.
+
 use axum::{
     body::Body,
     handler::HandlerWithoutStateExt,

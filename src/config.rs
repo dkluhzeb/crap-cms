@@ -1,7 +1,10 @@
+//! Configuration types loaded from `crap.toml`.
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
+/// Top-level configuration loaded from `crap.toml` in the config directory.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct CrapConfig {
@@ -14,6 +17,7 @@ pub struct CrapConfig {
     pub upload: UploadConfig,
 }
 
+/// Controls relationship population depth defaults and limits.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct DepthConfig {
@@ -33,6 +37,7 @@ impl Default for DepthConfig {
     }
 }
 
+/// Global upload settings (per-collection upload config is separate).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct UploadConfig {
@@ -48,12 +53,14 @@ impl Default for UploadConfig {
     }
 }
 
+/// Hook configuration — currently just `on_init` script references.
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct HooksConfig {
     pub on_init: Vec<String>,
 }
 
+/// JWT authentication settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AuthConfig {
@@ -73,6 +80,7 @@ impl Default for AuthConfig {
     }
 }
 
+/// Admin UI and gRPC server bind settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct ServerConfig {
@@ -81,12 +89,14 @@ pub struct ServerConfig {
     pub host: String,
 }
 
+/// SQLite database path configuration.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
     pub path: String,
 }
 
+/// Admin UI behavior settings.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct AdminConfig {

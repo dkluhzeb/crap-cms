@@ -1,3 +1,5 @@
+//! Row-to-document conversion from SQLite result sets.
+
 use rusqlite::Row;
 use crate::core::Document;
 use std::collections::HashMap;

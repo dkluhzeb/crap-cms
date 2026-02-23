@@ -1,3 +1,5 @@
+//! Pool-based read-only wrappers around `query::*` functions for convenience.
+
 use anyhow::{Context, Result};
 
 use crate::core::{CollectionDefinition, Document};

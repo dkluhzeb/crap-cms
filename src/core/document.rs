@@ -1,6 +1,9 @@
+//! Document type representing a single content record from any collection.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// A single content document with an ID, user-defined fields, and optional timestamps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     pub id: String,

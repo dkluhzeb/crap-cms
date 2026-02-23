@@ -1,3 +1,5 @@
+//! Tonic gRPC service implementing all ContentAPI RPCs.
+
 use anyhow::Context as _;
 use std::collections::{BTreeMap, HashMap};
 use tonic::{Request, Response, Status};
@@ -13,6 +15,7 @@ use crate::hooks::lifecycle::{self, HookContext, HookEvent, HookRunner};
 use super::content;
 use super::content::content_api_server::ContentApi;
 
+/// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
 pub struct ContentService {
     pool: DbPool,
     registry: SharedRegistry,
@@ -227,6 +230,7 @@ fn field_def_to_proto(field: &crate::core::field::FieldDefinition) -> content::F
 
 #[tonic::async_trait]
 impl ContentApi for ContentService {
+    /// Find documents in a collection with optional filters, sorting, and pagination.
     async fn find(
         &self,
         request: Request<content::FindRequest>,
@@ -336,6 +340,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Find a single document by ID with optional relationship population depth.
     async fn find_by_id(
         &self,
         request: Request<content::FindByIdRequest>,
@@ -427,6 +432,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Create a new document, running before/after hooks within a transaction.
     async fn create(
         &self,
         request: Request<content::CreateRequest>,
@@ -533,6 +539,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Update an existing document by ID, running before/after hooks within a transaction.
     async fn update(
         &self,
         request: Request<content::UpdateRequest>,
@@ -639,6 +646,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Delete a document by ID, running before/after delete hooks.
     async fn delete(
         &self,
         request: Request<content::DeleteRequest>,
@@ -691,6 +699,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Get the single document for a global definition.
     async fn get_global(
         &self,
         request: Request<content::GetGlobalRequest>,
@@ -731,6 +740,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Update a global's document, running hooks within a transaction.
     async fn update_global(
         &self,
         request: Request<content::UpdateGlobalRequest>,
@@ -812,6 +822,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Authenticate with email/password and return a JWT token.
     async fn login(
         &self,
         request: Request<content::LoginRequest>,
@@ -878,6 +889,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// List all registered collections and globals.
     async fn list_collections(
         &self,
         _request: Request<content::ListCollectionsRequest>,
@@ -912,6 +924,7 @@ impl ContentApi for ContentService {
         }))
     }
 
+    /// Describe a collection's schema (fields, timestamps, auth, upload).
     async fn describe_collection(
         &self,
         request: Request<content::DescribeCollectionRequest>,
@@ -943,6 +956,7 @@ impl ContentApi for ContentService {
         }
     }
 
+    /// Return the currently authenticated user from a JWT token.
     async fn me(
         &self,
         request: Request<content::MeRequest>,

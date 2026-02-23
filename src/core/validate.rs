@@ -1,3 +1,5 @@
+//! Field validation error types returned by the hook system.
+
 use std::collections::HashMap;
 use std::fmt;
 

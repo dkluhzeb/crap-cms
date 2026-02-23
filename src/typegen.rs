@@ -1,3 +1,5 @@
+//! Generates LuaLS type definition files from the registry for IDE support.
+
 use anyhow::Result;
 use std::fmt::Write;
 use std::path::{Path, PathBuf};

@@ -1,3 +1,5 @@
+//! Lua VM setup, `crap.*` API registration, and hook lifecycle management.
+
 pub mod api;
 pub mod lifecycle;
 

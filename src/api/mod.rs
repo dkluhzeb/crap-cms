@@ -1,3 +1,5 @@
+//! gRPC API server (Tonic) implementing the ContentAPI service.
+
 mod service;
 
 use anyhow::Result;
@@ -14,6 +16,7 @@ pub mod content {
         tonic::include_file_descriptor_set!("content_descriptor");
 }
 
+/// Start the gRPC server with reflection enabled.
 pub async fn start_server(
     addr: &str,
     pool: DbPool,

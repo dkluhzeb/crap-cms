@@ -1,3 +1,5 @@
+//! CLI entrypoint for Crap CMS. Parses flags, loads config, and starts the admin + gRPC servers.
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::collections::HashMap;

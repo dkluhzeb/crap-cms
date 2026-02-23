@@ -1,0 +1,87 @@
+# Transaction Access
+
+Hooks can call back into the Crap CMS CRUD API. Whether a hook has CRUD access depends on the lifecycle event.
+
+## Which Hooks Get CRUD Access?
+
+| Event | CRUD Access | Reason |
+|-------|-------------|--------|
+| `before_validate` | Yes | Runs inside the write transaction |
+| `before_change` | Yes | Runs inside the write transaction |
+| `after_change` | **No** | Fires after commit, in the background |
+| `before_read` | No | Read operations don't open a write transaction |
+| `after_read` | **No** | Fire-and-forget, no transaction |
+| `before_delete` | Yes | Runs inside the delete transaction |
+| `after_delete` | **No** | Fires after commit, in the background |
+
+This applies to all three hook levels (field, collection, registered).
+
+## Available Functions
+
+Inside hooks with CRUD access:
+
+```lua
+-- Collections
+crap.collections.find("posts", { filters = { status = "published" } })
+crap.collections.find_by_id("posts", "abc123")
+crap.collections.create("audit_log", { action = "update", target = ctx.data.id })
+crap.collections.update("posts", id, { view_count = views + 1 })
+crap.collections.delete("drafts", old_id)
+
+-- Globals
+crap.globals.get("site_settings")
+crap.globals.update("counters", { total_posts = count + 1 })
+```
+
+## Transaction Sharing
+
+CRUD calls inside hooks share the **same database transaction** as the parent operation. This means:
+
+- If the hook creates a document and the parent operation later fails, the created document is rolled back
+- If the hook fails, the entire parent operation rolls back
+- All changes are atomic — either everything commits or nothing does
+
+## Error Handling
+
+If a before-hook returns an error or throws a Lua error, the entire transaction is rolled back and the operation fails with an error message.
+
+## Calling CRUD Outside Hooks
+
+Calling `crap.collections.find()` etc. outside a hook context (no active transaction) results in an error:
+
+```
+crap.collections CRUD functions are only available inside hooks
+with transaction context (before_change, before_delete, etc.)
+```
+
+## on_init Hooks
+
+The `[hooks] on_init` list in `crap.toml` runs at startup with CRUD access. These hooks can seed data, run migrations, or perform other initialization:
+
+```toml
+[hooks]
+on_init = ["hooks.seed.run"]
+```
+
+```lua
+-- hooks/seed.lua
+local M = {}
+
+function M.run(ctx)
+    local result = crap.collections.find("posts")
+    if result.total == 0 then
+        crap.collections.create("posts", {
+            title = "Welcome",
+            slug = "welcome",
+            status = "published",
+            content = "Welcome to your new site!",
+        })
+        crap.log.info("Seeded initial post")
+    end
+    return ctx
+end
+
+return M
+```
+
+If an `on_init` hook fails, the server aborts startup.

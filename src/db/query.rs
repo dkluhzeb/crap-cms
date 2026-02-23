@@ -1,3 +1,6 @@
+//! CRUD query functions operating on `&rusqlite::Connection` (works with both plain
+//! connections and transactions via `Deref`).
+
 use anyhow::{Context, Result, bail};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
@@ -19,6 +22,7 @@ pub enum AccessResult {
     Constrained(Vec<FilterClause>),
 }
 
+/// A filter comparison operator with its operand value(s).
 #[derive(Debug, Clone)]
 pub enum FilterOp {
     Equals(String),
@@ -35,18 +39,21 @@ pub enum FilterOp {
     NotExists,
 }
 
+/// A single field + operator filter condition.
 #[derive(Debug, Clone)]
 pub struct Filter {
     pub field: String,
     pub op: FilterOp,
 }
 
+/// A filter clause: either a single condition or an OR group.
 #[derive(Debug, Clone)]
 pub enum FilterClause {
     Single(Filter),
     Or(Vec<Filter>),
 }
 
+/// Parameters for a find query: filters, ordering, and pagination.
 #[derive(Debug, Default, Clone)]
 pub struct FindQuery {
     pub filters: Vec<FilterClause>,

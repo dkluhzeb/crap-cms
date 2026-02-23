@@ -1,3 +1,5 @@
+//! Collection CRUD handlers: list, create, edit, delete.
+
 use axum::{
     extract::{Form, FromRequest, Multipart, Path, Query, State},
     response::{Html, IntoResponse, Redirect},
@@ -70,6 +72,7 @@ fn forbidden(state: &AdminState, message: &str) -> Html<String> {
     }
 }
 
+/// Query parameters for paginated collection list views.
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
     pub page: Option<i64>,

@@ -1,3 +1,5 @@
+//! Login/logout handlers for the admin UI.
+
 use axum::{
     extract::{Form, State},
     response::{Html, IntoResponse, Redirect},
@@ -8,6 +10,7 @@ use crate::admin::AdminState;
 use crate::core::auth;
 use crate::db::query;
 
+/// Form data submitted by the login page.
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
     pub collection: String,

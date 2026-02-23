@@ -1,3 +1,5 @@
+//! Hook execution engine: runs field, collection, and registered hooks within transactions.
+
 use anyhow::{Context, Result};
 use mlua::{Lua, Value};
 use std::collections::HashMap;
@@ -74,6 +76,7 @@ pub struct HookRunner {
 }
 
 impl HookRunner {
+    /// Create a new HookRunner with its own Lua VM, registering CRUD functions and loading init.lua.
     pub fn new(config_dir: &Path, registry: SharedRegistry) -> Result<Self> {
         let lua = Lua::new();
 

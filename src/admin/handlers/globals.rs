@@ -1,3 +1,5 @@
+//! Global edit and update handlers.
+
 use axum::{
     extract::{Form, Path, State},
     response::{Html, IntoResponse, Redirect},

@@ -1,3 +1,5 @@
+//! SQLite connection pool with WAL mode and tuned pragmas.
+
 use anyhow::{Context, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
@@ -5,8 +7,10 @@ use std::path::Path;
 
 use crate::config::CrapConfig;
 
+/// r2d2 connection pool for SQLite.
 pub type DbPool = Pool<SqliteConnectionManager>;
 
+/// Create a connection pool, ensuring the database directory exists.
 pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
     let db_path = config.db_path(config_dir);
 

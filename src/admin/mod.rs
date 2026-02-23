@@ -1,3 +1,5 @@
+//! Admin UI: Axum server, Handlebars templates, and HTMX-powered handlers.
+
 pub mod server;
 pub mod templates;
 pub mod handlers;

@@ -1,3 +1,5 @@
+//! Upload handling: file validation, image resizing, and format conversion (WebP/AVIF).
+
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
@@ -5,6 +7,7 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+/// Per-collection upload configuration (MIME filtering, image sizes, format options).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionUpload {
     pub enabled: bool,
@@ -33,6 +36,7 @@ impl Default for CollectionUpload {
     }
 }
 
+/// A named image resize target (e.g. "thumbnail" at 200x200).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageSize {
     pub name: String,
@@ -42,6 +46,7 @@ pub struct ImageSize {
     pub fit: ImageFit,
 }
 
+/// Optional format conversion settings (WebP and/or AVIF with quality).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FormatOptions {
     #[serde(default)]
@@ -50,11 +55,13 @@ pub struct FormatOptions {
     pub avif: Option<FormatQuality>,
 }
 
+/// Quality setting for a converted image format (0-100).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormatQuality {
     pub quality: u8,
 }
 
+/// How an image is resized to fit the target dimensions.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFit {
@@ -65,12 +72,14 @@ pub enum ImageFit {
     Fill,
 }
 
+/// Raw uploaded file before processing.
 pub struct UploadedFile {
     pub filename: String,
     pub content_type: String,
     pub data: Vec<u8>,
 }
 
+/// Result of processing an upload (original + generated sizes/formats).
 pub struct ProcessedUpload {
     pub filename: String,
     pub mime_type: String,
@@ -81,6 +90,7 @@ pub struct ProcessedUpload {
     pub sizes: HashMap<String, SizeResult>,
 }
 
+/// Output metadata for one generated image size.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SizeResult {
     pub url: String,
@@ -90,6 +100,7 @@ pub struct SizeResult {
     pub formats: HashMap<String, FormatResult>,
 }
 
+/// Output metadata for a single converted format variant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormatResult {
     pub url: String,

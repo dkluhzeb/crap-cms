@@ -1,12 +1,16 @@
+//! In-memory registry of collection and global definitions loaded from Lua.
+
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use super::collection::{CollectionDefinition, GlobalDefinition};
 
+/// Holds all collection and global definitions loaded at startup.
 pub struct Registry {
     pub collections: HashMap<String, CollectionDefinition>,
     pub globals: HashMap<String, GlobalDefinition>,
 }
 
+/// Thread-safe shared reference to the registry.
 pub type SharedRegistry = Arc<RwLock<Registry>>;
 
 impl Default for Registry {

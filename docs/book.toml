@@ -1,0 +1,14 @@
+[book]
+title = "Crap CMS"
+authors = ["Crap CMS Contributors"]
+description = "Documentation for Crap CMS — a headless CMS in Rust with Lua hooks"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/your-org/crap-cms"
