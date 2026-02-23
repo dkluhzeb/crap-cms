@@ -193,6 +193,13 @@ message FieldInfo {
   repeated SelectOptionInfo options = 7;
   repeated FieldInfo fields = 8;
   optional int32 relationship_max_depth = 9;
+  repeated BlockInfo blocks = 10;
+}
+
+message BlockInfo {
+  string block_type = 1;
+  optional string label = 2;
+  repeated FieldInfo fields = 3;
 }
 
 message SelectOptionInfo {

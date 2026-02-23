@@ -1008,6 +1008,47 @@ function addArrayRow(fieldName) {
 }
 
 /**
+ * Add a new block row to a blocks repeater.
+ * Reads the selected block type from the dropdown, clones the matching
+ * template, replaces __INDEX__ placeholders, and appends.
+ *
+ * @param {string} fieldName - The blocks field name (e.g. "content")
+ */
+function addBlockRow(fieldName) {
+  const typeSelect = /** @type {HTMLSelectElement} */ (
+    document.getElementById(`block-type-${fieldName}`)
+  );
+  if (!typeSelect) return;
+  const blockType = typeSelect.value;
+  const template = document.getElementById(`block-template-${fieldName}-${blockType}`);
+  const container = document.getElementById(`array-rows-${fieldName}`);
+  if (!template || !container) return;
+
+  const nextIndex = container.children.length;
+  const clone = /** @type {HTMLTemplateElement} */ (template).content.cloneNode(true);
+
+  const html = /** @type {HTMLElement} */ (clone.firstElementChild);
+  if (html) {
+    html.setAttribute('data-row-index', String(nextIndex));
+    // Replace __INDEX__ in title text
+    html.querySelectorAll('.form__array-row-title').forEach(
+      /** @param {HTMLElement} el */ (el) => {
+        el.textContent = el.textContent.replace(/__INDEX__/g, String(nextIndex));
+      }
+    );
+    html.querySelectorAll('input, select, textarea').forEach(
+      /** @param {HTMLInputElement} input */ (input) => {
+        if (input.name) {
+          input.name = input.name.replace(/__INDEX__/g, String(nextIndex));
+        }
+      }
+    );
+  }
+
+  container.appendChild(clone);
+}
+
+/**
  * Remove an array row from the repeater.
  * Re-indexes remaining rows so form keys stay sequential.
  *

@@ -30,6 +30,7 @@ fn make_posts_def() -> CollectionDefinition {
                 access: FieldAccess::default(),
                 relationship: None,
                 fields: Vec::new(),
+                blocks: Vec::new(),
             },
             FieldDefinition {
                 name: "status".to_string(),
@@ -44,6 +45,7 @@ fn make_posts_def() -> CollectionDefinition {
                 access: FieldAccess::default(),
                 relationship: None,
                 fields: Vec::new(),
+                blocks: Vec::new(),
             },
         ],
         admin: CollectionAdmin::default(),
@@ -155,6 +157,7 @@ fn sync_schema_adds_columns() {
         access: FieldAccess::default(),
         relationship: None,
         fields: Vec::new(),
+        blocks: Vec::new(),
     });
     {
         let mut reg = registry.write().unwrap();

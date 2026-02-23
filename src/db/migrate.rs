@@ -113,7 +113,32 @@ fn create_collection_table(
     let mut columns = vec!["id TEXT PRIMARY KEY".to_string()];
 
     for field in &def.fields {
-        // Skip fields that use join tables (array, has-many relationship)
+        // Group fields expand sub-fields as prefixed columns
+        if field.field_type == FieldType::Group {
+            for sub in &field.fields {
+                let col_name = format!("{}__{}", field.name, sub.name);
+                let mut col = format!("{} {}", col_name, sub.field_type.sqlite_type());
+                if sub.required {
+                    col.push_str(" NOT NULL");
+                }
+                if sub.unique {
+                    col.push_str(" UNIQUE");
+                }
+                if let Some(ref default) = sub.default_value {
+                    match default {
+                        serde_json::Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s)),
+                        serde_json::Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
+                        serde_json::Value::Bool(b) => col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 })),
+                        _ => {}
+                    }
+                } else if sub.field_type == FieldType::Checkbox {
+                    col.push_str(" DEFAULT 0");
+                }
+                columns.push(col);
+            }
+            continue;
+        }
+        // Skip fields that use join tables (array, blocks, has-many relationship)
         if !field.has_parent_column() {
             continue;
         }
@@ -173,7 +198,31 @@ fn alter_collection_table(
     let existing_columns = get_table_columns(conn, slug)?;
 
     for field in &def.fields {
-        // Skip fields that use join tables (array, has-many relationship)
+        // Group fields expand sub-fields as prefixed columns
+        if field.field_type == FieldType::Group {
+            for sub in &field.fields {
+                let col_name = format!("{}__{}", field.name, sub.name);
+                if !existing_columns.contains(&col_name) {
+                    let mut col_def = sub.field_type.sqlite_type().to_string();
+                    if let Some(ref default) = sub.default_value {
+                        match default {
+                            serde_json::Value::String(s) => col_def.push_str(&format!(" DEFAULT '{}'", s)),
+                            serde_json::Value::Number(n) => col_def.push_str(&format!(" DEFAULT {}", n)),
+                            serde_json::Value::Bool(b) => col_def.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 })),
+                            _ => {}
+                        }
+                    } else if sub.field_type == FieldType::Checkbox {
+                        col_def.push_str(" DEFAULT 0");
+                    }
+                    let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", slug, col_name, col_def);
+                    tracing::info!("Adding column to {}: {}", slug, col_name);
+                    conn.execute(&sql, [])
+                        .with_context(|| format!("Failed to add column {} to {}", col_name, slug))?;
+                }
+            }
+            continue;
+        }
+        // Skip fields that use join tables (array, blocks, has-many relationship)
         if !field.has_parent_column() {
             continue;
         }
@@ -222,10 +271,18 @@ fn alter_collection_table(
     }
 
     // Warn about removed columns (SQLite can't DROP COLUMN easily)
-    let field_names: HashSet<String> = def.fields.iter()
+    let mut field_names: HashSet<String> = def.fields.iter()
         .filter(|f| f.has_parent_column())
         .map(|f| f.name.clone())
         .collect();
+    // Include group prefixed columns
+    for f in &def.fields {
+        if f.field_type == FieldType::Group {
+            for sub in &f.fields {
+                field_names.insert(format!("{}__{}", f.name, sub.name));
+            }
+        }
+    }
     let system_columns: HashSet<&str> = [
         "id", "created_at", "updated_at", "_password_hash",
         "_reset_token", "_reset_token_exp", "_verified", "_verification_token",
@@ -306,6 +363,24 @@ fn sync_join_tables(
                                 .with_context(|| format!("Failed to add column {} to {}", sub_field.name, table_name))?;
                         }
                     }
+                }
+            }
+            FieldType::Blocks => {
+                let table_name = format!("{}_{}", collection_slug, field.name);
+                if !table_exists(conn, &table_name)? {
+                    let sql = format!(
+                        "CREATE TABLE {} (\
+                            id TEXT PRIMARY KEY, \
+                            parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
+                            _order INTEGER NOT NULL DEFAULT 0, \
+                            _block_type TEXT NOT NULL, \
+                            data TEXT NOT NULL DEFAULT '{{}}'\
+                        )",
+                        table_name, collection_slug
+                    );
+                    tracing::info!("Creating blocks table: {}", table_name);
+                    conn.execute(&sql, [])
+                        .with_context(|| format!("Failed to create blocks table {}", table_name))?;
                 }
             }
             _ => {}

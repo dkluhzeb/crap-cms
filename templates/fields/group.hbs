@@ -1,0 +1,13 @@
+<fieldset class="form__group">
+  <legend>
+    {{label}}
+    {{#if required}}<span class="required">*</span>{{/if}}
+  </legend>
+  {{#each sub_fields}}
+  <div class="form__field">
+    {{{render_field this}}}
+  </div>
+  {{/each}}
+  {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
+  {{#if description}}<p class="form__help">{{description}}</p>{{/if}}
+</fieldset>

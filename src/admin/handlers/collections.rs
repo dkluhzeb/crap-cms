@@ -1195,6 +1195,81 @@ fn build_field_contexts(
                 ctx["sub_fields"] = serde_json::json!(sub_fields);
                 ctx["row_count"] = serde_json::json!(0);
             }
+            FieldType::Group => {
+                let sub_fields: Vec<_> = field.fields.iter().map(|sf| {
+                    let col_name = format!("{}__{}", field.name, sf.name);
+                    let sub_value = values.get(&col_name).cloned().unwrap_or_default();
+                    let sub_label = sf.name.split('_')
+                        .map(|w| {
+                            let mut c = w.chars();
+                            match c.next() {
+                                None => String::new(),
+                                Some(f) => f.to_uppercase().chain(c).collect(),
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let mut sub_ctx = serde_json::json!({
+                        "name": col_name,
+                        "field_type": sf.field_type.as_str(),
+                        "label": sub_label,
+                        "required": sf.required,
+                        "value": sub_value,
+                        "placeholder": sf.admin.placeholder,
+                        "description": sf.admin.description,
+                        "readonly": sf.admin.readonly,
+                    });
+                    if sf.field_type == FieldType::Checkbox {
+                        let checked = matches!(sub_value.as_str(), "1" | "true" | "on" | "yes");
+                        sub_ctx["checked"] = serde_json::json!(checked);
+                    }
+                    if sf.field_type == FieldType::Select {
+                        let options: Vec<_> = sf.options.iter().map(|opt| {
+                            serde_json::json!({
+                                "label": opt.label,
+                                "value": opt.value,
+                                "selected": opt.value == sub_value,
+                            })
+                        }).collect();
+                        sub_ctx["options"] = serde_json::json!(options);
+                    }
+                    sub_ctx
+                }).collect();
+                ctx["sub_fields"] = serde_json::json!(sub_fields);
+            }
+            FieldType::Upload => {
+                if let Some(ref rc) = field.relationship {
+                    ctx["relationship_collection"] = serde_json::json!(rc.collection);
+                }
+            }
+            FieldType::Blocks => {
+                let block_defs: Vec<_> = field.blocks.iter().map(|bd| {
+                    let block_fields: Vec<_> = bd.fields.iter().map(|sf| {
+                        serde_json::json!({
+                            "name": sf.name,
+                            "field_type": sf.field_type.as_str(),
+                            "label": sf.name.split('_')
+                                .map(|w| {
+                                    let mut c = w.chars();
+                                    match c.next() {
+                                        None => String::new(),
+                                        Some(f) => f.to_uppercase().chain(c).collect(),
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" "),
+                            "required": sf.required,
+                        })
+                    }).collect();
+                    serde_json::json!({
+                        "block_type": bd.block_type,
+                        "label": bd.label.as_deref().unwrap_or(&bd.block_type),
+                        "fields": block_fields,
+                    })
+                }).collect();
+                ctx["block_definitions"] = serde_json::json!(block_defs);
+                ctx["row_count"] = serde_json::json!(0);
+            }
             _ => {}
         }
 
@@ -1302,6 +1377,78 @@ fn enrich_field_contexts(
                 ctx["row_count"] = serde_json::json!(rows.len());
                 ctx["rows"] = serde_json::json!(rows);
             }
+            FieldType::Upload => {
+                // Upload is a has-one relationship to an upload collection
+                if let Some(ref rc) = field_def.relationship {
+                    if let Some(related_def) = reg.get_collection(&rc.collection) {
+                        let title_field = related_def.title_field().map(|s| s.to_string());
+                        let find_query = query::FindQuery::default();
+                        if let Ok(docs) = query::find(&conn, &rc.collection, related_def, &find_query) {
+                            let current_value = ctx.get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let options: Vec<_> = docs.iter().map(|doc| {
+                                let label = doc.get_str("filename")
+                                    .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+                                    .unwrap_or(&doc.id);
+                                serde_json::json!({
+                                    "value": doc.id,
+                                    "label": label,
+                                    "selected": doc.id == current_value,
+                                })
+                            }).collect();
+                            ctx["relationship_options"] = serde_json::json!(options);
+                        }
+                    }
+                }
+            }
+            FieldType::Blocks => {
+                // Populate rows from hydrated document data
+                let rows: Vec<serde_json::Value> = match doc_fields.get(&field_def.name) {
+                    Some(serde_json::Value::Array(arr)) => {
+                        arr.iter().enumerate().map(|(idx, row)| {
+                            let row_obj = row.as_object();
+                            let block_type = row_obj
+                                .and_then(|m| m.get("_block_type"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown");
+                            let block_label = field_def.blocks.iter()
+                                .find(|bd| bd.block_type == block_type)
+                                .and_then(|bd| bd.label.as_deref())
+                                .unwrap_or(block_type);
+                            let block_def = field_def.blocks.iter()
+                                .find(|bd| bd.block_type == block_type);
+                            let sub_values: Vec<_> = block_def
+                                .map(|bd| bd.fields.iter().map(|sf| {
+                                    let val = row_obj
+                                        .and_then(|m| m.get(&sf.name))
+                                        .map(|v| match v {
+                                            serde_json::Value::String(s) => s.clone(),
+                                            other => other.to_string(),
+                                        })
+                                        .unwrap_or_default();
+                                    serde_json::json!({
+                                        "name": sf.name,
+                                        "field_type": sf.field_type.as_str(),
+                                        "value": val,
+                                        "field_name_indexed": format!("{}[{}][{}]", field_def.name, idx, sf.name),
+                                    })
+                                }).collect())
+                                .unwrap_or_default();
+                            serde_json::json!({
+                                "index": idx,
+                                "_block_type": block_type,
+                                "block_label": block_label,
+                                "sub_fields": sub_values,
+                            })
+                        }).collect()
+                    }
+                    _ => Vec::new(),
+                };
+                ctx["row_count"] = serde_json::json!(rows.len());
+                ctx["rows"] = serde_json::json!(rows);
+            }
             _ => {}
         }
     }
@@ -1331,6 +1478,20 @@ fn extract_join_data_from_form(
                 }
             }
             FieldType::Array => {
+                let rows = parse_array_form_data(form, &field.name);
+                let json_rows: Vec<serde_json::Value> = rows.into_iter()
+                    .map(|row| {
+                        let obj: serde_json::Map<String, serde_json::Value> = row.into_iter()
+                            .map(|(k, v)| (k, serde_json::Value::String(v)))
+                            .collect();
+                        serde_json::Value::Object(obj)
+                    })
+                    .collect();
+                join_data.insert(field.name.clone(), serde_json::Value::Array(json_rows));
+            }
+            FieldType::Blocks => {
+                // Same form data pattern as arrays: name[idx][key]
+                // _block_type comes as name[idx][_block_type]
                 let rows = parse_array_form_data(form, &field.name);
                 let json_rows: Vec<serde_json::Value> = rows.into_iter()
                     .map(|row| {

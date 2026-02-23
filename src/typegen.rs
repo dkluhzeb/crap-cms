@@ -207,6 +207,9 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
             let pascal = to_pascal_case(&field.name);
             format!("crap.array_row.{}[]", pascal)
         }
+        FieldType::Group => "table".to_string(),
+        FieldType::Upload => "string".to_string(), // stores ID of upload document
+        FieldType::Blocks => "table[]".to_string(),
     }
 }
 
@@ -252,6 +255,7 @@ mod tests {
             access: FieldAccess::default(),
             relationship: None,
             fields: vec![],
+            blocks: vec![],
         }
     }
 
@@ -275,6 +279,7 @@ mod tests {
             access: FieldAccess::default(),
             relationship: None,
             fields: vec![],
+            blocks: vec![],
         }
     }
 
@@ -292,6 +297,7 @@ mod tests {
             access: FieldAccess::default(),
             relationship: None,
             fields: vec![],
+            blocks: vec![],
         }
     }
 

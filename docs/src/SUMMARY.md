@@ -35,6 +35,9 @@
 - [JSON](fields/json.md)
 - [Relationship](fields/relationship.md)
 - [Array](fields/array.md)
+- [Group](fields/group.md)
+- [Upload](fields/upload.md)
+- [Blocks](fields/blocks.md)
 
 # Globals
 

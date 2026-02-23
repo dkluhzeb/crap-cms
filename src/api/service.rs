@@ -287,6 +287,11 @@ fn field_def_to_proto(field: &crate::core::field::FieldDefinition) -> content::F
         }).collect(),
         fields: field.fields.iter().map(field_def_to_proto).collect(),
         relationship_max_depth: field.relationship.as_ref().and_then(|r| r.max_depth),
+        blocks: field.blocks.iter().map(|bd| content::BlockInfo {
+            block_type: bd.block_type.clone(),
+            label: bd.label.clone(),
+            fields: bd.fields.iter().map(field_def_to_proto).collect(),
+        }).collect(),
     }
 }
 

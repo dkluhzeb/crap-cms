@@ -182,6 +182,23 @@ pub fn create(
     let mut idx = 2;
 
     for field in &def.fields {
+        if field.field_type == FieldType::Group {
+            for sub in &field.fields {
+                let col_name = format!("{}__{}", field.name, sub.name);
+                if let Some(value) = data.get(&col_name) {
+                    columns.push(col_name);
+                    placeholders.push(format!("?{}", idx));
+                    params.push(coerce_value(&sub.field_type, value));
+                    idx += 1;
+                } else if sub.field_type == FieldType::Checkbox {
+                    columns.push(col_name);
+                    placeholders.push(format!("?{}", idx));
+                    params.push(Box::new(0i32));
+                    idx += 1;
+                }
+            }
+            continue;
+        }
         if !field.has_parent_column() {
             continue;
         }
@@ -242,6 +259,21 @@ pub fn update(
     let mut idx = 1;
 
     for field in &def.fields {
+        if field.field_type == FieldType::Group {
+            for sub in &field.fields {
+                let col_name = format!("{}__{}", field.name, sub.name);
+                if let Some(value) = data.get(&col_name) {
+                    set_clauses.push(format!("{} = ?{}", col_name, idx));
+                    params.push(coerce_value(&sub.field_type, value));
+                    idx += 1;
+                } else if sub.field_type == FieldType::Checkbox {
+                    set_clauses.push(format!("{} = ?{}", col_name, idx));
+                    params.push(Box::new(0i32));
+                    idx += 1;
+                }
+            }
+            continue;
+        }
         if !field.has_parent_column() {
             continue;
         }
@@ -752,7 +784,11 @@ pub fn is_verified(
 pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     let mut names = vec!["id".to_string()];
     for field in &def.fields {
-        if field.has_parent_column() {
+        if field.field_type == FieldType::Group {
+            for sub in &field.fields {
+                names.push(format!("{}__{}", field.name, sub.name));
+            }
+        } else if field.has_parent_column() {
             names.push(field.name.clone());
         }
     }
@@ -900,6 +936,79 @@ pub fn find_array_rows(
     Ok(rows)
 }
 
+/// Set block rows for a blocks field join table.
+/// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
+pub fn set_block_rows(
+    conn: &rusqlite::Connection,
+    collection: &str,
+    field_name: &str,
+    parent_id: &str,
+    rows: &[serde_json::Value],
+) -> Result<()> {
+    let table_name = format!("{}_{}", collection, field_name);
+    conn.execute(
+        &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
+        [parent_id],
+    ).with_context(|| format!("Failed to clear blocks table {}", table_name))?;
+
+    if rows.is_empty() {
+        return Ok(());
+    }
+
+    let sql = format!(
+        "INSERT INTO {} (id, parent_id, _order, _block_type, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+        table_name
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    for (order, row) in rows.iter().enumerate() {
+        let id = nanoid::nanoid!();
+        let block_type = row.get("_block_type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        // Store everything except _block_type as JSON data
+        let mut data_map = match row.as_object() {
+            Some(m) => m.clone(),
+            None => serde_json::Map::new(),
+        };
+        data_map.remove("_block_type");
+        data_map.remove("id");
+        let data_json = serde_json::Value::Object(data_map).to_string();
+        stmt.execute(rusqlite::params![id, parent_id, order as i64, block_type, data_json])?;
+    }
+    Ok(())
+}
+
+/// Find block rows for a blocks field join table, ordered.
+pub fn find_block_rows(
+    conn: &rusqlite::Connection,
+    collection: &str,
+    field_name: &str,
+    parent_id: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let table_name = format!("{}_{}", collection, field_name);
+    let sql = format!(
+        "SELECT id, _block_type, data FROM {} WHERE parent_id = ?1 ORDER BY _order",
+        table_name
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map([parent_id], |row| {
+        let id: String = row.get(0)?;
+        let block_type: String = row.get(1)?;
+        let data_json: String = row.get(2)?;
+        Ok((id, block_type, data_json))
+    })?.filter_map(|r| r.ok()).map(|(id, block_type, data_json)| {
+        let mut map = match serde_json::from_str::<serde_json::Value>(&data_json) {
+            Ok(serde_json::Value::Object(m)) => m,
+            _ => serde_json::Map::new(),
+        };
+        map.insert("id".to_string(), serde_json::Value::String(id));
+        map.insert("_block_type".to_string(), serde_json::Value::String(block_type));
+        serde_json::Value::Object(map)
+    }).collect();
+    Ok(rows)
+}
+
 /// Hydrate a document with join table data (has-many relationships and arrays).
 /// Populates `doc.fields` with JSON arrays for each join-table field.
 pub fn hydrate_document(
@@ -923,6 +1032,21 @@ pub fn hydrate_document(
             }
             FieldType::Array => {
                 let rows = find_array_rows(conn, slug, &field.name, &doc.id, &field.fields)?;
+                doc.fields.insert(field.name.clone(), serde_json::Value::Array(rows));
+            }
+            FieldType::Group => {
+                // Reconstruct nested object from prefixed columns: seo__title → { seo: { title: val } }
+                let mut group_obj = serde_json::Map::new();
+                for sub in &field.fields {
+                    let col_name = format!("{}__{}", field.name, sub.name);
+                    if let Some(val) = doc.fields.remove(&col_name) {
+                        group_obj.insert(sub.name.clone(), val);
+                    }
+                }
+                doc.fields.insert(field.name.clone(), serde_json::Value::Object(group_obj));
+            }
+            FieldType::Blocks => {
+                let rows = find_block_rows(conn, slug, &field.name, &doc.id)?;
                 doc.fields.insert(field.name.clone(), serde_json::Value::Array(rows));
             }
             _ => {}
@@ -970,7 +1094,7 @@ pub fn populate_relationships(
     visited.insert(visit_key);
 
     for field in &def.fields {
-        if field.field_type != FieldType::Relationship {
+        if field.field_type != FieldType::Relationship && field.field_type != FieldType::Upload {
             continue;
         }
         let rel = match &field.relationship {
@@ -1121,6 +1245,15 @@ pub fn save_join_table_data(
                         _ => Vec::new(),
                     };
                     set_array_rows(conn, slug, &field.name, parent_id, &rows, &field.fields)?;
+                }
+            }
+            FieldType::Blocks => {
+                if let Some(val) = data.get(&field.name) {
+                    let rows = match val {
+                        serde_json::Value::Array(arr) => arr.clone(),
+                        _ => Vec::new(),
+                    };
+                    set_block_rows(conn, slug, &field.name, parent_id, &rows)?;
                 }
             }
             _ => {}

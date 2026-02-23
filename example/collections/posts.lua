@@ -85,12 +85,9 @@ crap.collections.define("posts", {
             },
         },
         {
-            name = "image",
-            type = "relationship",
-            relationship = {
-                collection = "media",
-                has_many = false,
-            },
+            name = "featured_image",
+            type = "upload",
+            relation_to = "media",
             admin = {
                 description = "Featured image for this post",
             },

@@ -418,6 +418,7 @@ fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
                 access: FieldAccess::default(),
                 relationship: None,
                 fields: Vec::new(),
+                blocks: Vec::new(),
             });
         }
     }
@@ -634,6 +635,7 @@ fn hidden_text_field(name: &str) -> FieldDefinition {
         access: FieldAccess::default(),
         relationship: None,
         fields: Vec::new(),
+        blocks: Vec::new(),
     }
 }
 
@@ -652,6 +654,7 @@ fn hidden_number_field(name: &str) -> FieldDefinition {
         access: FieldAccess::default(),
         relationship: None,
         fields: Vec::new(),
+        blocks: Vec::new(),
     }
 }
 
@@ -672,6 +675,7 @@ fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &CollectionUp
             access: FieldAccess::default(),
             relationship: None,
             fields: Vec::new(),
+            blocks: Vec::new(),
         },
         hidden_text_field("mime_type"),
         hidden_number_field("filesize"),
@@ -772,14 +776,36 @@ fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
                     crate::core::field::RelationshipConfig { collection, has_many, max_depth: None }
                 })
             }
+        } else if field_type == FieldType::Upload {
+            // Upload: auto-create has-one relationship config from relation_to
+            if let Ok(rel_tbl) = get_table(&field_tbl, "relationship") {
+                let collection = get_string(&rel_tbl, "collection").unwrap_or_default();
+                let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
+                Some(crate::core::field::RelationshipConfig { collection, has_many: false, max_depth })
+            } else {
+                get_string(&field_tbl, "relation_to").map(|collection| {
+                    crate::core::field::RelationshipConfig { collection, has_many: false, max_depth: None }
+                })
+            }
         } else {
             None
         };
 
-        // Parse sub-fields for Array type (recursive)
-        let sub_fields = if field_type == FieldType::Array {
+        // Parse sub-fields for Array and Group types (recursive)
+        let sub_fields = if field_type == FieldType::Array || field_type == FieldType::Group {
             if let Ok(sub_fields_tbl) = get_table(&field_tbl, "fields") {
                 parse_fields(&sub_fields_tbl)?
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // Parse block definitions for Blocks type
+        let block_defs = if field_type == FieldType::Blocks {
+            if let Ok(blocks_tbl) = get_table(&field_tbl, "blocks") {
+                parse_block_definitions(&blocks_tbl)?
             } else {
                 Vec::new()
             }
@@ -800,6 +826,7 @@ fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             access,
             relationship,
             fields: sub_fields,
+            blocks: block_defs,
         });
     }
 
@@ -848,6 +875,27 @@ fn parse_string_list(tbl: &Table, key: &str) -> Result<Vec<String>> {
     } else {
         Ok(Vec::new())
     }
+}
+
+fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<crate::core::field::BlockDefinition>> {
+    let mut blocks = Vec::new();
+    for entry in blocks_tbl.clone().sequence_values::<Table>() {
+        let block_tbl = entry?;
+        let block_type: String = get_string_val(&block_tbl, "type")
+            .map_err(|_| anyhow::anyhow!("Block definition missing 'type'"))?;
+        let label = get_string(&block_tbl, "label");
+        let fields = if let Ok(fields_tbl) = get_table(&block_tbl, "fields") {
+            parse_fields(&fields_tbl)?
+        } else {
+            Vec::new()
+        };
+        blocks.push(crate::core::field::BlockDefinition {
+            block_type,
+            fields,
+            label,
+        });
+    }
+    Ok(blocks)
 }
 
 /// Convert a Lua value to a serde_json::Value.

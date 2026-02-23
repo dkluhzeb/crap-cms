@@ -19,7 +19,8 @@ Every field type accepts these properties:
 | `hooks` | table | `{}` | Per-field lifecycle hooks. |
 | `access` | table | `{}` | Per-field access control. |
 | `relationship` | table | `nil` | Relationship configuration (for `relationship` fields). |
-| `fields` | FieldDefinition[] | `{}` | Sub-field definitions (for `array` fields). |
+| `fields` | FieldDefinition[] | `{}` | Sub-field definitions (for `array` and `group` fields). |
+| `blocks` | BlockDefinition[] | `{}` | Block type definitions (for `blocks` fields). |
 
 ## Supported Types
 
@@ -36,6 +37,9 @@ Every field type accepts these properties:
 | `json` | TEXT | Arbitrary JSON blob |
 | `relationship` | TEXT (has-one) or join table (has-many) | Reference to another collection |
 | `array` | join table | Repeatable group of sub-fields |
+| `group` | prefixed columns | Visual grouping of sub-fields (no extra table) |
+| `upload` | TEXT | File reference (has-one relationship to upload collection) |
+| `blocks` | join table | Flexible content blocks with different schemas |
 
 ## `admin` Properties
 

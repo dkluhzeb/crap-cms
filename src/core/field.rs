@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Supported field types. Each variant maps to a SQLite column type (or join table for Array/has-many).
+/// Supported field types. Each variant maps to a SQLite column type (or join table for Array/Blocks/has-many).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldType {
@@ -17,6 +17,9 @@ pub enum FieldType {
     Richtext,
     Relationship,
     Array,
+    Group,
+    Upload,
+    Blocks,
 }
 
 /// Configuration for relationship fields (target collection, cardinality, depth cap).
@@ -44,6 +47,9 @@ impl FieldType {
             FieldType::Richtext => "TEXT",
             FieldType::Relationship => "TEXT",
             FieldType::Array => "TEXT", // never used — arrays use join tables
+            FieldType::Group => "TEXT", // never used — sub-fields get prefixed columns
+            FieldType::Upload => "TEXT",
+            FieldType::Blocks => "TEXT", // never used — blocks use join tables
         }
     }
 
@@ -61,6 +67,9 @@ impl FieldType {
             "richtext" => FieldType::Richtext,
             "relationship" => FieldType::Relationship,
             "array" => FieldType::Array,
+            "group" => FieldType::Group,
+            "upload" => FieldType::Upload,
+            "blocks" => FieldType::Blocks,
             other => {
                 tracing::warn!("Unknown field type '{}', defaulting to Text", other);
                 FieldType::Text
@@ -81,6 +90,9 @@ impl FieldType {
             FieldType::Richtext => "richtext",
             FieldType::Relationship => "relationship",
             FieldType::Array => "array",
+            FieldType::Group => "group",
+            FieldType::Upload => "upload",
+            FieldType::Blocks => "blocks",
         }
     }
 }
@@ -90,6 +102,15 @@ impl FieldType {
 pub struct SelectOption {
     pub label: String,
     pub value: String,
+}
+
+/// A block type definition for Blocks fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockDefinition {
+    pub block_type: String,
+    pub fields: Vec<FieldDefinition>,
+    #[serde(default)]
+    pub label: Option<String>,
 }
 
 /// Admin UI display hints for a field (placeholder, description, visibility, width).
@@ -167,14 +188,18 @@ pub struct FieldDefinition {
     pub relationship: Option<RelationshipConfig>,
     #[serde(default)]
     pub fields: Vec<FieldDefinition>,
+    #[serde(default)]
+    pub blocks: Vec<BlockDefinition>,
 }
 
 impl FieldDefinition {
     /// Whether this field has a column on the parent table.
-    /// False for Array and has-many Relationship (they use join tables).
+    /// False for Array, Group, Blocks, and has-many Relationship (they use join tables or prefixed columns).
     pub fn has_parent_column(&self) -> bool {
         match self.field_type {
             FieldType::Array => false,
+            FieldType::Group => false, // sub-fields get prefixed columns instead
+            FieldType::Blocks => false, // uses a join table
             FieldType::Relationship => {
                 match &self.relationship {
                     Some(rc) => !rc.has_many,
@@ -203,6 +228,9 @@ mod tests {
         assert_eq!(FieldType::from_str("richtext"), FieldType::Richtext);
         assert_eq!(FieldType::from_str("relationship"), FieldType::Relationship);
         assert_eq!(FieldType::from_str("array"), FieldType::Array);
+        assert_eq!(FieldType::from_str("group"), FieldType::Group);
+        assert_eq!(FieldType::from_str("upload"), FieldType::Upload);
+        assert_eq!(FieldType::from_str("blocks"), FieldType::Blocks);
     }
 
     #[test]
@@ -234,6 +262,7 @@ mod tests {
             FieldType::Select, FieldType::Checkbox, FieldType::Date,
             FieldType::Email, FieldType::Json, FieldType::Richtext,
             FieldType::Relationship, FieldType::Array,
+            FieldType::Group, FieldType::Upload, FieldType::Blocks,
         ];
         for ft in &types {
             assert_eq!(FieldType::from_str(ft.as_str()), *ft);

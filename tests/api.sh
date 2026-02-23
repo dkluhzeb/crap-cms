@@ -506,3 +506,43 @@ create_media_metadata() {
     }
   }' "$ADDR" crap.ContentAPI/Create
 }
+
+# ── Group / Upload / Blocks field types ──────────────────────
+
+# Create a document with group field data (flat prefixed keys)
+create_with_group() {
+  grpcurl -plaintext -d '{
+    "collection": "pages",
+    "data": {
+      "title": "Page With SEO",
+      "seo__title": "My Custom SEO Title",
+      "seo__description": "SEO description here"
+    }
+  }' "$ADDR" crap.ContentAPI/Create
+}
+
+# Create a document with blocks field data
+create_with_blocks() {
+  grpcurl -plaintext -d '{
+    "collection": "pages",
+    "data": {
+      "title": "Page With Blocks",
+      "content": [
+        { "_block_type": "hero", "heading": "Welcome", "subheading": "To our site" },
+        { "_block_type": "richtext", "body": "<p>Some rich text content here.</p>" }
+      ]
+    }
+  }' "$ADDR" crap.ContentAPI/Create
+}
+
+# Create a document with an upload field reference
+create_with_upload() {
+  local media_id="${1:?Usage: create_with_upload <media_id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"data\": {
+      \"title\": \"Post With Upload\",
+      \"featured_image\": \"$media_id\"
+    }
+  }" "$ADDR" crap.ContentAPI/Create
+}

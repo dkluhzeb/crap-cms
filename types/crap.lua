@@ -85,6 +85,11 @@ crap = {}
 --- (crap.collections.find/create/update/delete) via the parent transaction.
 --- after_change and after_read field hooks do NOT have CRUD access (fire-and-forget).
 
+--- @class crap.BlockDefinition
+--- @field type   string                    Block type identifier (required).
+--- @field label? string                    Display label for the block type (defaults to type name).
+--- @field fields crap.FieldDefinition[]    Fields within this block type.
+
 --- @class crap.FieldDefinition
 --- @field name          string            Column name (required).
 --- @field type          crap.FieldType    Field type (required).
@@ -100,6 +105,7 @@ crap = {}
 --- @field relation_to?  string            Target collection (legacy flat syntax).
 --- @field has_many?     boolean           Many-to-many relationship (legacy flat syntax, default: false).
 --- @field fields?       crap.FieldDefinition[] Sub-fields for "array" / "group" types.
+--- @field blocks?       crap.BlockDefinition[] Block type definitions for "blocks" type.
 --- @field admin?        crap.FieldAdmin   Admin UI display options.
 --- @field access?       crap.FieldAccess  Field-level access control (read/create/update).
 

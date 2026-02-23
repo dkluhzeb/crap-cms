@@ -1,0 +1,18 @@
+<label for="field-{{name}}">
+  {{label}}
+  {{#if required}}<span class="required">*</span>{{/if}}
+</label>
+<select
+  id="field-{{name}}"
+  name="{{name}}"
+  data-field-type="upload"
+  {{#if required}}required{{/if}}
+  {{#if error}}class="form__input--error"{{/if}}
+>
+  <option value="">-- Select --</option>
+  {{#each relationship_options}}
+  <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+  {{/each}}
+</select>
+{{#if error}}<p class="form__error">{{error}}</p>{{/if}}
+{{#if description}}<p class="form__help">{{description}}</p>{{/if}}

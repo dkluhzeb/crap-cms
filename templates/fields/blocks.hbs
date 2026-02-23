@@ -1,0 +1,79 @@
+<fieldset class="form__array" data-field-type="blocks" data-field-name="{{name}}">
+  <legend>
+    {{label}}
+    {{#if required}}<span class="required">*</span>{{/if}}
+  </legend>
+
+  <div class="form__array-rows" id="array-rows-{{name}}">
+    {{#each rows}}
+    <div class="form__array-row" data-row-index="{{this.index}}">
+      <div class="form__array-row-header" onclick="toggleArrayRow(this)">
+        <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
+        <span class="form__array-row-title">{{this.block_label}} {{this.index}}</span>
+        <button type="button" class="button button--ghost button--small" onclick="event.stopPropagation();removeArrayRow(this)">
+          <span class="material-symbols-outlined" style="font-size:16px">close</span>
+        </button>
+      </div>
+      <div class="form__array-row-body">
+        <input type="hidden" name="{{../name}}[{{this.index}}][_block_type]" value="{{this._block_type}}" />
+        <div class="form__array-row-fields">
+          {{#each this.sub_fields}}
+          <div class="form__array-sub-field">
+            <label>{{this.name}}</label>
+            <input
+              type="text"
+              name="{{this.field_name_indexed}}"
+              value="{{this.value}}"
+            />
+          </div>
+          {{/each}}
+        </div>
+      </div>
+    </div>
+    {{/each}}
+  </div>
+
+  {{#each block_definitions}}
+  <template id="block-template-{{../name}}-{{this.block_type}}">
+    <div class="form__array-row" data-row-index="__INDEX__">
+      <div class="form__array-row-header" onclick="toggleArrayRow(this)">
+        <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
+        <span class="form__array-row-title">{{this.label}} __INDEX__</span>
+        <button type="button" class="button button--ghost button--small" onclick="event.stopPropagation();removeArrayRow(this)">
+          <span class="material-symbols-outlined" style="font-size:16px">close</span>
+        </button>
+      </div>
+      <div class="form__array-row-body">
+        <input type="hidden" name="{{../../name}}[__INDEX__][_block_type]" value="{{this.block_type}}" />
+        <div class="form__array-row-fields">
+          {{#each this.fields}}
+          <div class="form__array-sub-field">
+            <label>{{this.name}}</label>
+            <input
+              type="text"
+              name="{{../../../name}}[__INDEX__][{{this.name}}]"
+              value=""
+            />
+          </div>
+          {{/each}}
+        </div>
+      </div>
+    </div>
+  </template>
+  {{/each}}
+
+  <div class="form__blocks-add">
+    <select id="block-type-{{name}}">
+      {{#each block_definitions}}
+      <option value="{{this.block_type}}">{{this.label}}</option>
+      {{/each}}
+    </select>
+    <button type="button" class="button button--ghost button--small" onclick="addBlockRow('{{name}}')">
+      <span class="material-symbols-outlined" style="font-size:16px">add</span>
+      Add Block
+    </button>
+  </div>
+
+  {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
+  {{#if description}}<p class="form__help">{{description}}</p>{{/if}}
+</fieldset>
