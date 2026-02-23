@@ -108,7 +108,8 @@ impl HelperDef for RenderFieldHelper {
         let template_name = format!("fields/{}", field_type);
 
         let rendered = r.render(&template_name, field_data)
-            .unwrap_or_else(|_| {
+            .unwrap_or_else(|e| {
+                tracing::warn!("Failed to render template '{}': {}, falling back to fields/text", template_name, e);
                 r.render("fields/text", field_data)
                     .unwrap_or_default()
             });

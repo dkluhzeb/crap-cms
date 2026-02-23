@@ -5,8 +5,8 @@
 
 .list__row {
   display: flex;
-  border-bottom: 1px solid rgb(240 240 240);
-  padding: 1rem 0;
+  border-bottom: 1px solid var(--border-color);
+  padding: var(--space-md) 0;
 }
 
 .list__cell--30 {

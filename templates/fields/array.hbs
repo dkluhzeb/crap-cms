@@ -7,42 +7,61 @@
   <div class="form__array-rows" id="array-rows-{{name}}">
     {{#each rows}}
     <div class="form__array-row" data-row-index="{{this.index}}">
-      <div class="form__array-row-fields">
-        {{#each this.sub_fields}}
-        <div class="form__array-sub-field">
-          <label>{{this.name}}</label>
-          <input
-            type="text"
-            name="{{this.field_name_indexed}}"
-            value="{{this.value}}"
-          />
-        </div>
-        {{/each}}
+      <div class="form__array-row-header" onclick="toggleArrayRow(this)">
+        <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
+        <span class="form__array-row-title">{{../label}} {{this.index}}</span>
+        <button type="button" class="button button--ghost button--small" onclick="event.stopPropagation();removeArrayRow(this)">
+          <span class="material-symbols-outlined" style="font-size:16px">close</span>
+        </button>
       </div>
-      <button type="button" class="btn btn--sm btn--danger" onclick="removeArrayRow(this)">Remove</button>
+      <div class="form__array-row-body">
+        <div class="form__array-row-fields">
+          {{#each this.sub_fields}}
+          <div class="form__array-sub-field">
+            <label>{{this.name}}</label>
+            <input
+              type="text"
+              name="{{this.field_name_indexed}}"
+              value="{{this.value}}"
+            />
+          </div>
+          {{/each}}
+        </div>
+      </div>
     </div>
     {{/each}}
   </div>
 
   <template id="array-template-{{name}}">
     <div class="form__array-row" data-row-index="__INDEX__">
-      <div class="form__array-row-fields">
-        {{#each sub_fields}}
-        <div class="form__array-sub-field">
-          <label>{{this.name}}</label>
-          <input
-            type="text"
-            name="{{../name}}[__INDEX__][{{this.name}}]"
-            value=""
-          />
-        </div>
-        {{/each}}
+      <div class="form__array-row-header" onclick="toggleArrayRow(this)">
+        <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
+        <span class="form__array-row-title">{{label}} __INDEX__</span>
+        <button type="button" class="button button--ghost button--small" onclick="event.stopPropagation();removeArrayRow(this)">
+          <span class="material-symbols-outlined" style="font-size:16px">close</span>
+        </button>
       </div>
-      <button type="button" class="btn btn--sm btn--danger" onclick="removeArrayRow(this)">Remove</button>
+      <div class="form__array-row-body">
+        <div class="form__array-row-fields">
+          {{#each sub_fields}}
+          <div class="form__array-sub-field">
+            <label>{{this.name}}</label>
+            <input
+              type="text"
+              name="{{../name}}[__INDEX__][{{this.name}}]"
+              value=""
+            />
+          </div>
+          {{/each}}
+        </div>
+      </div>
     </div>
   </template>
 
-  <button type="button" class="btn btn--sm btn--secondary" onclick="addArrayRow('{{name}}')">Add Row</button>
+  <button type="button" class="button button--ghost button--small" onclick="addArrayRow('{{name}}')">
+    <span class="material-symbols-outlined" style="font-size:16px">add</span>
+    Add Row
+  </button>
 
   {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
   {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

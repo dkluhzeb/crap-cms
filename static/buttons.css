@@ -8,8 +8,8 @@
   box-shadow: var(--shadow-sm);
   font-size: var(--text-sm);
   font-weight: 500;
-  height: 36px;
-  padding: 0 var(--space-lg);
+  height: 32px;
+  padding: 0 var(--space-md);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
   cursor: pointer;
@@ -83,12 +83,12 @@
 }
 
 .button--ghost:active {
-  background-color: rgba(0, 0, 0, 0.08);
+  background-color: var(--bg-hover);
 }
 
 /* Small */
 .button--small {
-  height: 28px;
+  height: 26px;
   padding: 0 var(--space-sm);
   font-size: var(--text-xs);
 }

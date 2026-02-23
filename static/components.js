@@ -218,8 +218,10 @@ class CrapConfirm extends HTMLElement {
           padding: 0;
           max-width: 400px;
           width: 90vw;
-          box-shadow: 0 16px 48px rgba(0, 0, 0, 0.2);
+          box-shadow: var(--shadow-lg, 0 16px 48px rgba(0, 0, 0, 0.2));
           font-family: inherit;
+          background: var(--bg-elevated, #fff);
+          color: var(--text-primary, rgba(0, 0, 0, 0.88));
         }
         dialog::backdrop {
           background: rgba(0, 0, 0, 0.4);
@@ -230,7 +232,7 @@ class CrapConfirm extends HTMLElement {
         .dialog__body p {
           margin: 0;
           font-size: 0.95rem;
-          color: rgba(0, 0, 0, 0.8);
+          color: var(--text-primary, rgba(0, 0, 0, 0.8));
           line-height: 1.5;
         }
         .dialog__actions {
@@ -251,15 +253,15 @@ class CrapConfirm extends HTMLElement {
         }
         .btn-cancel {
           background: transparent;
-          color: rgba(0, 0, 0, 0.65);
-          border: 1px solid #d9d9d9;
+          color: var(--text-secondary, rgba(0, 0, 0, 0.65));
+          border: 1px solid var(--border-color-hover, #d9d9d9);
         }
-        .btn-cancel:hover { background: rgba(0, 0, 0, 0.04); }
+        .btn-cancel:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }
         .btn-confirm {
-          background: #dc2626;
-          color: #fff;
+          background: var(--color-danger, #dc2626);
+          color: var(--text-on-primary, #fff);
         }
-        .btn-confirm:hover { background: #ef4444; }
+        .btn-confirm:hover { background: var(--color-danger-hover, #ef4444); }
       </style>
       <slot></slot>
       <dialog>
@@ -326,6 +328,113 @@ class CrapConfirm extends HTMLElement {
 }
 
 customElements.define('crap-confirm', CrapConfirm);
+
+
+/* ── Theme Switching ───────────────────────────────────────────── */
+
+/**
+ * Theme management namespace.
+ *
+ * Handles theme persistence (localStorage), DOM application, and
+ * picker UI initialization. Re-inits on `htmx:afterSettle` because
+ * HTMX body swaps destroy picker DOM.
+ *
+ * @namespace
+ */
+window.CrapTheme = {
+  /** @type {string} localStorage key */
+  _key: 'crap-theme',
+
+  /**
+   * Get the current theme name from localStorage.
+   * @returns {string} Theme name or '' for default light.
+   */
+  get() {
+    return localStorage.getItem(this._key) || '';
+  },
+
+  /**
+   * Apply a theme to the document without saving.
+   * @param {string} theme - Theme name ('' for light default).
+   */
+  apply(theme) {
+    if (theme) {
+      document.documentElement.setAttribute('data-theme', theme);
+    } else {
+      document.documentElement.removeAttribute('data-theme');
+    }
+  },
+
+  /**
+   * Set and persist a theme.
+   * @param {string} theme - Theme name ('' for light default).
+   */
+  set(theme) {
+    if (theme) {
+      localStorage.setItem(this._key, theme);
+    } else {
+      localStorage.removeItem(this._key);
+    }
+    this.apply(theme);
+  },
+
+  /**
+   * Initialize theme picker UI. Safe to call multiple times
+   * (idempotent — skips already-initialized pickers).
+   */
+  initPicker() {
+    document.querySelectorAll('[data-theme-picker]').forEach((picker) => {
+      if (/** @type {HTMLElement} */ (picker).dataset.themeInit) return;
+      /** @type {HTMLElement} */ (picker).dataset.themeInit = '1';
+
+      const toggle = picker.querySelector('[data-theme-toggle]');
+      const dropdown = picker.querySelector('[data-theme-dropdown]');
+      if (!toggle || !dropdown) return;
+
+      /** Update active state on options */
+      const updateActive = () => {
+        const current = this.get();
+        dropdown.querySelectorAll('[data-theme-value]').forEach((btn) => {
+          const val = /** @type {HTMLElement} */ (btn).dataset.themeValue;
+          btn.classList.toggle('theme-picker__option--active', val === current);
+        });
+      };
+
+      toggle.addEventListener('click', (e) => {
+        e.stopPropagation();
+        dropdown.classList.toggle('theme-picker__dropdown--open');
+        updateActive();
+      });
+
+      dropdown.addEventListener('click', (e) => {
+        const btn = /** @type {HTMLElement} */ (e.target).closest('[data-theme-value]');
+        if (!btn) return;
+        this.set(/** @type {HTMLElement} */ (btn).dataset.themeValue || '');
+        dropdown.classList.remove('theme-picker__dropdown--open');
+        updateActive();
+      });
+
+      // Close on outside click
+      document.addEventListener('click', (e) => {
+        if (!picker.contains(/** @type {Node} */ (e.target))) {
+          dropdown.classList.remove('theme-picker__dropdown--open');
+        }
+      });
+    });
+  },
+};
+
+// Init on load
+document.addEventListener('DOMContentLoaded', () => {
+  window.CrapTheme.apply(window.CrapTheme.get());
+  window.CrapTheme.initPicker();
+});
+
+// Re-init after HTMX body swaps (picker DOM gets replaced)
+document.addEventListener('htmx:afterSettle', () => {
+  window.CrapTheme.initPicker();
+});
+
 
 /* ── <crap-richtext> ────────────────────────────────────────────── */
 
@@ -855,6 +964,17 @@ customElements.define('crap-richtext', CrapRichtext);
 
 
 /* ── Array field repeater ──────────────────────────────────────── */
+
+/**
+ * Toggle a single array row's collapsed state.
+ *
+ * @param {HTMLElement} header - The row header element that was clicked.
+ */
+function toggleArrayRow(header) {
+  const row = header.closest('.form__array-row');
+  if (!row) return;
+  row.classList.toggle('form__array-row--collapsed');
+}
 
 /**
  * Add a new row to an array field repeater.

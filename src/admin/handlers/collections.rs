@@ -1180,6 +1180,7 @@ fn build_field_contexts(
                     })
                 }).collect();
                 ctx["sub_fields"] = serde_json::json!(sub_fields);
+                ctx["row_count"] = serde_json::json!(0);
             }
             _ => {}
         }
@@ -1258,7 +1259,7 @@ fn enrich_field_contexts(
             }
             FieldType::Array => {
                 // Populate rows from hydrated document data
-                let rows = match doc_fields.get(&field_def.name) {
+                let rows: Vec<serde_json::Value> = match doc_fields.get(&field_def.name) {
                     Some(serde_json::Value::Array(arr)) => {
                         arr.iter().enumerate().map(|(idx, row)| {
                             let row_obj = row.as_object();
@@ -1285,6 +1286,7 @@ fn enrich_field_contexts(
                     }
                     _ => Vec::new(),
                 };
+                ctx["row_count"] = serde_json::json!(rows.len());
                 ctx["rows"] = serde_json::json!(rows);
             }
             _ => {}

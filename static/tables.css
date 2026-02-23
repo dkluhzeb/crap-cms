@@ -6,7 +6,7 @@
 .table th {
   text-align: left;
   padding: var(--space-sm) var(--space-md);
-  border-bottom: 2px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
   color: var(--text-tertiary);
   font-size: var(--text-sm);
   font-weight: 500;
@@ -14,7 +14,7 @@
 }
 
 .table td {
-  padding: var(--space-sm) var(--space-md);
+  padding: 6px var(--space-md);
   border-bottom: 1px solid var(--border-color);
   font-size: var(--text-sm);
   vertical-align: middle;

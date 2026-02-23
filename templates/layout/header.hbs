@@ -3,12 +3,35 @@
     <span class="material-symbols-outlined">memory</span>
     Crap CMS
   </div>
-  {{#if user}}
-  <div class="header__user">
+  <div class="header__actions">
+    <div class="theme-picker" data-theme-picker>
+      <button type="button" class="theme-picker__toggle" aria-label="Change theme" data-theme-toggle>
+        <span class="material-symbols-outlined" style="font-size:18px">palette</span>
+      </button>
+      <div class="theme-picker__dropdown" data-theme-dropdown>
+        <button type="button" class="theme-picker__option" data-theme-value="">
+          <span class="theme-picker__swatch" style="background:#f4f7fc"></span>
+          Light
+        </button>
+        <button type="button" class="theme-picker__option" data-theme-value="tokyo-night">
+          <span class="theme-picker__swatch" style="background:#1a1b26"></span>
+          Tokyo Night
+        </button>
+        <button type="button" class="theme-picker__option" data-theme-value="catppuccin">
+          <span class="theme-picker__swatch" style="background:#1e1e2e"></span>
+          Catppuccin Mocha
+        </button>
+        <button type="button" class="theme-picker__option" data-theme-value="gruvbox">
+          <span class="theme-picker__swatch" style="background:#282828"></span>
+          Gruvbox Dark
+        </button>
+      </div>
+    </div>
+    {{#if user}}
     <span class="header__email">{{user.email}}</span>
     <form method="POST" action="/admin/logout" class="header__logout-form">
       <button type="submit" class="button button--ghost button--small">Logout</button>
     </form>
+    {{/if}}
   </div>
-  {{/if}}
 </header>

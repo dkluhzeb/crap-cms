@@ -1,6 +1,6 @@
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--space-lg);
 }
 
@@ -8,7 +8,7 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-xl);
   background-color: var(--bg-elevated);
-  transition: box-shadow var(--transition-normal), transform var(--transition-normal);
+  transition: box-shadow var(--transition-normal);
 }
 
 a.card {
@@ -19,7 +19,6 @@ a.card {
 
 a.card:hover {
   box-shadow: var(--shadow-md);
-  transform: translateY(-2px);
 }
 
 .card__header {
@@ -27,7 +26,7 @@ a.card:hover {
   align-items: center;
   gap: var(--space-sm);
 
-  padding: var(--space-md) var(--space-xl) var(--space-md);
+  padding: var(--space-sm) var(--space-lg) var(--space-sm);
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -43,7 +42,7 @@ a.card:hover {
 }
 
 .card__body {
-  padding: var(--space-lg) var(--space-xl);
+  padding: var(--space-md) var(--space-lg);
 }
 
 .card__body p {
