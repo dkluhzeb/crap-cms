@@ -1,11 +1,11 @@
 //! Configuration types loaded from `crap.toml`.
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Top-level configuration loaded from `crap.toml` in the config directory.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct CrapConfig {
     pub server: ServerConfig,
@@ -18,7 +18,7 @@ pub struct CrapConfig {
 }
 
 /// Controls relationship population depth defaults and limits.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DepthConfig {
     /// Default population depth when request doesn't specify one.
@@ -38,7 +38,7 @@ impl Default for DepthConfig {
 }
 
 /// Global upload settings (per-collection upload config is separate).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct UploadConfig {
     /// Global max file size in bytes. Default: 50MB.
@@ -54,14 +54,14 @@ impl Default for UploadConfig {
 }
 
 /// Hook configuration — currently just `on_init` script references.
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct HooksConfig {
     pub on_init: Vec<String>,
 }
 
 /// JWT authentication settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AuthConfig {
     /// JWT secret. If empty, a random secret is generated at startup (tokens
@@ -81,7 +81,7 @@ impl Default for AuthConfig {
 }
 
 /// Admin UI and gRPC server bind settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ServerConfig {
     pub admin_port: u16,
@@ -90,14 +90,14 @@ pub struct ServerConfig {
 }
 
 /// SQLite database path configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
     pub path: String,
 }
 
 /// Admin UI behavior settings.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdminConfig {
     pub dev_mode: bool,

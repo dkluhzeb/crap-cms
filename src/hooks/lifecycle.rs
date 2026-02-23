@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::config::CrapConfig;
 use crate::core::collection::CollectionHooks;
 use crate::core::Document;
 use crate::core::SharedRegistry;
@@ -77,7 +78,7 @@ pub struct HookRunner {
 
 impl HookRunner {
     /// Create a new HookRunner with its own Lua VM, registering CRUD functions and loading init.lua.
-    pub fn new(config_dir: &Path, registry: SharedRegistry) -> Result<Self> {
+    pub fn new(config_dir: &Path, registry: SharedRegistry, config: &CrapConfig) -> Result<Self> {
         let lua = Lua::new();
 
         // Set up package paths
@@ -92,7 +93,7 @@ impl HookRunner {
         lua.load(&code).exec().context("Failed to set package paths")?;
 
         // Register crap.log, crap.util, crap.collections.define, etc.
-        super::api::register_api(&lua, registry.clone(), config_dir)?;
+        super::api::register_api(&lua, registry.clone(), config_dir, config)?;
 
         // Register CRUD functions on crap.collections (find, find_by_id, create, update, delete).
         // These read the active transaction from Lua app_data when called inside hooks.

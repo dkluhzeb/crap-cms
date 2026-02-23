@@ -9,16 +9,16 @@ use crap_cms::hooks::lifecycle::HookRunner;
 
 fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry, HookRunner) {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
-    let registry = hooks::init_lua(&config_dir).unwrap();
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(&config_dir, &config).unwrap();
 
     let tmp = tempfile::tempdir().unwrap();
-    let config = CrapConfig::default();
     let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
 
     // Sync schema so tables exist
     migrate::sync_all(&db_pool, &registry).unwrap();
 
-    let runner = HookRunner::new(&config_dir, registry.clone()).unwrap();
+    let runner = HookRunner::new(&config_dir, registry.clone(), &config).unwrap();
     (tmp, db_pool, registry, runner)
 }
 
@@ -35,7 +35,8 @@ fn make_user_doc(id: &str, role: &str) -> Document {
 #[test]
 fn access_config_parsed_from_lua() {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
-    let registry = hooks::init_lua(&config_dir).unwrap();
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(&config_dir, &config).unwrap();
     let reg = registry.read().unwrap();
     let posts = reg.get_collection("posts").expect("posts collection not found");
 
@@ -48,7 +49,8 @@ fn access_config_parsed_from_lua() {
 #[test]
 fn field_access_parsed_from_lua() {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
-    let registry = hooks::init_lua(&config_dir).unwrap();
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(&config_dir, &config).unwrap();
     let reg = registry.read().unwrap();
     let posts = reg.get_collection("posts").expect("posts collection not found");
 

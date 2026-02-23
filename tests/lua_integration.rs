@@ -3,7 +3,8 @@ use std::path::PathBuf;
 #[test]
 fn init_lua_loads_example_config() {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
-    let registry = crap_cms::hooks::init_lua(&config_dir)
+    let config = crap_cms::config::CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(&config_dir, &config)
         .expect("Failed to initialize Lua VM with example config");
 
     let reg = registry.read().unwrap();

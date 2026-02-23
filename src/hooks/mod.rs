@@ -7,11 +7,12 @@ use anyhow::{Context, Result};
 use mlua::Lua;
 use std::path::Path;
 
+use crate::config::CrapConfig;
 use crate::core::SharedRegistry;
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
 /// and run init.lua. Returns a populated SharedRegistry.
-pub fn init_lua(config_dir: &Path) -> Result<SharedRegistry> {
+pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry> {
     let lua = Lua::new();
     let registry = crate::core::Registry::shared();
 
@@ -19,7 +20,7 @@ pub fn init_lua(config_dir: &Path) -> Result<SharedRegistry> {
     setup_package_paths(&lua, config_dir)?;
 
     // Register the crap global API table
-    api::register_api(&lua, registry.clone(), config_dir)?;
+    api::register_api(&lua, registry.clone(), config_dir, config)?;
 
     // Auto-load collections/*.lua
     let collections_dir = config_dir.join("collections");

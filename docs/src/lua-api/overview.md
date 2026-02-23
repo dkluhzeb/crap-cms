@@ -11,6 +11,10 @@ The `crap` global table is the entry point for all CMS operations in Lua. It's a
 | `crap.hooks` | Global hook registration |
 | `crap.log` | Structured logging |
 | `crap.util` | Utility functions |
+| `crap.auth` | Password hashing and verification (Argon2id) |
+| `crap.env` | Read-only environment variable access |
+| `crap.http` | Outbound HTTP requests (blocking) |
+| `crap.config` | Read-only access to crap.toml values |
 
 ## CRUD Availability
 

@@ -438,13 +438,9 @@ function crap.util.json_decode(str) end
 
 -- ── crap.auth ──────────────────────────────────────────────────
 
---- Authentication helpers (available in hook context).
+--- Password hashing and verification helpers.
 --- @class crap.auth
 crap.auth = {}
-
---- Get the current request's authenticated user.
---- @return crap.User?  User or nil if anonymous.
-function crap.auth.get_user() end
 
 --- Hash a plaintext password (Argon2id).
 --- @param password string  Plaintext password.
@@ -458,7 +454,7 @@ function crap.auth.hash_password(password) end
 function crap.auth.verify_password(password, hash) end
 
 
--- ── crap.env (planned) ───────────────────────────────────────
+-- ── crap.env ─────────────────────────────────────────────────
 
 --- Read-only access to environment variables.
 --- @class crap.env
@@ -470,17 +466,18 @@ crap.env = {}
 function crap.env.get(key) end
 
 
--- ── crap.http (planned) ──────────────────────────────────────
+-- ── crap.http ────────────────────────────────────────────────
 
---- Outbound HTTP client.
+--- Outbound HTTP client (blocking, runs inside spawn_blocking context).
 --- @class crap.http
 crap.http = {}
 
 --- @class crap.HttpRequest
---- @field url     string            Request URL.
---- @field method? string            HTTP method (default: "GET").
+--- @field url      string            Request URL (required).
+--- @field method?  string            HTTP method (default: "GET").
 --- @field headers? table<string, string>  Request headers.
---- @field body?   string            Request body.
+--- @field body?    string            Request body.
+--- @field timeout? integer           Request timeout in seconds (default: 30).
 
 --- @class crap.HttpResponse
 --- @field status  integer           HTTP status code.
@@ -493,18 +490,15 @@ crap.http = {}
 function crap.http.request(opts) end
 
 
--- ── crap.config (planned) ────────────────────────────────────
+-- ── crap.config ──────────────────────────────────────────────
 
---- Runtime configuration access.
+--- Read-only access to crap.toml configuration values.
+--- Values are a snapshot from startup — changes to crap.toml after
+--- startup won't be reflected until restart.
 --- @class crap.config
 crap.config = {}
 
---- Set a configuration value programmatically.
---- @param key   string  Dot-separated config key (e.g., "admin.site_name").
---- @param value any     Value to set.
-function crap.config.set(key, value) end
-
---- Get a configuration value.
---- @param key string  Dot-separated config key.
+--- Get a configuration value using dot notation.
+--- @param key string  Dot-separated config key (e.g., "server.admin_port").
 --- @return any
 function crap.config.get(key) end

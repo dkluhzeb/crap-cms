@@ -73,7 +73,7 @@ async fn main() -> Result<()> {
     info!(?config, "Configuration loaded");
 
     // Initialize Lua VM and load collections/globals
-    let registry = hooks::init_lua(&config_dir)
+    let registry = hooks::init_lua(&config_dir, &config)
         .context("Failed to initialize Lua VM")?;
 
     {
@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
     }
 
     // Initialize Lua hook runner (with registry for CRUD access in hooks)
-    let hook_runner = hooks::lifecycle::HookRunner::new(&config_dir, registry.clone())?;
+    let hook_runner = hooks::lifecycle::HookRunner::new(&config_dir, registry.clone(), &config)?;
 
     // Run on_init hooks (synchronous — failure aborts startup)
     if !config.hooks.on_init.is_empty() {

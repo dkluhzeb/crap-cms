@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use mlua::{Lua, Table, Value, Function};
 use std::path::Path;
 
+use crate::config::CrapConfig;
 use crate::core::{
     SharedRegistry,
     field::{FieldType, FieldDefinition, FieldAccess, FieldAdmin, FieldHooks, SelectOption},
@@ -11,8 +12,9 @@ use crate::core::{
     upload::{CollectionUpload, ImageSize, ImageFit, FormatOptions, FormatQuality},
 };
 
-/// Register the `crap` global table with sub-tables for collections, globals, log, util.
-pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path) -> Result<()> {
+/// Register the `crap` global table with sub-tables for collections, globals, log, util,
+/// auth, env, http, config.
+pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path, config: &CrapConfig) -> Result<()> {
     let crap = lua.create_table().context("Failed to create crap table")?;
 
     // crap.collections
@@ -150,6 +152,137 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path) -> 
     hooks_table.set("remove", remove_fn)?;
 
     crap.set("hooks", hooks_table)?;
+
+    // crap.auth — password hashing/verification
+    let auth_table = lua.create_table()?;
+    let hash_pw_fn = lua.create_function(|_, password: String| {
+        crate::core::auth::hash_password(&password)
+            .map_err(|e| mlua::Error::RuntimeError(format!("hash_password error: {}", e)))
+    })?;
+    let verify_pw_fn = lua.create_function(|_, (password, hash): (String, String)| {
+        crate::core::auth::verify_password(&password, &hash)
+            .map_err(|e| mlua::Error::RuntimeError(format!("verify_password error: {}", e)))
+    })?;
+    auth_table.set("hash_password", hash_pw_fn)?;
+    auth_table.set("verify_password", verify_pw_fn)?;
+    crap.set("auth", auth_table)?;
+
+    // crap.env — read-only env var access
+    let env_table = lua.create_table()?;
+    let env_get_fn = lua.create_function(|_, key: String| -> mlua::Result<Option<String>> {
+        match std::env::var(&key) {
+            Ok(val) => Ok(Some(val)),
+            Err(_) => Ok(None),
+        }
+    })?;
+    env_table.set("get", env_get_fn)?;
+    crap.set("env", env_table)?;
+
+    // crap.http — outbound HTTP via ureq (blocking, safe in spawn_blocking context)
+    let http_table = lua.create_table()?;
+    let http_request_fn = lua.create_function(|lua, opts: Table| -> mlua::Result<Table> {
+        let url: String = opts.get("url")?;
+        let method: String = opts.get::<Option<String>>("method")?
+            .unwrap_or_else(|| "GET".to_string())
+            .to_uppercase();
+        let timeout: u64 = opts.get::<Option<u64>>("timeout")?.unwrap_or(30);
+        let body: Option<String> = opts.get("body")?;
+
+        let agent = ureq::AgentBuilder::new()
+            .timeout(std::time::Duration::from_secs(timeout))
+            .build();
+
+        let mut req = match method.as_str() {
+            "GET" => agent.get(&url),
+            "POST" => agent.post(&url),
+            "PUT" => agent.put(&url),
+            "PATCH" => agent.request("PATCH", &url),
+            "DELETE" => agent.delete(&url),
+            "HEAD" => agent.head(&url),
+            _ => return Err(mlua::Error::RuntimeError(
+                format!("unsupported HTTP method: {}", method)
+            )),
+        };
+
+        // Set request headers
+        if let Ok(headers_tbl) = opts.get::<Table>("headers") {
+            for pair in headers_tbl.pairs::<String, String>() {
+                let (k, v) = pair?;
+                req = req.set(&k, &v);
+            }
+        }
+
+        // Send request
+        let response = if let Some(body_str) = body {
+            req.send_string(&body_str)
+        } else {
+            req.call()
+        };
+
+        let result = lua.create_table()?;
+        match response {
+            Ok(resp) => {
+                result.set("status", resp.status() as i64)?;
+                let headers_out = lua.create_table()?;
+                for name in resp.headers_names() {
+                    if let Some(val) = resp.header(&name) {
+                        headers_out.set(name.as_str(), val)?;
+                    }
+                }
+                result.set("headers", headers_out)?;
+                let body_str = resp.into_string()
+                    .map_err(|e| mlua::Error::RuntimeError(
+                        format!("failed to read response body: {}", e)
+                    ))?;
+                result.set("body", body_str)?;
+            }
+            Err(ureq::Error::Status(code, resp)) => {
+                result.set("status", code as i64)?;
+                let headers_out = lua.create_table()?;
+                for name in resp.headers_names() {
+                    if let Some(val) = resp.header(&name) {
+                        headers_out.set(name.as_str(), val)?;
+                    }
+                }
+                result.set("headers", headers_out)?;
+                let body_str = resp.into_string().unwrap_or_default();
+                result.set("body", body_str)?;
+            }
+            Err(ureq::Error::Transport(e)) => {
+                return Err(mlua::Error::RuntimeError(
+                    format!("HTTP transport error: {}", e)
+                ));
+            }
+        }
+
+        Ok(result)
+    })?;
+    http_table.set("request", http_request_fn)?;
+    crap.set("http", http_table)?;
+
+    // crap.config — read-only config access with dot notation
+    let config_table = lua.create_table()?;
+    // Serialize config to JSON, then to a Lua table stored as _crap_config
+    let config_json = serde_json::to_value(config)
+        .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
+    let config_lua = json_to_lua(lua, &config_json)?;
+    lua.globals().set("_crap_config", config_lua)?;
+
+    let config_get_fn = lua.create_function(|lua, key: String| -> mlua::Result<Value> {
+        let config_val: Value = lua.globals().get("_crap_config")?;
+        let mut current = config_val;
+        for part in key.split('.') {
+            match current {
+                Value::Table(tbl) => {
+                    current = tbl.get(part)?;
+                }
+                _ => return Ok(Value::Nil),
+            }
+        }
+        Ok(current)
+    })?;
+    config_table.set("get", config_get_fn)?;
+    crap.set("config", config_table)?;
 
     lua.globals().set("crap", crap)?;
     Ok(())

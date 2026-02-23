@@ -83,6 +83,10 @@
 - [crap.hooks](lua-api/hooks.md)
 - [crap.log](lua-api/log.md)
 - [crap.util](lua-api/util.md)
+- [crap.auth](lua-api/auth.md)
+- [crap.env](lua-api/env.md)
+- [crap.http](lua-api/http.md)
+- [crap.config](lua-api/config.md)
 - [Filter Operators](lua-api/filter-operators.md)
 
 # gRPC API
