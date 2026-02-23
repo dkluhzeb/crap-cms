@@ -6,6 +6,7 @@ use crate::core::{
     SharedRegistry,
     field::{FieldType, FieldDefinition, FieldAccess, FieldAdmin, FieldHooks, SelectOption},
     collection::{AuthStrategy, CollectionAccess, CollectionAuth, CollectionDefinition, GlobalDefinition, CollectionLabels, CollectionAdmin, CollectionHooks},
+    upload::{CollectionUpload, ImageSize, ImageFit, FormatOptions, FormatQuality},
 };
 
 /// Register the `crap` global table with sub-tables for collections, globals, log, util.
@@ -228,6 +229,16 @@ fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
     // Parse auth: true | { token_expiry = 3600 }
     let auth = parse_collection_auth(config);
 
+    // Parse upload config
+    let upload = parse_collection_upload(config);
+
+    // If upload enabled, auto-inject metadata fields
+    if let Some(ref u) = upload {
+        if u.enabled {
+            inject_upload_fields(&mut fields, u);
+        }
+    }
+
     // Parse access control
     let access = parse_access_config(config);
 
@@ -262,6 +273,7 @@ fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
         admin,
         hooks,
         auth,
+        upload,
         access,
     })
 }
@@ -360,6 +372,172 @@ fn parse_auth_strategies(tbl: &Table) -> Vec<AuthStrategy> {
         }
     }
     strategies
+}
+
+fn parse_collection_upload(config: &Table) -> Option<CollectionUpload> {
+    let val: Value = config.get("upload").ok()?;
+    match val {
+        Value::Boolean(true) => Some(CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        }),
+        Value::Boolean(false) | Value::Nil => None,
+        Value::Table(tbl) => {
+            let mime_types = if let Ok(mt_tbl) = get_table(&tbl, "mime_types") {
+                mt_tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
+            } else {
+                Vec::new()
+            };
+
+            let max_file_size = tbl.get::<Option<u64>>("max_file_size").ok().flatten();
+
+            let image_sizes = if let Ok(sizes_tbl) = get_table(&tbl, "image_sizes") {
+                parse_image_sizes(&sizes_tbl)
+            } else {
+                Vec::new()
+            };
+
+            let admin_thumbnail = get_string(&tbl, "admin_thumbnail");
+            let format_options = parse_format_options(&tbl);
+
+            Some(CollectionUpload {
+                enabled: true,
+                mime_types,
+                max_file_size,
+                image_sizes,
+                admin_thumbnail,
+                format_options,
+            })
+        }
+        _ => None,
+    }
+}
+
+fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
+    let mut sizes = Vec::new();
+    for entry in tbl.sequence_values::<Table>() {
+        if let Ok(size_tbl) = entry {
+            let name = match get_string(&size_tbl, "name") {
+                Some(n) => n,
+                None => continue,
+            };
+            let width = size_tbl.get::<u32>("width").unwrap_or(0);
+            let height = size_tbl.get::<u32>("height").unwrap_or(0);
+            if width == 0 || height == 0 {
+                continue;
+            }
+            let fit = match get_string(&size_tbl, "fit").as_deref() {
+                Some("cover") => ImageFit::Cover,
+                Some("contain") => ImageFit::Contain,
+                Some("inside") => ImageFit::Inside,
+                Some("fill") => ImageFit::Fill,
+                _ => ImageFit::Cover,
+            };
+            sizes.push(ImageSize { name, width, height, fit });
+        }
+    }
+    sizes
+}
+
+fn parse_format_options(tbl: &Table) -> FormatOptions {
+    let fo_tbl = match get_table(tbl, "format_options") {
+        Ok(t) => t,
+        Err(_) => return FormatOptions::default(),
+    };
+
+    let webp = get_table(&fo_tbl, "webp").ok().map(|t| {
+        let quality = t.get::<u8>("quality").unwrap_or(80);
+        FormatQuality { quality }
+    });
+
+    let avif = get_table(&fo_tbl, "avif").ok().map(|t| {
+        let quality = t.get::<u8>("quality").unwrap_or(60);
+        FormatQuality { quality }
+    });
+
+    FormatOptions { webp, avif }
+}
+
+/// Helper to create a hidden text field definition.
+fn hidden_text_field(name: &str) -> FieldDefinition {
+    FieldDefinition {
+        name: name.to_string(),
+        field_type: FieldType::Text,
+        required: false,
+        unique: false,
+        validate: None,
+        default_value: None,
+        options: Vec::new(),
+        admin: FieldAdmin { hidden: true, ..Default::default() },
+        hooks: FieldHooks::default(),
+        access: FieldAccess::default(),
+        relationship: None,
+        fields: Vec::new(),
+    }
+}
+
+/// Helper to create a hidden number field definition.
+fn hidden_number_field(name: &str) -> FieldDefinition {
+    FieldDefinition {
+        name: name.to_string(),
+        field_type: FieldType::Number,
+        required: false,
+        unique: false,
+        validate: None,
+        default_value: None,
+        options: Vec::new(),
+        admin: FieldAdmin { hidden: true, ..Default::default() },
+        hooks: FieldHooks::default(),
+        access: FieldAccess::default(),
+        relationship: None,
+        fields: Vec::new(),
+    }
+}
+
+/// Auto-inject upload metadata fields at position 0 (before user fields).
+/// Generates typed columns for each image size instead of a JSON blob.
+fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &CollectionUpload) {
+    let mut upload_fields = vec![
+        FieldDefinition {
+            name: "filename".to_string(),
+            field_type: FieldType::Text,
+            required: true,
+            unique: false,
+            validate: None,
+            default_value: None,
+            options: Vec::new(),
+            admin: FieldAdmin { readonly: true, ..Default::default() },
+            hooks: FieldHooks::default(),
+            access: FieldAccess::default(),
+            relationship: None,
+            fields: Vec::new(),
+        },
+        hidden_text_field("mime_type"),
+        hidden_number_field("filesize"),
+        hidden_number_field("width"),
+        hidden_number_field("height"),
+        hidden_text_field("url"),
+    ];
+
+    // Per-size typed fields: {size}_url, {size}_width, {size}_height
+    // Plus format variants: {size}_webp_url, {size}_avif_url
+    for size in &upload.image_sizes {
+        upload_fields.push(hidden_text_field(&format!("{}_url", size.name)));
+        upload_fields.push(hidden_number_field(&format!("{}_width", size.name)));
+        upload_fields.push(hidden_number_field(&format!("{}_height", size.name)));
+
+        if upload.format_options.webp.is_some() {
+            upload_fields.push(hidden_text_field(&format!("{}_webp_url", size.name)));
+        }
+        if upload.format_options.avif.is_some() {
+            upload_fields.push(hidden_text_field(&format!("{}_avif_url", size.name)));
+        }
+    }
+
+    // Insert at position 0, before user-defined fields
+    for (i, field) in upload_fields.into_iter().enumerate() {
+        fields.insert(i, field);
+    }
 }
 
 fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {

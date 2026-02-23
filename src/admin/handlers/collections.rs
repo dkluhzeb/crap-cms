@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Form, Path, Query, State},
+    extract::{Form, FromRequest, Multipart, Path, Query, State},
     response::{Html, IntoResponse, Redirect},
     Extension,
 };
@@ -10,6 +10,7 @@ use anyhow::Context as _;
 use crate::admin::AdminState;
 use crate::core::auth::{AuthUser, Claims};
 use crate::core::field::FieldType;
+use crate::core::upload::{self, UploadedFile, ProcessedUpload};
 use crate::core::validate::ValidationError;
 use crate::db::{ops, query};
 use crate::db::query::{AccessResult, FindQuery, Filter, FilterOp, FilterClause};
@@ -189,7 +190,15 @@ pub async fn list_items(
     let read_result = tokio::task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "find", HashMap::new())?;
         let total = ops::count_documents(&pool, &slug_owned, &def_owned, &filters)?;
-        let docs = ops::find_documents(&pool, &slug_owned, &def_owned, &find_query)?;
+        let mut docs = ops::find_documents(&pool, &slug_owned, &def_owned, &find_query)?;
+        // Assemble sizes for upload collections
+        if let Some(ref upload_config) = def_owned.upload {
+            if upload_config.enabled {
+                for doc in &mut docs {
+                    upload::assemble_sizes_object(doc, upload_config);
+                }
+            }
+        }
         let docs = runner.apply_after_read_many(&hooks, &fields, &slug_owned, "find", docs);
         Ok::<_, anyhow::Error>((docs, total))
     }).await;
@@ -213,16 +222,47 @@ pub async fn list_items(
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
 
     let title_field = def.title_field().map(|s| s.to_string());
+    let is_upload = def.is_upload_collection();
+    let admin_thumbnail = def.upload.as_ref()
+        .and_then(|u| u.admin_thumbnail.as_ref().cloned());
     let items: Vec<_> = documents.iter().map(|doc| {
         let title_value = title_field.as_ref()
             .and_then(|f| doc.get_str(f))
-            .unwrap_or(&doc.id);
-        serde_json::json!({
+            .unwrap_or_else(|| {
+                // For upload collections, use filename as title
+                if is_upload {
+                    doc.get_str("filename").unwrap_or(&doc.id)
+                } else {
+                    &doc.id
+                }
+            });
+        let mut item = serde_json::json!({
             "id": doc.id,
             "title_value": title_value,
             "created_at": doc.created_at,
             "updated_at": doc.updated_at,
-        })
+        });
+
+        // Add thumbnail URL for upload collections
+        if is_upload {
+            let mime = doc.get_str("mime_type").unwrap_or("");
+            if mime.starts_with("image/") {
+                let thumb_url = admin_thumbnail.as_ref()
+                    .and_then(|thumb_name| {
+                        doc.fields.get("sizes")
+                            .and_then(|v| v.get(thumb_name))
+                            .and_then(|v| v.get("url"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .or_else(|| doc.get_str("url").map(|s| s.to_string()));
+                if let Some(url) = thumb_url {
+                    item["thumbnail_url"] = serde_json::json!(url);
+                }
+            }
+        }
+
+        item
     }).collect();
 
     // Build pagination URLs preserving search param
@@ -309,7 +349,7 @@ pub async fn create_form(
         }));
     }
 
-    let data = serde_json::json!({
+    let mut data = serde_json::json!({
         "page_title": format!("Create {}", def.singular_name()),
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
@@ -323,6 +363,16 @@ pub async fn create_form(
         "user": user_json(&claims),
     });
 
+    // Add upload context for upload collections
+    if def.is_upload_collection() {
+        data["is_upload"] = serde_json::json!(true);
+        if let Some(ref u) = def.upload {
+            if !u.mime_types.is_empty() {
+                data["upload_accept"] = serde_json::json!(u.mime_types.join(","));
+            }
+        }
+    }
+
     render_or_error(&state, "collections/edit", &data).into_response()
 }
 
@@ -331,7 +381,7 @@ pub async fn create_action(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     auth_user: Option<Extension<AuthUser>>,
-    Form(mut form_data): Form<HashMap<String, String>>,
+    request: axum::extract::Request,
 ) -> axum::response::Response {
     let def = {
         let reg = match state.registry.read() {
@@ -352,6 +402,56 @@ pub async fn create_action(
         Ok(AccessResult::Denied) => return forbidden(&state, "You don't have permission to create items in this collection").into_response(),
         Err(resp) => return resp,
         _ => {}
+    }
+
+    // Parse form data — multipart for upload collections, regular form for others
+    let (mut form_data, file) = if def.is_upload_collection() {
+        match parse_multipart_form(request, &state).await {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("Multipart parse error: {}", e);
+                return redirect_response(&format!("/admin/collections/{}/create", slug));
+            }
+        }
+    } else {
+        let Form(data) = match Form::<HashMap<String, String>>::from_request(request, &state).await {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::error!("Form parse error: {}", e);
+                return redirect_response(&format!("/admin/collections/{}/create", slug));
+            }
+        };
+        (data, None)
+    };
+
+    // Process upload if file present
+    if let Some(f) = file {
+        if let Some(ref upload_config) = def.upload {
+            match upload::process_upload(
+                &f, upload_config, &state.config_dir, &slug,
+                state.config.upload.max_file_size,
+            ) {
+                Ok(processed) => inject_upload_metadata(&mut form_data, &processed),
+                Err(e) => {
+                    tracing::error!("Upload processing error: {}", e);
+                    let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new());
+                    let data = serde_json::json!({
+                        "page_title": format!("Create {}", def.singular_name()),
+                        "collections": state.sidebar_collections(),
+                        "globals": state.sidebar_globals(),
+                        "collection": {
+                            "slug": def.slug,
+                            "display_name": def.display_name(),
+                            "singular_name": def.singular_name(),
+                        },
+                        "fields": fields,
+                        "editing": false,
+                        "is_upload": true,
+                    });
+                    return html_with_toast(&state, "collections/edit", &data, &e.to_string());
+                }
+            }
+        }
     }
 
     // Strip field-level create-denied fields
@@ -440,6 +540,7 @@ pub async fn create_action(
                     },
                     "fields": fields,
                     "editing": false,
+                    "is_upload": def.is_upload_collection(),
                 });
                 html_with_toast(&state, "collections/edit", &data, &e.to_string())
             } else {
@@ -510,6 +611,15 @@ pub async fn edit_form(
         } else {
             ops::find_document_by_id(&pool, &slug_owned, &def_owned, &id_owned)?
         };
+        // Assemble sizes for upload collections
+        let doc = doc.map(|mut d| {
+            if let Some(ref upload_config) = def_owned.upload {
+                if upload_config.enabled {
+                    upload::assemble_sizes_object(&mut d, upload_config);
+                }
+            }
+            d
+        });
         let doc = doc.map(|d| runner.apply_after_read(&hooks, &fields, &slug_owned, "find_by_id", d));
         Ok::<_, anyhow::Error>(doc)
     }).await;
@@ -566,7 +676,7 @@ pub async fn edit_form(
         }));
     }
 
-    let data = serde_json::json!({
+    let mut data = serde_json::json!({
         "page_title": format!("Edit {}", def.singular_name()),
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
@@ -583,6 +693,55 @@ pub async fn edit_form(
         "user": user_json(&claims),
     });
 
+    // Add upload context for upload collections
+    if def.is_upload_collection() {
+        data["is_upload"] = serde_json::json!(true);
+        if let Some(ref u) = def.upload {
+            if !u.mime_types.is_empty() {
+                data["upload_accept"] = serde_json::json!(u.mime_types.join(","));
+            }
+        }
+
+        // Upload preview and file info from existing document
+        let url = document.fields.get("url").and_then(|v| v.as_str());
+        let mime_type = document.fields.get("mime_type").and_then(|v| v.as_str());
+        let filename = document.fields.get("filename").and_then(|v| v.as_str());
+        let filesize = document.fields.get("filesize").and_then(|v| v.as_f64()).map(|v| v as u64);
+        let width = document.fields.get("width").and_then(|v| v.as_f64()).map(|v| v as u32);
+        let height = document.fields.get("height").and_then(|v| v.as_f64()).map(|v| v as u32);
+
+        // Show preview for images
+        if let (Some(url), Some(mime)) = (url, mime_type) {
+            if mime.starts_with("image/") {
+                // Use admin_thumbnail size if available
+                let preview_url = def.upload.as_ref()
+                    .and_then(|u| u.admin_thumbnail.as_ref())
+                    .and_then(|thumb_name| {
+                        document.fields.get("sizes")
+                            .and_then(|v| v.get(thumb_name))
+                            .and_then(|v| v.get("url"))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string())
+                    })
+                    .unwrap_or_else(|| url.to_string());
+                data["upload_preview"] = serde_json::json!(preview_url);
+            }
+        }
+
+        if let Some(fname) = filename {
+            let mut info = serde_json::json!({
+                "filename": fname,
+            });
+            if let Some(size) = filesize {
+                info["filesize_display"] = serde_json::json!(upload::format_filesize(size));
+            }
+            if let (Some(w), Some(h)) = (width, height) {
+                info["dimensions"] = serde_json::json!(format!("{}x{}", w, h));
+            }
+            data["upload_info"] = info;
+        }
+    }
+
     render_or_error(&state, "collections/edit", &data).into_response()
 }
 
@@ -591,18 +750,50 @@ pub async fn update_action_post(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
     auth_user: Option<Extension<AuthUser>>,
-    Form(mut form_data): Form<HashMap<String, String>>,
+    request: axum::extract::Request,
 ) -> axum::response::Response {
+    let def = {
+        let reg = match state.registry.read() {
+            Ok(r) => r,
+            Err(_) => return redirect_response("/admin/collections"),
+        };
+        reg.get_collection(&slug).cloned()
+    };
+    let def = match def {
+        Some(d) => d,
+        None => return redirect_response("/admin/collections"),
+    };
+
+    // Parse form data — multipart for upload collections, regular form for others
+    let (mut form_data, file) = if def.is_upload_collection() {
+        match parse_multipart_form(request, &state).await {
+            Ok(result) => result,
+            Err(e) => {
+                tracing::error!("Multipart parse error: {}", e);
+                return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+            }
+        }
+    } else {
+        let Form(data) = match Form::<HashMap<String, String>>::from_request(request, &state).await {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::error!("Form parse error: {}", e);
+                return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+            }
+        };
+        (data, None)
+    };
+
     let method = form_data.remove("_method").unwrap_or_default();
 
     if method.eq_ignore_ascii_case("DELETE") {
         return delete_action_impl(&state, &slug, &id, &auth_user).await.into_response();
     }
 
-    do_update(&state, &slug, &id, form_data, &auth_user).await
+    do_update(&state, &slug, &id, form_data, file, &auth_user).await
 }
 
-async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: HashMap<String, String>, auth_user: &Option<Extension<AuthUser>>) -> axum::response::Response {
+async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: HashMap<String, String>, file: Option<UploadedFile>, auth_user: &Option<Extension<AuthUser>>) -> axum::response::Response {
     let def = {
         let reg = match state.registry.read() {
             Ok(r) => r,
@@ -622,6 +813,45 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         Ok(AccessResult::Denied) => return forbidden(state, "You don't have permission to update this item").into_response(),
         Err(resp) => return resp,
         _ => {}
+    }
+
+    // For upload collections, if a new file was uploaded, process it and delete old files
+    let mut old_doc_fields: Option<HashMap<String, serde_json::Value>> = None;
+    if let Some(f) = file {
+        if let Some(ref upload_config) = def.upload {
+            // Load old document to get old file paths for cleanup
+            if let Ok(conn) = state.pool.get() {
+                if let Ok(Some(old_doc)) = query::find_by_id(&conn, slug, &def, id) {
+                    old_doc_fields = Some(old_doc.fields.clone());
+                }
+            }
+
+            match upload::process_upload(
+                &f, upload_config, &state.config_dir, slug,
+                state.config.upload.max_file_size,
+            ) {
+                Ok(processed) => inject_upload_metadata(&mut form_data, &processed),
+                Err(e) => {
+                    tracing::error!("Upload processing error: {}", e);
+                    let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new());
+                    let data = serde_json::json!({
+                        "page_title": format!("Edit {}", def.singular_name()),
+                        "collections": state.sidebar_collections(),
+                        "globals": state.sidebar_globals(),
+                        "collection": {
+                            "slug": def.slug,
+                            "display_name": def.display_name(),
+                            "singular_name": def.singular_name(),
+                        },
+                        "document": { "id": id },
+                        "fields": fields,
+                        "editing": true,
+                        "is_upload": true,
+                    });
+                    return html_with_toast(state, "collections/edit", &data, &e.to_string());
+                }
+            }
+        }
     }
 
     // Strip field-level update-denied fields
@@ -688,6 +918,11 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
 
     match result {
         Ok(Ok(doc)) => {
+            // If a new file was uploaded and old files exist, clean up old files
+            if let Some(old_fields) = old_doc_fields {
+                upload::delete_upload_files(&state.config_dir, &old_fields);
+            }
+
             state.hook_runner.fire_after_event(
                 &def.hooks, &def.fields, HookEvent::AfterChange,
                 slug.to_string(), "update".to_string(), doc.fields.clone(),
@@ -712,8 +947,9 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                     },
                     "fields": fields,
                     "editing": true,
+                    "is_upload": def.is_upload_collection(),
                 });
-                html_with_toast(&state, "collections/edit", &data, &e.to_string())
+                html_with_toast(state, "collections/edit", &data, &e.to_string())
             } else {
                 tracing::error!("Update error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/{}", slug, id))
@@ -811,6 +1047,15 @@ async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user:
         _ => {}
     }
 
+    // For upload collections, load the document before deleting to get file paths
+    let upload_doc_fields = if def.is_upload_collection() {
+        state.pool.get().ok()
+            .and_then(|conn| query::find_by_id(&conn, slug, &def, id).ok().flatten())
+            .map(|doc| doc.fields.clone())
+    } else {
+        None
+    };
+
     // Before hooks + delete in a single transaction
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -836,6 +1081,11 @@ async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user:
 
     match result {
         Ok(Ok(())) => {
+            // Clean up upload files after successful delete
+            if let Some(fields) = upload_doc_fields {
+                upload::delete_upload_files(&state.config_dir, &fields);
+            }
+
             state.hook_runner.fire_after_event(
                 &def.hooks, &def.fields, HookEvent::AfterDelete,
                 slug.to_string(), "delete".to_string(),
@@ -861,7 +1111,7 @@ fn build_field_contexts(
     values: &HashMap<String, String>,
     errors: &HashMap<String, String>,
 ) -> Vec<serde_json::Value> {
-    fields.iter().map(|field| {
+    fields.iter().filter(|field| !field.admin.hidden).map(|field| {
         let value = values.get(&field.name).cloned().unwrap_or_default();
         let label = field.name.split('_')
             .map(|w| {
@@ -956,7 +1206,7 @@ fn enrich_field_contexts(
         Err(_) => return,
     };
 
-    for (ctx, field_def) in fields.iter_mut().zip(field_defs.iter()) {
+    for (ctx, field_def) in fields.iter_mut().zip(field_defs.iter().filter(|f| !f.admin.hidden)) {
         match field_def.field_type {
             FieldType::Relationship => {
                 if let Some(ref rc) = field_def.relationship {
@@ -1107,6 +1357,68 @@ fn parse_array_form_data(form: &HashMap<String, String>, field_name: &str) -> Ve
     }
 
     rows.into_values().collect()
+}
+
+/// Parse a multipart form request, extracting form fields and an optional file upload.
+async fn parse_multipart_form(
+    request: axum::extract::Request,
+    state: &AdminState,
+) -> Result<(HashMap<String, String>, Option<UploadedFile>), anyhow::Error> {
+    let mut multipart = Multipart::from_request(request, state).await
+        .map_err(|e| anyhow::anyhow!("Failed to parse multipart: {}", e))?;
+
+    let mut form_data = HashMap::new();
+    let mut file: Option<UploadedFile> = None;
+
+    while let Some(field) = multipart.next_field().await
+        .map_err(|e| anyhow::anyhow!("Failed to read multipart field: {}", e))?
+    {
+        let name = field.name().unwrap_or("").to_string();
+        if name == "_file" && field.file_name().is_some() {
+            let filename = field.file_name().unwrap_or("").to_string();
+            let content_type = field.content_type()
+                .unwrap_or("application/octet-stream").to_string();
+            let data = field.bytes().await
+                .map_err(|e| anyhow::anyhow!("Failed to read file data: {}", e))?;
+            if !data.is_empty() {
+                file = Some(UploadedFile {
+                    filename,
+                    content_type,
+                    data: data.to_vec(),
+                });
+            }
+        } else {
+            let text = field.text().await.unwrap_or_default();
+            form_data.insert(name, text);
+        }
+    }
+
+    Ok((form_data, file))
+}
+
+/// Inject upload metadata fields into form data from a processed upload.
+/// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_webp_url, etc.)
+fn inject_upload_metadata(form_data: &mut HashMap<String, String>, processed: &ProcessedUpload) {
+    form_data.insert("filename".into(), processed.filename.clone());
+    form_data.insert("mime_type".into(), processed.mime_type.clone());
+    form_data.insert("filesize".into(), processed.filesize.to_string());
+    if let Some(w) = processed.width {
+        form_data.insert("width".into(), w.to_string());
+    }
+    if let Some(h) = processed.height {
+        form_data.insert("height".into(), h.to_string());
+    }
+    form_data.insert("url".into(), processed.url.clone());
+
+    // Per-size typed fields
+    for (name, size) in &processed.sizes {
+        form_data.insert(format!("{}_url", name), size.url.clone());
+        form_data.insert(format!("{}_width", name), size.width.to_string());
+        form_data.insert(format!("{}_height", name), size.height.to_string());
+        for (fmt, result) in &size.formats {
+            form_data.insert(format!("{}_{}_url", name, fmt), result.url.clone());
+        }
+    }
 }
 
 fn redirect_response(url: &str) -> axum::response::Response {

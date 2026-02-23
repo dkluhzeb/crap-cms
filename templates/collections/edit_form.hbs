@@ -11,9 +11,35 @@
   hx-target="body"
   class="form"
   novalidate
+  {{#if is_upload}}enctype="multipart/form-data"{{/if}}
+  hx-indicator="#upload-loading"
 >
   {{#if editing}}
   <input type="hidden" name="_method" value="PUT" />
+  {{/if}}
+
+  {{#if is_upload}}
+  <div class="upload-section">
+    {{#if upload_preview}}
+    <div class="upload-section__preview">
+      <img src="{{upload_preview}}" alt="Current file" />
+    </div>
+    {{/if}}
+    {{#if upload_info}}
+    <div class="upload-section__info">
+      <p>{{upload_info.filename}} &middot; {{upload_info.filesize_display}} {{upload_info.dimensions}}</p>
+    </div>
+    {{/if}}
+    <div class="upload-section__input">
+      <label for="upload-file">
+        {{#if editing}}Replace file{{else}}Upload file{{/if}}
+        {{#unless editing}}<span class="form__required">*</span>{{/unless}}
+      </label>
+      <input type="file" id="upload-file" name="_file"
+        {{#if upload_accept}}accept="{{upload_accept}}"{{/if}}
+        {{#unless editing}}required{{/unless}} />
+    </div>
+  </div>
   {{/if}}
 
   {{#each fields}}

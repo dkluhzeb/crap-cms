@@ -1,7 +1,10 @@
 <tr>
   <td>
-    <a href="/admin/collections/{{collection.slug}}/{{this.id}}"
+    <a class="items-row__link" href="/admin/collections/{{collection.slug}}/{{this.id}}"
       hx-get="/admin/collections/{{collection.slug}}/{{this.id}}" hx-target="body" hx-push-url="true">
+      {{#if this.thumbnail_url}}
+      <img class="items-row__thumbnail" src="{{this.thumbnail_url}}" alt="" loading="lazy" />
+      {{/if}}
       {{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}
     </a>
   </td>

@@ -5,6 +5,7 @@ use tonic::metadata::MetadataMap;
 
 use crate::core::SharedRegistry;
 use crate::core::auth::{self, AuthUser};
+use crate::core::upload;
 use crate::db::DbPool;
 use crate::db::{ops, query};
 use crate::db::query::{AccessResult, FindQuery, Filter, FilterOp, FilterClause};
@@ -293,6 +294,14 @@ impl ContentApi for ContentService {
             for doc in &mut docs {
                 query::hydrate_document(&conn, &collection, &def_owned, doc)?;
             }
+            // Assemble sizes for upload collections
+            if let Some(ref upload_config) = def_owned.upload {
+                if upload_config.enabled {
+                    for doc in &mut docs {
+                        upload::assemble_sizes_object(doc, upload_config);
+                    }
+                }
+            }
             let docs = runner.apply_after_read_many(&hooks, &fields, &collection, "find", docs);
             // Populate relationships if depth > 0
             if depth > 0 {
@@ -379,6 +388,14 @@ impl ContentApi for ContentService {
             if let Some(ref mut d) = doc {
                 let conn = pool.get().context("DB connection for hydration")?;
                 query::hydrate_document(&conn, &collection, &def_owned, d)?;
+            }
+            // Assemble sizes for upload collections
+            if let Some(ref mut d) = doc {
+                if let Some(ref upload_config) = def_owned.upload {
+                    if upload_config.enabled {
+                        upload::assemble_sizes_object(d, upload_config);
+                    }
+                }
             }
             let mut doc = doc.map(|d| runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d));
             // Populate relationships if depth > 0
@@ -875,6 +892,7 @@ impl ContentApi for ContentService {
                 plural_label: def.labels.plural.clone(),
                 timestamps: def.timestamps,
                 auth: def.is_auth_collection(),
+                upload: def.is_upload_collection(),
             })
             .collect();
         collections.sort_by(|a, b| a.slug.cmp(&b.slug));
@@ -909,6 +927,7 @@ impl ContentApi for ContentService {
                 timestamps: false,
                 auth: false,
                 fields: def.fields.iter().map(field_def_to_proto).collect(),
+                upload: false,
             }))
         } else {
             let def = self.get_collection_def(&req.slug)?;
@@ -919,6 +938,7 @@ impl ContentApi for ContentService {
                 timestamps: def.timestamps,
                 auth: def.is_auth_collection(),
                 fields: def.fields.iter().map(field_def_to_proto).collect(),
+                upload: def.is_upload_collection(),
             }))
         }
     }

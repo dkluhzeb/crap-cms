@@ -85,6 +85,17 @@ crap.collections.define("posts", {
             },
         },
         {
+            name = "image",
+            type = "relationship",
+            relationship = {
+                collection = "media",
+                has_many = false,
+            },
+            admin = {
+                description = "Featured image for this post",
+            },
+        },
+        {
             name = "author",
             type = "relationship",
             relationship = {

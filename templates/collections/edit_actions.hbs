@@ -2,6 +2,10 @@
   <button type="submit" class="button button--primary">
     {{#if editing}}Update{{else}}Create{{/if}} {{collection.singular_name}}
   </button>
+  <div id="upload-loading" class="loading-indicator">
+    <span class="loading-indicator__spinner"></span>
+    <span class="loading-indicator__text">Saving&hellip;</span>
+  </div>
   <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
     hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
     Cancel

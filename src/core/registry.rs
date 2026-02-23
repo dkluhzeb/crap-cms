@@ -60,6 +60,7 @@ mod tests {
             admin: CollectionAdmin::default(),
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         }
     }

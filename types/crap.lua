@@ -141,11 +141,34 @@ crap = {}
 --- @field strategies?    crap.AuthStrategy[] Custom auth strategies for request-level authentication.
 --- @field disable_local? boolean             Disable local password login (default: false). When true, only custom strategies can authenticate.
 
+--- @alias crap.ImageFit "cover" | "contain" | "inside" | "fill"
+
+--- @class crap.ImageSize
+--- @field name   string       Size name (e.g., "thumbnail", "card").
+--- @field width  integer      Target width in pixels.
+--- @field height integer      Target height in pixels.
+--- @field fit?   crap.ImageFit  Resize fit mode (default: "cover").
+
+--- @class crap.FormatQuality
+--- @field quality integer  Encoding quality 1-100.
+
+--- @class crap.FormatOptions
+--- @field webp? crap.FormatQuality  Auto-generate WebP variant for each size.
+--- @field avif? crap.FormatQuality  Auto-generate AVIF variant for each size.
+
+--- @class crap.CollectionUpload
+--- @field mime_types?      string[]            MIME type allowlist with glob support (e.g., "image/*"). Empty = any type.
+--- @field max_file_size?   integer             Max file size in bytes (overrides global default).
+--- @field image_sizes?     crap.ImageSize[]    Resize definitions for image uploads.
+--- @field admin_thumbnail? string              Name of image_size to show in admin list.
+--- @field format_options?  crap.FormatOptions  Auto-generate format variants for each size.
+
 --- @class crap.CollectionConfig
 --- @field labels?     crap.CollectionLabels      Display names.
 --- @field slug?       string                     URL segment (defaults to name).
 --- @field timestamps? boolean                    Auto created_at/updated_at (default: true).
 --- @field auth?       boolean|crap.CollectionAuth  Enable authentication on this collection. `true` for defaults, or a config table with strategies/token_expiry/disable_local.
+--- @field upload?     boolean|crap.CollectionUpload  Enable file uploads. `true` for defaults, or a config table with mime_types/max_file_size/image_sizes.
 --- @field fields?     crap.FieldDefinition[]     Field definitions.
 --- @field admin?      crap.CollectionAdmin       Admin UI options.
 --- @field hooks?      crap.CollectionHooks       Hook references.

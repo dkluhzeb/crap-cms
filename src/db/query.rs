@@ -868,6 +868,11 @@ pub fn populate_relationships(
                 match find_by_id(conn, &rel.collection, &rel_def, id)? {
                     Some(mut related_doc) => {
                         hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc)?;
+                        if let Some(ref uc) = rel_def.upload {
+                            if uc.enabled {
+                                crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
+                            }
+                        }
                         populate_relationships(
                             conn, registry, &rel.collection, &rel_def,
                             &mut related_doc, effective_depth - 1, visited,
@@ -894,6 +899,11 @@ pub fn populate_relationships(
             match find_by_id(conn, &rel.collection, &rel_def, &id)? {
                 Some(mut related_doc) => {
                     hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc)?;
+                    if let Some(ref uc) = rel_def.upload {
+                        if uc.enabled {
+                            crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
+                        }
+                    }
                     populate_relationships(
                         conn, registry, &rel.collection, &rel_def,
                         &mut related_doc, effective_depth - 1, visited,

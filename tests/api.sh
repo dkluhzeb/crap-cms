@@ -447,3 +447,33 @@ describe_message() {
   local msg="${1:?Usage: describe_message <type> (e.g. crap.FindRequest)}"
   grpcurl -plaintext "$ADDR" describe "$msg"
 }
+
+# ── Upload Collections (media) ──────────────────────────────
+
+# Describe the media upload collection (verify upload fields in schema)
+describe_media() {
+  grpcurl -plaintext -d '{ "slug": "media" }' \
+    "$ADDR" crap.ContentAPI/DescribeCollection
+}
+
+# List media items
+find_media() {
+  grpcurl -plaintext -d '{ "collection": "media" }' \
+    "$ADDR" crap.ContentAPI/Find
+}
+
+# Create a media document (metadata only — file upload via admin UI)
+# Note: Upload collections are primarily used via the admin UI for file upload.
+# Via gRPC, clients can create/update metadata directly.
+create_media_metadata() {
+  grpcurl -plaintext -d '{
+    "collection": "media",
+    "data": {
+      "filename": "test-image.png",
+      "mime_type": "image/png",
+      "filesize": "12345",
+      "url": "/uploads/media/abc_test-image.png",
+      "alt": "Test image"
+    }
+  }' "$ADDR" crap.ContentAPI/Create
+}

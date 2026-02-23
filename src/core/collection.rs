@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use super::field::FieldDefinition;
+use super::upload::CollectionUpload;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CollectionAccess {
@@ -100,6 +101,8 @@ pub struct CollectionDefinition {
     #[serde(default)]
     pub auth: Option<CollectionAuth>,
     #[serde(default)]
+    pub upload: Option<CollectionUpload>,
+    #[serde(default)]
     pub access: CollectionAccess,
 }
 
@@ -128,6 +131,11 @@ impl CollectionDefinition {
     /// Check if this collection has auth enabled.
     pub fn is_auth_collection(&self) -> bool {
         self.auth.as_ref().is_some_and(|a| a.enabled)
+    }
+
+    /// Check if this collection is an upload collection.
+    pub fn is_upload_collection(&self) -> bool {
+        self.upload.as_ref().is_some_and(|u| u.enabled)
     }
 }
 
@@ -172,6 +180,7 @@ mod tests {
             },
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         }
     }

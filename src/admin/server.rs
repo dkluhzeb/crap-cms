@@ -16,7 +16,7 @@ use crate::db::DbPool;
 use crate::db::query;
 use crate::hooks::lifecycle::HookRunner;
 use super::AdminState;
-use super::handlers::{auth as auth_handlers, dashboard, collections, globals, static_assets};
+use super::handlers::{auth as auth_handlers, dashboard, collections, globals, static_assets, uploads};
 
 pub async fn start(
     addr: &str,
@@ -84,7 +84,8 @@ pub async fn start(
         .route("/admin/logout", post(auth_handlers::logout_action))
         .merge(protected)
         .nest_service("/static", static_assets::overlay_service(&config_dir))
-        .layer(DefaultBodyLimit::max(10 * 1024 * 1024))
+        .route("/uploads/{collection_slug}/{filename}", get(uploads::serve_upload))
+        .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
@@ -202,7 +203,7 @@ async fn auth_middleware(
 
 /// Load the full user document for an authenticated user.
 /// Returns None if the user can't be found (e.g., deleted since JWT was issued).
-fn load_auth_user(
+pub(crate) fn load_auth_user(
     pool: &DbPool,
     registry: &SharedRegistry,
     claims: &auth::Claims,
@@ -220,7 +221,7 @@ fn load_auth_user(
 }
 
 /// Extract a named cookie value from a Cookie header string.
-fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
+pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str> {
     for part in header.split(';') {
         let trimmed = part.trim();
         if let Some(value) = trimmed.strip_prefix(name) {

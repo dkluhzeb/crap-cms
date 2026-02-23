@@ -128,6 +128,7 @@ message CollectionInfo {
   optional string plural_label = 3;
   bool timestamps = 4;
   bool auth = 5;
+  bool upload = 6;
 }
 
 message GlobalInfo {
@@ -148,6 +149,7 @@ message DescribeCollectionResponse {
   bool timestamps = 4;
   bool auth = 5;
   repeated FieldInfo fields = 6;
+  bool upload = 7;
 }
 
 message FieldInfo {

@@ -354,6 +354,7 @@ mod tests {
             admin: CollectionAdmin::default(),
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         };
 
@@ -406,6 +407,7 @@ mod tests {
             admin: CollectionAdmin::default(),
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         };
 
@@ -455,6 +457,7 @@ mod tests {
             admin: CollectionAdmin::default(),
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         });
         registry.register_collection(CollectionDefinition {
@@ -465,6 +468,7 @@ mod tests {
             admin: CollectionAdmin::default(),
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         });
 
@@ -485,6 +489,7 @@ mod tests {
             admin: CollectionAdmin::default(),
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         });
         registry.register_collection(CollectionDefinition {
@@ -495,6 +500,7 @@ mod tests {
             admin: CollectionAdmin::default(),
             hooks: CollectionHooks::default(),
             auth: None,
+            upload: None,
             access: CollectionAccess::default(),
         });
 

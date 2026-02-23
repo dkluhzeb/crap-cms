@@ -11,6 +11,7 @@ pub struct CrapConfig {
     pub hooks: HooksConfig,
     pub auth: AuthConfig,
     pub depth: DepthConfig,
+    pub upload: UploadConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -28,6 +29,21 @@ impl Default for DepthConfig {
         Self {
             default_depth: 1,
             max_depth: 10,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct UploadConfig {
+    /// Global max file size in bytes. Default: 50MB.
+    pub max_file_size: u64,
+}
+
+impl Default for UploadConfig {
+    fn default() -> Self {
+        Self {
+            max_file_size: 52_428_800, // 50MB
         }
     }
 }

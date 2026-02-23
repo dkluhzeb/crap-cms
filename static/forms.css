@@ -286,3 +286,86 @@ select[multiple] {
 .header__logout-form {
   margin: 0;
 }
+
+/* Upload section */
+.upload-section {
+  grid-column: span 12;
+  background: var(--bg-elevated);
+  border: 2px dashed var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: var(--space-lg);
+}
+
+.upload-section__preview {
+  margin-bottom: var(--space-md);
+  text-align: center;
+}
+
+.upload-section__preview img {
+  max-width: 300px;
+  max-height: 200px;
+  border-radius: var(--radius-md);
+  object-fit: contain;
+}
+
+.upload-section__info {
+  margin-bottom: var(--space-md);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+.upload-section__info p {
+  margin: 0;
+}
+
+.upload-section__input label {
+  display: block;
+  margin-bottom: var(--space-xs);
+}
+
+.upload-section__input input[type="file"] {
+  height: auto;
+  padding: var(--space-sm);
+  cursor: pointer;
+}
+
+/* Loading indicator (HTMX) */
+.loading-indicator {
+  display: none;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.loading-indicator.htmx-request {
+  display: inline-flex;
+}
+
+.loading-indicator__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-color-hover);
+  border-top-color: var(--color-primary);
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Items row thumbnail */
+.items-row__link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.items-row__thumbnail {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  flex-shrink: 0;
+}
