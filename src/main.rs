@@ -178,6 +178,8 @@ async fn main() -> Result<()> {
         hook_runner.clone(),
         jwt_secret,
         &config.depth,
+        &config,
+        &config_dir,
     );
 
     tokio::try_join!(admin_handle, grpc_handle)

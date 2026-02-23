@@ -137,9 +137,15 @@ fn create_collection_table(
         columns.push(col);
     }
 
-    // Auth collections get a _password_hash column (not a regular field)
+    // Auth collections get hidden system columns (not regular fields)
     if def.is_auth_collection() {
         columns.push("_password_hash TEXT".to_string());
+        columns.push("_reset_token TEXT".to_string());
+        columns.push("_reset_token_exp INTEGER".to_string());
+        if def.auth.as_ref().is_some_and(|a| a.verify_email) {
+            columns.push("_verified INTEGER DEFAULT 0".to_string());
+            columns.push("_verification_token TEXT".to_string());
+        }
     }
 
     if def.timestamps {
@@ -191,12 +197,28 @@ fn alter_collection_table(
         }
     }
 
-    // Auth collections: ensure _password_hash column exists
-    if def.is_auth_collection() && !existing_columns.contains("_password_hash") {
-        let sql = format!("ALTER TABLE {} ADD COLUMN _password_hash TEXT", slug);
-        tracing::info!("Adding _password_hash column to {}", slug);
-        conn.execute(&sql, [])
-            .with_context(|| format!("Failed to add _password_hash to {}", slug))?;
+    // Auth collections: ensure system columns exist
+    if def.is_auth_collection() {
+        for col in ["_password_hash TEXT", "_reset_token TEXT", "_reset_token_exp INTEGER"] {
+            let col_name = col.split_whitespace().next().unwrap();
+            if !existing_columns.contains(col_name) {
+                let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
+                tracing::info!("Adding {} column to {}", col_name, slug);
+                conn.execute(&sql, [])
+                    .with_context(|| format!("Failed to add {} to {}", col_name, slug))?;
+            }
+        }
+        if def.auth.as_ref().is_some_and(|a| a.verify_email) {
+            for col in ["_verified INTEGER DEFAULT 0", "_verification_token TEXT"] {
+                let col_name = col.split_whitespace().next().unwrap();
+                if !existing_columns.contains(col_name) {
+                    let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
+                    tracing::info!("Adding {} column to {}", col_name, slug);
+                    conn.execute(&sql, [])
+                        .with_context(|| format!("Failed to add {} to {}", col_name, slug))?;
+                }
+            }
+        }
     }
 
     // Warn about removed columns (SQLite can't DROP COLUMN easily)
@@ -204,7 +226,10 @@ fn alter_collection_table(
         .filter(|f| f.has_parent_column())
         .map(|f| f.name.clone())
         .collect();
-    let system_columns: HashSet<&str> = ["id", "created_at", "updated_at", "_password_hash"].into();
+    let system_columns: HashSet<&str> = [
+        "id", "created_at", "updated_at", "_password_hash",
+        "_reset_token", "_reset_token_exp", "_verified", "_verification_token",
+    ].into();
     for col in &existing_columns {
         if !field_names.contains(col) && !system_columns.contains(col.as_str()) {
             tracing::warn!(

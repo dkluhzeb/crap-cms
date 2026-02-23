@@ -284,6 +284,28 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path, con
     config_table.set("get", config_get_fn)?;
     crap.set("config", config_table)?;
 
+    // crap.email — outbound email sending via SMTP
+    let email_table = lua.create_table()?;
+    let email_config = config.email.clone();
+    let email_send_fn = lua.create_function(move |_, opts: Table| -> mlua::Result<bool> {
+        let to: String = opts.get("to")?;
+        let subject: String = opts.get("subject")?;
+        let html: String = opts.get("html")?;
+        let text: Option<String> = opts.get("text")?;
+
+        crate::core::email::send_email(
+            &email_config,
+            &to,
+            &subject,
+            &html,
+            text.as_deref(),
+        ).map_err(|e| mlua::Error::RuntimeError(format!("email send error: {}", e)))?;
+
+        Ok(true)
+    })?;
+    email_table.set("send", email_send_fn)?;
+    crap.set("email", email_table)?;
+
     lua.globals().set("crap", crap)?;
     Ok(())
 }
@@ -478,12 +500,16 @@ fn parse_collection_auth(config: &Table) -> Option<CollectionAuth> {
         Value::Table(tbl) => {
             let token_expiry = tbl.get::<u64>("token_expiry").unwrap_or(7200);
             let disable_local = get_bool(&tbl, "disable_local", false);
+            let verify_email = get_bool(&tbl, "verify_email", false);
+            let forgot_password = get_bool(&tbl, "forgot_password", true);
             let strategies = parse_auth_strategies(&tbl);
             Some(CollectionAuth {
                 enabled: true,
                 token_expiry,
                 strategies,
                 disable_local,
+                verify_email,
+                forgot_password,
             })
         }
         _ => None,

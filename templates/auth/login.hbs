@@ -18,6 +18,10 @@
       <h1 class="auth-card__title">Crap CMS</h1>
     </div>
 
+    {{#if success}}
+    <div class="auth-card__success">{{success}}</div>
+    {{/if}}
+
     {{#if error}}
     <div class="auth-card__error">{{error}}</div>
     {{/if}}
@@ -52,6 +56,10 @@
       </div>
 
       <button type="submit" class="button button--primary auth-card__submit">Sign in</button>
+
+      {{#if show_forgot_password}}
+      <p class="auth-card__link"><a href="/admin/forgot-password">Forgot password?</a></p>
+      {{/if}}
     </form>
     {{/if}}
   </div>

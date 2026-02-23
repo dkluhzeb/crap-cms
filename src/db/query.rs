@@ -613,6 +613,142 @@ pub fn update_password(
     Ok(())
 }
 
+// ── Reset token functions ─────────────────────────────────────────────────
+
+/// Store a password reset token and expiry for a user.
+pub fn set_reset_token(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    user_id: &str,
+    token: &str,
+    exp: i64,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _reset_token = ?1, _reset_token_exp = ?2 WHERE id = ?3",
+        slug
+    );
+    conn.execute(&sql, rusqlite::params![token, exp, user_id])
+        .with_context(|| format!("Failed to set reset token for {} in {}", user_id, slug))?;
+    Ok(())
+}
+
+/// Find a user by their reset token. Returns the document and token expiry.
+pub fn find_by_reset_token(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    token: &str,
+) -> Result<Option<(Document, i64)>> {
+    let column_names = get_column_names(def);
+    let cols = column_names.join(", ");
+    let sql = format!(
+        "SELECT {}, _reset_token_exp FROM {} WHERE _reset_token = ?1",
+        cols, slug
+    );
+
+    let result = conn.query_row(&sql, [token], |row| {
+        let doc = row_to_document(row, &column_names)?;
+        let exp: i64 = row.get(column_names.len())?;
+        Ok((doc, exp))
+    });
+
+    match result {
+        Ok(pair) => Ok(Some(pair)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e).context(format!("Failed to find user by reset token in {}", slug)),
+    }
+}
+
+/// Clear the reset token for a user (after successful reset or expiry).
+pub fn clear_reset_token(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    user_id: &str,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _reset_token = NULL, _reset_token_exp = NULL WHERE id = ?1",
+        slug
+    );
+    conn.execute(&sql, [user_id])
+        .with_context(|| format!("Failed to clear reset token for {} in {}", user_id, slug))?;
+    Ok(())
+}
+
+// ── Email verification functions ──────────────────────────────────────────
+
+/// Store a verification token for a user.
+pub fn set_verification_token(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    user_id: &str,
+    token: &str,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _verification_token = ?1 WHERE id = ?2",
+        slug
+    );
+    conn.execute(&sql, rusqlite::params![token, user_id])
+        .with_context(|| format!("Failed to set verification token for {} in {}", user_id, slug))?;
+    Ok(())
+}
+
+/// Find a user by their verification token.
+pub fn find_by_verification_token(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    token: &str,
+) -> Result<Option<Document>> {
+    let column_names = get_column_names(def);
+    let sql = format!(
+        "SELECT {} FROM {} WHERE _verification_token = ?1",
+        column_names.join(", "), slug
+    );
+
+    let result = conn.query_row(&sql, [token], |row| {
+        row_to_document(row, &column_names)
+    });
+
+    match result {
+        Ok(doc) => Ok(Some(doc)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e).context(format!("Failed to find user by verification token in {}", slug)),
+    }
+}
+
+/// Mark a user as verified (set _verified = 1, clear token).
+pub fn mark_verified(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    user_id: &str,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _verified = 1, _verification_token = NULL WHERE id = ?1",
+        slug
+    );
+    conn.execute(&sql, [user_id])
+        .with_context(|| format!("Failed to mark user {} as verified in {}", user_id, slug))?;
+    Ok(())
+}
+
+/// Check if a user is verified.
+pub fn is_verified(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    user_id: &str,
+) -> Result<bool> {
+    let sql = format!("SELECT _verified FROM {} WHERE id = ?1", slug);
+    let result = conn.query_row(&sql, [user_id], |row| {
+        row.get::<_, Option<i64>>(0)
+    });
+    match result {
+        Ok(Some(v)) => Ok(v != 0),
+        Ok(None) => Ok(false),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+        Err(e) => Err(e).context(format!("Failed to check verification for {} in {}", user_id, slug)),
+    }
+}
+
 pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     let mut names = vec!["id".to_string()];
     for field in &def.fields {

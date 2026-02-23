@@ -376,6 +376,35 @@ me() {
   }" "$ADDR" crap.ContentAPI/Me
 }
 
+# ── Password Reset & Email Verification ──────────────────────
+
+# Forgot password (always returns success — doesn't leak user existence)
+forgot_password() {
+grpcurl -plaintext -d '{
+  "collection": "users",
+  "email": "admin@example.com"
+}' "$ADDR" crap.ContentAPI/ForgotPassword
+}
+
+# Reset password with token from email
+reset_password() {
+  local token="${1:?Usage: reset_password <token>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"users\",
+    \"token\": \"$token\",
+    \"new_password\": \"newsecret123\"
+  }" "$ADDR" crap.ContentAPI/ResetPassword
+}
+
+# Verify email with token from email
+verify_email() {
+  local token="${1:?Usage: verify_email <token>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"users\",
+    \"token\": \"$token\"
+  }" "$ADDR" crap.ContentAPI/VerifyEmail
+}
+
 # ── Authenticated requests ────────────────────────────────────
 
 # Find posts with Bearer token (for access-controlled collections)

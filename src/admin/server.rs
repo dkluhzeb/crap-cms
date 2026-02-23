@@ -30,6 +30,9 @@ pub async fn start(
     jwt_secret: String,
 ) -> Result<()> {
     let handlebars = super::templates::create_handlebars(&config_dir, config.admin.dev_mode)?;
+    let email_renderer = std::sync::Arc::new(
+        crate::core::email::EmailRenderer::new(&config_dir)?
+    );
 
     // Check if any auth collections exist
     let has_auth = {
@@ -46,6 +49,7 @@ pub async fn start(
         handlebars,
         hook_runner,
         jwt_secret,
+        email_renderer,
     };
 
     // Build method routers explicitly to handle multiple methods on same path
@@ -84,6 +88,9 @@ pub async fn start(
     let app = Router::new()
         .route("/admin/login", get(auth_handlers::login_page).post(auth_handlers::login_action))
         .route("/admin/logout", post(auth_handlers::logout_action))
+        .route("/admin/forgot-password", get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action))
+        .route("/admin/reset-password", get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action))
+        .route("/admin/verify-email", get(auth_handlers::verify_email))
         .merge(protected)
         .nest_service("/static", static_assets::overlay_service(&config_dir))
         .route("/uploads/{collection_slug}/{filename}", get(uploads::serve_upload))

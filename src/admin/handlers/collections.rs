@@ -526,6 +526,16 @@ pub async fn create_action(
                 &def.hooks, &def.fields, HookEvent::AfterChange,
                 slug.clone(), "create".to_string(), doc.fields.clone(),
             );
+
+            // Auto-send verification email for auth collections with verify_email enabled
+            if def.is_auth_collection() && def.auth.as_ref().is_some_and(|a| a.verify_email) {
+                if let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str()) {
+                    send_verification_email(
+                        &state, &slug, &doc.id, user_email,
+                    );
+                }
+            }
+
             redirect_response(&format!("/admin/collections/{}", slug))
         }
         Ok(Err(e)) => {
@@ -1424,6 +1434,57 @@ fn inject_upload_metadata(form_data: &mut HashMap<String, String>, processed: &P
             form_data.insert(format!("{}_{}_url", name, fmt), result.url.clone());
         }
     }
+}
+
+/// Fire-and-forget: generate a verification token and send the verification email.
+fn send_verification_email(state: &AdminState, slug: &str, user_id: &str, user_email: &str) {
+    let pool = state.pool.clone();
+    let email_config = state.config.email.clone();
+    let email_renderer = state.email_renderer.clone();
+    let server_config = state.config.server.clone();
+    let slug = slug.to_string();
+    let user_id = user_id.to_string();
+    let user_email = user_email.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        if !crate::core::email::is_configured(&email_config) {
+            tracing::warn!("Email not configured — skipping verification email for {}", user_email);
+            return;
+        }
+
+        let token = nanoid::nanoid!(32);
+
+        let conn = match pool.get() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("DB connection for verification token: {}", e);
+                return;
+            }
+        };
+        if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token) {
+            tracing::error!("Failed to set verification token: {}", e);
+            return;
+        }
+
+        let verify_url = format!(
+            "http://{}:{}/admin/verify-email?token={}",
+            server_config.host, server_config.admin_port, token
+        );
+        let data = serde_json::json!({ "verify_url": verify_url });
+        let html = match email_renderer.render("verify_email", &data) {
+            Ok(h) => h,
+            Err(e) => {
+                tracing::error!("Failed to render verify email template: {}", e);
+                return;
+            }
+        };
+
+        if let Err(e) = crate::core::email::send_email(
+            &email_config, &user_email, "Verify your email", &html, None,
+        ) {
+            tracing::error!("Failed to send verification email: {}", e);
+        }
+    });
 }
 
 fn redirect_response(url: &str) -> axum::response::Response {

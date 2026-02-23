@@ -29,6 +29,14 @@ max_depth = 10           # Hard cap on population depth (prevents abuse)
 [upload]
 max_file_size = 52428800 # Global max file size in bytes (50 MB)
 
+[email]
+smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
+smtp_port = 587          # SMTP port (587 for STARTTLS)
+smtp_user = ""           # SMTP username
+smtp_pass = ""           # SMTP password
+from_address = "noreply@example.com"  # Sender email address
+from_name = "Crap CMS"  # Sender display name
+
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 ```
@@ -75,6 +83,19 @@ on_init = []             # Lua function refs to run at startup (with CRUD access
 |-------|------|---------|-------------|
 | `max_file_size` | integer | `52428800` | Global maximum file size in bytes (50 MB). Per-collection `max_file_size` overrides this. |
 
+### `[email]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `smtp_host` | string | `""` (empty) | SMTP server hostname. **Empty = email disabled** — all send attempts log a warning and return Ok. |
+| `smtp_port` | integer | `587` | SMTP port. 587 is the standard STARTTLS port. |
+| `smtp_user` | string | `""` | SMTP authentication username. |
+| `smtp_pass` | string | `""` | SMTP authentication password. |
+| `from_address` | string | `"noreply@example.com"` | Sender email address for outgoing mail. |
+| `from_name` | string | `"Crap CMS"` | Sender display name. |
+
+When configured, email enables password reset ("Forgot password?" link on login), email verification (optional per-collection), and the `crap.email.send()` Lua API.
+
 ### `[hooks]`
 
 | Field | Type | Default | Description |
@@ -105,6 +126,14 @@ max_depth = 5
 
 [upload]
 max_file_size = 104857600  # 100 MB
+
+[email]
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_user = "noreply@example.com"
+smtp_pass = "your-smtp-password"
+from_address = "noreply@example.com"
+from_name = "My App"
 
 [hooks]
 on_init = ["hooks.seed.run"]

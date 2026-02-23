@@ -136,10 +136,12 @@ crap = {}
 --- @field authenticate  string  Lua function ref (module.function format) that receives `{ headers, collection }` and returns a user document or nil.
 
 --- @class crap.CollectionAuth
---- @field enabled?       boolean             Enable auth for this collection (default: false).
---- @field token_expiry?  integer             JWT token expiry in seconds (default: 7200).
---- @field strategies?    crap.AuthStrategy[] Custom auth strategies for request-level authentication.
---- @field disable_local? boolean             Disable local password login (default: false). When true, only custom strategies can authenticate.
+--- @field enabled?          boolean             Enable auth for this collection (default: false).
+--- @field token_expiry?     integer             JWT token expiry in seconds (default: 7200).
+--- @field strategies?       crap.AuthStrategy[] Custom auth strategies for request-level authentication.
+--- @field disable_local?    boolean             Disable local password login (default: false). When true, only custom strategies can authenticate.
+--- @field verify_email?     boolean             Require email verification before login (default: false). Sends a verification email on user create.
+--- @field forgot_password?  boolean             Enable forgot password flow (default: true). Sends a reset email when requested.
 
 --- @alias crap.ImageFit "cover" | "contain" | "inside" | "fill"
 
@@ -491,6 +493,23 @@ function crap.http.request(opts) end
 
 
 -- ── crap.config ──────────────────────────────────────────────
+
+--- Email sending (requires SMTP configuration in crap.toml).
+--- @class crap.email
+crap.email = {}
+
+--- @class crap.EmailOptions
+--- @field to      string  Recipient email address (required).
+--- @field subject string  Email subject line (required).
+--- @field html    string  HTML email body (required).
+--- @field text?   string  Plain text fallback body.
+
+--- Send an email via SMTP. Blocking — safe to call from hooks.
+--- Returns true on success. If email is not configured (smtp_host empty), logs a warning and returns true (no-op).
+--- @param opts crap.EmailOptions  Email options.
+--- @return boolean success
+function crap.email.send(opts) end
+
 
 --- Read-only access to crap.toml configuration values.
 --- Values are a snapshot from startup — changes to crap.toml after

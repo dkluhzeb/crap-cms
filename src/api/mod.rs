@@ -24,10 +24,18 @@ pub async fn start_server(
     hook_runner: HookRunner,
     jwt_secret: String,
     depth_config: &crate::config::DepthConfig,
+    config: &crate::config::CrapConfig,
+    config_dir: &std::path::Path,
 ) -> Result<()> {
     let addr = addr.parse()?;
 
-    let content_service = service::ContentService::new(pool, registry, hook_runner, jwt_secret, depth_config);
+    let email_renderer = std::sync::Arc::new(
+        crate::core::email::EmailRenderer::new(config_dir)?
+    );
+    let content_service = service::ContentService::new(
+        pool, registry, hook_runner, jwt_secret, depth_config,
+        config.email.clone(), email_renderer, config.server.clone(),
+    );
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(content::FILE_DESCRIPTOR_SET)

@@ -87,6 +87,7 @@
 - [crap.env](lua-api/env.md)
 - [crap.http](lua-api/http.md)
 - [crap.config](lua-api/config.md)
+- [crap.email](lua-api/email.md)
 - [Filter Operators](lua-api/filter-operators.md)
 
 # gRPC API
@@ -95,6 +96,7 @@
 - [RPCs](grpc-api/rpcs.md)
 - [Where Clause](grpc-api/where-clause.md)
 - [Authentication](grpc-api/authentication.md)
+- [Type Safety](grpc-api/type-safety.md)
 
 # Database
 

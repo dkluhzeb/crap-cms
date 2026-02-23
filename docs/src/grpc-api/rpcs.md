@@ -1,6 +1,6 @@
 # RPCs
 
-All 11 RPCs with request/response shapes and grpcurl examples.
+All 14 RPCs with request/response shapes and grpcurl examples.
 
 ## Find
 
@@ -216,6 +216,80 @@ grpcurl -plaintext -d '{
     "token": "eyJhbGciOi..."
 }' localhost:50051 crap.ContentAPI/Me
 ```
+
+## ForgotPassword
+
+Initiate a password reset flow. Generates a reset token and sends a reset email. Always returns success to prevent user enumeration.
+
+```protobuf
+message ForgotPasswordRequest {
+  string collection = 1;
+  string email = 2;
+}
+
+message ForgotPasswordResponse {
+  bool success = 1;  // always true
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "email": "admin@example.com"
+}' localhost:50051 crap.ContentAPI/ForgotPassword
+```
+
+Requires email configuration (`[email]` in `crap.toml`). If email is not configured, the token is still generated but no email is sent.
+
+## ResetPassword
+
+Reset a user's password using a token from the reset email.
+
+```protobuf
+message ResetPasswordRequest {
+  string collection = 1;
+  string token = 2;
+  string new_password = 3;
+}
+
+message ResetPasswordResponse {
+  bool success = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "token": "the-reset-token",
+    "new_password": "newsecret123"
+}' localhost:50051 crap.ContentAPI/ResetPassword
+```
+
+Tokens are single-use and expire after 1 hour.
+
+## VerifyEmail
+
+Verify a user's email address using a token sent during account creation.
+
+```protobuf
+message VerifyEmailRequest {
+  string collection = 1;
+  string token = 2;
+}
+
+message VerifyEmailResponse {
+  bool success = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "token": "the-verification-token"
+}' localhost:50051 crap.ContentAPI/VerifyEmail
+```
+
+Only relevant for auth collections with `verify_email: true`.
 
 ## ListCollections
 

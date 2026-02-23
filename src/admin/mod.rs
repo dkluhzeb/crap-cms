@@ -11,6 +11,7 @@ use handlebars::Handlebars;
 
 use crate::config::CrapConfig;
 use crate::core::SharedRegistry;
+use crate::core::email::EmailRenderer;
 use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
@@ -25,6 +26,7 @@ pub struct AdminState {
     pub handlebars: Arc<Handlebars<'static>>,
     pub hook_runner: HookRunner,
     pub jwt_secret: String,
+    pub email_renderer: Arc<EmailRenderer>,
 }
 
 impl AdminState {

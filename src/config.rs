@@ -15,6 +15,7 @@ pub struct CrapConfig {
     pub auth: AuthConfig,
     pub depth: DepthConfig,
     pub upload: UploadConfig,
+    pub email: EmailConfig,
 }
 
 /// Controls relationship population depth defaults and limits.
@@ -49,6 +50,37 @@ impl Default for UploadConfig {
     fn default() -> Self {
         Self {
             max_file_size: 52_428_800, // 50MB
+        }
+    }
+}
+
+/// SMTP email configuration. Empty `smtp_host` disables email (no-op sends).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct EmailConfig {
+    /// SMTP server hostname. Empty = email disabled.
+    pub smtp_host: String,
+    /// SMTP server port (default 587).
+    pub smtp_port: u16,
+    /// SMTP username for authentication.
+    pub smtp_user: String,
+    /// SMTP password for authentication.
+    pub smtp_pass: String,
+    /// "From" email address (default "noreply@example.com").
+    pub from_address: String,
+    /// "From" display name (default "Crap CMS").
+    pub from_name: String,
+}
+
+impl Default for EmailConfig {
+    fn default() -> Self {
+        Self {
+            smtp_host: String::new(),
+            smtp_port: 587,
+            smtp_user: String::new(),
+            smtp_pass: String::new(),
+            from_address: "noreply@example.com".to_string(),
+            from_name: "Crap CMS".to_string(),
         }
     }
 }

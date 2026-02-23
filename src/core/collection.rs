@@ -35,6 +35,16 @@ pub struct CollectionAuth {
     pub strategies: Vec<AuthStrategy>,
     #[serde(default)]
     pub disable_local: bool,
+    /// Enable email verification requirement for new users. Default: false.
+    #[serde(default)]
+    pub verify_email: bool,
+    /// Enable forgot password flow. Default: true (when auth enabled).
+    #[serde(default = "default_true_auth")]
+    pub forgot_password: bool,
+}
+
+fn default_true_auth() -> bool {
+    true
 }
 
 fn default_token_expiry() -> u64 {
@@ -48,6 +58,8 @@ impl Default for CollectionAuth {
             token_expiry: default_token_expiry(),
             strategies: Vec::new(),
             disable_local: false,
+            verify_email: false,
+            forgot_password: true,
         }
     }
 }

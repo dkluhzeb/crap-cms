@@ -5,8 +5,10 @@ use std::collections::{BTreeMap, HashMap};
 use tonic::{Request, Response, Status};
 use tonic::metadata::MetadataMap;
 
+use crate::config::{EmailConfig, ServerConfig};
 use crate::core::SharedRegistry;
 use crate::core::auth::{self, AuthUser};
+use crate::core::email::{self, EmailRenderer};
 use crate::core::upload;
 use crate::db::DbPool;
 use crate::db::{ops, query};
@@ -23,6 +25,9 @@ pub struct ContentService {
     jwt_secret: String,
     default_depth: i32,
     max_depth: i32,
+    email_config: EmailConfig,
+    email_renderer: std::sync::Arc<EmailRenderer>,
+    server_config: ServerConfig,
 }
 
 impl ContentService {
@@ -32,6 +37,9 @@ impl ContentService {
         hook_runner: HookRunner,
         jwt_secret: String,
         depth_config: &crate::config::DepthConfig,
+        email_config: EmailConfig,
+        email_renderer: std::sync::Arc<EmailRenderer>,
+        server_config: ServerConfig,
     ) -> Self {
         Self {
             pool,
@@ -40,6 +48,9 @@ impl ContentService {
             jwt_secret,
             default_depth: depth_config.default_depth,
             max_depth: depth_config.max_depth,
+            email_config,
+            email_renderer,
+            server_config,
         }
     }
 
@@ -110,6 +121,57 @@ impl ContentService {
                 s.fields.remove(name);
             }
         }
+    }
+
+    /// Fire-and-forget: generate a verification token and send the verification email.
+    fn send_verification_email(&self, slug: &str, user_id: &str, user_email: &str) {
+        let pool = self.pool.clone();
+        let email_config = self.email_config.clone();
+        let email_renderer = self.email_renderer.clone();
+        let server_config = self.server_config.clone();
+        let slug = slug.to_string();
+        let user_id = user_id.to_string();
+        let user_email = user_email.to_string();
+
+        tokio::task::spawn_blocking(move || {
+            if !email::is_configured(&email_config) {
+                tracing::warn!("Email not configured — skipping verification email for {}", user_email);
+                return;
+            }
+
+            let token = nanoid::nanoid!(32);
+
+            let conn = match pool.get() {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!("DB connection for verification token: {}", e);
+                    return;
+                }
+            };
+            if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token) {
+                tracing::error!("Failed to set verification token: {}", e);
+                return;
+            }
+
+            let verify_url = format!(
+                "http://{}:{}/admin/verify-email?token={}",
+                server_config.host, server_config.admin_port, token
+            );
+            let data = serde_json::json!({ "verify_url": verify_url });
+            let html = match email_renderer.render("verify_email", &data) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!("Failed to render verify email template: {}", e);
+                    return;
+                }
+            };
+
+            if let Err(e) = email::send_email(
+                &email_config, &user_email, "Verify your email", &html, None,
+            ) {
+                tracing::error!("Failed to send verification email: {}", e);
+            }
+        });
     }
 }
 
@@ -520,15 +582,28 @@ impl ContentApi for ContentService {
 
         {
             let def = self.get_collection_def(&req.collection);
-            let (hooks, fields) = match &def {
-                Ok(d) => (d.hooks.clone(), d.fields.clone()),
-                Err(_) => (Default::default(), Vec::new()),
+            let (hooks, fields, should_verify) = match &def {
+                Ok(d) => (
+                    d.hooks.clone(),
+                    d.fields.clone(),
+                    d.is_auth_collection() && d.auth.as_ref().is_some_and(|a| a.verify_email),
+                ),
+                Err(_) => (Default::default(), Vec::new(), false),
             };
             self.hook_runner.fire_after_event(
                 &hooks, &fields,
                 HookEvent::AfterChange,
                 req.collection.clone(), "create".to_string(), doc.fields.clone(),
             );
+
+            // Auto-send verification email for auth collections with verify_email
+            if should_verify {
+                if let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str()) {
+                    self.send_verification_email(
+                        &req.collection, &doc.id, user_email,
+                    );
+                }
+            }
         }
 
         let mut proto_doc = document_to_proto(&doc, &req.collection);
@@ -864,6 +939,25 @@ impl ContentApi for ContentService {
 
         let user = user.ok_or_else(|| Status::unauthenticated("Invalid email or password"))?;
 
+        // Check email verification if enabled
+        if def.auth.as_ref().is_some_and(|a| a.verify_email) {
+            let pool = self.pool.clone();
+            let slug = req.collection.clone();
+            let uid = user.id.clone();
+            let verified = tokio::task::spawn_blocking(move || {
+                let conn = pool.get().context("DB connection")?;
+                query::is_verified(&conn, &slug, &uid)
+            }).await
+                .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+                .map_err(|e| Status::internal(format!("Verification check error: {}", e)))?;
+
+            if !verified {
+                return Err(Status::permission_denied(
+                    "Please verify your email before logging in"
+                ));
+            }
+        }
+
         let user_email = user.fields.get("email")
             .and_then(|v| v.as_str())
             .unwrap_or(&req.email)
@@ -887,6 +981,166 @@ impl ContentApi for ContentService {
             token,
             user: Some(document_to_proto(&user, &req.collection)),
         }))
+    }
+
+    /// Initiate a password reset flow — generates a token and sends a reset email.
+    /// Always returns success to prevent leaking user existence.
+    async fn forgot_password(
+        &self,
+        request: Request<content::ForgotPasswordRequest>,
+    ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        if !def.is_auth_collection() {
+            return Err(Status::invalid_argument(format!(
+                "Collection '{}' is not an auth collection", req.collection
+            )));
+        }
+
+        if !def.auth.as_ref().is_some_and(|a| a.forgot_password) {
+            return Err(Status::permission_denied("Password reset is not enabled for this collection"));
+        }
+
+        let pool = self.pool.clone();
+        let slug = req.collection.clone();
+        let user_email = req.email.clone();
+        let def_owned = def;
+        let email_config = self.email_config.clone();
+        let email_renderer = self.email_renderer.clone();
+        let server_config = self.server_config.clone();
+
+        // Fire and forget — always return success
+        tokio::task::spawn_blocking(move || {
+            let conn = match pool.get() {
+                Ok(c) => c,
+                Err(e) => { tracing::error!("DB connection for forgot password: {}", e); return; }
+            };
+
+            let user = match query::find_by_email(&conn, &slug, &def_owned, &user_email) {
+                Ok(Some(u)) => u,
+                Ok(None) => return,
+                Err(e) => { tracing::error!("Forgot password lookup: {}", e); return; }
+            };
+
+            let token = nanoid::nanoid!();
+            let exp = chrono::Utc::now().timestamp() + 3600;
+
+            if let Err(e) = query::set_reset_token(&conn, &slug, &user.id, &token, exp) {
+                tracing::error!("Failed to set reset token: {}", e);
+                return;
+            }
+
+            let base_url = if server_config.host == "0.0.0.0" {
+                format!("http://localhost:{}", server_config.admin_port)
+            } else {
+                format!("http://{}:{}", server_config.host, server_config.admin_port)
+            };
+            let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
+
+            let html = match email_renderer.render("password_reset", &serde_json::json!({
+                "reset_url": reset_url,
+                "expiry_minutes": 60,
+                "from_name": email_config.from_name,
+            })) {
+                Ok(h) => h,
+                Err(e) => { tracing::error!("Failed to render reset email: {}", e); return; }
+            };
+
+            if let Err(e) = email::send_email(&email_config, &user_email, "Reset your password", &html, None) {
+                tracing::error!("Failed to send reset email: {}", e);
+            }
+        });
+
+        Ok(Response::new(content::ForgotPasswordResponse { success: true }))
+    }
+
+    /// Reset a password using a valid reset token.
+    async fn reset_password(
+        &self,
+        request: Request<content::ResetPasswordRequest>,
+    ) -> Result<Response<content::ResetPasswordResponse>, Status> {
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        if !def.is_auth_collection() {
+            return Err(Status::invalid_argument(format!(
+                "Collection '{}' is not an auth collection", req.collection
+            )));
+        }
+
+        if req.new_password.len() < 6 {
+            return Err(Status::invalid_argument("Password must be at least 6 characters"));
+        }
+
+        let pool = self.pool.clone();
+        let slug = req.collection.clone();
+        let token = req.token.clone();
+        let password = req.new_password.clone();
+        let def_owned = def;
+
+        let result = tokio::task::spawn_blocking(move || {
+            let conn = pool.get().context("DB connection")?;
+            let (user, exp) = query::find_by_reset_token(&conn, &slug, &def_owned, &token)?
+                .ok_or_else(|| anyhow::anyhow!("Invalid reset token"))?;
+
+            if chrono::Utc::now().timestamp() >= exp {
+                query::clear_reset_token(&conn, &slug, &user.id)?;
+                return Err(anyhow::anyhow!("Reset token has expired"));
+            }
+
+            query::update_password(&conn, &slug, &user.id, &password)?;
+            query::clear_reset_token(&conn, &slug, &user.id)?;
+            Ok(())
+        }).await
+            .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+        let _ = result;
+        Ok(Response::new(content::ResetPasswordResponse { success: true }))
+    }
+
+    /// Verify an email address using a verification token.
+    async fn verify_email(
+        &self,
+        request: Request<content::VerifyEmailRequest>,
+    ) -> Result<Response<content::VerifyEmailResponse>, Status> {
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        if !def.is_auth_collection() {
+            return Err(Status::invalid_argument(format!(
+                "Collection '{}' is not an auth collection", req.collection
+            )));
+        }
+
+        if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
+            return Err(Status::invalid_argument("Email verification is not enabled for this collection"));
+        }
+
+        let pool = self.pool.clone();
+        let slug = req.collection.clone();
+        let token = req.token.clone();
+        let def_owned = def;
+
+        let found = tokio::task::spawn_blocking(move || {
+            let conn = pool.get().context("DB connection")?;
+            match query::find_by_verification_token(&conn, &slug, &def_owned, &token)? {
+                Some(user) => {
+                    query::mark_verified(&conn, &slug, &user.id)?;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }).await
+            .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+            .map_err(|e: anyhow::Error| Status::internal(e.to_string()))?;
+
+        if !found {
+            return Err(Status::not_found("Invalid verification token"));
+        }
+
+        Ok(Response::new(content::VerifyEmailResponse { success: true }))
     }
 
     /// List all registered collections and globals.

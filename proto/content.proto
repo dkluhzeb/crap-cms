@@ -14,6 +14,9 @@ service ContentAPI {
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
   rpc Me (MeRequest) returns (MeResponse);
+  rpc ForgotPassword (ForgotPasswordRequest) returns (ForgotPasswordResponse);
+  rpc ResetPassword (ResetPasswordRequest) returns (ResetPasswordResponse);
+  rpc VerifyEmail (VerifyEmailRequest) returns (VerifyEmailResponse);
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
 }
@@ -105,6 +108,34 @@ message MeRequest {
 
 message MeResponse {
   Document user = 1;
+}
+
+message ForgotPasswordRequest {
+  string collection = 1;
+  string email = 2;
+}
+
+message ForgotPasswordResponse {
+  bool success = 1;
+}
+
+message ResetPasswordRequest {
+  string collection = 1;
+  string token = 2;
+  string new_password = 3;
+}
+
+message ResetPasswordResponse {
+  bool success = 1;
+}
+
+message VerifyEmailRequest {
+  string collection = 1;
+  string token = 2;
+}
+
+message VerifyEmailResponse {
+  bool success = 1;
 }
 
 message Document {

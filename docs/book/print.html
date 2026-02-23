@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bfaa04a8.js";
+            window.path_to_searchindex_js = "searchindex-76ee6ee2.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-f00845ee.js"></script>
+        <script src="toc-7aa5378d.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -385,6 +385,14 @@ max_depth = 10           # Hard cap on population depth (prevents abuse)
 [upload]
 max_file_size = 52428800 # Global max file size in bytes (50 MB)
 
+[email]
+smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
+smtp_port = 587          # SMTP port (587 for STARTTLS)
+smtp_user = ""           # SMTP username
+smtp_pass = ""           # SMTP password
+from_address = "noreply@example.com"  # Sender email address
+from_name = "Crap CMS"  # Sender display name
+
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 </code></pre>
@@ -459,6 +467,23 @@ on_init = []             # Lua function refs to run at startup (with CRUD access
 </tbody>
 </table>
 </div>
+<h3 id="email"><a class="header" href="#email"><code>[email]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>smtp_host</code></td><td>string</td><td><code>""</code> (empty)</td><td>SMTP server hostname. <strong>Empty = email disabled</strong> — all send attempts log a warning and return Ok.</td></tr>
+<tr><td><code>smtp_port</code></td><td>integer</td><td><code>587</code></td><td>SMTP port. 587 is the standard STARTTLS port.</td></tr>
+<tr><td><code>smtp_user</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication username.</td></tr>
+<tr><td><code>smtp_pass</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication password.</td></tr>
+<tr><td><code>from_address</code></td><td>string</td><td><code>"noreply@example.com"</code></td><td>Sender email address for outgoing mail.</td></tr>
+<tr><td><code>from_name</code></td><td>string</td><td><code>"Crap CMS"</code></td><td>Sender display name.</td></tr>
+</tbody>
+</table>
+</div>
+<p>When configured, email enables password reset (“Forgot password?” link on login), email verification (optional per-collection), and the <code>crap.email.send()</code> Lua API.</p>
 <h3 id="hooks"><a class="header" href="#hooks"><code>[hooks]</code></a></h3>
 <div class="table-wrapper">
 <table>
@@ -492,6 +517,14 @@ max_depth = 5
 
 [upload]
 max_file_size = 104857600  # 100 MB
+
+[email]
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_user = "noreply@example.com"
+smtp_pass = "your-smtp-password"
+from_address = "noreply@example.com"
+from_name = "My App"
 
 [hooks]
 on_init = ["hooks.seed.run"]
@@ -1043,7 +1076,7 @@ return M
 <li>Comparison operators (<code>greater_than</code>, <code>less_than</code>) work on the string representation</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="email"><a class="header" href="#email">Email</a></h1>
+<h1 id="email-1"><a class="header" href="#email-1">Email</a></h1>
 <p>Email address field.</p>
 <h2 id="sqlite-storage-7"><a class="header" href="#sqlite-storage-7">SQLite Storage</a></h2>
 <p><code>TEXT</code> column.</p>
@@ -1919,6 +1952,8 @@ end
 <li><strong>Argon2id</strong> — passwords are hashed with Argon2id before storage.</li>
 <li><strong><code>_password_hash</code></strong> — a hidden column added to auth collection tables. Never exposed in API responses, hooks, or admin forms.</li>
 <li><strong>Custom strategies</strong> — pluggable auth via Lua functions (API keys, LDAP, SSO).</li>
+<li><strong>Password reset</strong> — token-based forgot/reset password flow via admin UI and gRPC. Requires email configuration.</li>
+<li><strong>Email verification</strong> — optional per-collection. When enabled, users must verify their email before logging in.</li>
 </ul>
 <h2 id="activation"><a class="header" href="#activation">Activation</a></h2>
 <p>Auth middleware only activates when at least one auth collection exists. If no auth collections are defined, the admin UI and API remain fully open.</p>
@@ -1949,6 +1984,48 @@ crap.collections.define("users", {
 <pre><code class="language-toml">[auth]
 secret = "your-random-secret-here"
 </code></pre>
+<ol start="4">
+<li>(Optional) Configure email for password reset and verification:</li>
+</ol>
+<pre><code class="language-toml">[email]
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_user = "noreply@example.com"
+smtp_pass = "your-smtp-password"
+from_address = "noreply@example.com"
+from_name = "My App"
+</code></pre>
+<ol start="5">
+<li>(Optional) Enable email verification:</li>
+</ol>
+<pre><code class="language-lua">crap.collections.define("users", {
+    auth = {
+        verify_email = true,
+    },
+    fields = { ... },
+})
+</code></pre>
+<h2 id="password-reset"><a class="header" href="#password-reset">Password Reset</a></h2>
+<p>When email is configured, a “Forgot password?” link appears on the admin login page. The flow:</p>
+<ol>
+<li>User clicks “Forgot password?” and enters their email</li>
+<li>Server generates a single-use reset token (nanoid, stored in DB with 1-hour expiry)</li>
+<li>Reset email is sent with a link to <code>/admin/reset-password?token=xxx</code></li>
+<li>User sets a new password via the form</li>
+<li>Token is consumed (single-use) and user is redirected to login</li>
+</ol>
+<p>Available via gRPC as <code>ForgotPassword</code> and <code>ResetPassword</code> RPCs.</p>
+<p><strong>Security:</strong> The forgot password endpoint always returns success regardless of whether the email exists, to prevent user enumeration.</p>
+<h2 id="email-verification"><a class="header" href="#email-verification">Email Verification</a></h2>
+<p>When <code>verify_email: true</code> is set on an auth collection:</p>
+<ol>
+<li>A verification email is automatically sent when a user is created (admin UI or gRPC)</li>
+<li>The email contains a link to <code>/admin/verify-email?token=xxx</code></li>
+<li>Until verified, the user cannot log in (returns “Please verify your email” error)</li>
+<li>Clicking the verification link marks the user as verified</li>
+</ol>
+<p>Available via gRPC as <code>VerifyEmail</code> RPC.</p>
+<p><strong>Note:</strong> Email verification requires SMTP to be configured. If SMTP is not configured, verification emails won’t be sent (logged as warnings) and unverified users will be unable to log in.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="auth-collections"><a class="header" href="#auth-collections">Auth Collections</a></h1>
 <p>Any collection can be an auth collection. Set <code>auth = true</code> for defaults, or provide a configuration table.</p>
@@ -2049,6 +2126,9 @@ secret = "your-random-secret-here"
 <ul>
 <li><code>/admin/login</code></li>
 <li><code>/admin/logout</code></li>
+<li><code>/admin/forgot-password</code></li>
+<li><code>/admin/reset-password</code></li>
+<li><code>/admin/verify-email</code></li>
 <li><code>/static/*</code></li>
 </ul>
 <p><strong>Custom strategy flow:</strong>
@@ -2091,6 +2171,47 @@ If custom strategies are configured, the middleware checks them before redirecti
 <h2 id="multiple-auth-collections"><a class="header" href="#multiple-auth-collections">Multiple Auth Collections</a></h2>
 <p>You can have multiple auth collections (e.g., <code>users</code> and <code>admins</code>). The <code>Login</code> RPC takes a <code>collection</code> parameter to specify which one to authenticate against.</p>
 <p>The admin UI login always tries all auth collections.</p>
+<h2 id="password-reset-flow"><a class="header" href="#password-reset-flow">Password Reset Flow</a></h2>
+<p>When email is configured (<code>[email]</code> section in <code>crap.toml</code>):</p>
+<h3 id="admin-ui"><a class="header" href="#admin-ui">Admin UI</a></h3>
+<ol>
+<li>User clicks “Forgot password?” on the login page</li>
+<li>Enters their email address and selects the auth collection</li>
+<li>Server generates a nanoid reset token with 1-hour expiry</li>
+<li>Reset email is sent with a link to <code>/admin/reset-password?token=xxx</code></li>
+<li>User clicks the link, enters a new password</li>
+<li>Server validates the token, updates the password, and redirects to login</li>
+</ol>
+<h3 id="grpc"><a class="header" href="#grpc">gRPC</a></h3>
+<pre><code class="language-bash"># Step 1: Request password reset
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "email": "admin@example.com"
+}' localhost:50051 crap.ContentAPI/ForgotPassword
+
+# Step 2: Reset password with token from email
+grpcurl -plaintext -d '{
+    "collection": "users",
+    "token": "the-token-from-email",
+    "new_password": "newsecret123"
+}' localhost:50051 crap.ContentAPI/ResetPassword
+</code></pre>
+<p><strong>Note:</strong> <code>ForgotPassword</code> always returns success to prevent user enumeration.</p>
+<h2 id="email-verification-flow"><a class="header" href="#email-verification-flow">Email Verification Flow</a></h2>
+<p>When <code>verify_email: true</code> is set on an auth collection:</p>
+<h3 id="admin-ui-1"><a class="header" href="#admin-ui-1">Admin UI</a></h3>
+<ol>
+<li>User is created (via admin form or gRPC)</li>
+<li>Verification email is sent automatically with a link to <code>/admin/verify-email?token=xxx</code></li>
+<li>User clicks the verification link</li>
+<li>Login attempts before verification return “Please verify your email”</li>
+</ol>
+<h3 id="grpc-1"><a class="header" href="#grpc-1">gRPC</a></h3>
+<pre><code class="language-bash">grpcurl -plaintext -d '{
+    "collection": "users",
+    "token": "the-token-from-email"
+}' localhost:50051 crap.ContentAPI/VerifyEmail
+</code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="custom-strategies"><a class="header" href="#custom-strategies">Custom Strategies</a></h1>
 <p>Custom auth strategies let you authenticate users via mechanisms other than password login — API keys, LDAP, SSO headers, etc.</p>
@@ -2368,7 +2489,7 @@ max_depth = 10       # Hard cap for all requests (default: 10)
 }
 </code></pre>
 <h2 id="usage"><a class="header" href="#usage">Usage</a></h2>
-<h3 id="grpc"><a class="header" href="#grpc">gRPC</a></h3>
+<h3 id="grpc-2"><a class="header" href="#grpc-2">gRPC</a></h3>
 <pre><code class="language-bash"># Find with depth=1
 grpcurl -plaintext -d '{
     "collection": "posts",
@@ -2637,6 +2758,10 @@ local post = crap.collections.find_by_id("posts", id, { depth = 2 })
 <tr><td><code>crap.hooks</code></td><td>Global hook registration</td></tr>
 <tr><td><code>crap.log</code></td><td>Structured logging</td></tr>
 <tr><td><code>crap.util</code></td><td>Utility functions</td></tr>
+<tr><td><code>crap.auth</code></td><td>Password hashing and verification (Argon2id)</td></tr>
+<tr><td><code>crap.env</code></td><td>Read-only environment variable access</td></tr>
+<tr><td><code>crap.http</code></td><td>Outbound HTTP requests (blocking)</td></tr>
+<tr><td><code>crap.config</code></td><td>Read-only access to crap.toml values</td></tr>
 </tbody>
 </table>
 </div>
@@ -2970,6 +3095,224 @@ end
 end
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="crapauth"><a class="header" href="#crapauth">crap.auth</a></h1>
+<p>Password hashing and verification helpers using Argon2id.</p>
+<h2 id="functions-1"><a class="header" href="#functions-1">Functions</a></h2>
+<h3 id="crapauthhash_passwordpassword"><a class="header" href="#crapauthhash_passwordpassword"><code>crap.auth.hash_password(password)</code></a></h3>
+<p>Hash a plaintext password using Argon2id.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>password</code> (string) — Plaintext password.</li>
+</ul>
+<p><strong>Returns:</strong> string — The hashed password string.</p>
+<pre><code class="language-lua">local hash = crap.auth.hash_password("secret123")
+-- hash is an Argon2id hash string like "$argon2id$v=19$..."
+</code></pre>
+<h3 id="crapauthverify_passwordpassword-hash"><a class="header" href="#crapauthverify_passwordpassword-hash"><code>crap.auth.verify_password(password, hash)</code></a></h3>
+<p>Verify a plaintext password against a stored hash.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>password</code> (string) — Plaintext password to check.</li>
+<li><code>hash</code> (string) — Stored Argon2id hash.</li>
+</ul>
+<p><strong>Returns:</strong> boolean — <code>true</code> if the password matches.</p>
+<pre><code class="language-lua">local valid = crap.auth.verify_password("secret123", stored_hash)
+if valid then
+    crap.log.info("Password matches")
+end
+</code></pre>
+<h2 id="notes-4"><a class="header" href="#notes-4">Notes</a></h2>
+<ul>
+<li>Available in both init.lua and hooks.</li>
+<li>Uses the same Argon2id implementation as the built-in auth system.</li>
+<li>Useful for custom auth strategies or migrating users from external systems.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="crapenv"><a class="header" href="#crapenv">crap.env</a></h1>
+<p>Read-only access to environment variables.</p>
+<h2 id="functions-2"><a class="header" href="#functions-2">Functions</a></h2>
+<h3 id="crapenvgetkey"><a class="header" href="#crapenvgetkey"><code>crap.env.get(key)</code></a></h3>
+<p>Get the value of an environment variable.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>key</code> (string) — Environment variable name.</li>
+</ul>
+<p><strong>Returns:</strong> string or nil — The value, or <code>nil</code> if the variable is not set.</p>
+<pre><code class="language-lua">local db_url = crap.env.get("DATABASE_URL")
+if db_url then
+    crap.log.info("DB URL: " .. db_url)
+end
+
+-- Common pattern: env with fallback
+local port = crap.env.get("PORT") or "3000"
+</code></pre>
+<h2 id="notes-5"><a class="header" href="#notes-5">Notes</a></h2>
+<ul>
+<li>Available in both init.lua and hooks.</li>
+<li>Returns <code>nil</code> for unset variables (never errors).</li>
+<li>Useful for reading secrets, feature flags, or deployment-specific values without hardcoding them in Lua files.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="craphttp"><a class="header" href="#craphttp">crap.http</a></h1>
+<p>Outbound HTTP client for making requests from Lua hooks and init.lua.</p>
+<h2 id="functions-3"><a class="header" href="#functions-3">Functions</a></h2>
+<h3 id="craphttprequestopts"><a class="header" href="#craphttprequestopts"><code>crap.http.request(opts)</code></a></h3>
+<p>Make a blocking HTTP request.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>opts</code> (table):
+<ul>
+<li><code>url</code> (string, required) — Request URL.</li>
+<li><code>method</code> (string, optional) — HTTP method. Default: <code>"GET"</code>. Supported: <code>GET</code>, <code>POST</code>, <code>PUT</code>, <code>PATCH</code>, <code>DELETE</code>, <code>HEAD</code>.</li>
+<li><code>headers</code> (table, optional) — Request headers as key-value pairs.</li>
+<li><code>body</code> (string, optional) — Request body.</li>
+<li><code>timeout</code> (integer, optional) — Timeout in seconds. Default: <code>30</code>.</li>
+</ul>
+</li>
+</ul>
+<p><strong>Returns:</strong> table — Response with fields:</p>
+<ul>
+<li><code>status</code> (integer) — HTTP status code.</li>
+<li><code>headers</code> (table) — Response headers as key-value pairs.</li>
+<li><code>body</code> (string) — Response body as a string.</li>
+</ul>
+<p><strong>Errors:</strong> Throws a Lua error on transport failures (DNS, connection refused, timeout).</p>
+<pre><code class="language-lua">-- Simple GET
+local resp = crap.http.request({ url = "https://api.example.com/data" })
+if resp.status == 200 then
+    local data = crap.util.json_decode(resp.body)
+    crap.log.info("Got " .. #data .. " items")
+end
+
+-- POST with JSON body
+local resp = crap.http.request({
+    url = "https://api.example.com/webhook",
+    method = "POST",
+    headers = {
+        ["Content-Type"] = "application/json",
+        ["Authorization"] = "Bearer " .. crap.env.get("API_TOKEN"),
+    },
+    body = crap.util.json_encode({ event = "document.created", id = ctx.data.id }),
+    timeout = 10,
+})
+</code></pre>
+<h2 id="notes-6"><a class="header" href="#notes-6">Notes</a></h2>
+<ul>
+<li>Uses <a href="https://docs.rs/ureq">ureq</a> (blocking HTTP client). Since Lua hooks run inside <code>spawn_blocking</code>, blocking I/O is correct and won’t stall the async runtime.</li>
+<li>Non-2xx responses are <strong>not</strong> errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.</li>
+<li>Available in both init.lua and hooks.</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="crapconfig"><a class="header" href="#crapconfig">crap.config</a></h1>
+<p>Read-only access to <code>crap.toml</code> configuration values using dot notation.</p>
+<h2 id="functions-4"><a class="header" href="#functions-4">Functions</a></h2>
+<h3 id="crapconfiggetkey"><a class="header" href="#crapconfiggetkey"><code>crap.config.get(key)</code></a></h3>
+<p>Get a configuration value by dot-separated key path.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>key</code> (string) — Dot-separated config key (e.g., <code>"server.admin_port"</code>).</li>
+</ul>
+<p><strong>Returns:</strong> any — The value at that key path, or <code>nil</code> if the path doesn’t exist.</p>
+<pre><code class="language-lua">local port = crap.config.get("server.admin_port")   -- 3000
+local host = crap.config.get("server.host")          -- "0.0.0.0"
+local dev = crap.config.get("admin.dev_mode")        -- true
+local depth = crap.config.get("depth.max_depth")     -- 10
+local expiry = crap.config.get("auth.token_expiry")  -- 7200
+</code></pre>
+<h2 id="available-keys"><a class="header" href="#available-keys">Available Keys</a></h2>
+<p>The config structure mirrors <code>crap.toml</code>:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Key</th><th>Type</th><th>Default</th></tr>
+</thead>
+<tbody>
+<tr><td><code>server.admin_port</code></td><td>integer</td><td>3000</td></tr>
+<tr><td><code>server.grpc_port</code></td><td>integer</td><td>50051</td></tr>
+<tr><td><code>server.host</code></td><td>string</td><td>“0.0.0.0”</td></tr>
+<tr><td><code>database.path</code></td><td>string</td><td>“data/crap.db”</td></tr>
+<tr><td><code>admin.dev_mode</code></td><td>boolean</td><td>true</td></tr>
+<tr><td><code>auth.secret</code></td><td>string</td><td>“”</td></tr>
+<tr><td><code>auth.token_expiry</code></td><td>integer</td><td>7200</td></tr>
+<tr><td><code>depth.default_depth</code></td><td>integer</td><td>1</td></tr>
+<tr><td><code>depth.max_depth</code></td><td>integer</td><td>10</td></tr>
+<tr><td><code>upload.max_file_size</code></td><td>integer</td><td>52428800</td></tr>
+<tr><td><code>hooks.on_init</code></td><td>string[]</td><td>[]</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="notes-7"><a class="header" href="#notes-7">Notes</a></h2>
+<ul>
+<li>Values are a <strong>read-only snapshot</strong> taken at VM creation time. Changes to <code>crap.toml</code> after startup won’t be reflected until the process restarts.</li>
+<li>Available in both init.lua and hooks.</li>
+<li>Returns <code>nil</code> for non-existent keys (never errors).</li>
+</ul>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="crapemail"><a class="header" href="#crapemail">crap.email</a></h1>
+<p>Send emails via SMTP. Requires the <code>[email]</code> section in <code>crap.toml</code> to be configured.</p>
+<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
+<pre><code class="language-toml">[email]
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_user = "noreply@example.com"
+smtp_pass = "your-smtp-password"
+from_address = "noreply@example.com"
+from_name = "My App"
+</code></pre>
+<p>If <code>smtp_host</code> is empty (default), all <code>crap.email.send()</code> calls log a warning and return <code>true</code> (no-op). The system remains fully functional without SMTP.</p>
+<h2 id="crapemailsendopts"><a class="header" href="#crapemailsendopts">crap.email.send(opts)</a></h2>
+<p>Send an email.</p>
+<p><strong>Parameters:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Required</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>to</code></td><td>string</td><td>yes</td><td>Recipient email address</td></tr>
+<tr><td><code>subject</code></td><td>string</td><td>yes</td><td>Email subject line</td></tr>
+<tr><td><code>html</code></td><td>string</td><td>yes</td><td>HTML email body</td></tr>
+<tr><td><code>text</code></td><td>string</td><td>no</td><td>Plain text fallback body</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Returns:</strong> <code>true</code> on success.</p>
+<p><strong>Example:</strong></p>
+<pre><code class="language-lua">crap.email.send({
+    to = "user@example.com",
+    subject = "Welcome!",
+    html = "&lt;h1&gt;Welcome&lt;/h1&gt;&lt;p&gt;Thanks for signing up.&lt;/p&gt;",
+    text = "Welcome! Thanks for signing up.",
+})
+</code></pre>
+<h3 id="use-in-hooks"><a class="header" href="#use-in-hooks">Use in Hooks</a></h3>
+<p><code>crap.email.send()</code> is blocking (uses SMTP transport), which is correct because Lua hooks run inside <code>spawn_blocking</code>. Safe to call from any hook.</p>
+<pre><code class="language-lua">-- hooks/notifications.lua
+local M = {}
+
+function M.notify_on_create(ctx)
+    local admin_email = crap.env.get("ADMIN_EMAIL")
+    if admin_email then
+        crap.email.send({
+            to = admin_email,
+            subject = "New " .. ctx.collection .. " created",
+            html = "&lt;p&gt;A new document was created in &lt;b&gt;" .. ctx.collection .. "&lt;/b&gt;.&lt;/p&gt;",
+        })
+    end
+    return ctx
+end
+
+return M
+</code></pre>
+<pre><code class="language-lua">-- collections/posts.lua
+crap.collections.define("posts", {
+    hooks = {
+        after_change = { "hooks.notifications.notify_on_create" },
+    },
+    fields = { ... },
+})
+</code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="filter-operators"><a class="header" href="#filter-operators">Filter Operators</a></h1>
 <p>Filters are used in <code>crap.collections.find()</code> queries and in access control constraint returns. They map to SQL WHERE clauses.</p>
 <h2 id="shorthand-simple-equality"><a class="header" href="#shorthand-simple-equality">Shorthand: Simple Equality</a></h2>
@@ -3112,7 +3455,7 @@ find_post_by_id abc123
 <p>All commands use <code>-plaintext</code> (no TLS) and server reflection.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="rpcs"><a class="header" href="#rpcs">RPCs</a></h1>
-<p>All 11 RPCs with request/response shapes and grpcurl examples.</p>
+<p>All 14 RPCs with request/response shapes and grpcurl examples.</p>
 <h2 id="find"><a class="header" href="#find">Find</a></h2>
 <p>Find documents in a collection with filtering, sorting, and pagination.</p>
 <pre><code class="language-protobuf">message FindRequest {
@@ -3273,6 +3616,59 @@ message MeResponse {
     "token": "eyJhbGciOi..."
 }' localhost:50051 crap.ContentAPI/Me
 </code></pre>
+<h2 id="forgotpassword"><a class="header" href="#forgotpassword">ForgotPassword</a></h2>
+<p>Initiate a password reset flow. Generates a reset token and sends a reset email. Always returns success to prevent user enumeration.</p>
+<pre><code class="language-protobuf">message ForgotPasswordRequest {
+  string collection = 1;
+  string email = 2;
+}
+
+message ForgotPasswordResponse {
+  bool success = 1;  // always true
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -d '{
+    "collection": "users",
+    "email": "admin@example.com"
+}' localhost:50051 crap.ContentAPI/ForgotPassword
+</code></pre>
+<p>Requires email configuration (<code>[email]</code> in <code>crap.toml</code>). If email is not configured, the token is still generated but no email is sent.</p>
+<h2 id="resetpassword"><a class="header" href="#resetpassword">ResetPassword</a></h2>
+<p>Reset a user’s password using a token from the reset email.</p>
+<pre><code class="language-protobuf">message ResetPasswordRequest {
+  string collection = 1;
+  string token = 2;
+  string new_password = 3;
+}
+
+message ResetPasswordResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -d '{
+    "collection": "users",
+    "token": "the-reset-token",
+    "new_password": "newsecret123"
+}' localhost:50051 crap.ContentAPI/ResetPassword
+</code></pre>
+<p>Tokens are single-use and expire after 1 hour.</p>
+<h2 id="verifyemail"><a class="header" href="#verifyemail">VerifyEmail</a></h2>
+<p>Verify a user’s email address using a token sent during account creation.</p>
+<pre><code class="language-protobuf">message VerifyEmailRequest {
+  string collection = 1;
+  string token = 2;
+}
+
+message VerifyEmailResponse {
+  bool success = 1;
+}
+</code></pre>
+<pre><code class="language-bash">grpcurl -plaintext -d '{
+    "collection": "users",
+    "token": "the-verification-token"
+}' localhost:50051 crap.ContentAPI/VerifyEmail
+</code></pre>
+<p>Only relevant for auth collections with <code>verify_email: true</code>.</p>
 <h2 id="listcollections"><a class="header" href="#listcollections">ListCollections</a></h2>
 <p>List all collections and globals (lightweight overview).</p>
 <pre><code class="language-protobuf">message ListCollectionsRequest {}
@@ -3426,9 +3822,308 @@ grpcurl -plaintext -d '{
 </code></pre>
 <p>If <code>password</code> is omitted, the existing password is kept.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="type-safety"><a class="header" href="#type-safety">Type Safety</a></h1>
+<p>The gRPC API uses <code>google.protobuf.Struct</code> for document fields — a generic JSON object with no schema at the proto level. This is a deliberate design choice: Lua files define schemas, the proto stays stable, and the binary never needs recompiling when you add a field.</p>
+<p>But <code>Struct</code> means your gRPC client sees <code>fields</code> as an untyped map. This page explains how to get type safety back.</p>
+<h2 id="the-two-layer-architecture"><a class="header" href="#the-two-layer-architecture">The Two-Layer Architecture</a></h2>
+<pre><code>┌──────────────────────────────────────────────────┐
+│  Lua definitions (source of truth)               │
+│  collections/posts.lua → fields, types, options  │
+└────────────┬─────────────────────┬───────────────┘
+             │                     │
+    ┌────────▼────────┐   ┌───────▼────────────┐
+    │  DescribeCollection │   │  --generate-types    │
+    │  (runtime, gRPC)    │   │  (build-time, Lua)   │
+    └────────┬────────┘   └───────┬────────────┘
+             │                     │
+    ┌────────▼────────┐   ┌───────▼────────────┐
+    │  Client codegen │   │  types/generated.lua│
+    │  TS/Go/Python   │   │  (IDE types for     │
+    │  typed wrappers │   │   hooks &amp; init.lua) │
+    └─────────────────┘   └────────────────────┘
+</code></pre>
+<p><strong>Layer 1: Runtime schema discovery</strong> — the <code>DescribeCollection</code> RPC returns the full field schema. gRPC clients call it at startup or build time to generate typed wrappers.</p>
+<p><strong>Layer 2: Lua typegen</strong> — the <code>--generate-types</code> flag writes <code>types/generated.lua</code> with LuaLS annotations. This gives you autocompletion and type checking inside hooks and init.lua.</p>
+<h2 id="describecollection-1"><a class="header" href="#describecollection-1">DescribeCollection</a></h2>
+<p>The <code>DescribeCollection</code> RPC returns the full schema for any collection or global:</p>
+<pre><code class="language-bash">grpcurl -plaintext -d '{"slug": "posts"}' \
+    localhost:50051 crap.ContentAPI/DescribeCollection
+</code></pre>
+<p>Response:</p>
+<pre><code class="language-json">{
+  "slug": "posts",
+  "singularLabel": "Post",
+  "pluralLabel": "Posts",
+  "timestamps": true,
+  "fields": [
+    {
+      "name": "title",
+      "type": "text",
+      "required": true,
+      "unique": true
+    },
+    {
+      "name": "slug",
+      "type": "text",
+      "required": true,
+      "unique": true
+    },
+    {
+      "name": "status",
+      "type": "select",
+      "required": true,
+      "options": [
+        { "label": "Draft", "value": "draft" },
+        { "label": "Published", "value": "published" },
+        { "label": "Archived", "value": "archived" }
+      ]
+    },
+    {
+      "name": "content",
+      "type": "richtext"
+    },
+    {
+      "name": "author",
+      "type": "relationship",
+      "relationshipCollection": "users",
+      "relationshipMaxDepth": 1
+    },
+    {
+      "name": "tags",
+      "type": "relationship",
+      "relationshipCollection": "tags",
+      "relationshipHasMany": true
+    }
+  ]
+}
+</code></pre>
+<h3 id="fieldinfo-schema"><a class="header" href="#fieldinfo-schema">FieldInfo Schema</a></h3>
+<p>Each field in the response has:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>name</code></td><td>string</td><td>Column name</td></tr>
+<tr><td><code>type</code></td><td>string</td><td>Field type: <code>text</code>, <code>number</code>, <code>select</code>, <code>relationship</code>, etc.</td></tr>
+<tr><td><code>required</code></td><td>bool</td><td>Whether the field is required</td></tr>
+<tr><td><code>unique</code></td><td>bool</td><td>Whether the field has a uniqueness constraint</td></tr>
+<tr><td><code>options</code></td><td>SelectOptionInfo[]</td><td>Options for <code>select</code> fields (label + value)</td></tr>
+<tr><td><code>relationship_collection</code></td><td>string?</td><td>Target collection slug for <code>relationship</code> fields</td></tr>
+<tr><td><code>relationship_has_many</code></td><td>bool?</td><td>Whether it’s a many-to-many relationship</td></tr>
+<tr><td><code>relationship_max_depth</code></td><td>int?</td><td>Per-field population depth cap</td></tr>
+<tr><td><code>fields</code></td><td>FieldInfo[]</td><td>Sub-fields for <code>array</code> and <code>group</code> types (recursive)</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="building-typed-clients"><a class="header" href="#building-typed-clients">Building Typed Clients</a></h2>
+<p>The idea: call <code>DescribeCollection</code> once (at build time or app startup), then generate typed wrappers for your language.</p>
+<h3 id="typescript-example"><a class="header" href="#typescript-example">TypeScript Example</a></h3>
+<p>Call <code>DescribeCollection</code> for each collection and generate interfaces:</p>
+<pre><code class="language-typescript">// Generated from DescribeCollection("posts")
+interface Post {
+  id: string;
+  title: string;
+  slug: string;
+  status: "draft" | "published" | "archived";
+  content?: string;
+  author?: string;        // relationship ID (depth=0)
+  tags?: string[];         // has_many relationship IDs
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface CreatePostInput {
+  title: string;           // required
+  slug: string;            // required
+  status: string;          // required
+  content?: string;
+  author?: string;
+  tags?: string[];
+}
+</code></pre>
+<p>The mapping from <code>FieldInfo.type</code> to TypeScript types:</p>
+<pre><code class="language-typescript">function fieldTypeToTS(field: FieldInfo): string {
+  switch (field.type) {
+    case "text":
+    case "textarea":
+    case "richtext":
+    case "email":
+    case "date":
+    case "slug":
+      return "string";
+    case "number":
+      return "number";
+    case "checkbox":
+      return "boolean";
+    case "json":
+      return "unknown";
+    case "select":
+      return field.options.map(o =&gt; `"${o.value}"`).join(" | ");
+    case "relationship":
+      return field.relationshipHasMany ? "string[]" : "string";
+    case "array":
+      // Recurse into sub-fields
+      return `Array&lt;{ ${field.fields.map(f =&gt;
+        `${f.name}${f.required ? '' : '?'}: ${fieldTypeToTS(f)}`
+      ).join('; ')} }&gt;`;
+    default:
+      return "unknown";
+  }
+}
+</code></pre>
+<p>A typed wrapper around the gRPC client:</p>
+<pre><code class="language-typescript">// Wrap the untyped gRPC client with generated types
+class PostsClient {
+  constructor(private client: ContentAPIClient) {}
+
+  async find(query?: FindQuery): Promise&lt;{ documents: Post[]; total: number }&gt; {
+    const resp = await this.client.find({ collection: "posts", ...query });
+    return {
+      documents: resp.documents.map(d =&gt; ({ id: d.id, ...d.fields } as Post)),
+      total: resp.total,
+    };
+  }
+
+  async create(data: CreatePostInput): Promise&lt;Post&gt; {
+    const resp = await this.client.create({ collection: "posts", data });
+    return { id: resp.document.id, ...resp.document.fields } as Post;
+  }
+}
+</code></pre>
+<h3 id="go-example"><a class="header" href="#go-example">Go Example</a></h3>
+<p>Same pattern — <code>DescribeCollection</code> at build time, generate structs:</p>
+<pre><code class="language-go">// Generated from DescribeCollection("posts")
+type Post struct {
+    ID        string  `json:"id"`
+    Title     string  `json:"title"`
+    Slug      string  `json:"slug"`
+    Status    string  `json:"status"`
+    Content   *string `json:"content,omitempty"`
+    Author    *string `json:"author,omitempty"`
+    CreatedAt *string `json:"created_at,omitempty"`
+    UpdatedAt *string `json:"updated_at,omitempty"`
+}
+
+// Convert a generic Document to a typed Post
+func DocumentToPost(doc *crap.Document) Post {
+    p := Post{ID: doc.Id}
+    if f := doc.Fields.Fields; f != nil {
+        if v, ok := f["title"]; ok {
+            p.Title = v.GetStringValue()
+        }
+        // ...
+    }
+    return p
+}
+</code></pre>
+<h3 id="python-example"><a class="header" href="#python-example">Python Example</a></h3>
+<pre><code class="language-python"># Generated from DescribeCollection("posts")
+from dataclasses import dataclass
+from typing import Optional, List
+
+@dataclass
+class Post:
+    id: str
+    title: str
+    slug: str
+    status: str  # "draft" | "published" | "archived"
+    content: Optional[str] = None
+    author: Optional[str] = None
+    tags: Optional[List[str]] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+def document_to_post(doc) -&gt; Post:
+    fields = dict(doc.fields)
+    return Post(
+        id=doc.id,
+        title=fields.get("title", {}).string_value,
+        slug=fields.get("slug", {}).string_value,
+        status=fields.get("status", {}).string_value,
+        content=fields.get("content", {}).string_value or None,
+        # ...
+    )
+</code></pre>
+<h2 id="lua-typegen-for-hooks"><a class="header" href="#lua-typegen-for-hooks">Lua Typegen (for Hooks)</a></h2>
+<p>The gRPC type safety story above is for <strong>external clients</strong>. For <strong>Lua hooks and init.lua</strong>, the built-in typegen provides IDE-level type safety.</p>
+<h3 id="generate-types"><a class="header" href="#generate-types">Generate Types</a></h3>
+<p>Types are auto-generated on every server startup. You can also generate them explicitly:</p>
+<pre><code class="language-bash">crap-cms --config ./my-project --generate-types
+</code></pre>
+<p>This writes <code>&lt;config_dir&gt;/types/generated.lua</code> with LuaLS annotations derived from your Lua collection definitions.</p>
+<h3 id="what-gets-generated"><a class="header" href="#what-gets-generated">What Gets Generated</a></h3>
+<p>For each collection, typegen emits:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Type</th><th>Purpose</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crap.data.Posts</code></td><td>Input fields (for Create/Update data)</td></tr>
+<tr><td><code>crap.doc.Posts</code></td><td>Full document (fields + id + timestamps)</td></tr>
+<tr><td><code>crap.hook.Posts</code></td><td>Typed hook context (<code>collection</code>, <code>operation</code>, <code>data</code>)</td></tr>
+<tr><td><code>crap.find_result.Posts</code></td><td>Find result (<code>documents[]</code> + <code>total</code>)</td></tr>
+<tr><td><code>crap.filters.Posts</code></td><td>Filter keys for queries</td></tr>
+<tr><td><code>crap.query.Posts</code></td><td>Query options (filters, order_by, limit, offset)</td></tr>
+<tr><td><code>crap.hook_fn.Posts</code></td><td>Hook function signature</td></tr>
+</tbody>
+</table>
+</div>
+<p>For globals: <code>crap.global_data.*</code>, <code>crap.global_doc.*</code>, <code>crap.hook.global_*</code>.</p>
+<p>For array fields: <code>crap.array_row.*</code> with the sub-field types.</p>
+<p>Select fields become union types: <code>"draft" | "published" | "archived"</code>.</p>
+<p>Function overloads are generated so <code>crap.collections.find("posts", ...)</code> returns <code>crap.find_result.Posts</code> instead of the generic <code>crap.FindResult</code>.</p>
+<h3 id="ide-setup"><a class="header" href="#ide-setup">IDE Setup</a></h3>
+<p>Add a <code>.luarc.json</code> in your config directory:</p>
+<pre><code class="language-json">{
+  "runtime": { "version": "Lua 5.4" },
+  "workspace": { "library": ["./types"] }
+}
+</code></pre>
+<p>LuaLS (used by VS Code, Neovim, etc.) will then provide:</p>
+<ul>
+<li>Autocompletion on all document fields</li>
+<li>Type checking for field values</li>
+<li>Inline errors for typos and type mismatches</li>
+<li>Hover documentation showing field types</li>
+<li>Smart overloads on <code>crap.collections.find()</code> per collection</li>
+</ul>
+<h3 id="example-generated-output"><a class="header" href="#example-generated-output">Example Generated Output</a></h3>
+<p>For a <code>posts</code> collection with <code>title</code>, <code>slug</code>, <code>status</code> (select), <code>content</code> (richtext):</p>
+<pre><code class="language-lua">---@class crap.data.Posts
+---@field title string
+---@field slug string
+---@field status "draft" | "published" | "archived"
+---@field content? string
+
+---@class crap.doc.Posts
+---@field id string
+---@field title string
+---@field slug string
+---@field status "draft" | "published" | "archived"
+---@field content? string
+---@field created_at? string
+---@field updated_at? string
+
+---@class crap.hook.Posts
+---@field collection "posts"
+---@field operation "create" | "update"
+---@field data crap.data.Posts
+</code></pre>
+<h2 id="why-generic-struct"><a class="header" href="#why-generic-struct">Why Generic Struct?</a></h2>
+<p>The <code>Document.fields</code> is <code>google.protobuf.Struct</code> (not per-collection messages) because:</p>
+<ol>
+<li><strong>Single binary</strong> — the proto file is compiled into the binary. Per-collection proto messages would require recompilation when schemas change.</li>
+<li><strong>Lua is the schema source</strong> — schemas live in Lua files, not proto definitions. The proto layer is a transport, not a schema system.</li>
+<li><strong>Dynamic schemas</strong> — collections can be added, removed, or modified by editing Lua files without touching the binary or proto.</li>
+<li><strong>DescribeCollection fills the gap</strong> — runtime schema discovery gives clients everything they need to build typed wrappers, without coupling the proto to specific schemas.</li>
+</ol>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="database-1"><a class="header" href="#database-1">Database</a></h1>
 <p>Crap CMS uses SQLite as its database, accessed via rusqlite with an r2d2 connection pool.</p>
-<h2 id="configuration-5"><a class="header" href="#configuration-5">Configuration</a></h2>
+<h2 id="configuration-6"><a class="header" href="#configuration-6">Configuration</a></h2>
 <pre><code class="language-toml">[database]
 path = "data/crap.db"   # relative to config dir, or absolute
 </code></pre>
@@ -3526,7 +4221,7 @@ CREATE TABLE posts_slides (
 6. Fire after-hooks (background, no transaction)
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
-<h1 id="admin-ui"><a class="header" href="#admin-ui">Admin UI</a></h1>
+<h1 id="admin-ui-2"><a class="header" href="#admin-ui-2">Admin UI</a></h1>
 <p>Crap CMS includes a built-in admin UI served via Axum with Handlebars templates and HTMX.</p>
 <h2 id="access-1"><a class="header" href="#access-1">Access</a></h2>
 <p>Default: <a href="http://localhost:3000/admin">http://localhost:3000/admin</a></p>
@@ -3854,22 +4549,6 @@ CREATE TABLE posts_slides (
         <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
         <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
 
-        <!-- Livereload script (if served using the cli tool) -->
-        <script>
-            const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsAddress = wsProtocol + "//" + location.host + "/" + "__livereload";
-            const socket = new WebSocket(wsAddress);
-            socket.onmessage = function (event) {
-                if (event.data === "reload") {
-                    socket.close();
-                    location.reload();
-                }
-            };
-
-            window.onbeforeunload = function() {
-                socket.close();
-            }
-        </script>
 
 
         <script>
