@@ -25,8 +25,8 @@ fn parse_key_val(s: &str) -> Result<(String, String), String> {
 #[derive(Parser)]
 #[command(name = "crap-cms", about = "Crap CMS - Headless CMS with Lua hooks")]
 struct Cli {
-    /// Path to the config directory
-    #[arg(long, default_value = "./crap-cms")]
+    /// Path to the config directory (required)
+    #[arg(long)]
     config: PathBuf,
 
     /// Generate Lua type definitions and exit
