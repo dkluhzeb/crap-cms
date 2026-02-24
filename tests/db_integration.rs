@@ -187,6 +187,66 @@ fn sync_schema_adds_columns() {
 }
 
 #[test]
+fn sync_schema_adds_timestamp_columns_to_existing_table() {
+    let (_tmp, pool) = create_test_pool();
+    let registry = Registry::shared();
+
+    // Create a collection WITHOUT timestamps
+    let mut def = make_posts_def();
+    def.timestamps = false;
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register_collection(def.clone());
+    }
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync");
+
+    // Insert a row (no timestamp columns exist)
+    let mut data = HashMap::new();
+    data.insert("title".to_string(), "Old post".to_string());
+    {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        query::create(&tx, "posts", &def, &data, None).expect("Create without timestamps");
+        tx.commit().unwrap();
+    }
+
+    // Now enable timestamps and re-sync — this should add created_at/updated_at via ALTER TABLE
+    def.timestamps = true;
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register_collection(def.clone());
+    }
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Second sync with timestamps");
+
+    // Verify we can query (the bug: SELECT ... created_at, updated_at would fail)
+    let find_query = query::FindQuery {
+        filters: vec![],
+        order_by: None,
+        limit: None,
+        offset: None,
+        select: None,
+    };
+    let conn = pool.get().unwrap();
+    let docs = query::find(&conn, "posts", &def, &find_query, None)
+        .expect("Find should succeed after adding timestamp columns");
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].get_str("title"), Some("Old post"));
+
+    // Existing row has NULL timestamps (added via ALTER TABLE with no default)
+    assert!(docs[0].created_at.is_none());
+
+    // New rows get timestamps set by the query layer
+    drop(conn);
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let mut data2 = HashMap::new();
+    data2.insert("title".to_string(), "New post".to_string());
+    let new_doc = query::create(&tx, "posts", &def, &data2, None).expect("Create with timestamps");
+    tx.commit().unwrap();
+    assert!(new_doc.created_at.is_some());
+}
+
+#[test]
 fn count_documents() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();

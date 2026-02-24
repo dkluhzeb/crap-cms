@@ -336,6 +336,20 @@ fn alter_collection_table(
         }
     }
 
+    // Timestamps: ensure created_at/updated_at exist when timestamps are enabled
+    // Note: SQLite ALTER TABLE cannot use non-constant defaults like datetime('now'),
+    // so we add with no default (NULL for existing rows) — new inserts set these explicitly.
+    if def.timestamps {
+        for col_name in ["created_at", "updated_at"] {
+            if !existing_columns.contains(col_name) {
+                let sql = format!("ALTER TABLE {} ADD COLUMN {} TEXT", slug, col_name);
+                tracing::info!("Adding {} column to {}", col_name, slug);
+                conn.execute(&sql, [])
+                    .with_context(|| format!("Failed to add {} to {}", col_name, slug))?;
+            }
+        }
+    }
+
     // Warn about removed columns (SQLite can't DROP COLUMN easily)
     let mut field_names: HashSet<String> = HashSet::new();
     for f in &def.fields {
