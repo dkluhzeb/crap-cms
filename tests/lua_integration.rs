@@ -42,4 +42,13 @@ fn init_lua_loads_example_config() {
     );
     let settings = reg.get_global("site_settings").unwrap();
     assert!(settings.fields.iter().any(|f| f.name == "site_name"));
+
+    // Check articles collection has versioning config
+    let articles = reg.get_collection("articles").expect("articles collection not found");
+    assert_eq!(articles.display_name(), "Articles");
+    assert!(articles.has_versions(), "articles should have versions enabled");
+    assert!(articles.has_drafts(), "articles should have drafts enabled");
+    let vc = articles.versions.as_ref().unwrap();
+    assert!(vc.drafts);
+    assert_eq!(vc.max_versions, 20);
 }

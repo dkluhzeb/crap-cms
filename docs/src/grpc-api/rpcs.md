@@ -1,6 +1,6 @@
 # RPCs
 
-All 15 RPCs with request/response shapes and grpcurl examples.
+All RPCs with request/response shapes and grpcurl examples.
 
 ## Find
 
@@ -15,6 +15,7 @@ message FindRequest {
   optional int64 offset = 5;
   optional string where = 6;            // JSON where clause (advanced)
   optional int32 depth = 7;             // population depth (default: 0)
+  optional bool draft = 10;             // true = include drafts (versioned collections)
 }
 
 message FindResponse {
@@ -42,6 +43,7 @@ message FindByIDRequest {
   string collection = 1;
   string id = 2;
   optional int32 depth = 3;  // default: depth.default_depth from crap.toml
+  optional bool draft = 6;   // true = return latest version (may be draft)
 }
 
 message FindByIDResponse {
@@ -65,6 +67,7 @@ Create a new document.
 message CreateRequest {
   string collection = 1;
   google.protobuf.Struct data = 2;
+  optional bool draft = 4;  // true = create as draft (versioned collections)
 }
 
 message CreateResponse {
@@ -94,6 +97,7 @@ message UpdateRequest {
   string collection = 1;
   string id = 2;
   google.protobuf.Struct data = 3;
+  optional bool draft = 5;  // true = version-only save (main table unchanged)
 }
 
 message UpdateResponse {
@@ -326,6 +330,7 @@ message DescribeCollectionResponse {
   bool auth = 5;
   repeated FieldInfo fields = 6;
   bool upload = 7;
+  bool drafts = 8;  // true if collection has versions with drafts enabled
 }
 ```
 
@@ -338,6 +343,66 @@ grpcurl -plaintext -d '{"slug": "posts"}' \
 grpcurl -plaintext -d '{"slug": "site_settings", "is_global": true}' \
     localhost:50051 crap.ContentAPI/DescribeCollection
 ```
+
+## ListVersions
+
+List version history for a document. Only available for versioned collections.
+
+```protobuf
+message ListVersionsRequest {
+  string collection = 1;
+  string id = 2;
+  optional int64 limit = 3;
+}
+
+message ListVersionsResponse {
+  repeated VersionInfo versions = 1;
+}
+
+message VersionInfo {
+  string id = 1;
+  int64 version = 2;
+  string status = 3;      // "published" or "draft"
+  bool latest = 4;
+  string created_at = 5;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "articles",
+    "id": "abc123",
+    "limit": "10"
+}' localhost:50051 crap.ContentAPI/ListVersions
+```
+
+Returns versions in newest-first order. Returns an error for non-versioned collections.
+
+## RestoreVersion
+
+Restore a previous version, writing its snapshot data back to the main table.
+
+```protobuf
+message RestoreVersionRequest {
+  string collection = 1;
+  string document_id = 2;
+  string version_id = 3;
+}
+
+message RestoreVersionResponse {
+  Document document = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "articles",
+    "document_id": "abc123",
+    "version_id": "v_xyz"
+}' localhost:50051 crap.ContentAPI/RestoreVersion
+```
+
+This overwrites the main table with the version's snapshot, sets `_status` to `"published"`, and creates a new version entry for the restore. Returns an error for non-versioned collections.
 
 ## Subscribe
 

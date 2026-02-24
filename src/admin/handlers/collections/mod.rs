@@ -197,11 +197,15 @@ pub async fn list_items(
                     &doc.id
                 }
             });
+        let status = doc.fields.get("_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("published");
         let mut item = serde_json::json!({
             "id": doc.id,
             "title_value": title_value,
             "created_at": doc.created_at,
             "updated_at": doc.updated_at,
+            "status": status,
         });
 
         // Add thumbnail URL for upload collections
@@ -240,6 +244,8 @@ pub async fn list_items(
         })
         .unwrap_or_default();
 
+    let has_drafts = def.has_drafts();
+
     let data = serde_json::json!({
         "page_title": def.display_name(),
         "collections": state.sidebar_collections(),
@@ -251,6 +257,7 @@ pub async fn list_items(
             "title_field": title_field,
         },
         "items": items,
+        "has_drafts": has_drafts,
         "search": search,
         "page": page,
         "per_page": per_page,
@@ -324,6 +331,7 @@ pub async fn create_form(
         },
         "fields": fields,
         "editing": false,
+        "has_drafts": def.has_drafts(),
         "user": user_json(&claims),
         "breadcrumbs": [
             { "label": "Collections", "url": "/admin/collections" },
@@ -451,7 +459,10 @@ pub async fn create_action(
     // Extract join table data (arrays + has-many relationships) from form
     let join_data = extract_join_data_from_form(&form_data, &def.fields);
 
-    // Extract locale before it enters hooks/regular data flow
+    // Extract action (publish/save_draft) and locale before they enter hooks
+    let action = form_data.remove("_action").unwrap_or_default();
+    let draft = action == "save_draft";
+
     let form_locale = form_data.remove("_locale");
     let locale_ctx = LocaleContext::from_locale_string(
         form_locale.as_deref(), &state.config.locale,
@@ -472,7 +483,7 @@ pub async fn create_action(
             &pool, &runner, &slug_owned, &def_owned,
             form_data, &join_data,
             password.as_deref(), locale_ctx.as_ref(), locale,
-            user_doc.as_ref(),
+            user_doc.as_ref(), draft,
         )
     }).await;
 
@@ -666,6 +677,37 @@ pub async fn edit_form(
         .map(|s| s.to_string())
         .unwrap_or_else(|| document.id.clone());
 
+    // Fetch document status and version history for versioned collections
+    let has_drafts = def.has_drafts();
+    let has_versions = def.has_versions();
+    let doc_status = if has_drafts {
+        document.fields.get("_status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("published")
+            .to_string()
+    } else {
+        String::new()
+    };
+    let versions: Vec<serde_json::Value> = if has_versions {
+        if let Ok(conn) = state.pool.get() {
+            query::list_versions(&conn, &slug, &document.id, Some(10))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|v| serde_json::json!({
+                    "id": v.id,
+                    "version": v.version,
+                    "status": v.status,
+                    "latest": v.latest,
+                    "created_at": v.created_at,
+                }))
+                .collect()
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+
     let mut data = serde_json::json!({
         "page_title": format!("Edit {}", def.singular_name()),
         "collections": state.sidebar_collections(),
@@ -679,9 +721,13 @@ pub async fn edit_form(
             "id": document.id,
             "created_at": document.created_at,
             "updated_at": document.updated_at,
+            "status": doc_status,
         },
         "fields": fields,
         "editing": true,
+        "has_drafts": has_drafts,
+        "has_versions": has_versions,
+        "versions": versions,
         "user": user_json(&claims),
         "breadcrumbs": [
             { "label": "Collections", "url": "/admin/collections" },
@@ -810,7 +856,10 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         None => return redirect_response("/admin/collections"),
     };
 
-    // Extract locale before it enters hooks/regular data flow
+    // Extract action (publish/save_draft/unpublish) and locale
+    let action = form_data.remove("_action").unwrap_or_default();
+    let draft = action == "save_draft";
+
     let form_locale = form_data.remove("_locale");
     let locale_ctx = LocaleContext::from_locale_string(
         form_locale.as_deref(), &state.config.locale,
@@ -896,13 +945,32 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         query::LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
+    let action_owned = action.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::service::update_document(
-            &pool, &runner, &slug_owned, &id_owned, &def_owned,
-            form_data, &join_data,
-            password.as_deref(), locale_ctx.as_ref(), locale,
-            user_doc.as_ref(),
-        )
+        // Handle unpublish: set _status to 'draft' and create a version
+        if action_owned == "unpublish" && def_owned.has_versions() {
+            let mut conn = pool.get().map_err(|e| anyhow::anyhow!("DB connection: {}", e))?;
+            let tx = conn.transaction().map_err(|e| anyhow::anyhow!("Start transaction: {}", e))?;
+            query::set_document_status(&tx, &slug_owned, &id_owned, "draft")?;
+            let doc = query::find_by_id(&tx, &slug_owned, &def_owned, &id_owned, None)?
+                .ok_or_else(|| anyhow::anyhow!("Document not found"))?;
+            let snapshot = query::build_snapshot(&tx, &slug_owned, &def_owned, &doc)?;
+            query::create_version(&tx, &slug_owned, &id_owned, "draft", &snapshot)?;
+            if let Some(ref vc) = def_owned.versions {
+                if vc.max_versions > 0 {
+                    query::prune_versions(&tx, &slug_owned, &id_owned, vc.max_versions)?;
+                }
+            }
+            tx.commit().map_err(|e| anyhow::anyhow!("Commit: {}", e))?;
+            Ok(doc)
+        } else {
+            crate::service::update_document(
+                &pool, &runner, &slug_owned, &id_owned, &def_owned,
+                form_data, &join_data,
+                password.as_deref(), locale_ctx.as_ref(), locale,
+                user_doc.as_ref(), draft,
+            )
+        }
     }).await;
 
     let locale_suffix = form_locale
@@ -1097,4 +1165,62 @@ async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user:
     }
 
     axum::response::Redirect::to(&format!("/admin/collections/{}", slug)).into_response()
+}
+
+/// POST /admin/collections/{slug}/{id}/versions/{version_id}/restore — restore a version
+pub async fn restore_version(
+    State(state): State<AdminState>,
+    Path((slug, id, version_id)): Path<(String, String, String)>,
+    auth_user: Option<Extension<AuthUser>>,
+) -> impl IntoResponse {
+    let def = {
+        let reg = match state.registry.read() {
+            Ok(r) => r,
+            Err(_) => return redirect_response("/admin/collections"),
+        };
+        reg.get_collection(&slug).cloned()
+    };
+    let def = match def {
+        Some(d) => d,
+        None => return redirect_response("/admin/collections"),
+    };
+
+    if !def.has_versions() {
+        return redirect_response(&format!("/admin/collections/{}/{}", slug, id));
+    }
+
+    // Check update access
+    match check_access_or_forbid(
+        &state, def.access.update.as_deref(), &auth_user, Some(&id), None,
+    ) {
+        Ok(AccessResult::Denied) => return forbidden(&state, "You don't have permission to update this item").into_response(),
+        Err(resp) => return resp,
+        _ => {}
+    }
+
+    let pool = state.pool.clone();
+    let slug_owned = slug.clone();
+    let id_owned = id.clone();
+    let def_owned = def.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        let mut conn = pool.get().map_err(|e| anyhow::anyhow!("DB connection: {}", e))?;
+        let tx = conn.transaction().map_err(|e| anyhow::anyhow!("Start transaction: {}", e))?;
+        let version = query::find_version_by_id(&tx, &slug_owned, &version_id)?
+            .ok_or_else(|| anyhow::anyhow!("Version not found"))?;
+        let doc = query::restore_version(&tx, &slug_owned, &def_owned, &id_owned, &version.snapshot, "published")?;
+        tx.commit().map_err(|e| anyhow::anyhow!("Commit: {}", e))?;
+        Ok::<_, anyhow::Error>(doc)
+    }).await;
+
+    match result {
+        Ok(Ok(_)) => redirect_response(&format!("/admin/collections/{}/{}", slug, id)),
+        Ok(Err(e)) => {
+            tracing::error!("Restore version error: {}", e);
+            redirect_response(&format!("/admin/collections/{}/{}", slug, id))
+        }
+        Err(e) => {
+            tracing::error!("Restore version task error: {}", e);
+            redirect_response(&format!("/admin/collections/{}/{}", slug, id))
+        }
+    }
 }

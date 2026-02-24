@@ -369,6 +369,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         };
 
         let mut out = String::new();
@@ -423,6 +424,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         };
 
         let mut out = String::new();
@@ -475,6 +477,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         });
         registry.register_collection(CollectionDefinition {
             slug: "apples".to_string(),
@@ -487,6 +490,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         });
 
         let output = render(&registry);
@@ -509,6 +513,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         });
         registry.register_collection(CollectionDefinition {
             slug: "pages".to_string(),
@@ -521,6 +526,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         });
 
         let output = render(&registry);

@@ -64,6 +64,7 @@ fn before_change_hook_modifies_data() {
         operation: "create".to_string(),
         data,
         locale: None,
+        draft: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -102,6 +103,7 @@ fn before_validate_trims_title() {
         operation: "create".to_string(),
         data,
         locale: None,
+        draft: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -167,6 +169,7 @@ fn registered_hook_fires_for_all_collections() {
         operation: "create".to_string(),
         data,
         locale: None,
+        draft: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -221,7 +224,7 @@ fn validate_required_present_passes() {
     data.insert("title".to_string(), serde_json::json!("Valid Title"));
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     assert!(result.is_ok(), "Validation should pass with required field present");
 }
 
@@ -235,7 +238,7 @@ fn validate_required_missing_fails() {
     let data = HashMap::new(); // title is missing
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     assert!(result.is_err(), "Validation should fail with missing required field");
     let err = result.unwrap_err();
     assert!(err.errors.iter().any(|e| e.field == "title"), "Should have title error");
@@ -252,7 +255,7 @@ fn validate_required_empty_string_fails() {
     data.insert("title".to_string(), serde_json::json!("")); // empty string
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     assert!(result.is_err(), "Validation should fail with empty required field");
 }
 
@@ -274,7 +277,7 @@ fn validate_unique_passes_when_no_conflict() {
     data.insert("title".to_string(), serde_json::json!("Different Title"));
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     assert!(result.is_ok(), "Unique validation should pass with different title");
 }
 
@@ -296,7 +299,7 @@ fn validate_unique_fails_on_duplicate() {
     data.insert("title".to_string(), serde_json::json!("Duplicate Title"));
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     assert!(result.is_err(), "Unique validation should fail for duplicate title");
     let err = result.unwrap_err();
     assert!(err.errors.iter().any(|e| e.field == "title" && e.message.contains("unique")));
@@ -320,7 +323,7 @@ fn validate_unique_excludes_self_on_update() {
     data.insert("title".to_string(), serde_json::json!("My Title"));
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", Some(&doc.id));
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", Some(&doc.id), false);
     assert!(result.is_ok(), "Unique validation should pass when excluding own ID");
 }
 
@@ -338,7 +341,7 @@ fn custom_validate_function_passes() {
     data.insert("word_count".to_string(), serde_json::json!(42)); // positive
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     assert!(result.is_ok(), "Custom validate should pass for positive number");
 }
 
@@ -354,7 +357,7 @@ fn custom_validate_function_fails() {
     data.insert("word_count".to_string(), serde_json::json!(-5)); // negative!
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     assert!(result.is_err(), "Custom validate should fail for negative number");
     let err = result.unwrap_err();
     assert!(err.errors.iter().any(|e| e.field == "word_count"), "Should have word_count error");
@@ -372,7 +375,7 @@ fn custom_validate_returns_error_message() {
     data.insert("word_count".to_string(), serde_json::json!(-1));
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None);
+    let result = runner.validate_fields(&def.fields, &data, &conn, "articles", None, false);
     let err = result.unwrap_err();
     let word_count_err = err.errors.iter().find(|e| e.field == "word_count").unwrap();
     assert!(
@@ -400,13 +403,14 @@ fn run_before_write_full_lifecycle() {
         operation: "create".to_string(),
         data,
         locale: None,
+        draft: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None,
+        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false,
     ).expect("run_before_write failed");
 
     // Title should be trimmed (before_validate hook)
@@ -435,13 +439,14 @@ fn run_before_write_fails_on_validation_error() {
         operation: "create".to_string(),
         data,
         locale: None,
+        draft: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None,
+        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false,
     );
     assert!(result.is_err(), "run_before_write should fail when validation fails");
 }

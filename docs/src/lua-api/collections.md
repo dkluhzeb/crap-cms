@@ -92,9 +92,13 @@ Create a new document. Returns the created document.
 local doc = crap.collections.create("posts", {
     title = "New Post",
     slug = "new-post",
-    status = "draft",
 })
 print(doc.id)  -- auto-generated nanoid
+
+-- Create as draft (versioned collections only)
+local draft = crap.collections.create("articles", {
+    title = "Work in progress",
+}, { draft = true })
 ```
 
 ### Options
@@ -102,6 +106,7 @@ print(doc.id)  -- auto-generated nanoid
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
+| `draft` | boolean | `false` | Create as draft. Skips required field validation. Only affects versioned collections with `drafts = true`. |
 | `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level and field-level access for the current user. |
 
 ## crap.collections.update(collection, id, data, opts?)
@@ -113,8 +118,12 @@ Update an existing document. Returns the updated document.
 ```lua
 local doc = crap.collections.update("posts", "abc123", {
     title = "Updated Title",
-    status = "published",
 })
+
+-- Draft update: saves a version snapshot only, main table unchanged
+crap.collections.update("articles", "abc123", {
+    title = "Still editing...",
+}, { draft = true })
 ```
 
 ### Options
@@ -122,6 +131,7 @@ local doc = crap.collections.update("posts", "abc123", {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
+| `draft` | boolean | `false` | Version-only save. Creates a draft version snapshot without modifying the main table. Only affects versioned collections with `drafts = true`. |
 | `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level and field-level access for the current user. |
 
 ## crap.collections.delete(collection, id, opts?)

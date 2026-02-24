@@ -16,6 +16,8 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 | `auth` | boolean or table | `nil` | Authentication config (see [Auth Collections](../authentication/auth-collections.md)) |
 | `upload` | boolean or table | `nil` | Upload config (see [Uploads](../uploads/overview.md)) |
 | `access` | table | `{}` | Access control function refs |
+| `versions` | boolean or table | `nil` | Versioning and drafts config (see [Versions & Drafts](versions.md)) |
+| `live` | boolean or string | `nil` | Live update broadcasting (see [Live Updates](../live-updates/overview.md)) |
 
 ## `admin`
 
@@ -97,6 +99,34 @@ See [Uploads](../uploads/overview.md) for the full schema.
 If a property is omitted, that operation is allowed for everyone.
 
 See [Access Control](../access-control/overview.md) for full details.
+
+## `versions`
+
+Set to `true` for defaults (drafts enabled, unlimited versions), or provide a config table:
+
+```lua
+-- Simple: versions with drafts
+versions = true
+
+-- With options
+versions = {
+    drafts = true,
+    max_versions = 20,
+}
+
+-- Versions without drafts (pure audit trail)
+versions = {
+    drafts = false,
+    max_versions = 50,
+}
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `drafts` | boolean | `true` | Enable draft/publish workflow with `_status` field |
+| `max_versions` | integer | `0` | Max versions per document. `0` = unlimited. |
+
+See [Versions & Drafts](versions.md) for the full workflow.
 
 ## Complete Example
 

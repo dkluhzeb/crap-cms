@@ -62,6 +62,14 @@ Every collection automatically has these columns (not in your field definitions)
 
 Auth collections also get a hidden `_password_hash` TEXT column.
 
+Versioned collections with `drafts = true` also get:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `_status` | TEXT | `"published"` or `"draft"` (auto-managed) |
+
+Versioned collections also get a companion `_versions_{slug}` table that stores JSON snapshots of every save. See [Versions & Drafts](versions.md).
+
 ## Schema Sync
 
 On startup, Crap CMS compares each Lua definition against the existing SQLite table:

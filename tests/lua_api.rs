@@ -1129,3 +1129,266 @@ fn lua_find_by_id_with_depth() {
     "#);
     assert_eq!(result, "ok");
 }
+
+// ── 5A. Versions Config Parsing ─────────────────────────────────────────────
+
+#[test]
+fn parse_versions_config_boolean_true() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("docs.lua"),
+        r#"
+crap.collections.define("docs", {
+    versions = true,
+    fields = {
+        { name = "title", type = "text" },
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("docs").expect("docs should be registered");
+    assert!(def.has_versions(), "versions=true should enable versions");
+    assert!(def.has_drafts(), "versions=true enables drafts by default (PayloadCMS convention)");
+    let vc = def.versions.as_ref().unwrap();
+    assert!(vc.drafts);
+    assert_eq!(vc.max_versions, 0);
+}
+
+#[test]
+fn parse_versions_config_table_with_drafts() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    versions = {
+        drafts = true,
+        max_versions = 50,
+    },
+    fields = {
+        { name = "title", type = "text" },
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("posts").expect("posts should be registered");
+    assert!(def.has_versions(), "should have versions");
+    assert!(def.has_drafts(), "should have drafts");
+    let vc = def.versions.as_ref().unwrap();
+    assert!(vc.drafts);
+    assert_eq!(vc.max_versions, 50);
+}
+
+#[test]
+fn parse_versions_config_false() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("notes.lua"),
+        r#"
+crap.collections.define("notes", {
+    versions = false,
+    fields = {
+        { name = "body", type = "textarea" },
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("notes").expect("notes should be registered");
+    assert!(!def.has_versions(), "versions=false should not enable versions");
+    assert!(def.versions.is_none());
+}
+
+#[test]
+fn parse_versions_config_omitted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("plain.lua"),
+        r#"
+crap.collections.define("plain", {
+    fields = {
+        { name = "name", type = "text" },
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("plain").expect("plain should be registered");
+    assert!(!def.has_versions(), "no versions config should mean no versions");
+    assert!(def.versions.is_none());
+}
+
+// ── 5B. Lua CRUD with Draft Option ──────────────────────────────────────────
+
+fn setup_versioned_db() -> (tempfile::TempDir, crap_cms::db::DbPool, SharedRegistry, HookRunner) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("articles.lua"),
+        r#"
+crap.collections.define("articles", {
+    timestamps = true,
+    versions = {
+        drafts = true,
+        max_versions = 10,
+    },
+    fields = {
+        { name = "title", type = "text", required = true },
+        { name = "body", type = "textarea" },
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
+    crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
+
+    let runner = HookRunner::new(tmp.path(), registry.clone(), &config).expect("runner");
+    (tmp, pool, registry, runner)
+}
+
+fn eval_versioned(runner: &HookRunner, pool: &crap_cms::db::DbPool, code: &str) -> String {
+    let conn = pool.get().expect("conn");
+    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+}
+
+#[test]
+fn lua_create_with_draft_option() {
+    let (_tmp, pool, _reg, runner) = setup_versioned_db();
+    let result = eval_versioned(&runner, &pool, r#"
+        local doc = crap.collections.create("articles", {
+            title = "Draft Article",
+            body = "Some content",
+        }, { draft = true })
+
+        if doc == nil then return "CREATE_NIL" end
+        if doc.id == nil then return "NO_ID" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_create_draft_skips_required_validation() {
+    let (_tmp, pool, _reg, runner) = setup_versioned_db();
+    let result = eval_versioned(&runner, &pool, r#"
+        -- title is required, but draft=true should skip validation
+        local ok, err = pcall(function()
+            crap.collections.create("articles", {
+                body = "No title, just body",
+            }, { draft = true })
+        end)
+        if ok then return "ok" end
+        return "FAILED:" .. tostring(err)
+    "#);
+    assert_eq!(result, "ok", "Draft create should skip required field validation");
+}
+
+#[test]
+fn lua_create_publish_enforces_required_validation() {
+    let (_tmp, pool, _reg, runner) = setup_versioned_db();
+    let result = eval_versioned(&runner, &pool, r#"
+        -- title is required, draft=false (publish) should enforce validation
+        local ok, err = pcall(function()
+            crap.collections.create("articles", {
+                body = "No title",
+            })
+        end)
+        if ok then return "SHOULD_HAVE_FAILED" end
+        local err_str = tostring(err)
+        if err_str:find("required") or err_str:find("title") then
+            return "ok"
+        end
+        return "UNEXPECTED_ERROR:" .. err_str
+    "#);
+    assert_eq!(result, "ok", "Publish create should enforce required validation");
+}
+
+#[test]
+fn lua_update_with_draft_option() {
+    let (_tmp, pool, _reg, runner) = setup_versioned_db();
+    let result = eval_versioned(&runner, &pool, r#"
+        -- Create a published document first
+        local doc = crap.collections.create("articles", {
+            title = "Published Article",
+            body = "Original body",
+        })
+        local id = doc.id
+
+        -- Draft update should NOT modify the main table
+        local updated = crap.collections.update("articles", id, {
+            title = "Draft Title Change",
+        }, { draft = true })
+
+        -- The returned doc should still have the original title
+        -- (version-only save, main table unchanged)
+        local current = crap.collections.find_by_id("articles", id)
+        if current.title ~= "Published Article" then
+            return "MAIN_TABLE_CHANGED:" .. tostring(current.title)
+        end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_update_publish_modifies_main_table() {
+    let (_tmp, pool, _reg, runner) = setup_versioned_db();
+    let result = eval_versioned(&runner, &pool, r#"
+        local doc = crap.collections.create("articles", {
+            title = "Original",
+            body = "Content",
+        })
+        local id = doc.id
+
+        -- Publish update (no draft option)
+        local updated = crap.collections.update("articles", id, {
+            title = "Updated Title",
+        })
+
+        local current = crap.collections.find_by_id("articles", id)
+        if current.title ~= "Updated Title" then
+            return "NOT_UPDATED:" .. tostring(current.title)
+        end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}

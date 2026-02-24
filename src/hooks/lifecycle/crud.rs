@@ -289,8 +289,47 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 }
             }
 
+            let draft: bool = opts.as_ref()
+                .and_then(|o| o.get::<Option<bool>>("draft").ok().flatten())
+                .unwrap_or(false);
+            let is_draft = draft && def.has_drafts();
+            let status = if is_draft { "draft" } else { "published" };
+
+            // Validate required fields when not a draft (draft-enabled collections
+            // don't have NOT NULL constraints, so we must check at the app level)
+            if !is_draft && def.has_drafts() {
+                for field in &def.fields {
+                    if field.required && field.field_type != crate::core::field::FieldType::Checkbox {
+                        let val = data.get(&field.name);
+                        if val.is_none() || val == Some(&String::new()) {
+                            return Err(mlua::Error::RuntimeError(
+                                format!("Field '{}' is required", field.name)
+                            ));
+                        }
+                    }
+                }
+            }
+
             let doc = query::create(conn, &collection, &def, &data, locale_ctx.as_ref())
                 .map_err(|e| mlua::Error::RuntimeError(format!("create error: {}", e)))?;
+
+            // Versioning: set status (only if drafts enabled) and create initial version snapshot
+            if def.has_versions() {
+                if def.has_drafts() {
+                    query::set_document_status(conn, &collection, &doc.id, status)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("set_status error: {}", e)))?;
+                }
+                let snapshot = query::build_snapshot(conn, &collection, &def, &doc)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("snapshot error: {}", e)))?;
+                query::create_version(conn, &collection, &doc.id, status, &snapshot)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("version error: {}", e)))?;
+                if let Some(ref vc) = def.versions {
+                    if vc.max_versions > 0 {
+                        query::prune_versions(conn, &collection, &doc.id, vc.max_versions)
+                            .map_err(|e| mlua::Error::RuntimeError(format!("prune error: {}", e)))?;
+                    }
+                }
+            }
 
             document_to_lua_table(lua, &doc)
         })?;
@@ -343,10 +382,68 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 }
             }
 
-            let doc = query::update(conn, &collection, &def, &id, &data, locale_ctx.as_ref())
-                .map_err(|e| mlua::Error::RuntimeError(format!("update error: {}", e)))?;
+            let draft: bool = opts.as_ref()
+                .and_then(|o| o.get::<Option<bool>>("draft").ok().flatten())
+                .unwrap_or(false);
+            let is_draft = draft && def.has_drafts();
 
-            document_to_lua_table(lua, &doc)
+            if is_draft && def.has_versions() {
+                // Version-only save: do NOT update the main table.
+                let existing_doc = query::find_by_id(conn, &collection, &def, &id, None)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?
+                    .ok_or_else(|| mlua::Error::RuntimeError(
+                        format!("Document {} not found in {}", id, collection)
+                    ))?;
+
+                // Merge incoming data onto existing doc fields
+                let mut snapshot_fields = existing_doc.fields.clone();
+                for (k, v) in &data {
+                    snapshot_fields.insert(k.clone(), serde_json::Value::String(v.clone()));
+                }
+                let snapshot_doc = crate::core::document::Document {
+                    id: id.clone(),
+                    fields: snapshot_fields,
+                    created_at: existing_doc.created_at.clone(),
+                    updated_at: existing_doc.updated_at.clone(),
+                };
+
+                let snapshot = query::build_snapshot(conn, &collection, &def, &snapshot_doc)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("snapshot error: {}", e)))?;
+                query::create_version(conn, &collection, &id, "draft", &snapshot)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("version error: {}", e)))?;
+                if let Some(ref vc) = def.versions {
+                    if vc.max_versions > 0 {
+                        query::prune_versions(conn, &collection, &id, vc.max_versions)
+                            .map_err(|e| mlua::Error::RuntimeError(format!("prune error: {}", e)))?;
+                    }
+                }
+
+                document_to_lua_table(lua, &existing_doc)
+            } else {
+                // Normal update: write to main table
+                let doc = query::update(conn, &collection, &def, &id, &data, locale_ctx.as_ref())
+                    .map_err(|e| mlua::Error::RuntimeError(format!("update error: {}", e)))?;
+
+                // Versioning: set status to published (only if drafts enabled) and create version
+                if def.has_versions() {
+                    if def.has_drafts() {
+                        query::set_document_status(conn, &collection, &doc.id, "published")
+                            .map_err(|e| mlua::Error::RuntimeError(format!("set_status error: {}", e)))?;
+                    }
+                    let snapshot = query::build_snapshot(conn, &collection, &def, &doc)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("snapshot error: {}", e)))?;
+                    query::create_version(conn, &collection, &doc.id, "published", &snapshot)
+                        .map_err(|e| mlua::Error::RuntimeError(format!("version error: {}", e)))?;
+                    if let Some(ref vc) = def.versions {
+                        if vc.max_versions > 0 {
+                            query::prune_versions(conn, &collection, &doc.id, vc.max_versions)
+                                .map_err(|e| mlua::Error::RuntimeError(format!("prune error: {}", e)))?;
+                        }
+                    }
+                }
+
+                document_to_lua_table(lua, &doc)
+            }
         })?;
         collections.set("update", update_fn)?;
     }

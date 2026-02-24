@@ -67,6 +67,8 @@ pub struct HookContext {
     pub operation: String,
     pub data: HashMap<String, serde_json::Value>,
     pub locale: Option<String>,
+    /// Whether this operation is a draft save (`true` = draft, `false`/`None` = publish).
+    pub draft: Option<bool>,
 }
 
 /// Raw pointer wrapper for injecting a transaction/connection into Lua CRUD
@@ -234,6 +236,7 @@ impl HookRunner {
                     operation: "init".to_string(),
                     data: HashMap::new(),
                     locale: None,
+                draft: None,
                 };
                 call_hook_ref(&lua, hook_ref, ctx)?;
             }
@@ -308,6 +311,7 @@ impl HookRunner {
             operation: operation.to_string(),
             data,
             locale: None,
+            draft: None,
         };
         self.run_hooks(hooks, HookEvent::BeforeRead, ctx)?;
         Ok(())
@@ -352,6 +356,7 @@ impl HookRunner {
             operation: operation.to_string(),
             data,
             locale: None,
+            draft: None,
         };
 
         // run_hooks handles both collection-level hook refs and global registered hooks
@@ -420,6 +425,7 @@ impl HookRunner {
         table: &str,
         exclude_id: Option<&str>,
         user: Option<&Document>,
+        is_draft: bool,
     ) -> Result<HookContext> {
         // Field-level before_validate (normalize inputs, CRUD available)
         self.run_field_hooks_with_conn(
@@ -428,8 +434,8 @@ impl HookRunner {
         )?;
         // Collection-level before_validate
         let ctx = self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, conn, user)?;
-        // Validation
-        self.validate_fields(fields, &ctx.data, conn, table, exclude_id)?;
+        // Validation (skip required checks for drafts)
+        self.validate_fields(fields, &ctx.data, conn, table, exclude_id, is_draft)?;
         // Field-level before_change (post-validation transforms, CRUD available)
         let mut ctx = ctx;
         self.run_field_hooks_with_conn(
@@ -474,6 +480,7 @@ impl HookRunner {
                 operation,
                 data,
                 locale: None,
+                draft: None,
             };
             let _ = runner.run_hooks(&hooks, event, ctx);
         });
@@ -507,6 +514,7 @@ impl HookRunner {
             operation: operation.to_string(),
             data,
             locale: None,
+            draft: None,
         };
 
         // run_hooks handles both collection-level hook refs and global registered hooks.
@@ -825,6 +833,7 @@ impl HookRunner {
         conn: &rusqlite::Connection,
         table: &str,
         exclude_id: Option<&str>,
+        is_draft: bool,
     ) -> Result<(), ValidationError> {
         let mut errors = Vec::new();
 
@@ -839,7 +848,8 @@ impl HookRunner {
 
             // Required check (skip for checkboxes — absent = false is valid)
             // For Array and has-many Relationship, "required" means at least one item
-            if field.required && field.field_type != FieldType::Checkbox {
+            // Skip required checks entirely for draft saves
+            if field.required && !is_draft && field.field_type != FieldType::Checkbox {
                 if !field.has_parent_column() {
                     // Join-table fields: check for non-empty array in data
                     let has_items = match value {
@@ -969,6 +979,9 @@ fn context_to_lua_table(lua: &Lua, context: &HookContext) -> mlua::Result<mlua::
     ctx_table.set("operation", context.operation.as_str())?;
     if let Some(ref locale) = context.locale {
         ctx_table.set("locale", locale.as_str())?;
+    }
+    if let Some(draft) = context.draft {
+        ctx_table.set("draft", draft)?;
     }
     let data_table = lua.create_table()?;
     for (k, v) in &context.data {

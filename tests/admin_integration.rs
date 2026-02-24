@@ -57,6 +57,7 @@ fn make_posts_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -108,6 +109,7 @@ fn make_users_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 

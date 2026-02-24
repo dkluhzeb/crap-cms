@@ -24,6 +24,7 @@
 
 - [Overview](collections/overview.md)
 - [Definition Schema](collections/definition-schema.md)
+- [Versions & Drafts](collections/versions.md)
 
 # Fields
 
@@ -81,6 +82,7 @@
 
 - [Overview](uploads/overview.md)
 - [Image Processing](uploads/image-processing.md)
+- [Client Uploads](uploads/client-uploads.md)
 
 # Lua API
 

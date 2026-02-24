@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 use super::field::{FieldDefinition, LocalizedString};
 use super::upload::CollectionUpload;
 
+/// Configuration for document versioning and drafts on a collection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionsConfig {
+    /// Enable draft/publish workflow with `_status` field.
+    #[serde(default)]
+    pub drafts: bool,
+    /// Maximum versions to keep per document (0 = unlimited).
+    #[serde(default)]
+    pub max_versions: u32,
+}
+
 /// Controls live event broadcasting for a collection or global.
 /// `None` = enabled (broadcast all events).
 /// `Some(LiveSetting::Disabled)` = never broadcast.
@@ -139,6 +150,8 @@ pub struct CollectionDefinition {
     pub access: CollectionAccess,
     #[serde(default)]
     pub live: Option<LiveSetting>,
+    #[serde(default)]
+    pub versions: Option<VersionsConfig>,
 }
 
 fn default_true() -> bool {
@@ -193,6 +206,16 @@ impl CollectionDefinition {
     /// Check if this collection is an upload collection.
     pub fn is_upload_collection(&self) -> bool {
         self.upload.as_ref().is_some_and(|u| u.enabled)
+    }
+
+    /// Check if this collection has versioning enabled.
+    pub fn has_versions(&self) -> bool {
+        self.versions.is_some()
+    }
+
+    /// Check if this collection has drafts enabled (versioning + drafts flag).
+    pub fn has_drafts(&self) -> bool {
+        self.versions.as_ref().is_some_and(|v| v.drafts)
     }
 }
 
@@ -253,6 +276,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         }
     }
 

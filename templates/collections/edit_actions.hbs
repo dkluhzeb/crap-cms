@@ -1,7 +1,16 @@
 <div class="form__actions">
-  <button type="submit" class="button button--primary">
-    {{#if editing}}{{t "update"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}
-  </button>
+  {{#if has_drafts}}
+    <button type="submit" name="_action" value="publish" class="button button--primary">
+      {{t "publish"}}
+    </button>
+    <button type="submit" name="_action" value="save_draft" class="button button--secondary">
+      {{#if editing}}{{t "save_draft"}}{{else}}{{t "save_as_draft"}}{{/if}}
+    </button>
+  {{else}}
+    <button type="submit" class="button button--primary">
+      {{#if editing}}{{t "update"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}
+    </button>
+  {{/if}}
   <div id="upload-loading" class="loading-indicator">
     <span class="loading-indicator__spinner"></span>
     <span class="loading-indicator__text">{{t "saving"}}&hellip;</span>

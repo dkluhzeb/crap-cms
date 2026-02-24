@@ -201,6 +201,15 @@ impl ContentApi for ContentService {
             filters.extend(constraint_filters.clone());
         }
 
+        // Draft-aware filtering: if collection has drafts and draft=false (default),
+        // only return published documents
+        if def.has_drafts() && !req.draft.unwrap_or(false) {
+            filters.push(FilterClause::Single(Filter {
+                field: "_status".to_string(),
+                op: FilterOp::Equals("published".to_string()),
+            }));
+        }
+
         let select = if req.select.is_empty() {
             None
         } else {
@@ -336,6 +345,10 @@ impl ContentApi for ContentService {
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
 
+        // Draft-aware find_by_id: if draft=true and collection has drafts,
+        // load the latest version snapshot instead of the main table document
+        let use_draft_version = req.draft.unwrap_or(false) && def.has_drafts() && def.has_versions();
+
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
         let hooks = def.hooks.clone();
@@ -352,6 +365,33 @@ impl ContentApi for ContentService {
         let def_owned = def;
         let doc = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &collection, "find_by_id", HashMap::new())?;
+
+            // If draft mode, try to load the latest version snapshot
+            if use_draft_version {
+                let conn = pool.get().context("DB connection for version lookup")?;
+                if let Some(version) = query::find_latest_version(&conn, &collection, &id)? {
+                    // Reconstruct Document from version snapshot
+                    let snapshot = version.snapshot;
+                    if let Some(obj) = snapshot.as_object() {
+                        let mut fields_map = HashMap::new();
+                        for (k, v) in obj {
+                            if k != "created_at" && k != "updated_at" {
+                                fields_map.insert(k.clone(), v.clone());
+                            }
+                        }
+                        let doc = crate::core::Document {
+                            id: id.clone(),
+                            fields: fields_map,
+                            created_at: obj.get("created_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                            updated_at: obj.get("updated_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                        };
+                        let doc = runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", doc);
+                        return Ok(Some(doc));
+                    }
+                }
+                // Fall through to normal find_by_id if no version found
+            }
+
             // If constrained, use find with id filter + constraints instead of find_by_id
             let mut doc = if let Some(constraints) = access_constraints {
                 let mut filters = constraints;
@@ -506,6 +546,7 @@ impl ContentApi for ContentService {
                 locale_ctx.as_ref(),
                 None,
                 user_doc.as_ref(),
+                req.draft.unwrap_or(false),
             )
         })
         .await
@@ -643,6 +684,7 @@ impl ContentApi for ContentService {
                 locale_ctx.as_ref(),
                 None,
                 user_doc.as_ref(),
+                req.draft.unwrap_or(false),
             )
         })
         .await
@@ -999,6 +1041,7 @@ impl ContentApi for ContentService {
                 auth: false,
                 fields: def.fields.iter().map(field_def_to_proto).collect(),
                 upload: false,
+                drafts: false,
             }))
         } else {
             let def = self.get_collection_def(&req.slug)?;
@@ -1018,6 +1061,7 @@ impl ContentApi for ContentService {
                 auth: def.is_auth_collection(),
                 fields: def.fields.iter().map(field_def_to_proto).collect(),
                 upload: def.is_upload_collection(),
+                drafts: def.has_drafts(),
             }))
         }
     }
@@ -1196,5 +1240,108 @@ impl ContentApi for ContentService {
         request: Request<content::MeRequest>,
     ) -> Result<Response<content::MeResponse>, Status> {
         self.me_impl(request).await
+    }
+
+    /// List version history for a document.
+    async fn list_versions(
+        &self,
+        request: Request<content::ListVersionsRequest>,
+    ) -> Result<Response<content::ListVersionsResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        if !def.has_versions() {
+            return Err(Status::failed_precondition(format!(
+                "Collection '{}' does not have versioning enabled", req.collection
+            )));
+        }
+
+        // Check read access
+        let access_result =
+            self.require_access(def.access.read.as_deref(), &auth_user, Some(&req.id), None)?;
+        if matches!(access_result, AccessResult::Denied) {
+            return Err(Status::permission_denied("Read access denied"));
+        }
+
+        let pool = self.pool.clone();
+        let collection = req.collection.clone();
+        let id = req.id.clone();
+        let limit = req.limit;
+        let versions = tokio::task::spawn_blocking(move || {
+            let conn = pool.get().context("DB connection")?;
+            query::list_versions(&conn, &collection, &id, limit)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| Status::internal(format!("List versions error: {}", e)))?;
+
+        let proto_versions: Vec<content::VersionInfo> = versions
+            .iter()
+            .map(|v| content::VersionInfo {
+                id: v.id.clone(),
+                version: v.version,
+                status: v.status.clone(),
+                latest: v.latest,
+                created_at: v.created_at.clone().unwrap_or_default(),
+            })
+            .collect();
+
+        Ok(Response::new(content::ListVersionsResponse {
+            versions: proto_versions,
+        }))
+    }
+
+    /// Restore a document to a previous version.
+    async fn restore_version(
+        &self,
+        request: Request<content::RestoreVersionRequest>,
+    ) -> Result<Response<content::RestoreVersionResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        if !def.has_versions() {
+            return Err(Status::failed_precondition(format!(
+                "Collection '{}' does not have versioning enabled", req.collection
+            )));
+        }
+
+        // Check update access
+        let access_result = self.require_access(
+            def.access.update.as_deref(),
+            &auth_user,
+            Some(&req.document_id),
+            None,
+        )?;
+        if matches!(access_result, AccessResult::Denied) {
+            return Err(Status::permission_denied("Update access denied"));
+        }
+
+        let pool = self.pool.clone();
+        let collection = req.collection.clone();
+        let document_id = req.document_id.clone();
+        let version_id = req.version_id.clone();
+        let def_owned = def.clone();
+        let doc = tokio::task::spawn_blocking(move || {
+            let conn = pool.get().context("DB connection")?;
+            let version = query::find_version_by_id(&conn, &collection, &version_id)?
+                .ok_or_else(|| anyhow::anyhow!("Version '{}' not found", version_id))?;
+            query::restore_version(
+                &conn, &collection, &def_owned, &document_id,
+                &version.snapshot, &version.status,
+            )
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| Status::internal(format!("Restore error: {}", e)))?;
+
+        let proto_doc = document_to_proto(&doc, &req.collection);
+
+        Ok(Response::new(content::RestoreVersionResponse {
+            document: Some(proto_doc),
+        }))
     }
 }

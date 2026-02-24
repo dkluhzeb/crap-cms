@@ -56,6 +56,11 @@ fn sync_collection_table(
     // Sync join tables for has-many relationships and array fields
     sync_join_tables(conn, slug, &def.fields, locale_config)?;
 
+    // Sync versions table if versioning is enabled
+    if def.has_versions() {
+        sync_versions_table(conn, slug)?;
+    }
+
     Ok(())
 }
 
@@ -135,8 +140,8 @@ fn create_collection_table(
                     for locale in &locale_config.locales {
                         let col_name = format!("{}__{}", base_col_name, locale);
                         let mut col = format!("{} {}", col_name, sub.field_type.sqlite_type());
-                        // Required only on default locale
-                        if sub.required && *locale == locale_config.default_locale {
+                        // Required only on default locale (skip NOT NULL for drafts — app-level validation on publish)
+                        if sub.required && *locale == locale_config.default_locale && !def.has_drafts() {
                             col.push_str(" NOT NULL");
                         }
                         if sub.unique {
@@ -147,7 +152,7 @@ fn create_collection_table(
                     }
                 } else {
                     let mut col = format!("{} {}", base_col_name, sub.field_type.sqlite_type());
-                    if sub.required {
+                    if sub.required && !def.has_drafts() {
                         col.push_str(" NOT NULL");
                     }
                     if sub.unique {
@@ -169,8 +174,8 @@ fn create_collection_table(
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", field.name, locale);
                 let mut col = format!("{} {}", col_name, field.field_type.sqlite_type());
-                // Required only on default locale
-                if field.required && *locale == locale_config.default_locale {
+                // Required only on default locale (skip NOT NULL for drafts — app-level validation on publish)
+                if field.required && *locale == locale_config.default_locale && !def.has_drafts() {
                     col.push_str(" NOT NULL");
                 }
                 if field.unique {
@@ -181,7 +186,7 @@ fn create_collection_table(
             }
         } else {
             let mut col = format!("{} {}", field.name, field.field_type.sqlite_type());
-            if field.required {
+            if field.required && !def.has_drafts() {
                 col.push_str(" NOT NULL");
             }
             if field.unique {
@@ -190,6 +195,11 @@ fn create_collection_table(
             append_default_value(&mut col, &field.default_value, &field.field_type);
             columns.push(col);
         }
+    }
+
+    // Versioned collections with drafts get a _status column
+    if def.has_drafts() {
+        columns.push("_status TEXT NOT NULL DEFAULT 'published'".to_string());
     }
 
     // Auth collections get hidden system columns (not regular fields)
@@ -285,6 +295,14 @@ fn alter_collection_table(
         }
     }
 
+    // Versioned collections with drafts: ensure _status column exists
+    if def.has_drafts() && !existing_columns.contains("_status") {
+        let sql = format!("ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'", slug);
+        tracing::info!("Adding _status column to {}", slug);
+        conn.execute(&sql, [])
+            .with_context(|| format!("Failed to add _status to {}", slug))?;
+    }
+
     // Auth collections: ensure system columns exist
     if def.is_auth_collection() {
         for col in ["_password_hash TEXT", "_reset_token TEXT", "_reset_token_exp INTEGER"] {
@@ -337,6 +355,7 @@ fn alter_collection_table(
     let system_columns: HashSet<&str> = [
         "id", "created_at", "updated_at", "_password_hash",
         "_reset_token", "_reset_token_exp", "_verified", "_verification_token",
+        "_status",
     ].into();
     for col in &existing_columns {
         if !field_names.contains(col) && !system_columns.contains(col.as_str()) {
@@ -470,6 +489,46 @@ fn sync_join_tables(
         }
     }
 
+    Ok(())
+}
+
+/// Create or verify the `_versions_{slug}` table for document version history.
+fn sync_versions_table(conn: &rusqlite::Connection, slug: &str) -> Result<()> {
+    let table_name = format!("_versions_{}", slug);
+    if !table_exists(conn, &table_name)? {
+        let sql = format!(
+            "CREATE TABLE {} (\
+                id TEXT PRIMARY KEY, \
+                _parent TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
+                _version INTEGER NOT NULL, \
+                _status TEXT NOT NULL, \
+                _latest INTEGER NOT NULL DEFAULT 0, \
+                snapshot TEXT NOT NULL, \
+                created_at TEXT DEFAULT (datetime('now')), \
+                updated_at TEXT DEFAULT (datetime('now'))\
+            )",
+            table_name, slug
+        );
+        tracing::info!("Creating versions table: {}", table_name);
+        conn.execute(&sql, [])
+            .with_context(|| format!("Failed to create versions table {}", table_name))?;
+
+        // Indexes for efficient version lookups
+        conn.execute(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS idx_{slug}_parent_latest ON {table} (_parent, _latest)",
+                slug = slug, table = table_name
+            ),
+            [],
+        )?;
+        conn.execute(
+            &format!(
+                "CREATE INDEX IF NOT EXISTS idx_{slug}_parent_version ON {table} (_parent, _version DESC)",
+                slug = slug, table = table_name
+            ),
+            [],
+        )?;
+    }
     Ok(())
 }
 

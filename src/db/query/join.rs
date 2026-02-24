@@ -457,6 +457,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+        versions: None,
         }
     }
 

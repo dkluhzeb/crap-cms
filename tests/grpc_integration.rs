@@ -70,6 +70,7 @@ fn make_posts_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -121,6 +122,7 @@ fn make_users_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -261,6 +263,7 @@ async fn create_and_find() {
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Hello"), ("status", "published")])),
             locale: None,
+            draft: None,
         }))
         .await
         .expect("Create failed");
@@ -296,6 +299,7 @@ async fn create_and_find_by_id() {
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Test Post")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -311,6 +315,7 @@ async fn create_and_find_by_id() {
             depth: Some(0),
             locale: None,
             select: vec![],
+            draft: None,
         }))
         .await
         .unwrap()
@@ -332,6 +337,7 @@ async fn update_document() {
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Original"), ("status", "draft")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -346,6 +352,7 @@ async fn update_document() {
             id: doc.id.clone(),
             data: Some(make_struct(&[("title", "Updated")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -367,6 +374,7 @@ async fn delete_document() {
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "To Delete")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -395,6 +403,7 @@ async fn delete_document() {
             depth: Some(0),
             locale: None,
             select: vec![],
+            draft: None,
         }))
         .await
         .unwrap()
@@ -414,6 +423,7 @@ async fn find_with_filters() {
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
+                draft: None,
             }))
             .await
             .unwrap();
@@ -447,6 +457,7 @@ async fn find_with_where_json() {
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title), ("status", status)])),
                 locale: None,
+                draft: None,
             }))
             .await
             .unwrap();
@@ -481,6 +492,7 @@ async fn find_with_where_or() {
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
+                draft: None,
             }))
             .await
             .unwrap();
@@ -512,6 +524,7 @@ async fn find_with_limit_and_offset() {
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", &format!("Post {}", i))])),
                 locale: None,
+                draft: None,
             }))
             .await
             .unwrap();
@@ -542,6 +555,7 @@ async fn find_with_select() {
             collection: "posts".to_string(),
             data: Some(make_struct(&[("title", "Selectable"), ("status", "live")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -590,6 +604,7 @@ async fn create_nonexistent_collection() {
             collection: "nonexistent".to_string(),
             data: Some(make_struct(&[("title", "Nope")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap_err();
@@ -815,6 +830,7 @@ async fn login_valid_credentials() {
                 ("password", "secret123"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -848,6 +864,7 @@ async fn login_invalid_password() {
                 ("password", "correct"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -895,6 +912,7 @@ async fn me_valid_token() {
                 ("password", "pw12345"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1104,6 +1122,7 @@ async fn authenticated_crud_with_bearer_token() {
                 ("password", "admin123"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1125,6 +1144,7 @@ async fn authenticated_crud_with_bearer_token() {
         collection: "posts".to_string(),
         data: Some(make_struct(&[("title", "Authenticated Post")])),
         locale: None,
+        draft: None,
     });
     req.metadata_mut().insert(
         "authorization",
@@ -1153,6 +1173,7 @@ async fn find_with_order_by() {
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
+                draft: None,
             }))
             .await
             .unwrap();
@@ -1194,6 +1215,7 @@ async fn find_with_order_by_desc() {
                 collection: "posts".to_string(),
                 data: Some(make_struct(&[("title", title)])),
                 locale: None,
+                draft: None,
             }))
             .await
             .unwrap();
@@ -1235,6 +1257,7 @@ async fn full_password_reset_flow() {
                 ("password", "oldpassword"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1279,6 +1302,7 @@ async fn reset_password_expired_token() {
                 ("password", "mypassword"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1350,6 +1374,7 @@ fn make_verify_users_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -1381,6 +1406,7 @@ async fn login_blocked_when_unverified() {
                 ("password", "secret123"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1419,6 +1445,7 @@ async fn update_password_via_grpc() {
                 ("password", "oldpass123"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1446,6 +1473,7 @@ async fn update_password_via_grpc() {
                 ("password", "newpass456"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1488,6 +1516,7 @@ async fn password_hash_not_in_response() {
                 ("password", "secret123"),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -1515,6 +1544,7 @@ async fn password_hash_not_in_response() {
             depth: Some(0),
             locale: None,
             select: vec![],
+            draft: None,
         }))
         .await
         .unwrap()
@@ -1563,6 +1593,7 @@ fn make_categories_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -1618,6 +1649,7 @@ fn make_posts_with_relationship() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -1635,6 +1667,7 @@ async fn find_with_depth_1_populates_relationship() {
             collection: "categories".to_string(),
             data: Some(make_struct(&[("name", "Tech")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -1651,6 +1684,7 @@ async fn find_with_depth_1_populates_relationship() {
                 ("category", &cat_doc.id),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap();
@@ -1708,6 +1742,7 @@ async fn find_by_id_default_depth_populates() {
             collection: "categories".to_string(),
             data: Some(make_struct(&[("name", "Science")])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -1725,6 +1760,7 @@ async fn find_by_id_default_depth_populates() {
                 ("category", &cat_doc.id),
             ])),
             locale: None,
+            draft: None,
         }))
         .await
         .unwrap()
@@ -1741,6 +1777,7 @@ async fn find_by_id_default_depth_populates() {
             depth: None, // use default
             locale: None,
             select: vec![],
+            draft: None,
         }))
         .await
         .unwrap()

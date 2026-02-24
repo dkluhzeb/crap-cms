@@ -26,9 +26,36 @@ When auth collections are configured, the admin UI requires login. Without auth 
 | `/admin/collections/{slug}` | Collection list view |
 | `/admin/collections/{slug}/create` | Create form |
 | `/admin/collections/{slug}/{id}` | Edit form |
+| `/admin/collections/{slug}/{id}/versions/{version_id}/restore` | Restore a previous version |
 | `/admin/globals/{slug}` | Global edit form |
 | `/static/*` | Static assets (public) |
 | `/uploads/*` | Uploaded files |
+
+## Versioning & Drafts Workflow
+
+For collections with `versions = { drafts = true }`, the admin UI provides a draft/publish workflow:
+
+**List view:**
+- Shows all documents (both draft and published) with status badges
+- A "Status" column displays `published` or `draft` per row
+
+**Create form:**
+- **Publish** (primary button) — creates as published, enforces required field validation
+- **Save as Draft** (secondary button) — creates as draft, skips required field validation
+
+**Edit form:**
+- **Draft document:** "Publish" (primary) + "Save Draft" (secondary) buttons
+- **Published document:** "Update" (primary) + "Save Draft" (secondary) + "Unpublish" (ghost) buttons
+- Draft saves create a version snapshot only — the main (published) document is not modified until you publish
+
+**Sidebar:**
+- Status badge showing current document status
+- Version history panel listing recent versions with version number, status, date, and a "Restore" button
+- Restoring a version writes the snapshot data back to the main table and creates a new version entry
+
+Collections without `versions` configured work exactly as before — a single "Create" or "Update" button with no status management.
+
+See [Versions & Drafts](../collections/versions.md) for the full configuration and behavioral reference.
 
 ## CSS Architecture
 

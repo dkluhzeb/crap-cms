@@ -682,3 +682,69 @@ subscribe_auth() {
     \"token\": \"$token\"
   }" "$ADDR" crap.ContentAPI/Subscribe
 }
+
+# ── Versioning & Drafts ──────────────────────────────────────
+
+# Create a post as draft (requires collection with versions.drafts = true)
+create_post_draft() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "draft": true,
+  "data": {
+    "title": "Draft Post",
+    "slug": "draft-post",
+    "content": "This is a draft."
+  }
+}' "$ADDR" crap.ContentAPI/Create
+}
+
+# Update a post as draft (version-only save, main table unchanged)
+update_post_draft() {
+  local id="${1:?Usage: update_post_draft <id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"id\": \"$id\",
+    \"draft\": true,
+    \"data\": {
+      \"title\": \"Updated Draft Title\"
+    }
+  }" "$ADDR" crap.ContentAPI/Update
+}
+
+# Find posts including drafts (draft=true skips _status=published filter)
+find_posts_with_drafts() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "draft": true
+}' "$ADDR" crap.ContentAPI/Find
+}
+
+# Find by ID loading latest draft version
+find_post_draft_version() {
+  local id="${1:?Usage: find_post_draft_version <id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"id\": \"$id\",
+    \"draft\": true
+  }" "$ADDR" crap.ContentAPI/FindByID
+}
+
+# List version history for a document
+list_versions() {
+  local id="${1:?Usage: list_versions <id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"id\": \"$id\"
+  }" "$ADDR" crap.ContentAPI/ListVersions
+}
+
+# Restore a specific version
+restore_version() {
+  local doc_id="${1:?Usage: restore_version <document_id> <version_id>}"
+  local version_id="${2:?Usage: restore_version <document_id> <version_id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"document_id\": \"$doc_id\",
+    \"version_id\": \"$version_id\"
+  }" "$ADDR" crap.ContentAPI/RestoreVersion
+}

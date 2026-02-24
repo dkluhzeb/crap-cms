@@ -60,6 +60,7 @@ fn make_posts_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -730,6 +731,7 @@ fn make_users_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -1171,6 +1173,7 @@ fn make_articles_with_join_tables() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -1189,6 +1192,7 @@ fn setup_articles() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefin
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -1587,6 +1591,7 @@ fn make_categories_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -1637,6 +1642,7 @@ fn make_posts_with_category() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -1858,6 +1864,7 @@ fn coerce_checkbox_values() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -1899,6 +1906,7 @@ fn coerce_number_valid() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -1930,6 +1938,7 @@ fn coerce_number_invalid_returns_null() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -1961,6 +1970,7 @@ fn coerce_number_empty_returns_null() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -2012,6 +2022,7 @@ fn checkbox_default_when_field_missing() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -2154,6 +2165,7 @@ fn alter_adds_auth_columns_on_upgrade() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -2207,6 +2219,7 @@ fn sync_adds_locale_columns() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -2272,6 +2285,7 @@ fn make_group_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -2406,6 +2420,7 @@ fn make_localized_def() -> CollectionDefinition {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     }
 }
 
@@ -2845,6 +2860,7 @@ fn migrate_default_value_with_quotes() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -2889,6 +2905,7 @@ fn create_checkbox_truthy_values() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -2934,6 +2951,7 @@ fn create_checkbox_falsy_values() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();
@@ -2972,6 +2990,7 @@ fn create_number_invalid_stores_null() {
         upload: None,
         access: CollectionAccess::default(),
         live: None,
+            versions: None,
     };
     {
         let mut reg = registry.write().unwrap();

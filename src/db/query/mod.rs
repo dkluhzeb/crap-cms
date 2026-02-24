@@ -8,6 +8,7 @@ pub mod join;
 pub mod populate;
 pub mod filter;
 pub mod global;
+pub mod versions;
 
 use anyhow::{Result, bail};
 use std::collections::HashSet;
@@ -22,6 +23,7 @@ pub use auth::*;
 pub use join::*;
 pub use populate::*;
 pub use global::*;
+pub use versions::*;
 
 /// How to handle localized fields in a query.
 #[derive(Debug, Clone)]
@@ -167,6 +169,9 @@ pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
             names.push(field.name.clone());
         }
     }
+    if def.has_drafts() {
+        names.push("_status".to_string());
+    }
     if def.timestamps {
         names.push("created_at".to_string());
         names.push("updated_at".to_string());
@@ -301,6 +306,9 @@ pub(crate) fn get_valid_filter_columns(def: &CollectionDefinition, locale_ctx: O
         } else if field.has_parent_column() {
             valid.insert(field.name.clone());
         }
+    }
+    if def.has_drafts() {
+        valid.insert("_status".to_string());
     }
     if def.timestamps {
         valid.insert("created_at".to_string());
@@ -486,6 +494,7 @@ mod tests {
             upload: None,
             access: CollectionAccess::default(),
             live: None,
+            versions: None,
         }
     }
 

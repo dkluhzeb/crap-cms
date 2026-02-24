@@ -343,10 +343,12 @@ function crap.collections.find_by_id(collection, id, opts) end
 --- @class crap.CreateOptions
 --- @field locale?         string   Locale code for localized fields. Nil = default locale.
 --- @field overrideAccess? boolean  Skip access control checks (default: true). Set to false to enforce collection-level and field-level access for the current user.
+--- @field draft?          boolean  When true and the collection has `versions.drafts`, creates the document with `_status = 'draft'` and skips required-field validation.
 
 --- @class crap.UpdateOptions
 --- @field locale?         string   Locale code for localized fields. Nil = default locale.
 --- @field overrideAccess? boolean  Skip access control checks (default: true). Set to false to enforce collection-level and field-level access for the current user.
+--- @field draft?          boolean  When true and the collection has `versions.drafts`, performs a version-only save (main table unchanged, only a draft version snapshot is created).
 
 --- Create a new document.
 --- Inside hooks, runs within the parent operation's transaction.

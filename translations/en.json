@@ -51,5 +51,16 @@
   "error_not_found": "The page you're looking for doesn't exist.",
   "error_forbidden": "You don't have permission to access this resource.",
   "error_server": "Something went wrong. Please try again.",
-  "go_to_dashboard": "Go to Dashboard"
+  "go_to_dashboard": "Go to Dashboard",
+  "publish": "Publish",
+  "save_draft": "Save Draft",
+  "save_as_draft": "Save as Draft",
+  "unpublish": "Unpublish",
+  "version_history": "Version History",
+  "status": "Status",
+  "restore": "Restore",
+  "restore_version": "Restore Version",
+  "published": "Published",
+  "draft": "Draft",
+  "version": "Version"
 }

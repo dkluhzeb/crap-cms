@@ -20,6 +20,8 @@ service ContentAPI {
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
   rpc Subscribe (SubscribeRequest) returns (stream MutationEvent);
+  rpc ListVersions (ListVersionsRequest) returns (ListVersionsResponse);
+  rpc RestoreVersion (RestoreVersionRequest) returns (RestoreVersionResponse);
 }
 
 message FindRequest {
@@ -32,6 +34,7 @@ message FindRequest {
   optional int32 depth = 7;
   optional string locale = 8;
   repeated string select = 9;
+  optional bool draft = 10;
 }
 
 message FindResponse {
@@ -45,6 +48,7 @@ message FindByIDRequest {
   optional int32 depth = 3;
   optional string locale = 4;
   repeated string select = 5;
+  optional bool draft = 6;
 }
 
 message FindByIDResponse {
@@ -55,6 +59,7 @@ message CreateRequest {
   string collection = 1;
   google.protobuf.Struct data = 2;
   optional string locale = 3;
+  optional bool draft = 4;
 }
 
 message CreateResponse {
@@ -66,6 +71,7 @@ message UpdateRequest {
   string id = 2;
   google.protobuf.Struct data = 3;
   optional string locale = 4;
+  optional bool draft = 5;
 }
 
 message UpdateResponse {
@@ -190,6 +196,7 @@ message DescribeCollectionResponse {
   bool auth = 5;
   repeated FieldInfo fields = 6;
   bool upload = 7;
+  bool drafts = 8;
 }
 
 message FieldInfo {
@@ -232,4 +239,32 @@ message MutationEvent {
   string collection = 5;
   string document_id = 6;
   google.protobuf.Struct data = 7;
+}
+
+message ListVersionsRequest {
+  string collection = 1;
+  string id = 2;
+  optional int64 limit = 3;
+}
+
+message ListVersionsResponse {
+  repeated VersionInfo versions = 1;
+}
+
+message VersionInfo {
+  string id = 1;
+  int64 version = 2;
+  string status = 3;
+  bool latest = 4;
+  string created_at = 5;
+}
+
+message RestoreVersionRequest {
+  string collection = 1;
+  string document_id = 2;
+  string version_id = 3;
+}
+
+message RestoreVersionResponse {
+  Document document = 1;
 }

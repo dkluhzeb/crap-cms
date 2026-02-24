@@ -5,7 +5,7 @@ use mlua::{Lua, Table, Value};
 
 use crate::core::{
     field::{FieldType, FieldDefinition, FieldAccess, FieldAdmin, FieldHooks, SelectOption, LocalizedString},
-    collection::{AuthStrategy, CollectionAccess, CollectionAuth, CollectionDefinition, GlobalDefinition, CollectionLabels, CollectionAdmin, CollectionHooks, LiveSetting},
+    collection::{AuthStrategy, CollectionAccess, CollectionAuth, CollectionDefinition, GlobalDefinition, CollectionLabels, CollectionAdmin, CollectionHooks, LiveSetting, VersionsConfig},
     upload::{CollectionUpload, ImageSize, ImageFit, FormatOptions, FormatQuality},
 };
 
@@ -69,6 +69,9 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
     // Parse live setting: absent=None (enabled), false=Disabled, string=Function
     let live = parse_live_setting(config);
 
+    // Parse versions: true | { drafts = true, max_versions = 100 }
+    let versions = parse_versions_config(config);
+
     // If auth enabled and no email field defined, inject one at index 0
     if let Some(ref a) = auth {
         if a.enabled && !fields.iter().any(|f| f.name == "email") {
@@ -105,6 +108,7 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
         upload,
         access,
         live,
+        versions,
     })
 }
 
@@ -160,6 +164,30 @@ fn parse_live_setting(config: &Table) -> Option<LiveSetting> {
             } else {
                 Some(LiveSetting::Function(func_ref))
             }
+        }
+        _ => None,
+    }
+}
+
+/// Parse `versions` from a collection Lua table.
+/// - `true` → VersionsConfig with defaults (drafts=true, no limit)
+/// - `false` / absent → None
+/// - `{ drafts = true, max_versions = 100 }` → VersionsConfig with values
+fn parse_versions_config(config: &Table) -> Option<VersionsConfig> {
+    let val: Value = config.get("versions").ok()?;
+    match val {
+        Value::Boolean(true) => Some(VersionsConfig {
+            drafts: true,
+            max_versions: 0,
+        }),
+        Value::Boolean(false) | Value::Nil => None,
+        Value::Table(tbl) => {
+            let drafts = get_bool(&tbl, "drafts", true);
+            let max_versions = tbl.get::<u32>("max_versions").unwrap_or(0);
+            Some(VersionsConfig {
+                drafts,
+                max_versions,
+            })
         }
         _ => None,
     }

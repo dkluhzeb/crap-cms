@@ -195,6 +195,49 @@ grpcurl -plaintext -d '{
 
 All filter field names and `order_by` fields are validated against the collection's field definitions. Invalid field names return an error. This prevents SQL injection via field names.
 
+## Draft Parameter (Versioned Collections)
+
+Collections with `versions = { drafts = true }` automatically filter by `_status = 'published'` on `Find` queries. Use the `draft` parameter to change this behavior.
+
+**Lua:**
+
+```lua
+-- Default: only published documents
+local published = crap.collections.find("articles", {})
+
+-- Include drafts
+local all = crap.collections.find("articles", { draft = true })
+
+-- FindByID: get the latest version (may be a draft)
+local latest = crap.collections.find_by_id("articles", id, { draft = true })
+```
+
+**gRPC:**
+
+```bash
+# Default: only published
+grpcurl -plaintext -d '{"collection": "articles"}' \
+    localhost:50051 crap.ContentAPI/Find
+
+# Include drafts
+grpcurl -plaintext -d '{"collection": "articles", "draft": true}' \
+    localhost:50051 crap.ContentAPI/Find
+
+# FindByID: get latest version snapshot
+grpcurl -plaintext -d '{"collection": "articles", "id": "abc123", "draft": true}' \
+    localhost:50051 crap.ContentAPI/FindByID
+```
+
+You can also filter directly on `_status`:
+
+```lua
+crap.collections.find("articles", {
+    filters = { _status = "draft" },
+})
+```
+
+See [Versions & Drafts](../collections/versions.md) for the full workflow.
+
 ## Valid Filter Fields
 
 You can filter on any column in the collection table:
@@ -203,5 +246,6 @@ You can filter on any column in the collection table:
 - `id`
 - `created_at` (if timestamps enabled)
 - `updated_at` (if timestamps enabled)
+- `_status` (if `versions.drafts` enabled)
 
 You cannot filter on join-table fields (has-many relationships, arrays) directly.

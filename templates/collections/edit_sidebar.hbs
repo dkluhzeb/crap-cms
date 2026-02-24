@@ -3,9 +3,32 @@
   <div class="edit-sidebar__panel">
     <div class="edit-sidebar__panel-body">
       <div class="edit-sidebar__actions">
-        <button type="submit" form="edit-form" class="button button--primary">
-          {{#if editing}}{{t "update"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}
-        </button>
+        {{#if has_drafts}}
+          {{#if editing}}
+            <button type="submit" form="edit-form" name="_action" value="publish" class="button button--primary">
+              {{t "publish"}}
+            </button>
+            <button type="submit" form="edit-form" name="_action" value="save_draft" class="button button--secondary">
+              {{t "save_draft"}}
+            </button>
+            {{#if (eq document.status "published")}}
+            <button type="submit" form="edit-form" name="_action" value="unpublish" class="button button--ghost">
+              {{t "unpublish"}}
+            </button>
+            {{/if}}
+          {{else}}
+            <button type="submit" form="edit-form" name="_action" value="publish" class="button button--primary">
+              {{t "publish"}}
+            </button>
+            <button type="submit" form="edit-form" name="_action" value="save_draft" class="button button--secondary">
+              {{t "save_as_draft"}}
+            </button>
+          {{/if}}
+        {{else}}
+          <button type="submit" form="edit-form" class="button button--primary">
+            {{#if editing}}{{t "update"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}
+          </button>
+        {{/if}}
         <div id="upload-loading" class="edit-sidebar__save-indicator">
           <span class="loading-indicator__spinner"></span>
           <span>{{t "saving"}}&hellip;</span>
@@ -49,6 +72,12 @@
     </div>
     <div class="edit-sidebar__panel-body">
       <div class="edit-sidebar__meta">
+        {{#if has_drafts}}
+        <div class="edit-sidebar__meta-row">
+          <span class="edit-sidebar__meta-label">{{t "status"}}</span>
+          <span class="edit-sidebar__meta-value"><span class="badge badge--{{document.status}}">{{document.status}}</span></span>
+        </div>
+        {{/if}}
         <div class="edit-sidebar__meta-row">
           <span class="edit-sidebar__meta-label">{{t "id"}}</span>
           <span class="edit-sidebar__meta-value">{{document.id}}</span>
@@ -68,6 +97,36 @@
       </div>
     </div>
   </div>
+
+  {{#if has_versions}}
+  {{!-- Version history panel --}}
+  <div class="edit-sidebar__panel">
+    <div class="edit-sidebar__panel-header">
+      <span class="material-symbols-outlined" style="font-size: 16px;">history</span>
+      {{t "version_history"}}
+    </div>
+    <div class="edit-sidebar__panel-body">
+      {{#if versions}}
+      <div class="edit-sidebar__versions">
+        {{#each versions}}
+        <div class="edit-sidebar__version-row">
+          <div class="edit-sidebar__version-info">
+            <span class="edit-sidebar__version-number">v{{this.version}}</span>
+            <span class="badge badge--{{this.status}}">{{this.status}}</span>
+          </div>
+          <div class="edit-sidebar__version-meta">{{this.created_at}}</div>
+          {{#unless this.latest}}
+          <form method="post" action="/admin/collections/{{../collection.slug}}/{{../document.id}}/versions/{{this.id}}/restore" style="margin:0;">
+            <button type="submit" class="button button--ghost button--small">{{t "restore"}}</button>
+          </form>
+          {{/unless}}
+        </div>
+        {{/each}}
+      </div>
+      {{/if}}
+    </div>
+  </div>
+  {{/if}}
 
   {{!-- Actions panel --}}
   <div class="edit-sidebar__panel">

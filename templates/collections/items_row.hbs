@@ -8,6 +8,7 @@
       {{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}
     </a>
   </td>
+  {{#if ../has_drafts}}<td><span class="badge badge--{{this.status}}">{{this.status}}</span></td>{{/if}}
   <td>{{this.created_at}}</td>
   <td>
     <a class="button button--ghost button--small" href="/admin/collections/{{collection.slug}}/{{this.id}}/delete"
