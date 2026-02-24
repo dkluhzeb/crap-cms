@@ -1,6 +1,6 @@
 //! gRPC API server (Tonic) implementing the ContentAPI service.
 
-mod service;
+pub mod service;
 
 use anyhow::Result;
 use tonic::transport::Server;

@@ -784,6 +784,28 @@ impl HookRunner {
         result
     }
 
+    /// Execute arbitrary Lua code within a transaction + user context.
+    /// The Lua code must return a string. Useful for testing CRUD closures.
+    pub fn eval_lua_with_conn(
+        &self,
+        code: &str,
+        conn: &rusqlite::Connection,
+        user: Option<&Document>,
+    ) -> Result<String> {
+        let lua = self.lua.lock()
+            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+
+        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(UserContext(user.cloned()));
+
+        let result = lua.load(code).eval::<String>();
+
+        lua.remove_app_data::<TxContext>();
+        lua.remove_app_data::<UserContext>();
+
+        result.map_err(|e| anyhow::anyhow!("{}", e))
+    }
+
     /// Validate field data against field definitions.
     /// Checks `required`, `unique`, and custom `validate` (Lua function ref).
     /// Runs inside the caller's transaction for unique checks.
@@ -1477,7 +1499,7 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &
             let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), &lc);
 
             let override_access: bool = query_table.as_ref()
-                .and_then(|qt| qt.get::<bool>("overrideAccess").ok())
+                .and_then(|qt| qt.get::<Option<bool>>("overrideAccess").ok().flatten())
                 .unwrap_or(true);
 
             let def = {
@@ -1581,7 +1603,7 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &
             let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), &lc);
 
             let override_access: bool = opts.as_ref()
-                .and_then(|o| o.get::<bool>("overrideAccess").ok())
+                .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
                 .unwrap_or(true);
 
             let def = {
@@ -1683,7 +1705,7 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &
             let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), &lc);
 
             let override_access: bool = opts.as_ref()
-                .and_then(|o| o.get::<bool>("overrideAccess").ok())
+                .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
                 .unwrap_or(true);
 
             let def = {
@@ -1737,7 +1759,7 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &
             let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), &lc);
 
             let override_access: bool = opts.as_ref()
-                .and_then(|o| o.get::<bool>("overrideAccess").ok())
+                .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
                 .unwrap_or(true);
 
             let def = {
@@ -1785,7 +1807,7 @@ fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &
             let conn = unsafe { &*conn_ptr };
 
             let override_access: bool = opts.as_ref()
-                .and_then(|o| o.get::<bool>("overrideAccess").ok())
+                .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
                 .unwrap_or(true);
 
             // Enforce access control when overrideAccess = false

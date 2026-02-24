@@ -133,3 +133,55 @@ pub fn send_email(
 pub fn is_configured(config: &EmailConfig) -> bool {
     !config.smtp_host.is_empty()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::EmailConfig;
+
+    #[test]
+    fn renderer_new_loads_compiled_templates() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+        // Should be able to render the compiled-in password_reset template
+        let result = renderer.render("password_reset", &serde_json::json!({
+            "reset_url": "http://example.com/reset?token=abc",
+            "app_name": "Test",
+        }));
+        assert!(result.is_ok(), "Should render password_reset template: {:?}", result.err());
+        let html = result.unwrap();
+        assert!(html.contains("reset") || html.contains("password"), "Rendered template should contain reset-related content");
+    }
+
+    #[test]
+    fn renderer_overlay_replaces_template() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let email_dir = tmp.path().join("templates/email");
+        std::fs::create_dir_all(&email_dir).unwrap();
+        // Use triple-brace {{{reset_url}}} to avoid HTML escaping
+        std::fs::write(
+            email_dir.join("password_reset.hbs"),
+            "<p>Custom reset: {{{reset_url}}}</p>",
+        ).unwrap();
+
+        let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
+        let html = renderer.render("password_reset", &serde_json::json!({
+            "reset_url": "http://example.com/reset",
+        })).expect("render");
+        assert!(html.contains("Custom reset:"), "Should use the overlaid template");
+        assert!(html.contains("http://example.com/reset"));
+    }
+
+    #[test]
+    fn is_configured_empty_host_false() {
+        let config = EmailConfig::default();
+        assert!(!is_configured(&config));
+    }
+
+    #[test]
+    fn is_configured_with_host_true() {
+        let mut config = EmailConfig::default();
+        config.smtp_host = "smtp.example.com".to_string();
+        assert!(is_configured(&config));
+    }
+}

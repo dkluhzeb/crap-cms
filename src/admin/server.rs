@@ -59,6 +59,18 @@ pub async fn start(
         event_bus,
     };
 
+    let app = build_router(state, has_auth);
+
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    axum::serve(listener, app).await?;
+
+    Ok(())
+}
+
+/// Build the full admin Axum router with all routes, middleware, and state.
+/// Separated from `start()` so integration tests can construct the router
+/// without binding to a TCP listener.
+pub fn build_router(state: AdminState, has_auth: bool) -> Router {
     // Build method routers explicitly to handle multiple methods on same path
     let slug_methods: MethodRouter<AdminState> = MethodRouter::new()
         .get(collections::list_items)
@@ -93,22 +105,19 @@ pub async fn start(
         protected
     };
 
-    let app = Router::new()
+    let config_dir = &state.config_dir;
+
+    Router::new()
         .route("/admin/login", get(auth_handlers::login_page).post(auth_handlers::login_action))
         .route("/admin/logout", post(auth_handlers::logout_action))
         .route("/admin/forgot-password", get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action))
         .route("/admin/reset-password", get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action))
         .route("/admin/verify-email", get(auth_handlers::verify_email))
         .merge(protected)
-        .nest_service("/static", static_assets::overlay_service(&config_dir))
+        .nest_service("/static", static_assets::overlay_service(config_dir))
         .route("/uploads/{collection_slug}/{filename}", get(uploads::serve_upload))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
+        .with_state(state)
 }
 
 /// Auth middleware — extracts JWT from `crap_session` cookie, validates it,
@@ -248,4 +257,56 @@ pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str>
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_cookie_single() {
+        assert_eq!(extract_cookie("crap_session=abc123", "crap_session"), Some("abc123"));
+    }
+
+    #[test]
+    fn extract_cookie_multiple() {
+        assert_eq!(
+            extract_cookie("other=val; crap_session=token123; another=x", "crap_session"),
+            Some("token123")
+        );
+    }
+
+    #[test]
+    fn extract_cookie_missing() {
+        assert_eq!(extract_cookie("other=val; foo=bar", "crap_session"), None);
+    }
+
+    #[test]
+    fn extract_cookie_empty_header() {
+        assert_eq!(extract_cookie("", "crap_session"), None);
+    }
+
+    #[test]
+    fn extract_cookie_prefix_match_does_not_confuse() {
+        // "crap_session_old" should NOT match "crap_session"
+        assert_eq!(extract_cookie("crap_session_old=bad", "crap_session"), None);
+    }
+
+    #[test]
+    fn extract_cookie_exact_name_with_similar_prefix() {
+        // Both "crap_session_old" and "crap_session" present — should get correct one
+        assert_eq!(
+            extract_cookie("crap_session_old=bad; crap_session=good", "crap_session"),
+            Some("good")
+        );
+    }
+
+    #[test]
+    fn extract_cookie_value_with_equals() {
+        // Cookie values can contain = (like base64)
+        assert_eq!(
+            extract_cookie("token=abc=def==", "token"),
+            Some("abc=def==")
+        );
+    }
 }

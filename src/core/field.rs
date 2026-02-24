@@ -311,4 +311,39 @@ mod tests {
             assert_eq!(FieldType::from_str(ft.as_str()), *ft);
         }
     }
+
+    // ── LocalizedString tests ───────────────────────────────────────────────
+
+    #[test]
+    fn localized_string_resolve_existing_locale() {
+        let mut map = HashMap::new();
+        map.insert("en".to_string(), "Title".to_string());
+        map.insert("de".to_string(), "Titel".to_string());
+        let ls = LocalizedString::Localized(map);
+        assert_eq!(ls.resolve("de", "en"), "Titel");
+    }
+
+    #[test]
+    fn localized_string_resolve_fallback_to_default() {
+        let mut map = HashMap::new();
+        map.insert("en".to_string(), "Title".to_string());
+        let ls = LocalizedString::Localized(map);
+        // Requesting "fr" which doesn't exist, should fall back to "en"
+        assert_eq!(ls.resolve("fr", "en"), "Title");
+    }
+
+    #[test]
+    fn localized_string_resolve_default_plain() {
+        let ls = LocalizedString::Plain("Hello".to_string());
+        assert_eq!(ls.resolve_default(), "Hello");
+        assert_eq!(ls.resolve("de", "en"), "Hello");
+    }
+
+    #[test]
+    fn localized_string_resolve_default_empty() {
+        let map = HashMap::new();
+        let ls = LocalizedString::Localized(map);
+        assert_eq!(ls.resolve("en", "en"), "");
+        assert_eq!(ls.resolve_default(), "");
+    }
 }

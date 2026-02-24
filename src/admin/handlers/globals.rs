@@ -2,6 +2,7 @@
 
 use axum::{
     extract::{Form, Path, Query, State},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect},
     Extension,
 };
@@ -70,17 +71,18 @@ fn check_global_access_or_forbid(
         })
 }
 
-fn forbidden(state: &AdminState, message: &str) -> Html<String> {
+fn forbidden(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = serde_json::json!({
         "title": "Forbidden",
         "message": message,
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
     });
-    match state.render("errors/403", &data) {
+    let html = match state.render("errors/403", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>403 Forbidden</h1><p>{}</p>", message)),
-    }
+    };
+    (StatusCode::FORBIDDEN, html)
 }
 
 /// GET /admin/globals/{slug} — show edit form for a global
@@ -578,28 +580,30 @@ fn render_or_error(state: &AdminState, template: &str, data: &serde_json::Value)
     }
 }
 
-fn not_found(state: &AdminState, message: &str) -> Html<String> {
+fn not_found(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = serde_json::json!({
         "title": "Not Found",
         "message": message,
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
     });
-    match state.render("errors/404", &data) {
+    let html = match state.render("errors/404", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>404</h1><p>{}</p>", message)),
-    }
+    };
+    (StatusCode::NOT_FOUND, html)
 }
 
-fn server_error(state: &AdminState, message: &str) -> Html<String> {
+fn server_error(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = serde_json::json!({
         "title": "Server Error",
         "message": message,
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
     });
-    match state.render("errors/500", &data) {
+    let html = match state.render("errors/500", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>500</h1><p>{}</p>", message)),
-    }
+    };
+    (StatusCode::INTERNAL_SERVER_ERROR, html)
 }

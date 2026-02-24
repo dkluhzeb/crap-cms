@@ -95,4 +95,31 @@ mod tests {
         reg.register_collection(make_collection("pages"));
         assert_eq!(reg.collections.len(), 1);
     }
+
+    fn make_global(slug: &str) -> GlobalDefinition {
+        GlobalDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels::default(),
+            fields: Vec::new(),
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+        }
+    }
+
+    #[test]
+    fn register_and_get_global() {
+        let mut reg = Registry::new();
+        assert!(reg.get_global("settings").is_none());
+
+        reg.register_global(make_global("settings"));
+        assert!(reg.get_global("settings").is_some());
+        assert_eq!(reg.get_global("settings").unwrap().slug, "settings");
+    }
+
+    #[test]
+    fn get_nonexistent_returns_none() {
+        let reg = Registry::new();
+        assert!(reg.get_global("nonexistent").is_none());
+    }
 }

@@ -88,3 +88,67 @@ impl EventBus {
         self.sender.subscribe()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_creates_bus() {
+        let bus = EventBus::new(16);
+        // Just verify it doesn't panic
+        let _rx = bus.subscribe();
+    }
+
+    #[test]
+    fn publish_with_no_subscribers_returns_none() {
+        let bus = EventBus::new(16);
+        // No subscribe() called, so no receivers
+        let result = bus.publish(
+            EventTarget::Collection,
+            EventOperation::Create,
+            "posts".to_string(),
+            "id1".to_string(),
+            HashMap::new(),
+        );
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn publish_with_subscriber_returns_event() {
+        let bus = EventBus::new(16);
+        let _rx = bus.subscribe(); // create a receiver
+        let result = bus.publish(
+            EventTarget::Collection,
+            EventOperation::Create,
+            "posts".to_string(),
+            "id1".to_string(),
+            HashMap::new(),
+        );
+        assert!(result.is_some());
+        let event = result.unwrap();
+        assert_eq!(event.collection, "posts");
+        assert_eq!(event.document_id, "id1");
+        assert_eq!(event.target, EventTarget::Collection);
+        assert_eq!(event.operation, EventOperation::Create);
+    }
+
+    #[test]
+    fn sequence_increments() {
+        let bus = EventBus::new(16);
+        let _rx = bus.subscribe();
+        let e1 = bus.publish(EventTarget::Collection, EventOperation::Create, "a".into(), "1".into(), HashMap::new()).unwrap();
+        let e2 = bus.publish(EventTarget::Collection, EventOperation::Update, "a".into(), "2".into(), HashMap::new()).unwrap();
+        assert_eq!(e2.sequence, e1.sequence + 1);
+    }
+
+    #[test]
+    fn subscriber_receives_event() {
+        let bus = EventBus::new(16);
+        let mut rx = bus.subscribe();
+        bus.publish(EventTarget::Global, EventOperation::Update, "settings".into(), "default".into(), HashMap::new());
+        let event = rx.try_recv().expect("should receive event");
+        assert_eq!(event.collection, "settings");
+        assert_eq!(event.target, EventTarget::Global);
+    }
+}

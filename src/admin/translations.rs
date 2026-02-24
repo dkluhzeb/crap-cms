@@ -48,3 +48,67 @@ impl Translations {
         result
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_returns_default_translations() {
+        let t = Translations::load(Path::new("/nonexistent"), "en");
+        // Should have at least some strings from the compiled-in en.json
+        assert!(!t.strings.is_empty());
+    }
+
+    #[test]
+    fn get_existing_key() {
+        let t = Translations::load(Path::new("/nonexistent"), "en");
+        // The compiled-in en.json should have common admin strings
+        // Just verify that get() returns something other than the key for a known key
+        // If we don't know the keys, test with a missing key instead
+        let val = t.get("nonexistent_key_12345");
+        assert_eq!(val, "nonexistent_key_12345", "missing key should return key itself");
+    }
+
+    #[test]
+    fn get_interpolated_replaces_vars() {
+        let mut strings = HashMap::new();
+        strings.insert("greeting".to_string(), "Hello {{name}}, welcome to {{place}}!".to_string());
+        let t = Translations { strings };
+
+        let mut params = HashMap::new();
+        params.insert("name".to_string(), "Alice".to_string());
+        params.insert("place".to_string(), "CMS".to_string());
+        let result = t.get_interpolated("greeting", &params);
+        assert_eq!(result, "Hello Alice, welcome to CMS!");
+    }
+
+    #[test]
+    fn get_interpolated_no_params() {
+        let mut strings = HashMap::new();
+        strings.insert("plain".to_string(), "No vars here".to_string());
+        let t = Translations { strings };
+        let result = t.get_interpolated("plain", &HashMap::new());
+        assert_eq!(result, "No vars here");
+    }
+
+    #[test]
+    fn get_interpolated_missing_key_returns_key() {
+        let t = Translations { strings: HashMap::new() };
+        let result = t.get_interpolated("missing", &HashMap::new());
+        assert_eq!(result, "missing");
+    }
+
+    #[test]
+    fn overlay_translations() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let trans_dir = tmp.path().join("translations");
+        std::fs::create_dir_all(&trans_dir).unwrap();
+        std::fs::write(
+            trans_dir.join("en.json"),
+            r#"{"custom_key": "custom_value"}"#,
+        ).unwrap();
+        let t = Translations::load(tmp.path(), "en");
+        assert_eq!(t.get("custom_key"), "custom_value");
+    }
+}

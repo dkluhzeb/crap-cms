@@ -288,4 +288,43 @@ mod tests {
         let col = make_collection("posts", None, None, None);
         assert_eq!(col.title_field(), None);
     }
+
+    // ── is_auth_collection / is_upload_collection tests ─────────────────────
+
+    #[test]
+    fn is_auth_collection_true() {
+        let mut col = make_collection("users", None, None, None);
+        col.auth = Some(CollectionAuth { enabled: true, ..Default::default() });
+        assert!(col.is_auth_collection());
+    }
+
+    #[test]
+    fn is_auth_collection_false_default() {
+        let col = make_collection("posts", None, None, None);
+        assert!(!col.is_auth_collection(), "no auth config = not auth");
+    }
+
+    #[test]
+    fn is_auth_collection_false_when_disabled() {
+        let mut col = make_collection("users", None, None, None);
+        col.auth = Some(CollectionAuth { enabled: false, ..Default::default() });
+        assert!(!col.is_auth_collection(), "auth.enabled=false = not auth");
+    }
+
+    #[test]
+    fn is_upload_collection() {
+        use crate::core::upload::CollectionUpload;
+        let mut col = make_collection("media", None, None, None);
+        col.upload = Some(CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        });
+        assert!(col.is_upload_collection());
+    }
+
+    #[test]
+    fn is_upload_collection_false_default() {
+        let col = make_collection("posts", None, None, None);
+        assert!(!col.is_upload_collection());
+    }
 }

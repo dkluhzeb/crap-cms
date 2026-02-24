@@ -477,7 +477,7 @@ fn sync_join_tables(
 fn append_default_value(col: &mut String, default_value: &Option<serde_json::Value>, field_type: &FieldType) {
     if let Some(ref default) = default_value {
         match default {
-            serde_json::Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s)),
+            serde_json::Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''"))),
             serde_json::Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
             serde_json::Value::Bool(b) => col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 })),
             _ => {}

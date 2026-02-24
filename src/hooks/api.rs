@@ -380,7 +380,7 @@ fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedString> {
 }
 
 fn get_bool(tbl: &Table, key: &str, default: bool) -> bool {
-    tbl.get::<bool>(key).unwrap_or(default)
+    tbl.get::<Option<bool>>(key).ok().flatten().unwrap_or(default)
 }
 
 fn get_string_val(tbl: &Table, key: &str) -> mlua::Result<String> {

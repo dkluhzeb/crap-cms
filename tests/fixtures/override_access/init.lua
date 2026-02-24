@@ -1,0 +1,2 @@
+-- overrideAccess test fixture — init.lua
+-- Nothing extra needed; collections and hooks are auto-loaded.

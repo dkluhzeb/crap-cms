@@ -272,4 +272,55 @@ mod tests {
         let dir = Path::new("/my/config");
         assert_eq!(config.db_path(dir), Path::new("/absolute/path.db"));
     }
+
+    #[test]
+    fn locale_config_is_enabled() {
+        let empty = LocaleConfig::default();
+        assert!(!empty.is_enabled(), "empty locales should be disabled");
+
+        let with_locales = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        assert!(with_locales.is_enabled(), "non-empty locales should be enabled");
+    }
+
+    #[test]
+    fn load_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            r#"
+[server]
+admin_port = 4000
+grpc_port = 60000
+host = "127.0.0.1"
+
+[database]
+path = "mydata/custom.db"
+
+[admin]
+dev_mode = false
+"#,
+        ).unwrap();
+
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.server.admin_port, 4000);
+        assert_eq!(config.server.grpc_port, 60000);
+        assert_eq!(config.server.host, "127.0.0.1");
+        assert_eq!(config.database.path, "mydata/custom.db");
+        assert!(!config.admin.dev_mode);
+    }
+
+    #[test]
+    fn email_config_defaults() {
+        let email = EmailConfig::default();
+        assert!(email.smtp_host.is_empty(), "smtp_host should be empty by default");
+        assert_eq!(email.smtp_port, 587);
+        assert!(email.smtp_user.is_empty());
+        assert!(email.smtp_pass.is_empty());
+        assert_eq!(email.from_address, "noreply@example.com");
+        assert_eq!(email.from_name, "Crap CMS");
+    }
 }

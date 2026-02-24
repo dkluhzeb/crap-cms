@@ -2,6 +2,7 @@
 
 use axum::{
     extract::{Form, FromRequest, Multipart, Path, Query, State},
+    http::StatusCode,
     response::{Html, IntoResponse, Redirect},
     Extension,
 };
@@ -59,17 +60,18 @@ fn strip_denied_fields(
     }
 }
 
-fn forbidden(state: &AdminState, message: &str) -> Html<String> {
+fn forbidden(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = serde_json::json!({
         "title": "Forbidden",
         "message": message,
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
     });
-    match state.render("errors/403", &data) {
+    let html = match state.render("errors/403", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>403 Forbidden</h1><p>{}</p>", message)),
-    }
+    };
+    (StatusCode::FORBIDDEN, html)
 }
 
 /// Query parameters for paginated collection list views.
@@ -118,12 +120,12 @@ fn build_locale_template_data(
 pub async fn list_collections(
     State(state): State<AdminState>,
     claims: Option<Extension<Claims>>,
-) -> Html<String> {
+) -> impl IntoResponse {
     let mut collections = Vec::new();
     {
         let reg = match state.registry.read() {
             Ok(r) => r,
-            Err(e) => return server_error(&state, &format!("Registry lock poisoned: {}", e)),
+            Err(e) => return server_error(&state, &format!("Registry lock poisoned: {}", e)).into_response(),
         };
         for (slug, def) in &reg.collections {
             collections.push(serde_json::json!({
@@ -142,7 +144,7 @@ pub async fn list_collections(
         "user": user_json(&claims),
     });
 
-    render_or_error(&state, "collections/list", &data)
+    render_or_error(&state, "collections/list", &data).into_response()
 }
 
 /// GET /admin/collections/{slug} — list items in a collection
@@ -249,8 +251,8 @@ pub async fn list_items(
         Err(e) => return server_error(&state, &format!("Task error: {}", e)).into_response(),
     };
 
-    // Strip field-level read-denied fields (used to filter title display)
-    let _denied_fields = {
+    // Strip field-level read-denied fields from documents
+    let denied_fields = {
         let user_doc = get_user_doc(&auth_user);
         let conn = match state.pool.get() {
             Ok(c) => c,
@@ -258,6 +260,12 @@ pub async fn list_items(
         };
         state.hook_runner.check_field_read_access(&def.fields, user_doc, &conn)
     };
+    let documents: Vec<_> = documents.into_iter().map(|mut doc| {
+        for field_name in &denied_fields {
+            doc.fields.remove(field_name);
+        }
+        doc
+    }).collect();
 
     let total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
 
@@ -1839,28 +1847,30 @@ fn render_or_error(state: &AdminState, template: &str, data: &serde_json::Value)
     }
 }
 
-fn not_found(state: &AdminState, message: &str) -> Html<String> {
+fn not_found(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = serde_json::json!({
         "title": "Not Found",
         "message": message,
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
     });
-    match state.render("errors/404", &data) {
+    let html = match state.render("errors/404", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>404</h1><p>{}</p>", message)),
-    }
+    };
+    (StatusCode::NOT_FOUND, html)
 }
 
-fn server_error(state: &AdminState, message: &str) -> Html<String> {
+fn server_error(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = serde_json::json!({
         "title": "Server Error",
         "message": message,
         "collections": state.sidebar_collections(),
         "globals": state.sidebar_globals(),
     });
-    match state.render("errors/500", &data) {
+    let html = match state.render("errors/500", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>500</h1><p>{}</p>", message)),
-    }
+    };
+    (StatusCode::INTERNAL_SERVER_ERROR, html)
 }

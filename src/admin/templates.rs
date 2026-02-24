@@ -148,6 +148,7 @@ impl HelperDef for EqHelper {
 /// Handlebars helper for admin UI translations.
 /// Usage: `{{t "key"}}` or with interpolation: `{{t "key" name=value}}`
 /// Interpolation replaces `{{var}}` placeholders in the translation string.
+#[allow(dead_code)]
 struct TranslationHelper {
     translations: Arc<Translations>,
 }
@@ -182,5 +183,39 @@ impl HelperDef for TranslationHelper {
             let translated = self.translations.get_interpolated(key, &params);
             Ok(ScopedJson::Derived(serde_json::Value::String(translated)))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_handlebars_loads_templates() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        // Should have at least the compiled-in templates (dashboard/index, auth/login, etc.)
+        // Rendering dashboard/index with minimal data should work (non-strict mode)
+        let result = hbs.render("auth/login", &serde_json::json!({
+            "title": "Login",
+            "collections": [],
+        }));
+        assert!(result.is_ok(), "Should render auth/login template: {:?}", result.err());
+    }
+
+    #[test]
+    fn eq_helper_works() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        // Register a test template using the eq helper
+        let mut hbs_mut = (*hbs).clone();
+        hbs_mut.register_template_string("test_eq", "{{#if (eq a b)}}EQUAL{{else}}NOT_EQUAL{{/if}}")
+            .expect("register");
+        let result = hbs_mut.render("test_eq", &serde_json::json!({"a": "foo", "b": "foo"})).unwrap();
+        assert_eq!(result, "EQUAL");
+        let result = hbs_mut.render("test_eq", &serde_json::json!({"a": "foo", "b": "bar"})).unwrap();
+        assert_eq!(result, "NOT_EQUAL");
     }
 }

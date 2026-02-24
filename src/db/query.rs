@@ -674,8 +674,9 @@ fn build_filter_condition(f: &Filter, params: &mut Vec<Box<dyn rusqlite::types::
             format!("{} LIKE ?", f.field)
         }
         FilterOp::Contains(v) => {
-            params.push(Box::new(format!("%{}%", v)));
-            format!("{} LIKE ?", f.field)
+            let escaped = v.replace('%', "\\%").replace('_', "\\_");
+            params.push(Box::new(format!("%{}%", escaped)));
+            format!("{} LIKE ? ESCAPE '\\'", f.field)
         }
         FilterOp::GreaterThan(v) => {
             params.push(Box::new(v.clone()));
@@ -1719,5 +1720,53 @@ mod tests {
             .iter().map(|s| s.to_string()).collect();
         let err = validate_field_name("nonexistent", &valid).unwrap_err();
         assert!(err.to_string().contains("Invalid field 'nonexistent'"));
+    }
+
+    // ── LocaleContext tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn locale_context_disabled() {
+        let config = crate::config::LocaleConfig::default(); // no locales
+        let ctx = LocaleContext::from_locale_string(None, &config);
+        assert!(ctx.is_none(), "Should be None when localization is disabled");
+    }
+
+    #[test]
+    fn locale_context_all() {
+        let config = crate::config::LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let ctx = LocaleContext::from_locale_string(Some("all"), &config);
+        assert!(ctx.is_some());
+        assert!(matches!(ctx.unwrap().mode, LocaleMode::All));
+    }
+
+    #[test]
+    fn locale_context_specific() {
+        let config = crate::config::LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let ctx = LocaleContext::from_locale_string(Some("de"), &config);
+        assert!(ctx.is_some());
+        match ctx.unwrap().mode {
+            LocaleMode::Single(locale) => assert_eq!(locale, "de"),
+            other => panic!("Expected Single, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn locale_context_default() {
+        let config = crate::config::LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        let ctx = LocaleContext::from_locale_string(None, &config);
+        assert!(ctx.is_some());
+        assert!(matches!(ctx.unwrap().mode, LocaleMode::Default));
     }
 }
