@@ -17,6 +17,38 @@ crap.collections.define("posts", {
 
 See [Collection Definition Schema](../collections/definition-schema.md) for all config options.
 
+## crap.collections.config.get(slug)
+
+Get a collection's current definition as a Lua table. The returned table is round-trip
+compatible with `define()` — you can modify it and pass it back.
+
+Returns `nil` if the collection doesn't exist.
+
+```lua
+local def = crap.collections.config.get("posts")
+if def then
+    -- Add a field
+    def.fields[#def.fields + 1] = { name = "extra", type = "text" }
+    crap.collections.define("posts", def)
+end
+```
+
+## crap.collections.config.list()
+
+Get all registered collections as a slug-keyed table. Iterate with `pairs()`.
+
+```lua
+for slug, def in pairs(crap.collections.config.list()) do
+    if def.upload then
+        -- Add alt_text to every upload collection
+        def.fields[#def.fields + 1] = { name = "alt_text", type = "text" }
+        crap.collections.define(slug, def)
+    end
+end
+```
+
+See [Plugins](../plugins/overview.md) for patterns using these functions.
+
 ## crap.collections.find(collection, query?)
 
 Find documents matching a query. Returns a result table with `documents` and `total`.

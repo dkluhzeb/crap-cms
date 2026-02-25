@@ -323,6 +323,21 @@ crap.collections = {}
 --- @param config crap.CollectionConfig  Collection configuration.
 function crap.collections.define(slug, config) end
 
+--- Schema introspection sub-table for collections.
+--- @class crap.collections.config
+crap.collections.config = {}
+
+--- Get a collection's current definition as a Lua table.
+--- Returns the full config compatible with `define()` for round-trip editing.
+--- @param slug string  Collection slug.
+--- @return crap.CollectionConfig?  The collection config, or nil if not found.
+function crap.collections.config.get(slug) end
+
+--- List all registered collections as a slug-keyed table of full configs.
+--- Iterate with `for slug, def in pairs(crap.collections.config.list()) do ... end`.
+--- @return table<string, crap.CollectionConfig>  Slug -> collection config map.
+function crap.collections.config.list() end
+
 --- Find documents matching a query. Returns documents and total count.
 --- Inside hooks, runs within the parent operation's transaction.
 --- @param collection string        Collection slug.
@@ -438,6 +453,21 @@ crap.globals = {}
 --- @param slug   string            Unique global identifier.
 --- @param config crap.GlobalConfig Global configuration.
 function crap.globals.define(slug, config) end
+
+--- Schema introspection sub-table for globals.
+--- @class crap.globals.config
+crap.globals.config = {}
+
+--- Get a global's current definition as a Lua table.
+--- Returns the full config compatible with `define()` for round-trip editing.
+--- @param slug string  Global slug.
+--- @return crap.GlobalConfig?  The global config, or nil if not found.
+function crap.globals.config.get(slug) end
+
+--- List all registered globals as a slug-keyed table of full configs.
+--- Iterate with `for slug, def in pairs(crap.globals.config.list()) do ... end`.
+--- @return table<string, crap.GlobalConfig>  Slug -> global config map.
+function crap.globals.config.list() end
 
 --- @class crap.GlobalGetOptions
 --- @field locale? string  Locale code for localized fields. Nil = default locale.

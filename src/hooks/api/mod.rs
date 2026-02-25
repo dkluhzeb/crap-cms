@@ -146,6 +146,33 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path, con
         Ok(())
     })?;
     collections_table.set("define", define_collection)?;
+
+    let reg_clone = registry.clone();
+    let get_collection = lua.create_function(move |lua, slug: String| -> mlua::Result<Value> {
+        let reg = reg_clone.read()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+        match reg.get_collection(&slug) {
+            Some(def) => Ok(Value::Table(collection_config_to_lua(lua, def)?)),
+            None => Ok(Value::Nil),
+        }
+    })?;
+    // crap.collections.config sub-table
+    let collections_config_table = lua.create_table()?;
+    collections_config_table.set("get", get_collection)?;
+
+    let reg_clone = registry.clone();
+    let list_collections = lua.create_function(move |lua, ()| -> mlua::Result<Table> {
+        let reg = reg_clone.read()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+        let map = lua.create_table()?;
+        for (slug, def) in reg.collections.iter() {
+            map.set(slug.as_str(), collection_config_to_lua(lua, def)?)?;
+        }
+        Ok(map)
+    })?;
+    collections_config_table.set("list", list_collections)?;
+    collections_table.set("config", collections_config_table)?;
+
     crap.set("collections", collections_table)?;
 
     // crap.globals
@@ -162,6 +189,33 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path, con
         Ok(())
     })?;
     globals_table.set("define", define_global)?;
+
+    let reg_clone = registry.clone();
+    let get_global = lua.create_function(move |lua, slug: String| -> mlua::Result<Value> {
+        let reg = reg_clone.read()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+        match reg.get_global(&slug) {
+            Some(def) => Ok(Value::Table(global_config_to_lua(lua, def)?)),
+            None => Ok(Value::Nil),
+        }
+    })?;
+    // crap.globals.config sub-table
+    let globals_config_table = lua.create_table()?;
+    globals_config_table.set("get", get_global)?;
+
+    let reg_clone = registry.clone();
+    let list_globals = lua.create_function(move |lua, ()| -> mlua::Result<Table> {
+        let reg = reg_clone.read()
+            .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+        let map = lua.create_table()?;
+        for (slug, def) in reg.globals.iter() {
+            map.set(slug.as_str(), global_config_to_lua(lua, def)?)?;
+        }
+        Ok(map)
+    })?;
+    globals_config_table.set("list", list_globals)?;
+    globals_table.set("config", globals_config_table)?;
+
     crap.set("globals", globals_table)?;
 
     // crap.log
@@ -784,6 +838,419 @@ fn field_def_to_lua_table(lua: &Lua, f: &crate::core::field::FieldDefinition) ->
             let bf = lua.create_table()?;
             for (j, sf) in b.fields.iter().enumerate() {
                 bf.set(j + 1, field_def_to_lua_table(lua, sf)?)?;
+            }
+            bt.set("fields", bf)?;
+            blocks.set(i + 1, bt)?;
+        }
+        tbl.set("blocks", blocks)?;
+    }
+
+    Ok(tbl)
+}
+
+/// Convert a LocalizedString to a Lua value (string or locale table).
+fn localized_string_to_lua(lua: &Lua, ls: &crate::core::field::LocalizedString) -> mlua::Result<Value> {
+    match ls {
+        crate::core::field::LocalizedString::Plain(s) => {
+            Ok(Value::String(lua.create_string(s)?))
+        }
+        crate::core::field::LocalizedString::Localized(map) => {
+            let tbl = lua.create_table()?;
+            for (k, v) in map {
+                tbl.set(k.as_str(), v.as_str())?;
+            }
+            Ok(Value::Table(tbl))
+        }
+    }
+}
+
+/// Convert a CollectionDefinition to a full Lua table compatible with parse_collection_definition().
+/// Unlike collection_def_to_lua_table (used by crap.schema), this produces a round-trip compatible
+/// table that can be passed back to crap.collections.define().
+fn collection_config_to_lua(lua: &Lua, def: &crate::core::CollectionDefinition) -> mlua::Result<Table> {
+    let tbl = lua.create_table()?;
+
+    // labels
+    let labels = lua.create_table()?;
+    if let Some(ref s) = def.labels.singular {
+        labels.set("singular", localized_string_to_lua(lua, s)?)?;
+    }
+    if let Some(ref s) = def.labels.plural {
+        labels.set("plural", localized_string_to_lua(lua, s)?)?;
+    }
+    tbl.set("labels", labels)?;
+
+    tbl.set("timestamps", def.timestamps)?;
+
+    // admin
+    let admin = lua.create_table()?;
+    if let Some(ref s) = def.admin.use_as_title {
+        admin.set("use_as_title", s.as_str())?;
+    }
+    if let Some(ref s) = def.admin.default_sort {
+        admin.set("default_sort", s.as_str())?;
+    }
+    if def.admin.hidden {
+        admin.set("hidden", true)?;
+    }
+    if !def.admin.list_searchable_fields.is_empty() {
+        let lsf = lua.create_table()?;
+        for (i, f) in def.admin.list_searchable_fields.iter().enumerate() {
+            lsf.set(i + 1, f.as_str())?;
+        }
+        admin.set("list_searchable_fields", lsf)?;
+    }
+    tbl.set("admin", admin)?;
+
+    // fields
+    let fields_arr = lua.create_table()?;
+    for (i, f) in def.fields.iter().enumerate() {
+        fields_arr.set(i + 1, field_config_to_lua(lua, f)?)?;
+    }
+    tbl.set("fields", fields_arr)?;
+
+    // hooks
+    let hooks = collection_hooks_to_lua(lua, &def.hooks)?;
+    tbl.set("hooks", hooks)?;
+
+    // access
+    let access = lua.create_table()?;
+    if let Some(ref s) = def.access.read { access.set("read", s.as_str())?; }
+    if let Some(ref s) = def.access.create { access.set("create", s.as_str())?; }
+    if let Some(ref s) = def.access.update { access.set("update", s.as_str())?; }
+    if let Some(ref s) = def.access.delete { access.set("delete", s.as_str())?; }
+    tbl.set("access", access)?;
+
+    // auth
+    if let Some(ref auth) = def.auth {
+        if auth.enabled {
+            if auth.strategies.is_empty()
+                && !auth.disable_local
+                && !auth.verify_email
+                && auth.forgot_password
+                && auth.token_expiry == 7200
+            {
+                // Simple form: auth = true
+                tbl.set("auth", true)?;
+            } else {
+                let auth_tbl = lua.create_table()?;
+                auth_tbl.set("token_expiry", auth.token_expiry)?;
+                if auth.disable_local {
+                    auth_tbl.set("disable_local", true)?;
+                }
+                if auth.verify_email {
+                    auth_tbl.set("verify_email", true)?;
+                }
+                if !auth.forgot_password {
+                    auth_tbl.set("forgot_password", false)?;
+                }
+                if !auth.strategies.is_empty() {
+                    let strats = lua.create_table()?;
+                    for (i, s) in auth.strategies.iter().enumerate() {
+                        let st = lua.create_table()?;
+                        st.set("name", s.name.as_str())?;
+                        st.set("authenticate", s.authenticate.as_str())?;
+                        strats.set(i + 1, st)?;
+                    }
+                    auth_tbl.set("strategies", strats)?;
+                }
+                tbl.set("auth", auth_tbl)?;
+            }
+        }
+    }
+
+    // upload
+    if let Some(ref upload) = def.upload {
+        if upload.enabled {
+            if upload.mime_types.is_empty()
+                && upload.max_file_size.is_none()
+                && upload.image_sizes.is_empty()
+                && upload.admin_thumbnail.is_none()
+                && upload.format_options.webp.is_none()
+                && upload.format_options.avif.is_none()
+            {
+                tbl.set("upload", true)?;
+            } else {
+                let u = lua.create_table()?;
+                if !upload.mime_types.is_empty() {
+                    let mt = lua.create_table()?;
+                    for (i, m) in upload.mime_types.iter().enumerate() {
+                        mt.set(i + 1, m.as_str())?;
+                    }
+                    u.set("mime_types", mt)?;
+                }
+                if let Some(max) = upload.max_file_size {
+                    u.set("max_file_size", max)?;
+                }
+                if !upload.image_sizes.is_empty() {
+                    let sizes = lua.create_table()?;
+                    for (i, s) in upload.image_sizes.iter().enumerate() {
+                        let st = lua.create_table()?;
+                        st.set("name", s.name.as_str())?;
+                        st.set("width", s.width)?;
+                        st.set("height", s.height)?;
+                        let fit_str = match s.fit {
+                            crate::core::upload::ImageFit::Cover => "cover",
+                            crate::core::upload::ImageFit::Contain => "contain",
+                            crate::core::upload::ImageFit::Inside => "inside",
+                            crate::core::upload::ImageFit::Fill => "fill",
+                        };
+                        st.set("fit", fit_str)?;
+                        sizes.set(i + 1, st)?;
+                    }
+                    u.set("image_sizes", sizes)?;
+                }
+                if let Some(ref thumb) = upload.admin_thumbnail {
+                    u.set("admin_thumbnail", thumb.as_str())?;
+                }
+                if upload.format_options.webp.is_some() || upload.format_options.avif.is_some() {
+                    let fo = lua.create_table()?;
+                    if let Some(ref webp) = upload.format_options.webp {
+                        let w = lua.create_table()?;
+                        w.set("quality", webp.quality)?;
+                        fo.set("webp", w)?;
+                    }
+                    if let Some(ref avif) = upload.format_options.avif {
+                        let a = lua.create_table()?;
+                        a.set("quality", avif.quality)?;
+                        fo.set("avif", a)?;
+                    }
+                    u.set("format_options", fo)?;
+                }
+                tbl.set("upload", u)?;
+            }
+        }
+    }
+
+    // live
+    match &def.live {
+        None => { tbl.set("live", true)?; }
+        Some(crate::core::collection::LiveSetting::Disabled) => { tbl.set("live", false)?; }
+        Some(crate::core::collection::LiveSetting::Function(s)) => { tbl.set("live", s.as_str())?; }
+    }
+
+    // versions
+    if let Some(ref v) = def.versions {
+        if v.drafts && v.max_versions == 0 {
+            tbl.set("versions", true)?;
+        } else {
+            let vt = lua.create_table()?;
+            vt.set("drafts", v.drafts)?;
+            if v.max_versions > 0 {
+                vt.set("max_versions", v.max_versions)?;
+            }
+            tbl.set("versions", vt)?;
+        }
+    }
+
+    Ok(tbl)
+}
+
+/// Convert collection-level hooks to a Lua table.
+/// Convert a GlobalDefinition to a full Lua table compatible with parse_global_definition().
+fn global_config_to_lua(lua: &Lua, def: &crate::core::collection::GlobalDefinition) -> mlua::Result<Table> {
+    let tbl = lua.create_table()?;
+
+    // labels
+    let labels = lua.create_table()?;
+    if let Some(ref s) = def.labels.singular {
+        labels.set("singular", localized_string_to_lua(lua, s)?)?;
+    }
+    if let Some(ref s) = def.labels.plural {
+        labels.set("plural", localized_string_to_lua(lua, s)?)?;
+    }
+    tbl.set("labels", labels)?;
+
+    // fields
+    let fields_arr = lua.create_table()?;
+    for (i, f) in def.fields.iter().enumerate() {
+        fields_arr.set(i + 1, field_config_to_lua(lua, f)?)?;
+    }
+    tbl.set("fields", fields_arr)?;
+
+    // hooks
+    tbl.set("hooks", collection_hooks_to_lua(lua, &def.hooks)?)?;
+
+    // access
+    let access = lua.create_table()?;
+    if let Some(ref s) = def.access.read { access.set("read", s.as_str())?; }
+    if let Some(ref s) = def.access.create { access.set("create", s.as_str())?; }
+    if let Some(ref s) = def.access.update { access.set("update", s.as_str())?; }
+    if let Some(ref s) = def.access.delete { access.set("delete", s.as_str())?; }
+    tbl.set("access", access)?;
+
+    // live
+    match &def.live {
+        None => { tbl.set("live", true)?; }
+        Some(crate::core::collection::LiveSetting::Disabled) => { tbl.set("live", false)?; }
+        Some(crate::core::collection::LiveSetting::Function(s)) => { tbl.set("live", s.as_str())?; }
+    }
+
+    Ok(tbl)
+}
+
+/// Convert collection-level hooks to a Lua table.
+fn collection_hooks_to_lua(lua: &Lua, hooks: &crate::core::collection::CollectionHooks) -> mlua::Result<Table> {
+    let tbl = lua.create_table()?;
+    let pairs: &[(&str, &[String])] = &[
+        ("before_validate", &hooks.before_validate),
+        ("before_change", &hooks.before_change),
+        ("after_change", &hooks.after_change),
+        ("before_read", &hooks.before_read),
+        ("after_read", &hooks.after_read),
+        ("before_delete", &hooks.before_delete),
+        ("after_delete", &hooks.after_delete),
+        ("before_broadcast", &hooks.before_broadcast),
+    ];
+    for (key, list) in pairs {
+        if !list.is_empty() {
+            let arr = lua.create_table()?;
+            for (i, s) in list.iter().enumerate() {
+                arr.set(i + 1, s.as_str())?;
+            }
+            tbl.set(*key, arr)?;
+        }
+    }
+    Ok(tbl)
+}
+
+/// Convert a FieldDefinition to a full Lua table compatible with parse_fields().
+fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> mlua::Result<Table> {
+    let tbl = lua.create_table()?;
+    tbl.set("name", f.name.as_str())?;
+    tbl.set("type", f.field_type.as_str())?;
+
+    if f.required { tbl.set("required", true)?; }
+    if f.unique { tbl.set("unique", true)?; }
+    if f.localized { tbl.set("localized", true)?; }
+    if let Some(ref v) = f.validate { tbl.set("validate", v.as_str())?; }
+
+    if let Some(ref dv) = f.default_value {
+        match dv {
+            serde_json::Value::Bool(b) => { tbl.set("default_value", *b)?; }
+            serde_json::Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    tbl.set("default_value", i)?;
+                } else if let Some(f_val) = n.as_f64() {
+                    tbl.set("default_value", f_val)?;
+                }
+            }
+            serde_json::Value::String(s) => { tbl.set("default_value", s.as_str())?; }
+            _ => {}
+        }
+    }
+
+    if let Some(ref pa) = f.picker_appearance {
+        tbl.set("picker_appearance", pa.as_str())?;
+    }
+
+    // options (select fields)
+    if !f.options.is_empty() {
+        let opts = lua.create_table()?;
+        for (i, opt) in f.options.iter().enumerate() {
+            let o = lua.create_table()?;
+            o.set("label", localized_string_to_lua(lua, &opt.label)?)?;
+            o.set("value", opt.value.as_str())?;
+            opts.set(i + 1, o)?;
+        }
+        tbl.set("options", opts)?;
+    }
+
+    // admin
+    {
+        let admin = lua.create_table()?;
+        let mut has_any = false;
+        if let Some(ref l) = f.admin.label {
+            admin.set("label", localized_string_to_lua(lua, l)?)?;
+            has_any = true;
+        }
+        if let Some(ref p) = f.admin.placeholder {
+            admin.set("placeholder", localized_string_to_lua(lua, p)?)?;
+            has_any = true;
+        }
+        if let Some(ref d) = f.admin.description {
+            admin.set("description", localized_string_to_lua(lua, d)?)?;
+            has_any = true;
+        }
+        if f.admin.hidden { admin.set("hidden", true)?; has_any = true; }
+        if f.admin.readonly { admin.set("readonly", true)?; has_any = true; }
+        if let Some(ref w) = f.admin.width {
+            admin.set("width", w.as_str())?;
+            has_any = true;
+        }
+        if f.admin.collapsed { admin.set("collapsed", true)?; has_any = true; }
+        if has_any {
+            tbl.set("admin", admin)?;
+        }
+    }
+
+    // hooks
+    {
+        let hooks = lua.create_table()?;
+        let mut has_any = false;
+        let pairs: &[(&str, &[String])] = &[
+            ("before_validate", &f.hooks.before_validate),
+            ("before_change", &f.hooks.before_change),
+            ("after_change", &f.hooks.after_change),
+            ("after_read", &f.hooks.after_read),
+        ];
+        for (key, list) in pairs {
+            if !list.is_empty() {
+                let arr = lua.create_table()?;
+                for (i, s) in list.iter().enumerate() {
+                    arr.set(i + 1, s.as_str())?;
+                }
+                hooks.set(*key, arr)?;
+                has_any = true;
+            }
+        }
+        if has_any {
+            tbl.set("hooks", hooks)?;
+        }
+    }
+
+    // access
+    {
+        let access = lua.create_table()?;
+        let mut has_any = false;
+        if let Some(ref s) = f.access.read { access.set("read", s.as_str())?; has_any = true; }
+        if let Some(ref s) = f.access.create { access.set("create", s.as_str())?; has_any = true; }
+        if let Some(ref s) = f.access.update { access.set("update", s.as_str())?; has_any = true; }
+        if has_any {
+            tbl.set("access", access)?;
+        }
+    }
+
+    // relationship
+    if let Some(ref rc) = f.relationship {
+        let rel = lua.create_table()?;
+        rel.set("collection", rc.collection.as_str())?;
+        if rc.has_many { rel.set("has_many", true)?; }
+        if let Some(md) = rc.max_depth { rel.set("max_depth", md)?; }
+        tbl.set("relationship", rel)?;
+    }
+
+    // sub-fields (array, group)
+    if !f.fields.is_empty() {
+        let sub = lua.create_table()?;
+        for (i, sf) in f.fields.iter().enumerate() {
+            sub.set(i + 1, field_config_to_lua(lua, sf)?)?;
+        }
+        tbl.set("fields", sub)?;
+    }
+
+    // blocks
+    if !f.blocks.is_empty() {
+        let blocks = lua.create_table()?;
+        for (i, b) in f.blocks.iter().enumerate() {
+            let bt = lua.create_table()?;
+            bt.set("type", b.block_type.as_str())?;
+            if let Some(ref lbl) = b.label {
+                bt.set("label", localized_string_to_lua(lua, lbl)?)?;
+            }
+            let bf = lua.create_table()?;
+            for (j, sf) in b.fields.iter().enumerate() {
+                bf.set(j + 1, field_config_to_lua(lua, sf)?)?;
             }
             bt.set("fields", bf)?;
             blocks.set(i + 1, bt)?;

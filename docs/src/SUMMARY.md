@@ -78,6 +78,10 @@
 - [Overview](relationships/overview.md)
 - [Population Depth](relationships/population-depth.md)
 
+# Plugins
+
+- [Overview](plugins/overview.md)
+
 # Uploads
 
 - [Overview](uploads/overview.md)

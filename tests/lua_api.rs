@@ -555,7 +555,7 @@ fn lua_crud_find_with_filters() {
 }
 
 #[test]
-fn lua_globals_get_and_update() {
+fn lua_globals_config_get_and_update() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
     let result = eval_lua_db(&runner, &pool, r#"
         -- Get the default global (should exist with empty/default values)
@@ -2501,4 +2501,232 @@ fn date_field_normalizes_full_datetime() {
         return found.event_at
     "#);
     assert_eq!(result, "2026-03-15T09:00:00.000Z");
+}
+
+// ── crap.collections.config.get() ────────────────────────────────────────────────
+
+#[test]
+fn collections_config_get_returns_nil_for_unknown() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("nonexistent")
+        return tostring(def)
+    "#);
+    assert_eq!(result, "nil");
+}
+
+#[test]
+fn collections_config_get_returns_labels_and_fields() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("articles")
+        if def == nil then return "nil" end
+        local parts = {}
+        parts[#parts + 1] = def.labels.singular
+        parts[#parts + 1] = def.labels.plural
+        parts[#parts + 1] = tostring(#def.fields)
+        return table.concat(parts, "|")
+    "#);
+    let parts: Vec<&str> = result.split('|').collect();
+    assert_eq!(parts[0], "Article");
+    assert_eq!(parts[1], "Articles");
+    // articles has 7 fields: title, body, status, slug, word_count, published_at, event_at
+    assert_eq!(parts[2], "7");
+}
+
+#[test]
+fn collections_config_get_includes_field_details() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("articles")
+        local title = def.fields[1]
+        local parts = {}
+        parts[#parts + 1] = title.name
+        parts[#parts + 1] = title.type
+        parts[#parts + 1] = tostring(title.required)
+        parts[#parts + 1] = tostring(title.unique)
+        return table.concat(parts, "|")
+    "#);
+    assert_eq!(result, "title|text|true|true");
+}
+
+#[test]
+fn collections_config_get_includes_hooks() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("articles")
+        return def.hooks.before_validate[1]
+    "#);
+    assert_eq!(result, "hooks.article_hooks.before_validate");
+}
+
+#[test]
+fn collections_config_get_includes_field_hooks() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("articles")
+        -- slug is field 4
+        local slug = def.fields[4]
+        return slug.hooks.before_change[1]
+    "#);
+    assert_eq!(result, "hooks.field_hooks.slugify_title");
+}
+
+#[test]
+fn collections_config_get_includes_select_options() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("articles")
+        -- status is field 3
+        local status = def.fields[3]
+        local parts = {}
+        for _, opt in ipairs(status.options) do
+            parts[#parts + 1] = opt.label .. "=" .. opt.value
+        end
+        return table.concat(parts, "|")
+    "#);
+    assert_eq!(result, "Draft=draft|Published=published");
+}
+
+#[test]
+fn collections_config_get_includes_picker_appearance() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("articles")
+        -- event_at is field 7, has picker_appearance = "dayAndTime"
+        local event_at = def.fields[7]
+        return event_at.picker_appearance
+    "#);
+    assert_eq!(result, "dayAndTime");
+}
+
+#[test]
+fn collections_config_get_roundtrip_redefine() {
+    let runner = setup_lua();
+    // Get the definition, modify it, redefine, and get again to verify round-trip
+    let result = eval_lua(&runner, r#"
+        local def = crap.collections.config.get("articles")
+        -- Add a new field
+        def.fields[#def.fields + 1] = { name = "extra", type = "text" }
+        -- Redefine
+        crap.collections.define("articles", def)
+        -- Get again
+        local def2 = crap.collections.config.get("articles")
+        local parts = {}
+        parts[#parts + 1] = tostring(#def2.fields)
+        parts[#parts + 1] = def2.fields[#def2.fields].name
+        parts[#parts + 1] = def2.labels.singular
+        parts[#parts + 1] = def2.hooks.before_change[1]
+        return table.concat(parts, "|")
+    "#);
+    let parts: Vec<&str> = result.split('|').collect();
+    assert_eq!(parts[0], "8"); // 7 original + 1 new
+    assert_eq!(parts[1], "extra");
+    assert_eq!(parts[2], "Article"); // labels preserved
+    assert_eq!(parts[3], "hooks.article_hooks.before_change"); // hooks preserved
+}
+
+// ── crap.globals.config.get() / crap.globals.config.list() ──────────────────────────────
+
+#[test]
+fn globals_config_get_returns_nil_for_unknown() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        return tostring(crap.globals.config.get("nonexistent"))
+    "#);
+    assert_eq!(result, "nil");
+}
+
+#[test]
+fn globals_config_get_returns_labels_and_fields() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.globals.config.get("settings")
+        local parts = {}
+        parts[#parts + 1] = def.labels.singular
+        parts[#parts + 1] = tostring(#def.fields)
+        parts[#parts + 1] = def.fields[1].name
+        return table.concat(parts, "|")
+    "#);
+    assert_eq!(result, "Settings|2|site_name");
+}
+
+#[test]
+fn globals_config_get_roundtrip_redefine() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local def = crap.globals.config.get("settings")
+        def.fields[#def.fields + 1] = { name = "footer_text", type = "text" }
+        crap.globals.define("settings", def)
+        local def2 = crap.globals.config.get("settings")
+        local parts = {}
+        parts[#parts + 1] = tostring(#def2.fields)
+        parts[#parts + 1] = def2.fields[#def2.fields].name
+        parts[#parts + 1] = def2.labels.singular
+        return table.concat(parts, "|")
+    "#);
+    assert_eq!(result, "3|footer_text|Settings");
+}
+
+#[test]
+fn globals_list_returns_slug_keyed_map() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local all = crap.globals.config.list()
+        local slugs = {}
+        for slug, _ in pairs(all) do
+            slugs[#slugs + 1] = slug
+        end
+        table.sort(slugs)
+        return table.concat(slugs, ",")
+    "#);
+    assert!(result.contains("settings"), "should contain settings, got: {}", result);
+}
+
+#[test]
+fn globals_list_can_modify_and_redefine() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        for slug, def in pairs(crap.globals.config.list()) do
+            if slug == "settings" then
+                def.fields[#def.fields + 1] = { name = "plugin_field", type = "text" }
+                crap.globals.define(slug, def)
+            end
+        end
+        local updated = crap.globals.config.get("settings")
+        return updated.fields[#updated.fields].name
+    "#);
+    assert_eq!(result, "plugin_field");
+}
+
+#[test]
+fn collections_list_returns_all_collections() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local all = crap.collections.config.list()
+        local slugs = {}
+        for slug, _ in pairs(all) do
+            slugs[#slugs + 1] = slug
+        end
+        table.sort(slugs)
+        return table.concat(slugs, ",")
+    "#);
+    assert!(result.contains("articles"), "should contain articles, got: {}", result);
+}
+
+#[test]
+fn collections_list_can_filter_and_redefine() {
+    let runner = setup_lua();
+    // Simulate a plugin that adds a field to every collection
+    let result = eval_lua(&runner, r#"
+        for slug, def in pairs(crap.collections.config.list()) do
+            if slug == "articles" then
+                def.fields[#def.fields + 1] = { name = "plugin_field", type = "text" }
+                crap.collections.define(slug, def)
+            end
+        end
+        local updated = crap.collections.config.get("articles")
+        return updated.fields[#updated.fields].name
+    "#);
+    assert_eq!(result, "plugin_field");
 }
