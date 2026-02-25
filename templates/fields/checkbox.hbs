@@ -1,11 +1,24 @@
 <div class="form__checkbox">
+  {{#if locale_locked}}
+  <input type="hidden" name="{{name}}" value="{{#if checked}}1{{else}}0{{/if}}" />
+  <input
+    type="checkbox"
+    id="field-{{name}}"
+    {{#if checked}}checked{{/if}}
+    disabled
+  />
+  {{else}}
   <input
     type="checkbox"
     id="field-{{name}}"
     name="{{name}}"
     {{#if checked}}checked{{/if}}
   />
-  <label for="field-{{name}}">{{label}}</label>
+  {{/if}}
+  <label for="field-{{name}}">
+    {{label}}
+    {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
+  </label>
 </div>
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

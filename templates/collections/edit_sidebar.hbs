@@ -45,7 +45,7 @@
   {{!-- Locale selector panel --}}
   <div class="edit-sidebar__panel">
     <div class="edit-sidebar__panel-header">
-      <span class="material-symbols-outlined" style="font-size: 16px;">translate</span>
+      <span class="material-symbols-outlined">translate</span>
       {{t "locale"}}
     </div>
     <div class="edit-sidebar__panel-body">
@@ -67,7 +67,7 @@
   {{!-- Document meta panel --}}
   <div class="edit-sidebar__panel">
     <div class="edit-sidebar__panel-header">
-      <span class="material-symbols-outlined" style="font-size: 16px;">info</span>
+      <span class="material-symbols-outlined">info</span>
       {{t "document"}}
     </div>
     <div class="edit-sidebar__panel-body">
@@ -102,7 +102,7 @@
   {{!-- Version history panel --}}
   <div class="edit-sidebar__panel">
     <div class="edit-sidebar__panel-header">
-      <span class="material-symbols-outlined" style="font-size: 16px;">history</span>
+      <span class="material-symbols-outlined">history</span>
       {{t "version_history"}}
     </div>
     <div class="edit-sidebar__panel-body">
@@ -123,6 +123,14 @@
         </div>
         {{/each}}
       </div>
+      {{#if has_more_versions}}
+      <a class="edit-sidebar__versions-link"
+        href="/admin/collections/{{collection.slug}}/{{document.id}}/versions"
+        hx-get="/admin/collections/{{collection.slug}}/{{document.id}}/versions"
+        hx-target="body" hx-push-url="true">
+        {{t "view_all_versions"}}
+      </a>
+      {{/if}}
       {{/if}}
     </div>
   </div>
@@ -131,7 +139,7 @@
   {{!-- Actions panel --}}
   <div class="edit-sidebar__panel">
     <div class="edit-sidebar__panel-header">
-      <span class="material-symbols-outlined" style="font-size: 16px;">more_horiz</span>
+      <span class="material-symbols-outlined">more_horiz</span>
       {{t "actions"}}
     </div>
     <div class="edit-sidebar__panel-body">

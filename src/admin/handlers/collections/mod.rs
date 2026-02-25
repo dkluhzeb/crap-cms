@@ -22,6 +22,7 @@ use super::shared::{
     PaginationParams, LocaleParams,
     user_json, get_user_doc, strip_denied_fields,
     check_access_or_forbid, build_locale_template_data,
+    is_non_default_locale,
     build_field_contexts, enrich_field_contexts,
     forbidden, redirect_response, html_with_toast,
     render_or_error, not_found, server_error,
@@ -303,10 +304,11 @@ pub async fn create_form(
         _ => {}
     }
 
-    let mut fields = build_field_contexts(&def.fields, &HashMap::new(), &HashMap::new(), true);
+    let non_default_locale = is_non_default_locale(&state, locale_params.locale.as_deref());
+    let mut fields = build_field_contexts(&def.fields, &HashMap::new(), &HashMap::new(), true, non_default_locale);
 
     // Enrich relationship and array fields
-    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), &state, true);
+    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), &state, true, non_default_locale);
 
     if def.is_auth_collection() {
         fields.push(serde_json::json!({
@@ -419,7 +421,7 @@ pub async fn create_action(
                 Ok(processed) => inject_upload_metadata(&mut form_data, &processed),
                 Err(e) => {
                     tracing::error!("Upload processing error: {}", e);
-                    let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true);
+                    let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
                     let data = serde_json::json!({
                         "page_title": format!("Create {}", def.singular_name()),
                         "collections": state.sidebar_collections(),
@@ -521,7 +523,7 @@ pub async fn create_action(
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
-                let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true);
+                let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
                 let data = serde_json::json!({
                     "page_title": format!("Create {}", def.singular_name()),
                     "collections": state.sidebar_collections(),
@@ -657,10 +659,11 @@ pub async fn edit_form(
         })
         .collect();
 
-    let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), true);
+    let non_default_locale = is_non_default_locale(&state, locale_params.locale.as_deref());
+    let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), true, non_default_locale);
 
     // Enrich relationship and array fields with extra data
-    enrich_field_contexts(&mut fields, &def.fields, &document.fields, &state, true);
+    enrich_field_contexts(&mut fields, &def.fields, &document.fields, &state, true, non_default_locale);
 
     if def.is_auth_collection() {
         fields.push(serde_json::json!({
@@ -690,9 +693,10 @@ pub async fn edit_form(
     } else {
         String::new()
     };
-    let versions: Vec<serde_json::Value> = if has_versions {
+    let (versions, total_versions): (Vec<serde_json::Value>, i64) = if has_versions {
         if let Ok(conn) = state.pool.get() {
-            query::list_versions(&conn, &slug, &document.id, Some(10))
+            let total = query::count_versions(&conn, &slug, &document.id).unwrap_or(0);
+            let vers = query::list_versions(&conn, &slug, &document.id, Some(3), None)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|v| serde_json::json!({
@@ -702,12 +706,13 @@ pub async fn edit_form(
                     "latest": v.latest,
                     "created_at": v.created_at,
                 }))
-                .collect()
+                .collect();
+            (vers, total)
         } else {
-            vec![]
+            (vec![], 0)
         }
     } else {
-        vec![]
+        (vec![], 0)
     };
 
     let mut data = serde_json::json!({
@@ -730,6 +735,7 @@ pub async fn edit_form(
         "has_drafts": has_drafts,
         "has_versions": has_versions,
         "versions": versions,
+        "has_more_versions": total_versions > 3,
         "user": user_json(&claims),
         "breadcrumbs": [
             { "label": "Collections", "url": "/admin/collections" },
@@ -894,7 +900,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 Ok(processed) => inject_upload_metadata(&mut form_data, &processed),
                 Err(e) => {
                     tracing::error!("Upload processing error: {}", e);
-                    let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true);
+                    let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
                     let data = serde_json::json!({
                         "page_title": format!("Edit {}", def.singular_name()),
                         "collections": state.sidebar_collections(),
@@ -1002,7 +1008,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
-                let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true);
+                let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
                 let data = serde_json::json!({
                     "page_title": format!("Edit {}", def.singular_name()),
                     "collections": state.sidebar_collections(),
@@ -1204,12 +1210,13 @@ pub async fn restore_version(
     let slug_owned = slug.clone();
     let id_owned = id.clone();
     let def_owned = def.clone();
+    let locale_config = state.config.locale.clone();
     let result = tokio::task::spawn_blocking(move || {
         let mut conn = pool.get().map_err(|e| anyhow::anyhow!("DB connection: {}", e))?;
         let tx = conn.transaction().map_err(|e| anyhow::anyhow!("Start transaction: {}", e))?;
         let version = query::find_version_by_id(&tx, &slug_owned, &version_id)?
             .ok_or_else(|| anyhow::anyhow!("Version not found"))?;
-        let doc = query::restore_version(&tx, &slug_owned, &def_owned, &id_owned, &version.snapshot, "published")?;
+        let doc = query::restore_version(&tx, &slug_owned, &def_owned, &id_owned, &version.snapshot, "published", &locale_config)?;
         tx.commit().map_err(|e| anyhow::anyhow!("Commit: {}", e))?;
         Ok::<_, anyhow::Error>(doc)
     }).await;
@@ -1225,4 +1232,107 @@ pub async fn restore_version(
             redirect_response(&format!("/admin/collections/{}/{}", slug, id))
         }
     }
+}
+
+/// GET /admin/collections/{slug}/{id}/versions — dedicated version history page
+pub async fn list_versions_page(
+    State(state): State<AdminState>,
+    Path((slug, id)): Path<(String, String)>,
+    Query(params): Query<PaginationParams>,
+    claims: Option<Extension<Claims>>,
+    auth_user: Option<Extension<AuthUser>>,
+) -> impl IntoResponse {
+    let def = {
+        let reg = match state.registry.read() {
+            Ok(r) => r,
+            Err(e) => return server_error(&state, &format!("Registry lock poisoned: {}", e)).into_response(),
+        };
+        match reg.get_collection(&slug) {
+            Some(d) => d.clone(),
+            None => return not_found(&state, &format!("Collection '{}' not found", slug)).into_response(),
+        }
+    };
+
+    if !def.has_versions() {
+        return redirect_response(&format!("/admin/collections/{}/{}", slug, id)).into_response();
+    }
+
+    // Check read access
+    match check_access_or_forbid(
+        &state, def.access.read.as_deref(), &auth_user, Some(&id), None,
+    ) {
+        Ok(AccessResult::Denied) => return forbidden(&state, "You don't have permission to view this item").into_response(),
+        Err(resp) => return resp,
+        _ => {}
+    }
+
+    // Fetch the document for breadcrumb title
+    let document = match ops::find_document_by_id(&state.pool, &slug, &def, &id, None) {
+        Ok(Some(doc)) => doc,
+        Ok(None) => return not_found(&state, &format!("Document '{}' not found", id)).into_response(),
+        Err(e) => return server_error(&state, &format!("Query error: {}", e)).into_response(),
+    };
+
+    let doc_title = def.title_field()
+        .and_then(|f| document.get_str(f))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| document.id.clone());
+
+    let page = params.page.unwrap_or(1).max(1);
+    let per_page = params.per_page.unwrap_or(20).min(100);
+    let offset = (page - 1) * per_page;
+
+    let conn = match state.pool.get() {
+        Ok(c) => c,
+        Err(_) => return server_error(&state, "Database error").into_response(),
+    };
+
+    let total = query::count_versions(&conn, &slug, &id).unwrap_or(0);
+    let versions: Vec<serde_json::Value> = query::list_versions(&conn, &slug, &id, Some(per_page), Some(offset))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| serde_json::json!({
+            "id": v.id,
+            "version": v.version,
+            "status": v.status,
+            "latest": v.latest,
+            "created_at": v.created_at,
+        }))
+        .collect();
+
+    let total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
+
+    let data = serde_json::json!({
+        "page_title": format!("Version History — {}", doc_title),
+        "collections": state.sidebar_collections(),
+        "globals": state.sidebar_globals(),
+        "collection": {
+            "slug": def.slug,
+            "display_name": def.display_name(),
+            "singular_name": def.singular_name(),
+        },
+        "document": {
+            "id": document.id,
+        },
+        "doc_title": doc_title,
+        "versions": versions,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_pagination": total_pages > 1,
+        "has_prev": page > 1,
+        "has_next": page < total_pages,
+        "prev_url": format!("/admin/collections/{}/{}/versions?page={}", slug, id, page - 1),
+        "next_url": format!("/admin/collections/{}/{}/versions?page={}", slug, id, page + 1),
+        "user": user_json(&claims),
+        "breadcrumbs": [
+            { "label": "Collections", "url": "/admin/collections" },
+            { "label": def.display_name(), "url": format!("/admin/collections/{}", slug) },
+            { "label": doc_title, "url": format!("/admin/collections/{}/{}", slug, id) },
+            { "label": "Version History" },
+        ],
+    });
+
+    render_or_error(&state, "collections/versions", &data).into_response()
 }

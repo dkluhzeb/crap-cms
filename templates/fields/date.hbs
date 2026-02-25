@@ -1,6 +1,7 @@
 <label for="field-{{name}}">
   {{label}}
   {{#if required}}<span class="required">*</span>{{/if}}
+  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
 <input
   type="date"

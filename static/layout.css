@@ -75,6 +75,10 @@
   font-size: var(--text-sm);
 }
 
+.sidebar__navigation .material-symbols-outlined {
+  font-size: 16px;
+}
+
 .main {
   grid-area: main;
   flex-grow: 1;

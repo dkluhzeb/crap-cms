@@ -1,9 +1,25 @@
 <label for="field-{{name}}">
   {{label}}
   {{#if required}}<span class="required">*</span>{{/if}}
+  {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
 <div class="relationship-field">
   {{#if has_many}}
+  {{#if locale_locked}}
+  {{#each relationship_options}}{{#if this.selected}}<input type="hidden" name="{{../name}}" value="{{this.value}}" />{{/if}}{{/each}}
+  <select
+    id="field-{{name}}"
+    multiple
+    data-field-type="relationship"
+    data-has-many="true"
+    disabled
+    {{#if error}}class="form__input--error"{{/if}}
+  >
+    {{#each relationship_options}}
+    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+    {{/each}}
+  </select>
+  {{else}}
   <select
     id="field-{{name}}"
     name="{{name}}"
@@ -13,6 +29,22 @@
     {{#if required}}required{{/if}}
     {{#if error}}class="form__input--error"{{/if}}
   >
+    {{#each relationship_options}}
+    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+    {{/each}}
+  </select>
+  {{/if}}
+  {{else}}
+  {{#if locale_locked}}
+  <input type="hidden" name="{{name}}" value="{{value}}" />
+  <select
+    id="field-{{name}}"
+    data-field-type="relationship"
+    data-relationship-collection="{{relationship_collection}}"
+    disabled
+    {{#if error}}class="form__input--error"{{/if}}
+  >
+    <option value="">-- Select --</option>
     {{#each relationship_options}}
     <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
     {{/each}}
@@ -32,6 +64,8 @@
     {{/each}}
   </select>
   {{/if}}
+  {{/if}}
+  {{#unless locale_locked}}
   <div class="relationship-field__actions">
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
       hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
@@ -48,6 +82,7 @@
     </a>
     {{/unless}}
   </div>
+  {{/unless}}
 </div>
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

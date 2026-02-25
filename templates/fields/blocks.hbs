@@ -18,13 +18,8 @@
         <input type="hidden" name="{{../name}}[{{this.index}}][_block_type]" value="{{this._block_type}}" />
         <div class="form__array-row-fields">
           {{#each this.sub_fields}}
-          <div class="form__array-sub-field">
-            <label>{{this.name}}</label>
-            <input
-              type="text"
-              name="{{this.field_name_indexed}}"
-              value="{{this.value}}"
-            />
+          <div class="form__field">
+            {{{render_field this}}}
           </div>
           {{/each}}
         </div>
@@ -47,13 +42,33 @@
         <input type="hidden" name="{{../name}}[__INDEX__][_block_type]" value="{{this.block_type}}" />
         <div class="form__array-row-fields">
           {{#each this.fields}}
-          <div class="form__array-sub-field">
-            <label>{{this.name}}</label>
-            <input
-              type="text"
-              name="{{../../name}}[__INDEX__][{{this.name}}]"
-              value=""
-            />
+          <div class="form__field">
+            <label>{{this.label}}</label>
+            {{#if (eq this.field_type "richtext")}}
+            <crap-richtext>
+              <textarea name="{{../../name}}[__INDEX__][{{this.name}}]"></textarea>
+            </crap-richtext>
+            {{else if (eq this.field_type "textarea")}}
+            <textarea name="{{../../name}}[__INDEX__][{{this.name}}]" class="form__textarea"></textarea>
+            {{else if (eq this.field_type "checkbox")}}
+            <input type="hidden" name="{{../../name}}[__INDEX__][{{this.name}}]" value="0" />
+            <input type="checkbox" name="{{../../name}}[__INDEX__][{{this.name}}]" value="1" />
+            {{else if (eq this.field_type "select")}}
+            <select name="{{../../name}}[__INDEX__][{{this.name}}]" class="form__select">
+              <option value="">—</option>
+              {{#each this.options}}
+              <option value="{{this.value}}">{{this.label}}</option>
+              {{/each}}
+            </select>
+            {{else if (eq this.field_type "number")}}
+            <input type="number" name="{{../../name}}[__INDEX__][{{this.name}}]" value="" />
+            {{else if (eq this.field_type "date")}}
+            <input type="date" name="{{../../name}}[__INDEX__][{{this.name}}]" value="" />
+            {{else if (eq this.field_type "email")}}
+            <input type="email" name="{{../../name}}[__INDEX__][{{this.name}}]" value="" />
+            {{else}}
+            <input type="text" name="{{../../name}}[__INDEX__][{{this.name}}]" value="" />
+            {{/if}}
           </div>
           {{/each}}
         </div>

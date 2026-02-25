@@ -272,7 +272,7 @@ fn multiple_versions_latest_flag() {
     assert!(v3.latest);
 
     // Only the latest version should have _latest=1
-    let versions = query::list_versions(&conn, "articles", &doc.id, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(versions.len(), 3);
     // Newest first
     assert!(versions[0].latest);
@@ -294,7 +294,7 @@ fn list_versions_newest_first() {
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
 
-    let versions = query::list_versions(&conn, "articles", &doc.id, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].version, 3);
     assert_eq!(versions[1].version, 2);
@@ -315,7 +315,7 @@ fn list_versions_with_limit() {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     }
 
-    let limited = query::list_versions(&conn, "articles", &doc.id, Some(3)).unwrap();
+    let limited = query::list_versions(&conn, "articles", &doc.id, Some(3), None).unwrap();
     assert_eq!(limited.len(), 3);
     // Should be the 3 newest
     assert_eq!(limited[0].version, 5);
@@ -380,11 +380,11 @@ fn prune_versions_keeps_newest() {
     for _ in 0..10 {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     }
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None).unwrap().len(), 10);
+    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 10);
 
     // Prune to 3
     query::prune_versions(&conn, "articles", &doc.id, 3).unwrap();
-    let remaining = query::list_versions(&conn, "articles", &doc.id, None).unwrap();
+    let remaining = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(remaining.len(), 3);
     // Newest kept
     assert_eq!(remaining[0].version, 10);
@@ -408,7 +408,7 @@ fn prune_versions_zero_means_unlimited() {
 
     // max_versions=0 should not prune
     query::prune_versions(&conn, "articles", &doc.id, 0).unwrap();
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None).unwrap().len(), 5);
+    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 5);
 }
 
 #[test]
@@ -465,7 +465,7 @@ fn restore_version_updates_main_table() {
     assert_eq!(current.get_str("title"), Some("Updated"));
 
     // Restore v1
-    let restored = query::restore_version(&conn, "articles", &def, &doc.id, &snap_v1, "published").unwrap();
+    let restored = query::restore_version(&conn, "articles", &def, &doc.id, &snap_v1, "published", &Default::default()).unwrap();
     assert_eq!(restored.get_str("title"), Some("Original"));
 
     // Verify DB has restored data
@@ -474,9 +474,85 @@ fn restore_version_updates_main_table() {
     assert_eq!(after_restore.get_str("body"), Some("Original body"));
 
     // Restore should create a new version (v3)
-    let versions = query::list_versions(&conn, "articles", &doc.id, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(versions.len(), 3);
     assert_eq!(versions[0].version, 3);
+}
+
+/// Regression: restoring a version must clear locale columns that didn't exist
+/// when the snapshot was taken, so stale translations don't persist.
+#[test]
+fn restore_version_clears_locale_columns() {
+    // Build a versioned def with a localized title field
+    let mut def = make_versioned_def();
+    for field in &mut def.fields {
+        if field.name == "title" {
+            field.localized = true;
+        }
+    }
+
+    let locale_config = LocaleConfig {
+        default_locale: "en".to_string(),
+        locales: vec!["en".to_string(), "de".to_string()],
+        fallback: true,
+    };
+
+    // Setup DB with locale-aware migration
+    let (tmp, db_pool) = create_test_pool();
+    let registry = crap_cms::core::Registry::shared();
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register_collection(def.clone());
+    }
+    migrate::sync_all(&db_pool, &registry, &locale_config).expect("sync");
+    let conn = db_pool.get().unwrap();
+
+    // Create document with English title
+    let en_ctx = crap_cms::db::query::LocaleContext {
+        mode: crap_cms::db::query::LocaleMode::Single("en".to_string()),
+        config: locale_config.clone(),
+    };
+    let data: HashMap<String, String> = [
+        ("title".into(), "English Title".into()),
+        ("body".into(), "Body".into()),
+    ].into();
+    let doc = query::create(&conn, "articles", &def, &data, Some(&en_ctx)).unwrap();
+
+    // Create v1 snapshot (only English)
+    let snap_v1 = query::build_snapshot(&conn, "articles", &def, &doc).unwrap();
+    query::create_version(&conn, "articles", &doc.id, "published", &snap_v1).unwrap();
+
+    // Now add a German translation
+    let de_ctx = crap_cms::db::query::LocaleContext {
+        mode: crap_cms::db::query::LocaleMode::Single("de".to_string()),
+        config: locale_config.clone(),
+    };
+    let de_data: HashMap<String, String> = [
+        ("title".into(), "Deutscher Titel".into()),
+    ].into();
+    query::update(&conn, "articles", &def, &doc.id, &de_data, Some(&de_ctx)).unwrap();
+
+    // Verify German translation exists
+    let de_doc = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&de_ctx)).unwrap().unwrap();
+    assert_eq!(de_doc.get_str("title"), Some("Deutscher Titel"));
+
+    // Restore v1 — should clear the German translation
+    query::restore_version(&conn, "articles", &def, &doc.id, &snap_v1, "published", &locale_config).unwrap();
+
+    // English should be restored
+    let en_after = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&en_ctx)).unwrap().unwrap();
+    assert_eq!(en_after.get_str("title"), Some("English Title"));
+
+    // German should be cleared (NULL → fallback to English if fallback enabled, or NULL)
+    // Read the raw column to verify it's NULL
+    let de_raw: Option<String> = conn.query_row(
+        "SELECT title__de FROM articles WHERE id = ?1",
+        [&doc.id],
+        |row| row.get(0),
+    ).unwrap();
+    assert!(de_raw.is_none(), "German locale column should be NULL after restoring pre-translation version");
+
+    let _ = tmp; // keep tempdir alive
 }
 
 #[test]
@@ -491,13 +567,13 @@ fn delete_document_cascades_to_versions() {
     query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
 
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None).unwrap().len(), 2);
+    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 2);
 
     // Delete the document
     query::delete(&conn, "articles", &doc.id).unwrap();
 
     // Versions should be cascade-deleted
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None).unwrap().len(), 0);
+    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 0);
 }
 
 #[test]
@@ -533,7 +609,7 @@ fn service_create_published_creates_version() {
 
     let conn = pool.get().unwrap();
     // Should have created a version
-    let versions = query::list_versions(&conn, "articles", &doc.id, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "published");
 
@@ -558,7 +634,7 @@ fn service_create_draft_creates_draft_version() {
     ).unwrap();
 
     let conn = pool.get().unwrap();
-    let versions = query::list_versions(&conn, "articles", &doc.id, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(versions.len(), 1);
     assert_eq!(versions[0].status, "draft");
 
@@ -601,7 +677,7 @@ fn service_update_draft_is_version_only() {
     assert_eq!(current.get_str("title"), Some("Original Title"));
 
     // But there should be 2 versions now (create + draft update)
-    let versions = query::list_versions(&conn, "articles", &doc.id, None).unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(versions.len(), 2);
     assert_eq!(versions[0].status, "draft");
     assert_eq!(versions[1].status, "published");

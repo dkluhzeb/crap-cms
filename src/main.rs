@@ -1,7 +1,7 @@
 //! CLI entrypoint for Crap CMS. Parses flags, loads config, and starts the admin + gRPC servers.
 //!
 //! Subcommands: `serve`, `status`, `user`, `make`, `blueprint`, `db`, `typegen`, `proto`,
-//! `migrate`, `backup`, `export`, `import`, `init`.
+//! `migrate`, `backup`, `export`, `import`, `init`, `templates`.
 //! Running bare `crap-cms` prints help.
 
 use anyhow::{Context, Result};
@@ -149,6 +149,12 @@ enum Command {
         /// Import only this collection (default: all in file)
         #[arg(short, long)]
         collection: Option<String>,
+    },
+
+    /// List and extract default admin templates and static files
+    Templates {
+        #[command(subcommand)]
+        action: TemplatesAction,
     },
 }
 
@@ -426,6 +432,32 @@ enum DbAction {
     },
 }
 
+#[derive(Subcommand)]
+enum TemplatesAction {
+    /// List all available default templates and static files
+    List {
+        /// Filter: "templates" or "static" (default: both)
+        #[arg(short, long)]
+        r#type: Option<String>,
+    },
+    /// Extract default files into the config directory for customization
+    Extract {
+        /// Path to the config directory
+        config: PathBuf,
+        /// File paths to extract (e.g., "layout/base.hbs" "styles.css")
+        paths: Vec<String>,
+        /// Extract all files
+        #[arg(short, long)]
+        all: bool,
+        /// Filter: "templates" or "static" (default: both, only with --all)
+        #[arg(short, long)]
+        r#type: Option<String>,
+        /// Overwrite existing files
+        #[arg(short, long)]
+        force: bool,
+    },
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -552,6 +584,23 @@ async fn main() -> Result<()> {
         }
         Command::Import { config, file, collection } => {
             import_command(&config, &file, collection)
+        }
+        Command::Templates { action } => {
+            templates_command(action)
+        }
+    }
+}
+
+// ── templates command ─────────────────────────────────────────────────────
+
+/// Handle the `templates` subcommand — list or extract embedded templates/static files.
+fn templates_command(action: TemplatesAction) -> Result<()> {
+    match action {
+        TemplatesAction::List { r#type } => {
+            scaffold::templates_list(r#type.as_deref())
+        }
+        TemplatesAction::Extract { config, paths, all, r#type, force } => {
+            scaffold::templates_extract(&config, &paths, all, r#type.as_deref(), force)
         }
     }
 }

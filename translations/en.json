@@ -62,5 +62,7 @@
   "restore_version": "Restore Version",
   "published": "Published",
   "draft": "Draft",
-  "version": "Version"
+  "version": "Version",
+  "shared_field": "Shared across locales",
+  "view_all_versions": "View all versions"
 }

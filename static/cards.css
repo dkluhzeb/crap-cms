@@ -32,7 +32,7 @@ a.card:hover {
 
 .card__header > .material-symbols-outlined {
   color: var(--color-primary);
-  font-size: 20px;
+  font-size: 18px;
 }
 
 .card__header h3 {

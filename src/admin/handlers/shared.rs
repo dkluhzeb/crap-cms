@@ -113,12 +113,27 @@ pub(super) fn auto_label_from_name(name: &str) -> String {
         .join(" ")
 }
 
+/// Check if the current locale is a non-default locale (fields should be locked).
+pub(super) fn is_non_default_locale(state: &AdminState, requested_locale: Option<&str>) -> bool {
+    let config = &state.config.locale;
+    if !config.is_enabled() {
+        return false;
+    }
+    let current = requested_locale.unwrap_or(&config.default_locale);
+    current != config.default_locale
+}
+
 /// Build field context objects for template rendering.
+///
+/// `non_default_locale`: when true, non-localized fields are rendered readonly
+/// (locked) because they are shared across all locales and should only be edited
+/// from the default locale.
 pub(super) fn build_field_contexts(
     fields: &[crate::core::field::FieldDefinition],
     values: &HashMap<String, String>,
     errors: &HashMap<String, String>,
     filter_hidden: bool,
+    non_default_locale: bool,
 ) -> Vec<serde_json::Value> {
     let iter: Box<dyn Iterator<Item = &crate::core::field::FieldDefinition>> = if filter_hidden {
         Box::new(fields.iter().filter(|field| !field.admin.hidden))
@@ -130,6 +145,7 @@ pub(super) fn build_field_contexts(
         let label = field.admin.label.as_ref()
             .map(|ls| ls.resolve_default().to_string())
             .unwrap_or_else(|| auto_label_from_name(&field.name));
+        let locale_locked = non_default_locale && !field.localized;
 
         let mut ctx = serde_json::json!({
             "name": field.name,
@@ -139,7 +155,9 @@ pub(super) fn build_field_contexts(
             "value": value,
             "placeholder": field.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
             "description": field.admin.description.as_ref().map(|ls| ls.resolve_default()),
-            "readonly": field.admin.readonly,
+            "readonly": field.admin.readonly || locale_locked,
+            "localized": field.localized,
+            "locale_locked": locale_locked,
         });
 
         if let Some(err) = errors.get(&field.name) {
@@ -172,12 +190,22 @@ pub(super) fn build_field_contexts(
                     let sf_label = sf.admin.label.as_ref()
                         .map(|ls| ls.resolve_default().to_string())
                         .unwrap_or_else(|| auto_label_from_name(&sf.name));
-                    serde_json::json!({
+                    let mut sf_ctx = serde_json::json!({
                         "name": sf.name,
                         "field_type": sf.field_type.as_str(),
                         "label": sf_label,
                         "required": sf.required,
-                    })
+                    });
+                    if sf.field_type == FieldType::Select {
+                        let options: Vec<_> = sf.options.iter().map(|opt| {
+                            serde_json::json!({
+                                "label": opt.label.resolve_default(),
+                                "value": opt.value,
+                            })
+                        }).collect();
+                        sf_ctx["options"] = serde_json::json!(options);
+                    }
+                    sf_ctx
                 }).collect();
                 ctx["sub_fields"] = serde_json::json!(sub_fields);
                 ctx["row_count"] = serde_json::json!(0);
@@ -189,6 +217,8 @@ pub(super) fn build_field_contexts(
                     let sub_label = sf.admin.label.as_ref()
                         .map(|ls| ls.resolve_default().to_string())
                         .unwrap_or_else(|| auto_label_from_name(&sf.name));
+                    // Group sub-fields inherit locale locking from parent group
+                    let sf_locale_locked = non_default_locale && !field.localized;
                     let mut sub_ctx = serde_json::json!({
                         "name": col_name,
                         "field_type": sf.field_type.as_str(),
@@ -197,7 +227,9 @@ pub(super) fn build_field_contexts(
                         "value": sub_value,
                         "placeholder": sf.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
                         "description": sf.admin.description.as_ref().map(|ls| ls.resolve_default()),
-                        "readonly": sf.admin.readonly,
+                        "readonly": sf.admin.readonly || sf_locale_locked,
+                        "localized": field.localized,
+                        "locale_locked": sf_locale_locked,
                     });
                     if sf.field_type == FieldType::Checkbox {
                         let checked = matches!(sub_value.as_str(), "1" | "true" | "on" | "yes");
@@ -231,12 +263,22 @@ pub(super) fn build_field_contexts(
                         let sf_label = sf.admin.label.as_ref()
                             .map(|ls| ls.resolve_default().to_string())
                             .unwrap_or_else(|| auto_label_from_name(&sf.name));
-                        serde_json::json!({
+                        let mut sf_ctx = serde_json::json!({
                             "name": sf.name,
                             "field_type": sf.field_type.as_str(),
                             "label": sf_label,
                             "required": sf.required,
-                        })
+                        });
+                        if sf.field_type == FieldType::Select {
+                            let options: Vec<_> = sf.options.iter().map(|opt| {
+                                serde_json::json!({
+                                    "label": opt.label.resolve_default(),
+                                    "value": opt.value,
+                                })
+                            }).collect();
+                            sf_ctx["options"] = serde_json::json!(options);
+                        }
+                        sf_ctx
                     }).collect();
                     serde_json::json!({
                         "block_type": bd.block_type,
@@ -265,6 +307,7 @@ pub(super) fn enrich_field_contexts(
     doc_fields: &HashMap<String, serde_json::Value>,
     state: &AdminState,
     filter_hidden: bool,
+    non_default_locale: bool,
 ) {
     let reg = match state.registry.read() {
         Ok(r) => r,
@@ -333,6 +376,7 @@ pub(super) fn enrich_field_contexts(
             }
             FieldType::Array => {
                 // Populate rows from hydrated document data
+                let locale_locked = non_default_locale && !field_def.localized;
                 let rows: Vec<serde_json::Value> = match doc_fields.get(&field_def.name) {
                     Some(serde_json::Value::Array(arr)) => {
                         arr.iter().enumerate().map(|(idx, row)| {
@@ -345,12 +389,35 @@ pub(super) fn enrich_field_contexts(
                                         other => other.to_string(),
                                     })
                                     .unwrap_or_default();
-                                serde_json::json!({
-                                    "name": sf.name,
+                                let sf_label = sf.admin.label.as_ref()
+                                    .map(|ls| ls.resolve_default().to_string())
+                                    .unwrap_or_else(|| auto_label_from_name(&sf.name));
+                                let indexed_name = format!("{}[{}][{}]", field_def.name, idx, sf.name);
+                                let mut sub_ctx = serde_json::json!({
+                                    "name": indexed_name,
                                     "field_type": sf.field_type.as_str(),
+                                    "label": sf_label,
                                     "value": val,
-                                    "field_name_indexed": format!("{}[{}][{}]", field_def.name, idx, sf.name),
-                                })
+                                    "field_name_indexed": indexed_name,
+                                    "required": sf.required,
+                                    "readonly": sf.admin.readonly || locale_locked,
+                                    "locale_locked": locale_locked,
+                                });
+                                if sf.field_type == FieldType::Checkbox {
+                                    let checked = matches!(val.as_str(), "1" | "true" | "on" | "yes");
+                                    sub_ctx["checked"] = serde_json::json!(checked);
+                                }
+                                if sf.field_type == FieldType::Select {
+                                    let options: Vec<_> = sf.options.iter().map(|opt| {
+                                        serde_json::json!({
+                                            "label": opt.label.resolve_default(),
+                                            "value": opt.value,
+                                            "selected": opt.value == val,
+                                        })
+                                    }).collect();
+                                    sub_ctx["options"] = serde_json::json!(options);
+                                }
+                                sub_ctx
                             }).collect();
                             serde_json::json!({
                                 "index": idx,
@@ -446,6 +513,7 @@ pub(super) fn enrich_field_contexts(
             }
             FieldType::Blocks => {
                 // Populate rows from hydrated document data
+                let locale_locked = non_default_locale && !field_def.localized;
                 let rows: Vec<serde_json::Value> = match doc_fields.get(&field_def.name) {
                     Some(serde_json::Value::Array(arr)) => {
                         arr.iter().enumerate().map(|(idx, row)| {
@@ -469,12 +537,35 @@ pub(super) fn enrich_field_contexts(
                                             other => other.to_string(),
                                         })
                                         .unwrap_or_default();
-                                    serde_json::json!({
-                                        "name": sf.name,
+                                    let sf_label = sf.admin.label.as_ref()
+                                        .map(|ls| ls.resolve_default().to_string())
+                                        .unwrap_or_else(|| auto_label_from_name(&sf.name));
+                                    let indexed_name = format!("{}[{}][{}]", field_def.name, idx, sf.name);
+                                    let mut sub_ctx = serde_json::json!({
+                                        "name": indexed_name,
                                         "field_type": sf.field_type.as_str(),
+                                        "label": sf_label,
                                         "value": val,
-                                        "field_name_indexed": format!("{}[{}][{}]", field_def.name, idx, sf.name),
-                                    })
+                                        "field_name_indexed": indexed_name,
+                                        "required": sf.required,
+                                        "readonly": sf.admin.readonly || locale_locked,
+                                        "locale_locked": locale_locked,
+                                    });
+                                    if sf.field_type == FieldType::Checkbox {
+                                        let checked = matches!(val.as_str(), "1" | "true" | "on" | "yes");
+                                        sub_ctx["checked"] = serde_json::json!(checked);
+                                    }
+                                    if sf.field_type == FieldType::Select {
+                                        let options: Vec<_> = sf.options.iter().map(|opt| {
+                                            serde_json::json!({
+                                                "label": opt.label.resolve_default(),
+                                                "value": opt.value,
+                                                "selected": opt.value == val,
+                                            })
+                                        }).collect();
+                                        sub_ctx["options"] = serde_json::json!(options);
+                                    }
+                                    sub_ctx
                                 }).collect())
                                 .unwrap_or_default();
                             serde_json::json!({
@@ -644,5 +735,118 @@ mod tests {
 
         assert_eq!(fields.len(), 1);
         assert!(fields.contains_key("title"));
+    }
+
+    // --- build_field_contexts: array/block sub-field enrichment tests ---
+
+    use crate::core::field::{FieldDefinition, FieldAdmin, FieldHooks, FieldAccess, SelectOption, LocalizedString, BlockDefinition};
+
+    fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: ft,
+            required: false,
+            unique: false,
+            validate: None,
+            default_value: None,
+            options: Vec::new(),
+            admin: FieldAdmin::default(),
+            hooks: FieldHooks::default(),
+            access: FieldAccess::default(),
+            relationship: None,
+            fields: Vec::new(),
+            blocks: Vec::new(),
+            localized: false,
+        }
+    }
+
+    #[test]
+    fn build_field_contexts_array_sub_fields_include_type_and_label() {
+        let mut arr_field = make_field("items", FieldType::Array);
+        arr_field.fields = vec![
+            make_field("title", FieldType::Text),
+            make_field("body", FieldType::Richtext),
+        ];
+        let fields = vec![arr_field];
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let result = build_field_contexts(&fields, &values, &errors, false, false);
+        assert_eq!(result.len(), 1);
+        let sub_fields = result[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(sub_fields.len(), 2);
+        assert_eq!(sub_fields[0]["field_type"], "text");
+        assert_eq!(sub_fields[0]["label"], "Title");
+        assert_eq!(sub_fields[1]["field_type"], "richtext");
+        assert_eq!(sub_fields[1]["label"], "Body");
+    }
+
+    #[test]
+    fn build_field_contexts_array_select_sub_field_includes_options() {
+        let mut select_sf = make_field("status", FieldType::Select);
+        select_sf.options = vec![
+            SelectOption { label: LocalizedString::Plain("Draft".to_string()), value: "draft".to_string() },
+            SelectOption { label: LocalizedString::Plain("Published".to_string()), value: "published".to_string() },
+        ];
+        let mut arr_field = make_field("items", FieldType::Array);
+        arr_field.fields = vec![select_sf];
+        let fields = vec![arr_field];
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let result = build_field_contexts(&fields, &values, &errors, false, false);
+        let sub_fields = result[0]["sub_fields"].as_array().unwrap();
+        let opts = sub_fields[0]["options"].as_array().unwrap();
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0]["value"], "draft");
+        assert_eq!(opts[1]["value"], "published");
+    }
+
+    #[test]
+    fn build_field_contexts_blocks_sub_fields_include_type_and_label() {
+        let mut blocks_field = make_field("content", FieldType::Blocks);
+        blocks_field.blocks = vec![BlockDefinition {
+            block_type: "rich".to_string(),
+            label: Some(LocalizedString::Plain("Rich Text".to_string())),
+            fields: vec![
+                make_field("heading", FieldType::Text),
+                make_field("body", FieldType::Richtext),
+            ],
+        }];
+        let fields = vec![blocks_field];
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let result = build_field_contexts(&fields, &values, &errors, false, false);
+        let block_defs = result[0]["block_definitions"].as_array().unwrap();
+        assert_eq!(block_defs.len(), 1);
+        let block_fields = block_defs[0]["fields"].as_array().unwrap();
+        assert_eq!(block_fields.len(), 2);
+        assert_eq!(block_fields[0]["field_type"], "text");
+        assert_eq!(block_fields[0]["label"], "Heading");
+        assert_eq!(block_fields[1]["field_type"], "richtext");
+        assert_eq!(block_fields[1]["label"], "Body");
+    }
+
+    #[test]
+    fn build_field_contexts_blocks_select_sub_field_includes_options() {
+        let mut select_sf = make_field("align", FieldType::Select);
+        select_sf.options = vec![
+            SelectOption { label: LocalizedString::Plain("Left".to_string()), value: "left".to_string() },
+            SelectOption { label: LocalizedString::Plain("Center".to_string()), value: "center".to_string() },
+        ];
+        let mut blocks_field = make_field("layout", FieldType::Blocks);
+        blocks_field.blocks = vec![BlockDefinition {
+            block_type: "section".to_string(),
+            label: None,
+            fields: vec![select_sf],
+        }];
+        let fields = vec![blocks_field];
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let result = build_field_contexts(&fields, &values, &errors, false, false);
+        let block_defs = result[0]["block_definitions"].as_array().unwrap();
+        let block_fields = block_defs[0]["fields"].as_array().unwrap();
+        let opts = block_fields[0]["options"].as_array().unwrap();
+        assert_eq!(opts.len(), 2);
+        assert_eq!(opts[0]["value"], "left");
+        assert_eq!(opts[1]["value"], "center");
     }
 }

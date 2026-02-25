@@ -451,6 +451,218 @@ pub fn proto_export(output: Option<&Path>) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Templates & static file extraction
+// ---------------------------------------------------------------------------
+
+use include_dir::{include_dir, Dir};
+
+/// Embedded default templates — compiled into the binary.
+static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");
+/// Embedded default static files — compiled into the binary.
+static EMBEDDED_STATIC: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/static");
+
+/// Recursively collect all files from an `include_dir::Dir`, returning `(relative_path, content)`.
+/// Paths are relative to the root Dir.
+fn collect_embedded_files_flat<'a>(dir: &'a Dir<'a>) -> Vec<(String, &'a [u8])> {
+    let mut out = Vec::new();
+    for file in dir.files() {
+        out.push((file.path().to_string_lossy().to_string(), file.contents()));
+    }
+    for sub in dir.dirs() {
+        out.extend(collect_embedded_files_flat(sub));
+    }
+    out
+}
+
+/// Format a file size as human-readable (e.g., "1.2 KB", "92.0 KB").
+fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// List embedded templates and/or static files.
+///
+/// `type_filter`: None = both, Some("templates") = templates only, Some("static") = static only.
+pub fn templates_list(type_filter: Option<&str>) -> Result<()> {
+    // Validate filter
+    if let Some(f) = type_filter {
+        if f != "templates" && f != "static" {
+            anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
+        }
+    }
+
+    let show_templates = type_filter.is_none() || type_filter == Some("templates");
+    let show_static = type_filter.is_none() || type_filter == Some("static");
+
+    if show_templates {
+        let files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
+        println!("Templates ({} files):", files.len());
+        print_file_tree(&files);
+        if show_static {
+            println!();
+        }
+    }
+
+    if show_static {
+        let files = collect_embedded_files_flat(&EMBEDDED_STATIC);
+        println!("Static files ({} files):", files.len());
+        print_file_tree(&files);
+    }
+
+    Ok(())
+}
+
+/// Print files grouped by directory in a tree-like format.
+fn print_file_tree(files: &[(String, &[u8])]) {
+    use std::collections::BTreeMap;
+
+    // Group files by directory
+    let mut dirs: BTreeMap<String, Vec<(&str, usize)>> = BTreeMap::new();
+    for (path, content) in files {
+        let (dir, name) = match path.rfind('/') {
+            Some(i) => (&path[..i], &path[i + 1..]),
+            None => ("", path.as_str()),
+        };
+        dirs.entry(dir.to_string()).or_default().push((name, content.len()));
+    }
+
+    for (dir, entries) in &dirs {
+        if !dir.is_empty() {
+            println!("  {}/", dir);
+        }
+        for (name, size) in entries {
+            let indent = if dir.is_empty() { "  " } else { "    " };
+            println!("{}{:<40} {}", indent, name, format_size(*size));
+        }
+    }
+}
+
+/// Extract embedded templates/static files into a config directory.
+///
+/// `paths`: specific files to extract (e.g., "layout/base.hbs", "styles.css").
+/// `all`: extract all files.
+/// `type_filter`: None = both, Some("templates") = templates only, Some("static") = static only.
+/// `force`: overwrite existing files.
+pub fn templates_extract(
+    config_dir: &Path,
+    paths: &[String],
+    all: bool,
+    type_filter: Option<&str>,
+    force: bool,
+) -> Result<()> {
+    // Validate filter
+    if let Some(f) = type_filter {
+        if f != "templates" && f != "static" {
+            anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
+        }
+    }
+
+    if !all && paths.is_empty() {
+        anyhow::bail!("Specify file paths to extract, or use --all to extract everything");
+    }
+
+    let want_templates = type_filter.is_none() || type_filter == Some("templates");
+    let want_static = type_filter.is_none() || type_filter == Some("static");
+
+    if all {
+        let mut count = 0usize;
+
+        if want_templates {
+            let files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
+            for (path, content) in &files {
+                let dest = config_dir.join("templates").join(path);
+                if dest.exists() && !force {
+                    println!("  Skipped: templates/{} (exists, use --force)", path);
+                    continue;
+                }
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&dest, content)?;
+                count += 1;
+            }
+            if want_templates && !want_static {
+                println!("Extracted {} template file(s) to {}/templates/", count, config_dir.display());
+                return Ok(());
+            }
+        }
+
+        if want_static {
+            let tpl_count = count;
+            let files = collect_embedded_files_flat(&EMBEDDED_STATIC);
+            for (path, content) in &files {
+                let dest = config_dir.join("static").join(path);
+                if dest.exists() && !force {
+                    println!("  Skipped: static/{} (exists, use --force)", path);
+                    continue;
+                }
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&dest, content)?;
+                count += 1;
+            }
+            if !want_templates {
+                println!("Extracted {} static file(s) to {}/static/", count, config_dir.display());
+                return Ok(());
+            }
+            println!("Extracted {} file(s) ({} templates, {} static) to {}/",
+                count, tpl_count, count - tpl_count, config_dir.display());
+        }
+
+        return Ok(());
+    }
+
+    // Extract specific paths
+    let mut extracted = 0usize;
+    for path in paths {
+        // Try templates first, then static
+        let found = if want_templates {
+            EMBEDDED_TEMPLATES.get_file(path).map(|f| ("templates", f))
+        } else {
+            None
+        };
+        let found = found.or_else(|| {
+            if want_static {
+                EMBEDDED_STATIC.get_file(path).map(|f| ("static", f))
+            } else {
+                None
+            }
+        });
+
+        match found {
+            Some((kind, file)) => {
+                let dest = config_dir.join(kind).join(path);
+                if dest.exists() && !force {
+                    println!("  Skipped: {}/{} (exists, use --force)", kind, path);
+                    continue;
+                }
+                if let Some(parent) = dest.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&dest, file.contents())?;
+                println!("  \u{2713} {}/{}", kind, path);
+                extracted += 1;
+            }
+            None => {
+                println!("  Not found: {}", path);
+            }
+        }
+    }
+
+    if extracted > 0 {
+        println!("Extracted {} file(s) to {}/", extracted, config_dir.display());
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Migration scaffolding
 // ---------------------------------------------------------------------------
 
@@ -1213,5 +1425,143 @@ mod tests {
 
         let toml = fs::read_to_string(new_project.join("crap.toml")).unwrap();
         assert!(toml.contains("admin_port = 4000"));
+    }
+
+    #[test]
+    fn test_templates_list() {
+        // Just verify it runs without error
+        assert!(templates_list(None).is_ok());
+        assert!(templates_list(Some("templates")).is_ok());
+        assert!(templates_list(Some("static")).is_ok());
+        assert!(templates_list(Some("invalid")).is_err());
+    }
+
+    #[test]
+    fn test_templates_list_has_files() {
+        // Verify embedded dirs actually contain files
+        let tpl_files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
+        assert!(!tpl_files.is_empty(), "should have embedded templates");
+        assert!(tpl_files.iter().any(|(p, _)| p.ends_with(".hbs")));
+
+        let static_files = collect_embedded_files_flat(&EMBEDDED_STATIC);
+        assert!(!static_files.is_empty(), "should have embedded static files");
+        assert!(static_files.iter().any(|(p, _)| p.ends_with(".css")));
+    }
+
+    #[test]
+    fn test_templates_extract_specific() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        templates_extract(
+            tmp.path(),
+            &["layout/base.hbs".to_string()],
+            false, None, false,
+        ).unwrap();
+
+        assert!(tmp.path().join("templates/layout/base.hbs").exists());
+        let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_templates_extract_static_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        templates_extract(
+            tmp.path(),
+            &["styles.css".to_string()],
+            false, None, false,
+        ).unwrap();
+
+        assert!(tmp.path().join("static/styles.css").exists());
+    }
+
+    #[test]
+    fn test_templates_extract_skips_existing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // Extract once
+        templates_extract(
+            tmp.path(),
+            &["layout/base.hbs".to_string()],
+            false, None, false,
+        ).unwrap();
+
+        // Write a marker to verify it doesn't get overwritten
+        fs::write(tmp.path().join("templates/layout/base.hbs"), "CUSTOM").unwrap();
+
+        // Extract again without --force
+        templates_extract(
+            tmp.path(),
+            &["layout/base.hbs".to_string()],
+            false, None, false,
+        ).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
+        assert_eq!(content, "CUSTOM", "should not overwrite without --force");
+    }
+
+    #[test]
+    fn test_templates_extract_force_overwrites() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // Extract once
+        templates_extract(
+            tmp.path(),
+            &["layout/base.hbs".to_string()],
+            false, None, false,
+        ).unwrap();
+
+        // Write a marker
+        fs::write(tmp.path().join("templates/layout/base.hbs"), "CUSTOM").unwrap();
+
+        // Extract again with --force
+        templates_extract(
+            tmp.path(),
+            &["layout/base.hbs".to_string()],
+            false, None, true,
+        ).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
+        assert_ne!(content, "CUSTOM", "should overwrite with --force");
+    }
+
+    #[test]
+    fn test_templates_extract_all_templates() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        templates_extract(tmp.path(), &[], true, Some("templates"), false).unwrap();
+
+        // Should have created template files
+        assert!(tmp.path().join("templates/layout/base.hbs").exists());
+        // Should NOT have created static files
+        assert!(!tmp.path().join("static/styles.css").exists());
+    }
+
+    #[test]
+    fn test_templates_extract_all_static() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
+
+        // Should have created static files
+        assert!(tmp.path().join("static/styles.css").exists());
+        // Should NOT have created template files
+        assert!(!tmp.path().join("templates/layout/base.hbs").exists());
+    }
+
+    #[test]
+    fn test_templates_extract_requires_paths_or_all() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = templates_extract(tmp.path(), &[], false, None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("--all"));
+    }
+
+    #[test]
+    fn test_templates_extract_not_found() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Should not error, just print "Not found"
+        templates_extract(
+            tmp.path(),
+            &["nonexistent/file.hbs".to_string()],
+            false, None, false,
+        ).unwrap();
     }
 }

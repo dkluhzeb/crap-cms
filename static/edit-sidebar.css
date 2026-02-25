@@ -25,6 +25,10 @@
   color: var(--text-secondary);
 }
 
+.edit-sidebar__panel-header .material-symbols-outlined {
+  font-size: 16px;
+}
+
 .edit-sidebar__panel-body {
   padding: var(--space-md);
 }
@@ -161,4 +165,16 @@
   font-size: var(--text-xs);
   color: var(--text-tertiary);
   flex-basis: 100%;
+}
+
+.edit-sidebar__versions-link {
+  display: block;
+  margin-top: var(--space-sm);
+  font-size: var(--text-xs);
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.edit-sidebar__versions-link:hover {
+  text-decoration: underline;
 }

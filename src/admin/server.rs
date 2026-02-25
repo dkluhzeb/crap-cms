@@ -97,6 +97,7 @@ pub fn build_router(state: AdminState, has_auth: bool) -> Router {
         .route("/admin/collections/{slug}/create", get(collections::create_form))
         .route("/admin/collections/{slug}/{id}", item_methods)
         .route("/admin/collections/{slug}/{id}/delete", get(collections::delete_confirm))
+        .route("/admin/collections/{slug}/{id}/versions", get(collections::list_versions_page))
         .route("/admin/collections/{slug}/{id}/versions/{version_id}/restore", post(collections::restore_version))
         .route("/admin/globals/{slug}", globals_methods)
         .route("/admin/events", get(events::sse_handler));

@@ -1,0 +1,37 @@
+{{#> layout/base title=page_title}}
+<div class="page-header">
+  <h1>{{t "version_history"}}</h1>
+</div>
+
+{{#if versions}}
+<div class="card">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>{{t "version"}}</th>
+        <th>{{t "status"}}</th>
+        <th>{{t "created"}}</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {{#each versions}}
+      <tr>
+        <td><span class="edit-sidebar__version-number">v{{this.version}}</span></td>
+        <td><span class="badge badge--{{this.status}}">{{this.status}}</span></td>
+        <td>{{this.created_at}}</td>
+        <td>
+          {{#unless this.latest}}
+          <form method="post" action="/admin/collections/{{../collection.slug}}/{{../document.id}}/versions/{{this.id}}/restore" style="margin:0;">
+            <button type="submit" class="button button--ghost button--small">{{t "restore"}}</button>
+          </form>
+          {{/unless}}
+        </td>
+      </tr>
+      {{/each}}
+    </tbody>
+  </table>
+</div>
+{{> components/pagination}}
+{{/if}}
+{{/layout/base}}

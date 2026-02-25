@@ -1,8 +1,10 @@
 //! Version-specific database operations for the `_versions_{slug}` table.
 
 use anyhow::{Context, Result};
+use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
+use crate::config::LocaleConfig;
 use crate::core::collection::CollectionDefinition;
 use crate::core::document::VersionSnapshot;
 
@@ -114,20 +116,37 @@ pub fn find_latest_version(
     }
 }
 
+/// Count total versions for a parent document.
+pub fn count_versions(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    parent_id: &str,
+) -> Result<i64> {
+    let table = format!("_versions_{}", slug);
+    let count: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM {} WHERE _parent = ?1", table),
+        [parent_id],
+        |row| row.get(0),
+    ).context("Failed to count versions")?;
+    Ok(count)
+}
+
 /// List versions for a parent document, newest first.
 pub fn list_versions(
     conn: &rusqlite::Connection,
     slug: &str,
     parent_id: &str,
     limit: Option<i64>,
+    offset: Option<i64>,
 ) -> Result<Vec<VersionSnapshot>> {
     let table = format!("_versions_{}", slug);
     let limit_clause = limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
+    let offset_clause = offset.map(|o| format!(" OFFSET {}", o)).unwrap_or_default();
     let mut stmt = conn.prepare(
         &format!(
             "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
-             FROM {} WHERE _parent = ?1 ORDER BY _version DESC{}",
-            table, limit_clause
+             FROM {} WHERE _parent = ?1 ORDER BY _version DESC{}{}",
+            table, limit_clause, offset_clause
         ),
     )?;
     let rows = stmt.query_map([parent_id], |row| {
@@ -187,6 +206,11 @@ pub fn find_version_by_id(
 
 /// Restore a version snapshot back to the main table. Updates all regular columns
 /// and join tables from the snapshot data. Creates a new version recording the restore.
+///
+/// When `locale_config` indicates locales are enabled, localized fields are handled
+/// specially: ALL locale columns are cleared, then the snapshot value is written to
+/// the default locale column. This ensures stale translations from later edits don't
+/// persist after restoring an older version.
 pub fn restore_version(
     conn: &rusqlite::Connection,
     slug: &str,
@@ -194,10 +218,13 @@ pub fn restore_version(
     parent_id: &str,
     snapshot: &serde_json::Value,
     status: &str,
+    locale_config: &LocaleConfig,
 ) -> Result<crate::core::Document> {
     // Extract flat field data from snapshot for the UPDATE
     let obj = snapshot.as_object()
         .ok_or_else(|| anyhow::anyhow!("Snapshot is not a JSON object"))?;
+
+    let locales_enabled = locale_config.is_enabled();
 
     let mut data: HashMap<String, String> = HashMap::new();
     let insert_from_snapshot = |data: &mut HashMap<String, String>, key: &str| {
@@ -215,6 +242,10 @@ pub fn restore_version(
     for field in &def.fields {
         if field.field_type == crate::core::field::FieldType::Group {
             for sub in &field.fields {
+                let is_localized = (field.localized || sub.localized) && locales_enabled;
+                if is_localized {
+                    continue; // handled in locale column pass below
+                }
                 let key = format!("{}__{}", field.name, sub.name);
                 insert_from_snapshot(&mut data, &key);
             }
@@ -223,10 +254,61 @@ pub fn restore_version(
         if !field.has_parent_column() {
             continue; // join-table fields handled separately below
         }
+        if field.localized && locales_enabled {
+            continue; // handled in locale column pass below
+        }
         insert_from_snapshot(&mut data, &field.name);
     }
 
-    let doc = super::update(conn, slug, def, parent_id, &data, None)?;
+    // When locales are enabled, use a default locale context so that update()'s
+    // internal find_by_id can read back columns with locale suffixes.
+    let locale_ctx = if locales_enabled {
+        Some(super::LocaleContext {
+            mode: super::LocaleMode::Default,
+            config: locale_config.clone(),
+        })
+    } else {
+        None
+    };
+    let doc = super::update(conn, slug, def, parent_id, &data, locale_ctx.as_ref())?;
+
+    // Restore localized main-table columns: clear ALL locale columns, set default from snapshot.
+    if locales_enabled {
+        let mut set_clauses = Vec::new();
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut idx = 1;
+
+        for field in &def.fields {
+            if field.field_type == crate::core::field::FieldType::Group {
+                for sub in &field.fields {
+                    let is_localized = field.localized || sub.localized;
+                    if !is_localized { continue; }
+                    let base = format!("{}__{}", field.name, sub.name);
+                    restore_locale_columns(
+                        obj, &base, locale_config,
+                        &mut set_clauses, &mut params, &mut idx,
+                    );
+                }
+                continue;
+            }
+            if !field.localized || !field.has_parent_column() { continue; }
+            restore_locale_columns(
+                obj, &field.name, locale_config,
+                &mut set_clauses, &mut params, &mut idx,
+            );
+        }
+
+        if !set_clauses.is_empty() {
+            let sql = format!(
+                "UPDATE {} SET {} WHERE id = ?{}",
+                slug, set_clauses.join(", "), idx
+            );
+            params.push(Box::new(parent_id.to_string()));
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            conn.execute(&sql, params_from_iter(param_refs.iter()))
+                .context("Failed to restore locale columns")?;
+        }
+    }
 
     // Restore join table data from snapshot
     let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
@@ -248,6 +330,48 @@ pub fn restore_version(
     create_version(conn, slug, parent_id, status, snapshot)?;
 
     Ok(doc)
+}
+
+/// Helper: emit SET clauses that NULL all locale columns for a field, then set the
+/// default locale column to the snapshot value.
+fn restore_locale_columns(
+    snapshot: &serde_json::Map<String, serde_json::Value>,
+    field_name: &str,
+    locale_config: &LocaleConfig,
+    set_clauses: &mut Vec<String>,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    idx: &mut usize,
+) {
+    let snapshot_val = snapshot.get(field_name);
+    for locale in &locale_config.locales {
+        let col = format!("{}__{}", field_name, locale);
+        if *locale == locale_config.default_locale {
+            // Set default locale from snapshot
+            match snapshot_val {
+                Some(serde_json::Value::String(s)) => {
+                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    params.push(Box::new(s.clone()));
+                    *idx += 1;
+                }
+                Some(serde_json::Value::Number(n)) => {
+                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    params.push(Box::new(n.to_string()));
+                    *idx += 1;
+                }
+                Some(serde_json::Value::Bool(b)) => {
+                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    params.push(Box::new(if *b { 1i32 } else { 0i32 }));
+                    *idx += 1;
+                }
+                _ => {
+                    set_clauses.push(format!("{} = NULL", col));
+                }
+            }
+        } else {
+            // Clear non-default locale columns
+            set_clauses.push(format!("{} = NULL", col));
+        }
+    }
 }
 
 /// Set the `_status` column on a document in the main table.

@@ -18,6 +18,7 @@ use super::shared::{
     LocaleParams,
     user_json, get_user_doc,
     check_access_or_forbid, build_locale_template_data,
+    is_non_default_locale,
     build_field_contexts, enrich_field_contexts,
     forbidden, redirect_response, html_with_toast,
     render_or_error, not_found, server_error,
@@ -95,10 +96,11 @@ pub async fn edit_form(
         })
         .collect();
 
-    let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), false);
+    let non_default_locale = is_non_default_locale(&state, locale_params.locale.as_deref());
+    let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), false, non_default_locale);
 
     // Enrich relationship fields with options
-    enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false);
+    enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, non_default_locale);
 
     let mut data = serde_json::json!({
         "page_title": def.display_name(),
@@ -209,7 +211,7 @@ pub async fn update_action(
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
-                let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, false);
+                let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, false, false);
                 let data = serde_json::json!({
                     "page_title": def.display_name(),
                     "collections": state.sidebar_collections(),

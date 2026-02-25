@@ -1271,7 +1271,7 @@ impl ContentApi for ContentService {
         let limit = req.limit;
         let versions = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
-            query::list_versions(&conn, &collection, &id, limit)
+            query::list_versions(&conn, &collection, &id, limit, None)
         })
         .await
         .map_err(|e| Status::internal(format!("Task error: {}", e)))?
@@ -1325,13 +1325,14 @@ impl ContentApi for ContentService {
         let document_id = req.document_id.clone();
         let version_id = req.version_id.clone();
         let def_owned = def.clone();
+        let locale_config = self.locale_config.clone();
         let doc = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             let version = query::find_version_by_id(&conn, &collection, &version_id)?
                 .ok_or_else(|| anyhow::anyhow!("Version '{}' not found", version_id))?;
             query::restore_version(
                 &conn, &collection, &def_owned, &document_id,
-                &version.snapshot, &version.status,
+                &version.snapshot, &version.status, &locale_config,
             )
         })
         .await

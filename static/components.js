@@ -1287,3 +1287,89 @@ function removeArrayRow(btn) {
     connect();
   }
 })();
+
+
+/* ── Locale persistence ──────────────────────────────────────── */
+
+/**
+ * Persists the selected content locale across admin page navigations.
+ *
+ * When the user picks a locale in the edit sidebar, we store it in
+ * sessionStorage. On subsequent HTMX navigations (full-page swaps to body),
+ * the stored locale is automatically appended as `?locale=XX` so it
+ * carries over to list pages, other collections, create forms, etc.
+ *
+ * The locale selector links (`<a class="locale-selector__item">`) update
+ * the stored value on click. A "clear" happens when the user explicitly
+ * picks the default locale (the server omits `?locale` for the default).
+ */
+(function initLocalePersistence() {
+  const STORAGE_KEY = 'crap_locale';
+
+  /**
+   * Read the stored locale, or null if none / default.
+   * @returns {string | null}
+   */
+  function getStoredLocale() {
+    try { return sessionStorage.getItem(STORAGE_KEY); }
+    catch { return null; }
+  }
+
+  /**
+   * Store a locale selection (or clear it).
+   * @param {string | null} locale
+   */
+  function setStoredLocale(locale) {
+    try {
+      if (locale) sessionStorage.setItem(STORAGE_KEY, locale);
+      else sessionStorage.removeItem(STORAGE_KEY);
+    } catch { /* private browsing — ignore */ }
+  }
+
+  /**
+   * Bind click handlers on locale selector links to save the chosen locale.
+   * Called on load and after every HTMX body swap.
+   */
+  function bindLocaleSelector() {
+    document.querySelectorAll('.locale-selector__item').forEach(
+      /** @param {HTMLAnchorElement} link */ (link) => {
+        link.addEventListener('click', () => {
+          const url = new URL(link.href, location.origin);
+          const locale = url.searchParams.get('locale');
+          setStoredLocale(locale);
+        });
+      }
+    );
+  }
+
+  // Seed from the current page's locale param (if any) on first load.
+  const initial = new URLSearchParams(location.search).get('locale');
+  if (initial) setStoredLocale(initial);
+
+  document.addEventListener('DOMContentLoaded', bindLocaleSelector);
+  document.addEventListener('htmx:afterSettle', bindLocaleSelector);
+
+  /**
+   * Before every HTMX request, inject the stored locale into the URL
+   * if the request is a full-page navigation (target=body) and the URL
+   * doesn't already have a `locale` param.
+   */
+  document.body.addEventListener('htmx:configRequest', /** @param {CustomEvent} e */ (e) => {
+    const locale = getStoredLocale();
+    if (!locale) return;
+
+    const detail = e.detail;
+    // Only inject for GET requests that target <body> (page navigations)
+    if (detail.verb !== 'get') return;
+    const target = detail.elt.getAttribute('hx-target') ||
+                   detail.elt.closest('[hx-target]')?.getAttribute('hx-target');
+    if (target !== 'body') return;
+
+    // Don't override an explicit locale param already in the URL
+    const url = new URL(detail.path, location.origin);
+    if (url.searchParams.has('locale')) return;
+
+    url.searchParams.set('locale', locale);
+    detail.path = url.pathname + url.search;
+  });
+})();
