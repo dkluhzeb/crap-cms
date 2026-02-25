@@ -1,4 +1,5 @@
-//! Registers the `crap.*` Lua API namespace (collections, globals, hooks, log, util).
+//! Registers the `crap.*` Lua API namespace (collections, globals, hooks, log, util,
+//! crypto, schema).
 
 pub mod parse;
 
@@ -10,6 +11,121 @@ use crate::config::CrapConfig;
 use crate::core::SharedRegistry;
 
 use parse::{parse_collection_definition, parse_global_definition};
+
+/// Pure Lua table and string helpers, loaded onto `crap.util` after the table is set.
+const LUA_UTIL_HELPERS: &str = r#"
+local util = crap.util
+
+function util.deep_merge(a, b)
+    local out = {}
+    for k, v in pairs(a) do
+        out[k] = v
+    end
+    for k, v in pairs(b) do
+        if type(out[k]) == "table" and type(v) == "table" then
+            out[k] = util.deep_merge(out[k], v)
+        else
+            out[k] = v
+        end
+    end
+    return out
+end
+
+function util.pick(tbl, keys)
+    local out = {}
+    for _, k in ipairs(keys) do
+        out[k] = tbl[k]
+    end
+    return out
+end
+
+function util.omit(tbl, keys)
+    local skip = {}
+    for _, k in ipairs(keys) do skip[k] = true end
+    local out = {}
+    for k, v in pairs(tbl) do
+        if not skip[k] then out[k] = v end
+    end
+    return out
+end
+
+function util.keys(tbl)
+    local out = {}
+    for k in pairs(tbl) do out[#out + 1] = k end
+    return out
+end
+
+function util.values(tbl)
+    local out = {}
+    for _, v in pairs(tbl) do out[#out + 1] = v end
+    return out
+end
+
+function util.map(tbl, fn)
+    local out = {}
+    for i, v in ipairs(tbl) do out[i] = fn(v, i) end
+    return out
+end
+
+function util.filter(tbl, fn)
+    local out = {}
+    for i, v in ipairs(tbl) do
+        if fn(v, i) then out[#out + 1] = v end
+    end
+    return out
+end
+
+function util.find(tbl, fn)
+    for i, v in ipairs(tbl) do
+        if fn(v, i) then return v end
+    end
+    return nil
+end
+
+function util.includes(tbl, value)
+    for _, v in ipairs(tbl) do
+        if v == value then return true end
+    end
+    return false
+end
+
+function util.is_empty(tbl)
+    return next(tbl) == nil
+end
+
+function util.clone(tbl)
+    local out = {}
+    for k, v in pairs(tbl) do out[k] = v end
+    return out
+end
+
+function util.trim(str)
+    return (str:gsub("^%s+", ""):gsub("%s+$", ""))
+end
+
+function util.split(str, sep)
+    local out = {}
+    local pattern = "([^" .. sep .. "]+)"
+    for part in str:gmatch(pattern) do
+        out[#out + 1] = part
+    end
+    return out
+end
+
+function util.starts_with(str, prefix)
+    return str:sub(1, #prefix) == prefix
+end
+
+function util.ends_with(str, suffix)
+    return suffix == "" or str:sub(-#suffix) == suffix
+end
+
+function util.truncate(str, max_len, suffix)
+    suffix = suffix or "..."
+    if #str <= max_len then return str end
+    return str:sub(1, max_len - #suffix) .. suffix
+end
+"#;
 
 /// Register the `crap` global table with sub-tables for collections, globals, log, util,
 /// auth, env, http, config.
@@ -94,7 +210,252 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path, con
     })?;
     util_table.set("json_decode", json_decode_fn)?;
 
+    // Date helpers (Rust, using chrono)
+    {
+        let date_now_fn = lua.create_function(|_, ()| -> mlua::Result<String> {
+            Ok(chrono::Utc::now().to_rfc3339())
+        })?;
+        util_table.set("date_now", date_now_fn)?;
+
+        let date_timestamp_fn = lua.create_function(|_, ()| -> mlua::Result<i64> {
+            Ok(chrono::Utc::now().timestamp())
+        })?;
+        util_table.set("date_timestamp", date_timestamp_fn)?;
+
+        let date_parse_fn = lua.create_function(|_, s: String| -> mlua::Result<i64> {
+            // Try RFC 3339 first
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(&s) {
+                return Ok(dt.timestamp());
+            }
+            // Try "YYYY-MM-DD HH:MM:SS"
+            if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%d %H:%M:%S") {
+                return Ok(dt.and_utc().timestamp());
+            }
+            // Try "YYYY-MM-DD"
+            if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                return Ok(d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp());
+            }
+            Err(mlua::Error::RuntimeError(format!("could not parse date: {}", s)))
+        })?;
+        util_table.set("date_parse", date_parse_fn)?;
+
+        let date_format_fn = lua.create_function(|_, (ts, fmt): (i64, String)| -> mlua::Result<String> {
+            let dt = chrono::DateTime::from_timestamp(ts, 0)
+                .ok_or_else(|| mlua::Error::RuntimeError("invalid timestamp".into()))?;
+            Ok(dt.format(&fmt).to_string())
+        })?;
+        util_table.set("date_format", date_format_fn)?;
+
+        let date_add_fn = lua.create_function(|_, (ts, secs): (i64, i64)| -> mlua::Result<i64> {
+            Ok(ts + secs)
+        })?;
+        util_table.set("date_add", date_add_fn)?;
+
+        let date_diff_fn = lua.create_function(|_, (a, b): (i64, i64)| -> mlua::Result<i64> {
+            Ok(a - b)
+        })?;
+        util_table.set("date_diff", date_diff_fn)?;
+    }
+
     crap.set("util", util_table)?;
+
+    // crap.crypto — hashing, encoding, encryption
+    {
+        let crypto_table = lua.create_table()?;
+
+        let sha256_fn = lua.create_function(|_, data: String| -> mlua::Result<String> {
+            use ring::digest;
+            let hash = digest::digest(&digest::SHA256, data.as_bytes());
+            Ok(hex_encode(hash.as_ref()))
+        })?;
+        crypto_table.set("sha256", sha256_fn)?;
+
+        let hmac_sha256_fn = lua.create_function(|_, (data, key): (String, String)| -> mlua::Result<String> {
+            use ring::hmac;
+            let k = hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes());
+            let tag = hmac::sign(&k, data.as_bytes());
+            Ok(hex_encode(tag.as_ref()))
+        })?;
+        crypto_table.set("hmac_sha256", hmac_sha256_fn)?;
+
+        let b64_encode_fn = lua.create_function(|_, data: String| -> mlua::Result<String> {
+            use base64::Engine;
+            Ok(base64::engine::general_purpose::STANDARD.encode(data.as_bytes()))
+        })?;
+        crypto_table.set("base64_encode", b64_encode_fn)?;
+
+        let b64_decode_fn = lua.create_function(|_, data: String| -> mlua::Result<String> {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes())
+                .map_err(|e| mlua::Error::RuntimeError(format!("base64 decode error: {}", e)))?;
+            String::from_utf8(bytes)
+                .map_err(|e| mlua::Error::RuntimeError(format!("base64 decode utf8 error: {}", e)))
+        })?;
+        crypto_table.set("base64_decode", b64_decode_fn)?;
+
+        let auth_secret = config.auth.secret.clone();
+        let encrypt_fn = lua.create_function(move |_, plaintext: String| -> mlua::Result<String> {
+            use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
+            use aes_gcm::Nonce;
+            use ring::digest;
+            use base64::Engine;
+            use rand::RngCore;
+
+            // Derive a 32-byte key from auth.secret via SHA-256
+            let key_hash = digest::digest(&digest::SHA256, auth_secret.as_bytes());
+            let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
+                .map_err(|e| mlua::Error::RuntimeError(format!("cipher init: {}", e)))?;
+
+            // Random 12-byte nonce
+            let mut nonce_bytes = [0u8; 12];
+            rand::thread_rng().fill_bytes(&mut nonce_bytes);
+            let nonce = Nonce::from_slice(&nonce_bytes);
+
+            let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+                .map_err(|e| mlua::Error::RuntimeError(format!("encrypt error: {}", e)))?;
+
+            // Prepend nonce to ciphertext, base64 encode
+            let mut combined = nonce_bytes.to_vec();
+            combined.extend_from_slice(&ciphertext);
+            Ok(base64::engine::general_purpose::STANDARD.encode(&combined))
+        })?;
+        crypto_table.set("encrypt", encrypt_fn)?;
+
+        let auth_secret2 = config.auth.secret.clone();
+        let decrypt_fn = lua.create_function(move |_, encoded: String| -> mlua::Result<String> {
+            use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
+            use aes_gcm::Nonce;
+            use ring::digest;
+            use base64::Engine;
+
+            let combined = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes())
+                .map_err(|e| mlua::Error::RuntimeError(format!("base64 decode: {}", e)))?;
+            if combined.len() < 12 {
+                return Err(mlua::Error::RuntimeError("ciphertext too short".into()));
+            }
+            let (nonce_bytes, ciphertext) = combined.split_at(12);
+            let nonce = Nonce::from_slice(nonce_bytes);
+
+            let key_hash = digest::digest(&digest::SHA256, auth_secret2.as_bytes());
+            let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
+                .map_err(|e| mlua::Error::RuntimeError(format!("cipher init: {}", e)))?;
+
+            let plaintext = cipher.decrypt(nonce, ciphertext)
+                .map_err(|e| mlua::Error::RuntimeError(format!("decrypt error: {}", e)))?;
+
+            String::from_utf8(plaintext)
+                .map_err(|e| mlua::Error::RuntimeError(format!("decrypt utf8: {}", e)))
+        })?;
+        crypto_table.set("decrypt", decrypt_fn)?;
+
+        let random_bytes_fn = lua.create_function(|_, n: usize| -> mlua::Result<String> {
+            use rand::RngCore;
+            let mut buf = vec![0u8; n];
+            rand::thread_rng().fill_bytes(&mut buf);
+            Ok(hex_encode(&buf))
+        })?;
+        crypto_table.set("random_bytes", random_bytes_fn)?;
+
+        crap.set("crypto", crypto_table)?;
+    }
+
+    // crap.schema — read-only schema introspection
+    {
+        let schema_table = lua.create_table()?;
+
+        let reg = registry.clone();
+        let get_collection_fn = lua.create_function(move |lua, slug: String| -> mlua::Result<Value> {
+            let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
+                format!("Registry lock: {}", e)
+            ))?;
+            match r.get_collection(&slug) {
+                Some(def) => Ok(Value::Table(collection_def_to_lua_table(lua, def)?)),
+                None => Ok(Value::Nil),
+            }
+        })?;
+        schema_table.set("get_collection", get_collection_fn)?;
+
+        let reg = registry.clone();
+        let get_global_fn = lua.create_function(move |lua, slug: String| -> mlua::Result<Value> {
+            let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
+                format!("Registry lock: {}", e)
+            ))?;
+            match r.get_global(&slug) {
+                Some(def) => {
+                    let tbl = lua.create_table()?;
+                    tbl.set("slug", def.slug.as_str())?;
+                    let labels = lua.create_table()?;
+                    if let Some(ref s) = def.labels.singular {
+                        labels.set("singular", s.resolve_default())?;
+                    }
+                    if let Some(ref s) = def.labels.plural {
+                        labels.set("plural", s.resolve_default())?;
+                    }
+                    tbl.set("labels", labels)?;
+                    let fields_arr = lua.create_table()?;
+                    for (i, f) in def.fields.iter().enumerate() {
+                        fields_arr.set(i + 1, field_def_to_lua_table(lua, f)?)?;
+                    }
+                    tbl.set("fields", fields_arr)?;
+                    Ok(Value::Table(tbl))
+                }
+                None => Ok(Value::Nil),
+            }
+        })?;
+        schema_table.set("get_global", get_global_fn)?;
+
+        let reg = registry.clone();
+        let list_collections_fn = lua.create_function(move |lua, ()| -> mlua::Result<Table> {
+            let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
+                format!("Registry lock: {}", e)
+            ))?;
+            let tbl = lua.create_table()?;
+            let mut i = 0;
+            for def in r.collections.values() {
+                i += 1;
+                let item = lua.create_table()?;
+                item.set("slug", def.slug.as_str())?;
+                let labels = lua.create_table()?;
+                if let Some(ref s) = def.labels.singular {
+                    labels.set("singular", s.resolve_default())?;
+                }
+                if let Some(ref s) = def.labels.plural {
+                    labels.set("plural", s.resolve_default())?;
+                }
+                item.set("labels", labels)?;
+                tbl.set(i, item)?;
+            }
+            Ok(tbl)
+        })?;
+        schema_table.set("list_collections", list_collections_fn)?;
+
+        let reg = registry.clone();
+        let list_globals_fn = lua.create_function(move |lua, ()| -> mlua::Result<Table> {
+            let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
+                format!("Registry lock: {}", e)
+            ))?;
+            let tbl = lua.create_table()?;
+            let mut i = 0;
+            for def in r.globals.values() {
+                i += 1;
+                let item = lua.create_table()?;
+                item.set("slug", def.slug.as_str())?;
+                let labels = lua.create_table()?;
+                if let Some(ref s) = def.labels.singular {
+                    labels.set("singular", s.resolve_default())?;
+                }
+                if let Some(ref s) = def.labels.plural {
+                    labels.set("plural", s.resolve_default())?;
+                }
+                item.set("labels", labels)?;
+                tbl.set(i, item)?;
+            }
+            Ok(tbl)
+        })?;
+        schema_table.set("list_globals", list_globals_fn)?;
+
+        crap.set("schema", schema_table)?;
+    }
 
     // _crap_event_hooks — Lua-side storage for registered global hooks
     let event_hooks = lua.create_table()?;
@@ -333,7 +694,104 @@ pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path, con
     crap.set("email", email_table)?;
 
     lua.globals().set("crap", crap)?;
+
+    // Load pure Lua helpers onto crap.util (after crap global is set)
+    lua.load(LUA_UTIL_HELPERS).exec()
+        .context("Failed to load Lua util helpers")?;
+
     Ok(())
+}
+
+/// Encode bytes as lowercase hex string.
+fn hex_encode(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Convert a CollectionDefinition to a Lua table for crap.schema.get_collection().
+fn collection_def_to_lua_table(lua: &Lua, def: &crate::core::CollectionDefinition) -> mlua::Result<Table> {
+    let tbl = lua.create_table()?;
+    tbl.set("slug", def.slug.as_str())?;
+    let labels = lua.create_table()?;
+    if let Some(ref s) = def.labels.singular {
+        labels.set("singular", s.resolve_default())?;
+    }
+    if let Some(ref s) = def.labels.plural {
+        labels.set("plural", s.resolve_default())?;
+    }
+    tbl.set("labels", labels)?;
+    tbl.set("timestamps", def.timestamps)?;
+    tbl.set("has_auth", def.is_auth_collection())?;
+    tbl.set("has_upload", def.is_upload_collection())?;
+    tbl.set("has_versions", def.has_versions())?;
+    tbl.set("has_drafts", def.has_drafts())?;
+
+    let fields_arr = lua.create_table()?;
+    for (i, f) in def.fields.iter().enumerate() {
+        fields_arr.set(i + 1, field_def_to_lua_table(lua, f)?)?;
+    }
+    tbl.set("fields", fields_arr)?;
+    Ok(tbl)
+}
+
+/// Convert a FieldDefinition to a Lua table for schema introspection.
+fn field_def_to_lua_table(lua: &Lua, f: &crate::core::field::FieldDefinition) -> mlua::Result<Table> {
+    let tbl = lua.create_table()?;
+    tbl.set("name", f.name.as_str())?;
+    tbl.set("type", f.field_type.as_str())?;
+    tbl.set("required", f.required)?;
+    tbl.set("localized", f.localized)?;
+    tbl.set("unique", f.unique)?;
+
+    if let Some(ref rc) = f.relationship {
+        let rel = lua.create_table()?;
+        rel.set("collection", rc.collection.as_str())?;
+        rel.set("has_many", rc.has_many)?;
+        if let Some(md) = rc.max_depth {
+            rel.set("max_depth", md)?;
+        }
+        tbl.set("relationship", rel)?;
+    }
+
+    if !f.options.is_empty() {
+        let opts = lua.create_table()?;
+        for (i, opt) in f.options.iter().enumerate() {
+            let o = lua.create_table()?;
+            o.set("label", opt.label.resolve_default())?;
+            o.set("value", opt.value.as_str())?;
+            opts.set(i + 1, o)?;
+        }
+        tbl.set("options", opts)?;
+    }
+
+    // Recurse into sub-fields (array, group)
+    if !f.fields.is_empty() {
+        let sub = lua.create_table()?;
+        for (i, sf) in f.fields.iter().enumerate() {
+            sub.set(i + 1, field_def_to_lua_table(lua, sf)?)?;
+        }
+        tbl.set("fields", sub)?;
+    }
+
+    // Blocks
+    if !f.blocks.is_empty() {
+        let blocks = lua.create_table()?;
+        for (i, b) in f.blocks.iter().enumerate() {
+            let bt = lua.create_table()?;
+            bt.set("type", b.block_type.as_str())?;
+            if let Some(ref lbl) = b.label {
+                bt.set("label", lbl.resolve_default())?;
+            }
+            let bf = lua.create_table()?;
+            for (j, sf) in b.fields.iter().enumerate() {
+                bf.set(j + 1, field_def_to_lua_table(lua, sf)?)?;
+            }
+            bt.set("fields", bf)?;
+            blocks.set(i + 1, bt)?;
+        }
+        tbl.set("blocks", blocks)?;
+    }
+
+    Ok(tbl)
 }
 
 fn slugify(s: &str) -> String {

@@ -748,3 +748,62 @@ restore_version() {
     \"version_id\": \"$version_id\"
   }" "$ADDR" crap.ContentAPI/RestoreVersion
 }
+
+# ── Count / Bulk Operations ─────────────────────────────────
+
+# Count all posts
+count_posts() {
+grpcurl -plaintext -d '{
+  "collection": "posts"
+}' "$ADDR" crap.ContentAPI/Count
+}
+
+# Count posts with filter
+count_posts_published() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "filters": { "status": "published" }
+}' "$ADDR" crap.ContentAPI/Count
+}
+
+# Count posts with where clause
+count_posts_where() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "where": "{\"status\":{\"not_equals\":\"archived\"}}"
+}' "$ADDR" crap.ContentAPI/Count
+}
+
+# Update many posts (bulk update)
+update_many_posts() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "filters": { "status": "draft" },
+  "data": { "status": "published" }
+}' "$ADDR" crap.ContentAPI/UpdateMany
+}
+
+# Update many with where clause
+update_many_posts_where() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "where": "{\"status\":{\"equals\":\"draft\"}}",
+  "data": { "status": "published" }
+}' "$ADDR" crap.ContentAPI/UpdateMany
+}
+
+# Delete many posts (bulk delete)
+delete_many_posts() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "filters": { "status": "archived" }
+}' "$ADDR" crap.ContentAPI/DeleteMany
+}
+
+# Delete many with where clause
+delete_many_posts_where() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "where": "{\"status\":{\"equals\":\"archived\"}}"
+}' "$ADDR" crap.ContentAPI/DeleteMany
+}

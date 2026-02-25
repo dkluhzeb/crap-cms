@@ -534,7 +534,7 @@ impl ContentApi for ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let doc = tokio::task::spawn_blocking(move || {
+        let (doc, req_context) = tokio::task::spawn_blocking(move || {
             crate::service::create_document(
                 &pool,
                 &runner,
@@ -571,6 +571,7 @@ impl ContentApi for ContentService {
                 req.collection.clone(),
                 "create".to_string(),
                 doc.fields.clone(),
+                Some(req_context),
             );
             self.hook_runner.publish_event(
                 &self.event_bus,
@@ -671,7 +672,7 @@ impl ContentApi for ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let doc = tokio::task::spawn_blocking(move || {
+        let (doc, req_context) = tokio::task::spawn_blocking(move || {
             crate::service::update_document(
                 &pool,
                 &runner,
@@ -704,6 +705,7 @@ impl ContentApi for ContentService {
                 req.collection.clone(),
                 "update".to_string(),
                 doc.fields.clone(),
+                Some(req_context),
             );
             self.hook_runner.publish_event(
                 &self.event_bus,
@@ -752,7 +754,7 @@ impl ContentApi for ContentService {
         let collection = req.collection.clone();
         let id = req.id.clone();
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        tokio::task::spawn_blocking(move || {
+        let req_context = tokio::task::spawn_blocking(move || {
             crate::service::delete_document(
                 &pool,
                 &runner,
@@ -773,6 +775,7 @@ impl ContentApi for ContentService {
             req.collection.clone(),
             "delete".to_string(),
             [("id".to_string(), serde_json::Value::String(req.id.clone()))].into(),
+            Some(req_context),
         );
         self.hook_runner.publish_event(
             &self.event_bus,
@@ -786,6 +789,265 @@ impl ContentApi for ContentService {
         );
 
         Ok(Response::new(content::DeleteResponse { success: true }))
+    }
+
+    /// Count documents matching filters (no per-document hooks).
+    async fn count(
+        &self,
+        request: Request<content::CountRequest>,
+    ) -> Result<Response<content::CountResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        // Check read access
+        let access_result =
+            self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+        if matches!(access_result, AccessResult::Denied) {
+            return Err(Status::permission_denied("Read access denied"));
+        }
+
+        let mut filters = if let Some(ref where_json) = req.r#where {
+            parse_where_json(where_json)
+                .map_err(|e| Status::invalid_argument(format!("Invalid where clause: {}", e)))?
+        } else if !req.filters.is_empty() {
+            req.filters
+                .iter()
+                .map(|(k, v)| {
+                    FilterClause::Single(Filter {
+                        field: k.clone(),
+                        op: FilterOp::Equals(v.clone()),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if let AccessResult::Constrained(ref constraint_filters) = access_result {
+            filters.extend(constraint_filters.clone());
+        }
+
+        if def.has_drafts() && !req.draft.unwrap_or(false) {
+            filters.push(FilterClause::Single(Filter {
+                field: "_status".to_string(),
+                op: FilterOp::Equals("published".to_string()),
+            }));
+        }
+
+        let locale_ctx =
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
+
+        let pool = self.pool.clone();
+        let collection = req.collection.clone();
+        let def_owned = def;
+        let count = tokio::task::spawn_blocking(move || {
+            ops::count_documents(&pool, &collection, &def_owned, &filters, locale_ctx.as_ref())
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| Status::internal(format!("Count error: {}", e)))?;
+
+        Ok(Response::new(content::CountResponse { count }))
+    }
+
+    /// Bulk update matching documents (all-or-nothing access check, no per-document hooks).
+    async fn update_many(
+        &self,
+        request: Request<content::UpdateManyRequest>,
+    ) -> Result<Response<content::UpdateManyResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        // Check read access first (to find matching docs)
+        let read_access =
+            self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+        if matches!(read_access, AccessResult::Denied) {
+            return Err(Status::permission_denied("Read access denied"));
+        }
+
+        let mut filters = if let Some(ref where_json) = req.r#where {
+            parse_where_json(where_json)
+                .map_err(|e| Status::invalid_argument(format!("Invalid where clause: {}", e)))?
+        } else if !req.filters.is_empty() {
+            req.filters
+                .iter()
+                .map(|(k, v)| {
+                    FilterClause::Single(Filter {
+                        field: k.clone(),
+                        op: FilterOp::Equals(v.clone()),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if let AccessResult::Constrained(ref constraint_filters) = read_access {
+            filters.extend(constraint_filters.clone());
+        }
+
+        let join_data = req
+            .data
+            .as_ref()
+            .map(prost_struct_to_json_map)
+            .unwrap_or_default();
+        let data = req
+            .data
+            .map(|s| prost_struct_to_hashmap(&s))
+            .unwrap_or_default();
+
+        let locale_ctx =
+            LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
+
+        let pool = self.pool.clone();
+        let hook_runner = self.hook_runner.clone();
+        let collection = req.collection.clone();
+        let def_owned = def.clone();
+        let auth_user_clone = auth_user.clone();
+        let modified = tokio::task::spawn_blocking(move || -> Result<i64, anyhow::Error> {
+            let mut conn = pool.get().context("DB connection")?;
+            let tx = conn.transaction().context("Start transaction")?;
+
+            let find_query = FindQuery {
+                filters,
+                ..Default::default()
+            };
+            let docs = query::find(&tx, &collection, &def_owned, &find_query, locale_ctx.as_ref())?;
+
+            // All-or-nothing update access check
+            if def_owned.access.update.is_some() {
+                let user_doc = auth_user_clone.as_ref().map(|au| &au.user_doc);
+                for doc in &docs {
+                    let result = hook_runner.check_access(
+                        def_owned.access.update.as_deref(),
+                        user_doc,
+                        Some(&doc.id),
+                        None,
+                        &tx,
+                    )?;
+                    if matches!(result, AccessResult::Denied) {
+                        anyhow::bail!("Update access denied for document {}", doc.id);
+                    }
+                }
+            }
+
+            let mut count = 0i64;
+            for doc in &docs {
+                query::update(&tx, &collection, &def_owned, &doc.id, &data, locale_ctx.as_ref())?;
+                query::save_join_table_data(&tx, &collection, &def_owned, &doc.id, &join_data, locale_ctx.as_ref())?;
+                count += 1;
+            }
+
+            tx.commit().context("Commit transaction")?;
+            Ok(count)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| {
+            if e.to_string().contains("access denied") {
+                Status::permission_denied(e.to_string())
+            } else {
+                Status::internal(format!("UpdateMany error: {}", e))
+            }
+        })?;
+
+        Ok(Response::new(content::UpdateManyResponse { modified }))
+    }
+
+    /// Bulk delete matching documents (all-or-nothing access check, no per-document hooks).
+    async fn delete_many(
+        &self,
+        request: Request<content::DeleteManyRequest>,
+    ) -> Result<Response<content::DeleteManyResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        let req = request.into_inner();
+        let def = self.get_collection_def(&req.collection)?;
+
+        // Check read access first (to find matching docs)
+        let read_access =
+            self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+        if matches!(read_access, AccessResult::Denied) {
+            return Err(Status::permission_denied("Read access denied"));
+        }
+
+        let mut filters = if let Some(ref where_json) = req.r#where {
+            parse_where_json(where_json)
+                .map_err(|e| Status::invalid_argument(format!("Invalid where clause: {}", e)))?
+        } else if !req.filters.is_empty() {
+            req.filters
+                .iter()
+                .map(|(k, v)| {
+                    FilterClause::Single(Filter {
+                        field: k.clone(),
+                        op: FilterOp::Equals(v.clone()),
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        if let AccessResult::Constrained(ref constraint_filters) = read_access {
+            filters.extend(constraint_filters.clone());
+        }
+
+        let pool = self.pool.clone();
+        let hook_runner = self.hook_runner.clone();
+        let collection = req.collection.clone();
+        let def_owned = def.clone();
+        let auth_user_clone = auth_user.clone();
+        let deleted = tokio::task::spawn_blocking(move || -> Result<i64, anyhow::Error> {
+            let mut conn = pool.get().context("DB connection")?;
+            let tx = conn.transaction().context("Start transaction")?;
+
+            let find_query = FindQuery {
+                filters,
+                ..Default::default()
+            };
+            let docs = query::find(&tx, &collection, &def_owned, &find_query, None)?;
+
+            // All-or-nothing delete access check
+            if def_owned.access.delete.is_some() {
+                let user_doc = auth_user_clone.as_ref().map(|au| &au.user_doc);
+                for doc in &docs {
+                    let result = hook_runner.check_access(
+                        def_owned.access.delete.as_deref(),
+                        user_doc,
+                        Some(&doc.id),
+                        None,
+                        &tx,
+                    )?;
+                    if matches!(result, AccessResult::Denied) {
+                        anyhow::bail!("Delete access denied for document {}", doc.id);
+                    }
+                }
+            }
+
+            let mut count = 0i64;
+            for doc in &docs {
+                query::delete(&tx, &collection, &doc.id)?;
+                count += 1;
+            }
+
+            tx.commit().context("Commit transaction")?;
+            Ok(count)
+        })
+        .await
+        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| {
+            if e.to_string().contains("access denied") {
+                Status::permission_denied(e.to_string())
+            } else {
+                Status::internal(format!("DeleteMany error: {}", e))
+            }
+        })?;
+
+        Ok(Response::new(content::DeleteManyResponse { deleted }))
     }
 
     /// Get the single document for a global definition.
@@ -877,7 +1139,7 @@ impl ContentApi for ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let doc = tokio::task::spawn_blocking(move || {
+        let (doc, req_context) = tokio::task::spawn_blocking(move || {
             crate::service::update_global_document(
                 &pool,
                 &runner,
@@ -906,6 +1168,7 @@ impl ContentApi for ContentService {
                 req.slug.clone(),
                 "update".to_string(),
                 doc.fields.clone(),
+                Some(req_context),
             );
             self.hook_runner.publish_event(
                 &self.event_bus,

@@ -602,7 +602,7 @@ fn service_create_published_creates_version() {
         ("title".into(), "Published".into()),
         ("body".into(), "Content".into()),
     ].into();
-    let doc = service::create_document(
+    let (doc, _) = service::create_document(
         pool, runner, "articles", &def, data, &HashMap::new(),
         None, None, None, None, false,
     ).unwrap();
@@ -628,7 +628,7 @@ fn service_create_draft_creates_draft_version() {
     let data: HashMap<String, String> = [
         ("title".into(), "Draft Post".into()),
     ].into();
-    let doc = service::create_document(
+    let (doc, _) = service::create_document(
         pool, runner, "articles", &def, data, &HashMap::new(),
         None, None, None, None, true,
     ).unwrap();
@@ -654,7 +654,7 @@ fn service_update_draft_is_version_only() {
         ("title".into(), "Original Title".into()),
         ("body".into(), "Original Body".into()),
     ].into();
-    let doc = service::create_document(
+    let (doc, _) = service::create_document(
         pool, runner, "articles", &def, data, &HashMap::new(),
         None, None, None, None, false,
     ).unwrap();
@@ -663,7 +663,7 @@ fn service_update_draft_is_version_only() {
     let update_data: HashMap<String, String> = [
         ("title".into(), "Draft Title".into()),
     ].into();
-    let result = service::update_document(
+    let (result, _) = service::update_document(
         pool, runner, "articles", &doc.id, &def, update_data, &HashMap::new(),
         None, None, None, None, true,
     ).unwrap();
@@ -697,7 +697,7 @@ fn service_update_publish_updates_main_table() {
     let data: HashMap<String, String> = [
         ("title".into(), "Before Publish".into()),
     ].into();
-    let doc = service::create_document(
+    let (doc, _) = service::create_document(
         pool, runner, "articles", &def, data, &HashMap::new(),
         None, None, None, None, true, // create as draft
     ).unwrap();
@@ -706,7 +706,7 @@ fn service_update_publish_updates_main_table() {
     let update_data: HashMap<String, String> = [
         ("title".into(), "Published Title".into()),
     ].into();
-    let published = service::update_document(
+    let (published, _) = service::update_document(
         pool, runner, "articles", &doc.id, &def, update_data, &HashMap::new(),
         None, None, None, None, false,
     ).unwrap();
@@ -726,7 +726,7 @@ fn service_nonversioned_create_no_version_created() {
     let runner = &ts.runner;
 
     let data: HashMap<String, String> = [("title".into(), "Note".into())].into();
-    let _doc = service::create_document(
+    let (_doc, _) = service::create_document(
         pool, runner, "notes", &def, data, &HashMap::new(),
         None, None, None, None, false,
     ).unwrap();

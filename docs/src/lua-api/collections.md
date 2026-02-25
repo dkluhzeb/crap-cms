@@ -170,3 +170,87 @@ local result = crap.collections.find("posts", {
     overrideAccess = false,
 })
 ```
+
+## crap.collections.count(collection, query?)
+
+Count documents matching a query. Returns an integer count.
+
+**Only available inside hooks with transaction context.**
+
+```lua
+local n = crap.collections.count("posts")
+local published = crap.collections.count("posts", {
+    filters = { status = "published" },
+})
+```
+
+### Query Parameters
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `filters` | table | `{}` | Field filters. Same syntax as `find`. |
+| `locale` | string | `nil` | Locale code for localized fields. |
+| `overrideAccess` | boolean | `true` | Skip access control checks. |
+| `draft` | boolean | `false` | Include draft documents. |
+
+## crap.collections.update_many(collection, query, data, opts?)
+
+Update multiple documents matching a query. Returns `{ modified = N }`.
+
+**All-or-nothing semantics:** finds all matching documents, checks update access for each (if `overrideAccess = false`), and only proceeds if all pass. If any document fails access, an error is returned and nothing is modified.
+
+Does **not** fire per-document hooks (before_change, after_change, etc.).
+
+**Only available inside hooks with transaction context.**
+
+```lua
+local result = crap.collections.update_many("posts", {
+    filters = { status = "draft" },
+}, {
+    status = "published",
+})
+print(result.modified)  -- number of updated documents
+```
+
+### Query Parameters
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `filters` | table | `{}` | Field filters to match documents. |
+| `locale` | string | `nil` | Locale code for localized fields. |
+| `overrideAccess` | boolean | `true` | Skip access control checks. |
+| `draft` | boolean | `false` | Include draft documents. |
+
+### Data
+
+The `data` table contains fields to update on all matched documents (partial update).
+
+## crap.collections.delete_many(collection, query)
+
+Delete multiple documents matching a query. Returns `{ deleted = N }`.
+
+**All-or-nothing semantics:** finds all matching documents, checks delete access for each (if `overrideAccess = false`), and only proceeds if all pass.
+
+Does **not** fire per-document hooks (before_delete, after_delete, etc.).
+
+**Only available inside hooks with transaction context.**
+
+```lua
+local result = crap.collections.delete_many("posts", {
+    filters = { status = "archived" },
+})
+print(result.deleted)  -- number of deleted documents
+
+-- With access control enforcement
+local result = crap.collections.delete_many("posts", {
+    filters = { status = "archived" },
+    overrideAccess = false,
+})
+```
+
+### Query Parameters
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `filters` | table | `{}` | Field filters to match documents. |
+| `overrideAccess` | boolean | `true` | Skip access control checks. |

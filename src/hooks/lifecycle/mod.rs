@@ -69,6 +69,10 @@ pub struct HookContext {
     pub locale: Option<String>,
     /// Whether this operation is a draft save (`true` = draft, `false`/`None` = publish).
     pub draft: Option<bool>,
+    /// Request-scoped shared table that flows from before_validate through after_change.
+    /// Hooks can read/write this to share state within one request lifecycle.
+    /// Only JSON-compatible values survive (no functions, userdata, etc.).
+    pub context: HashMap<String, serde_json::Value>,
 }
 
 /// Raw pointer wrapper for injecting a transaction/connection into Lua CRUD
@@ -236,7 +240,8 @@ impl HookRunner {
                     operation: "init".to_string(),
                     data: HashMap::new(),
                     locale: None,
-                draft: None,
+                    draft: None,
+                    context: HashMap::new(),
                 };
                 call_hook_ref(&lua, hook_ref, ctx)?;
             }
@@ -312,6 +317,7 @@ impl HookRunner {
             data,
             locale: None,
             draft: None,
+            context: HashMap::new(),
         };
         self.run_hooks(hooks, HookEvent::BeforeRead, ctx)?;
         Ok(())
@@ -357,6 +363,7 @@ impl HookRunner {
             data,
             locale: None,
             draft: None,
+            context: HashMap::new(),
         };
 
         // run_hooks handles both collection-level hook refs and global registered hooks
@@ -448,6 +455,7 @@ impl HookRunner {
 
     /// Fire an after-event hook in the background (non-blocking, no transaction).
     /// For AfterChange events, field-level after_change hooks run first.
+    /// `req_context` carries the request-scoped shared table from before-hooks.
     pub fn fire_after_event(
         &self,
         hooks: &CollectionHooks,
@@ -456,6 +464,7 @@ impl HookRunner {
         collection: String,
         operation: String,
         data: HashMap<String, serde_json::Value>,
+        req_context: Option<HashMap<String, serde_json::Value>>,
     ) {
         let runner = self.clone();
         let hooks = hooks.clone();
@@ -481,6 +490,7 @@ impl HookRunner {
                 data,
                 locale: None,
                 draft: None,
+                context: req_context.unwrap_or_default(),
             };
             let _ = runner.run_hooks(&hooks, event, ctx);
         });
@@ -515,6 +525,7 @@ impl HookRunner {
             data,
             locale: None,
             draft: None,
+            context: HashMap::new(),
         };
 
         // run_hooks handles both collection-level hook refs and global registered hooks.
@@ -993,6 +1004,14 @@ fn context_to_lua_table(lua: &Lua, context: &HookContext) -> mlua::Result<mlua::
         data_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
     }
     ctx_table.set("data", data_table)?;
+
+    // Request-scoped shared context table
+    let context_table = lua.create_table()?;
+    for (k, v) in &context.context {
+        context_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
+    }
+    ctx_table.set("context", context_table)?;
+
     Ok(ctx_table)
 }
 
@@ -1159,11 +1178,9 @@ fn call_registered_hooks(
                     let (k, v) = pair?;
                     new_data.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
                 }
-                context = HookContext {
-                    data: new_data,
-                    ..context
-                };
+                context.data = new_data;
             }
+            read_context_back(lua, &tbl, &mut context.context);
         }
     }
 
@@ -1282,6 +1299,20 @@ pub(super) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::F
     Ok(func)
 }
 
+/// Read the `context` table from a returned Lua hook table, merging into the existing context.
+fn read_context_back(lua: &Lua, tbl: &mlua::Table, existing: &mut HashMap<String, serde_json::Value>) {
+    if let Ok(context_tbl) = tbl.get::<mlua::Table>("context") {
+        existing.clear();
+        for pair in context_tbl.pairs::<String, Value>() {
+            if let Ok((k, v)) = pair {
+                if let Ok(json_val) = crate::hooks::api::lua_to_json(lua, &v) {
+                    existing.insert(k, json_val);
+                }
+            }
+        }
+    }
+}
+
 /// Resolve a dotted function reference (e.g., "hooks.posts.auto_slug")
 /// and call it with the context.
 fn call_hook_ref(lua: &Lua, hook_ref: &str, context: HookContext) -> Result<HookContext> {
@@ -1296,6 +1327,7 @@ fn call_hook_ref(lua: &Lua, hook_ref: &str, context: HookContext) -> Result<Hook
     // Parse the result back
     match result {
         Value::Table(tbl) => {
+            let mut new_ctx = context;
             let data_result: mlua::Result<mlua::Table> = tbl.get("data");
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
@@ -1303,13 +1335,10 @@ fn call_hook_ref(lua: &Lua, hook_ref: &str, context: HookContext) -> Result<Hook
                     let (k, v) = pair?;
                     new_data.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
                 }
-                Ok(HookContext {
-                    data: new_data,
-                    ..context
-                })
-            } else {
-                Ok(context)
+                new_ctx.data = new_data;
             }
+            read_context_back(lua, &tbl, &mut new_ctx.context);
+            Ok(new_ctx)
         }
         _ => Ok(context),
     }

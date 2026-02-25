@@ -57,6 +57,12 @@ webp = "0.3"
 # HTTP client (blocking — used in Lua spawn_blocking context)
 ureq = "2"
 
+# Crypto
+ring = "0.17"
+base64 = "0.22"
+rand = "0.8"
+aes-gcm = "0.10"
+
 # Utilities
 rpassword = "5"
 nanoid = "0.4"

@@ -266,6 +266,7 @@ crap = {}
 --- @field locale?    string                 Current locale code (nil if localization disabled or default locale).
 --- @field original_doc? crap.Document       Original document (on update).
 --- @field req?       crap.RequestContext     Request context (if available).
+--- @field context  table<string, any>     Request-scoped shared table. Persists from before_validate through after_change within one request. Only JSON-compatible values survive (no functions/userdata).
 
 --- @class crap.ReadHookContext
 --- @field collection string           Collection slug.
@@ -378,6 +379,51 @@ function crap.collections.update(collection, id, data, opts) end
 --- @return boolean success
 function crap.collections.delete(collection, id, opts) end
 
+--- @class crap.CountQuery
+--- @field filters?        table<string, crap.FilterValue>  Field filters.
+--- @field locale?         string                 Locale code for localized fields.
+--- @field overrideAccess? boolean                Skip access control checks (default: true).
+--- @field draft?          boolean                Include draft documents (default: false).
+
+--- Count documents matching a query.
+--- Inside hooks, runs within the parent operation's transaction.
+--- @param collection string        Collection slug.
+--- @param query?     crap.CountQuery Query parameters.
+--- @return integer count
+function crap.collections.count(collection, query) end
+
+--- @class crap.UpdateManyQuery
+--- @field filters?        table<string, crap.FilterValue>  Field filters to match documents.
+--- @field where?          string                 JSON where clause.
+--- @field locale?         string                 Locale code for localized fields.
+--- @field overrideAccess? boolean                Skip access control checks (default: true).
+--- @field draft?          boolean                Include draft documents (default: false).
+
+--- Update multiple documents matching a query. All-or-nothing: checks update access
+--- for every matched document first. If any fails, returns error and nothing is modified.
+--- Does NOT fire per-document hooks.
+--- Inside hooks, runs within the parent operation's transaction.
+--- @param collection string                  Collection slug.
+--- @param query      crap.UpdateManyQuery    Query to match documents.
+--- @param data       table<string, any>      Fields to update on all matched documents.
+--- @param opts?      crap.UpdateOptions      Optional options.
+--- @return { modified: integer }
+function crap.collections.update_many(collection, query, data, opts) end
+
+--- @class crap.DeleteManyQuery
+--- @field filters?        table<string, crap.FilterValue>  Field filters to match documents.
+--- @field where?          string                 JSON where clause.
+--- @field overrideAccess? boolean                Skip access control checks (default: true).
+
+--- Delete multiple documents matching a query. All-or-nothing: checks delete access
+--- for every matched document first. If any fails, returns error and nothing is modified.
+--- Does NOT fire per-document hooks.
+--- Inside hooks, runs within the parent operation's transaction.
+--- @param collection string                  Collection slug.
+--- @param query      crap.DeleteManyQuery    Query to match documents.
+--- @return { deleted: integer }
+function crap.collections.delete_many(collection, query) end
+
 
 -- ── crap.globals ─────────────────────────────────────────────
 
@@ -487,6 +533,135 @@ function crap.util.json_encode(value) end
 --- @return any value  Decoded Lua value.
 function crap.util.json_decode(str) end
 
+-- ── crap.util — table helpers ──────────────────────────────
+
+--- Deep merge two tables. b overwrites a. Returns a new table.
+--- @param a table  Base table.
+--- @param b table  Override table.
+--- @return table merged
+function crap.util.deep_merge(a, b) end
+
+--- Return a table with only the listed keys.
+--- @param tbl table        Source table.
+--- @param keys string[]    Keys to keep.
+--- @return table
+function crap.util.pick(tbl, keys) end
+
+--- Return a table without the listed keys.
+--- @param tbl table        Source table.
+--- @param keys string[]    Keys to remove.
+--- @return table
+function crap.util.omit(tbl, keys) end
+
+--- Extract all keys from a table as an array.
+--- @param tbl table
+--- @return string[]
+function crap.util.keys(tbl) end
+
+--- Extract all values from a table as an array.
+--- @param tbl table
+--- @return any[]
+function crap.util.values(tbl) end
+
+--- Map a function over an array table.
+--- @param tbl any[]              Array to map over.
+--- @param fn  fun(v: any, i: integer): any  Mapping function.
+--- @return any[]
+function crap.util.map(tbl, fn) end
+
+--- Filter an array table by a predicate.
+--- @param tbl any[]              Array to filter.
+--- @param fn  fun(v: any, i: integer): boolean  Predicate function.
+--- @return any[]
+function crap.util.filter(tbl, fn) end
+
+--- Find the first element matching a predicate.
+--- @param tbl any[]              Array to search.
+--- @param fn  fun(v: any, i: integer): boolean  Predicate function.
+--- @return any?
+function crap.util.find(tbl, fn) end
+
+--- Check if an array contains a value.
+--- @param tbl any[]  Array to search.
+--- @param value any  Value to find.
+--- @return boolean
+function crap.util.includes(tbl, value) end
+
+--- Check if a table has no entries.
+--- @param tbl table
+--- @return boolean
+function crap.util.is_empty(tbl) end
+
+--- Shallow copy a table.
+--- @param tbl table
+--- @return table
+function crap.util.clone(tbl) end
+
+-- ── crap.util — string helpers ─────────────────────────────
+
+--- Strip leading and trailing whitespace.
+--- @param str string
+--- @return string
+function crap.util.trim(str) end
+
+--- Split a string by separator.
+--- @param str string  Input string.
+--- @param sep string  Separator string.
+--- @return string[]
+function crap.util.split(str, sep) end
+
+--- Check if a string starts with a prefix.
+--- @param str string
+--- @param prefix string
+--- @return boolean
+function crap.util.starts_with(str, prefix) end
+
+--- Check if a string ends with a suffix.
+--- @param str string
+--- @param suffix string
+--- @return boolean
+function crap.util.ends_with(str, suffix) end
+
+--- Truncate a string to a max length with optional suffix.
+--- @param str string       Input string.
+--- @param max_len integer  Maximum length.
+--- @param suffix? string   Suffix to append when truncated (default: "...").
+--- @return string
+function crap.util.truncate(str, max_len, suffix) end
+
+-- ── crap.util — date helpers ───────────────────────────────
+
+--- Get current UTC time as ISO 8601 string.
+--- @return string
+function crap.util.date_now() end
+
+--- Get current Unix timestamp in seconds.
+--- @return integer
+function crap.util.date_timestamp() end
+
+--- Parse a date string to Unix timestamp. Tries RFC 3339, then common formats.
+--- @param str string  Date string to parse.
+--- @return integer? timestamp  Unix seconds, or nil on parse failure.
+function crap.util.date_parse(str) end
+
+--- Format a Unix timestamp using a format string (chrono syntax).
+--- @param timestamp integer  Unix seconds.
+--- @param format string      Format string (e.g., "%Y-%m-%d %H:%M:%S").
+--- @return string?
+function crap.util.date_format(timestamp, format) end
+
+--- Add seconds to a timestamp.
+--- @param timestamp integer  Unix seconds.
+--- @param seconds integer    Seconds to add.
+--- @return integer
+function crap.util.date_add(timestamp, seconds) end
+
+--- Difference between two timestamps in seconds.
+--- @param a integer  First timestamp.
+--- @param b integer  Second timestamp.
+--- @return integer  a - b in seconds.
+function crap.util.date_diff(a, b) end
+
 
 -- ── crap.auth ──────────────────────────────────────────────────
 
@@ -592,3 +767,92 @@ function crap.locale.get_all() end
 --- Check if localization is enabled (at least one locale configured).
 --- @return boolean
 function crap.locale.is_enabled() end
+
+
+-- ── crap.crypto ────────────────────────────────────────────
+
+--- Cryptographic helpers. Keys derived from the auth secret in crap.toml.
+--- @class crap.crypto
+crap.crypto = {}
+
+--- SHA-256 hash of a string, returned as hex.
+--- @param data string  Data to hash.
+--- @return string hex  64-character hex string.
+function crap.crypto.sha256(data) end
+
+--- HMAC-SHA256 of data with a key, returned as hex.
+--- @param data string  Data to authenticate.
+--- @param key  string  HMAC key.
+--- @return string hex  64-character hex string.
+function crap.crypto.hmac_sha256(data, key) end
+
+--- Base64 encode a string.
+--- @param str string
+--- @return string
+function crap.crypto.base64_encode(str) end
+
+--- Base64 decode a string.
+--- @param str string
+--- @return string
+function crap.crypto.base64_decode(str) end
+
+--- Encrypt plaintext using AES-256-GCM. Key derived from auth secret.
+--- Returns base64-encoded ciphertext (nonce prepended).
+--- @param plaintext string
+--- @return string ciphertext  Base64-encoded.
+function crap.crypto.encrypt(plaintext) end
+
+--- Decrypt ciphertext produced by `encrypt`.
+--- @param ciphertext string  Base64-encoded ciphertext from `encrypt`.
+--- @return string plaintext
+function crap.crypto.decrypt(ciphertext) end
+
+--- Generate random bytes as hex string.
+--- @param n integer  Number of random bytes.
+--- @return string hex  Hex string of length 2*n.
+function crap.crypto.random_bytes(n) end
+
+
+-- ── crap.schema ────────────────────────────────────────────
+
+--- Schema introspection API (read-only). Reads from the loaded registry.
+--- @class crap.schema
+crap.schema = {}
+
+--- @class crap.SchemaCollection
+--- @field slug        string
+--- @field labels      { singular?: string, plural?: string }
+--- @field timestamps  boolean
+--- @field has_auth    boolean
+--- @field has_upload  boolean
+--- @field has_versions boolean
+--- @field fields      crap.SchemaField[]
+
+--- @class crap.SchemaField
+--- @field name         string
+--- @field type         string
+--- @field required     boolean
+--- @field localized    boolean
+--- @field unique       boolean
+--- @field relationship? { collection: string, has_many: boolean }
+--- @field options?     { label: string, value: string }[]
+--- @field fields?      crap.SchemaField[]
+--- @field blocks?      { block_type: string, label?: string, fields: crap.SchemaField[] }[]
+
+--- Get a collection's schema definition.
+--- @param slug string  Collection slug.
+--- @return crap.SchemaCollection?
+function crap.schema.get_collection(slug) end
+
+--- Get a global's schema definition.
+--- @param slug string  Global slug.
+--- @return crap.SchemaCollection?
+function crap.schema.get_global(slug) end
+
+--- List all collection slugs and labels.
+--- @return { slug: string, labels: { singular?: string, plural?: string } }[]
+function crap.schema.list_collections() end
+
+--- List all global slugs and labels.
+--- @return { slug: string, labels: { singular?: string, plural?: string } }[]
+function crap.schema.list_globals() end

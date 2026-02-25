@@ -19,6 +19,9 @@ service ContentAPI {
   rpc VerifyEmail (VerifyEmailRequest) returns (VerifyEmailResponse);
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
+  rpc Count (CountRequest) returns (CountResponse);
+  rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
+  rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
   rpc Subscribe (SubscribeRequest) returns (stream MutationEvent);
   rpc ListVersions (ListVersionsRequest) returns (ListVersionsResponse);
   rpc RestoreVersion (RestoreVersionRequest) returns (RestoreVersionResponse);
@@ -151,6 +154,41 @@ message VerifyEmailRequest {
 
 message VerifyEmailResponse {
   bool success = 1;
+}
+
+message CountRequest {
+  string collection = 1;
+  map<string, string> filters = 2;
+  optional string where = 3;
+  optional string locale = 4;
+  optional bool draft = 5;
+}
+
+message CountResponse {
+  int64 count = 1;
+}
+
+message UpdateManyRequest {
+  string collection = 1;
+  map<string, string> filters = 2;
+  optional string where = 3;
+  google.protobuf.Struct data = 4;
+  optional string locale = 5;
+  optional bool draft = 6;
+}
+
+message UpdateManyResponse {
+  int64 modified = 1;
+}
+
+message DeleteManyRequest {
+  string collection = 1;
+  map<string, string> filters = 2;
+  optional string where = 3;
+}
+
+message DeleteManyResponse {
+  int64 deleted = 1;
 }
 
 message Document {

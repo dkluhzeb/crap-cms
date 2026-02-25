@@ -195,10 +195,11 @@ pub async fn update_action(
         .map(|l| format!("?locale={}", l))
         .unwrap_or_default();
     match result {
-        Ok(Ok(doc)) => {
+        Ok(Ok((doc, req_context))) => {
             state.hook_runner.fire_after_event(
                 &def.hooks, &def.fields, HookEvent::AfterChange,
                 slug.clone(), "update".to_string(), doc.fields.clone(),
+                Some(req_context),
             );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),

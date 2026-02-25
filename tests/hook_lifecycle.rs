@@ -65,6 +65,7 @@ fn before_change_hook_modifies_data() {
         data,
         locale: None,
         draft: None,
+        context: HashMap::new(),
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -104,6 +105,7 @@ fn before_validate_trims_title() {
         data,
         locale: None,
         draft: None,
+        context: HashMap::new(),
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -170,6 +172,7 @@ fn registered_hook_fires_for_all_collections() {
         data,
         locale: None,
         draft: None,
+        context: HashMap::new(),
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -404,6 +407,7 @@ fn run_before_write_full_lifecycle() {
         data,
         locale: None,
         draft: None,
+        context: HashMap::new(),
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -440,6 +444,7 @@ fn run_before_write_fails_on_validation_error() {
         data,
         locale: None,
         draft: None,
+        context: HashMap::new(),
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -1022,6 +1027,7 @@ fn fire_after_event_runs_hooks() {
             "articles".to_string(),
             "create".to_string(),
             data,
+            None,
         );
         // Give the background task a moment to execute
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

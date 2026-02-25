@@ -18,9 +18,13 @@ use crate::db::query::{self, LocaleContext};
 use crate::db::DbPool;
 use crate::hooks::lifecycle::{self, HookContext, HookEvent, HookRunner};
 
+/// Result of a write operation: the document and the request-scoped hook context.
+pub type WriteResult = (Document, HashMap<String, serde_json::Value>);
+
 /// Create a document within a single transaction: before-hooks → insert → join data → password.
 /// When `draft` is true and the collection has drafts enabled, the document is created with
 /// `_status = 'draft'` and required-field validation is skipped.
+/// Returns the created document and the request-scoped context from before-hooks.
 #[allow(clippy::too_many_arguments)]
 pub fn create_document(
     pool: &DbPool,
@@ -34,7 +38,7 @@ pub fn create_document(
     locale: Option<String>,
     user: Option<&Document>,
     draft: bool,
-) -> Result<Document> {
+) -> Result<WriteResult> {
     let is_draft = draft && def.has_drafts();
     let status = if is_draft { "draft" } else { "published" };
 
@@ -49,10 +53,12 @@ pub fn create_document(
             .collect(),
         locale,
         draft: Some(is_draft),
+        context: HashMap::new(),
     };
     let final_ctx = runner.run_before_write(
         &def.hooks, &def.fields, hook_ctx, &tx, slug, None, user, is_draft,
     )?;
+    let req_context = final_ctx.context.clone();
     let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
     let doc = query::create(&tx, slug, def, &final_data, locale_ctx)?;
 
@@ -80,7 +86,7 @@ pub fn create_document(
     }
 
     tx.commit().context("Commit transaction")?;
-    Ok(doc)
+    Ok((doc, req_context))
 }
 
 /// Update a document within a single transaction: before-hooks → update → join data → password.
@@ -101,7 +107,7 @@ pub fn update_document(
     locale: Option<String>,
     user: Option<&Document>,
     draft: bool,
-) -> Result<Document> {
+) -> Result<WriteResult> {
     let is_draft = draft && def.has_drafts();
 
     let mut conn = pool.get().context("DB connection")?;
@@ -115,10 +121,12 @@ pub fn update_document(
             .collect(),
         locale,
         draft: Some(is_draft),
+        context: HashMap::new(),
     };
     let final_ctx = runner.run_before_write(
         &def.hooks, &def.fields, hook_ctx, &tx, slug, Some(id), user, is_draft,
     )?;
+    let req_context = final_ctx.context.clone();
     let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
 
     if is_draft && def.has_versions() {
@@ -148,7 +156,7 @@ pub fn update_document(
         }
 
         tx.commit().context("Commit transaction")?;
-        Ok(existing_doc)
+        Ok((existing_doc, req_context))
     } else {
         // Normal update: write to main table
         let doc = query::update(&tx, slug, def, id, &final_data, locale_ctx)?;
@@ -176,11 +184,12 @@ pub fn update_document(
         }
 
         tx.commit().context("Commit transaction")?;
-        Ok(doc)
+        Ok((doc, req_context))
     }
 }
 
 /// Delete a document within a single transaction: before-hooks → delete.
+/// Returns the request-scoped context from before-hooks.
 pub fn delete_document(
     pool: &DbPool,
     runner: &HookRunner,
@@ -188,7 +197,7 @@ pub fn delete_document(
     id: &str,
     hooks: &CollectionHooks,
     user: Option<&Document>,
-) -> Result<()> {
+) -> Result<HashMap<String, serde_json::Value>> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction().context("Start transaction")?;
 
@@ -198,12 +207,13 @@ pub fn delete_document(
         data: [("id".to_string(), serde_json::Value::String(id.to_string()))].into(),
         locale: None,
         draft: None,
+        context: HashMap::new(),
     };
-    runner.run_hooks_with_conn(hooks, HookEvent::BeforeDelete, hook_ctx, &tx, user)?;
+    let final_ctx = runner.run_hooks_with_conn(hooks, HookEvent::BeforeDelete, hook_ctx, &tx, user)?;
     query::delete(&tx, slug, id)?;
 
     tx.commit().context("Commit transaction")?;
-    Ok(())
+    Ok(final_ctx.context)
 }
 
 /// Update a global document within a single transaction: before-hooks → update.
@@ -217,7 +227,7 @@ pub fn update_global_document(
     locale_ctx: Option<&LocaleContext>,
     locale: Option<String>,
     user: Option<&Document>,
-) -> Result<Document> {
+) -> Result<WriteResult> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn.transaction().context("Start transaction")?;
 
@@ -229,16 +239,18 @@ pub fn update_global_document(
             .collect(),
         locale,
         draft: None,
+        context: HashMap::new(),
     };
     let global_table = format!("_global_{}", slug);
     let final_ctx = runner.run_before_write(
         &def.hooks, &def.fields, hook_ctx, &tx, &global_table, Some("default"), user, false,
     )?;
+    let req_context = final_ctx.context.clone();
     let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
     let doc = query::update_global(&tx, slug, def, &final_data, locale_ctx)?;
 
     tx.commit().context("Commit transaction")?;
-    Ok(doc)
+    Ok((doc, req_context))
 }
 
 /// Fire-and-forget: generate a verification token and send the verification email.

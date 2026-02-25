@@ -493,10 +493,11 @@ pub async fn create_action(
     }).await;
 
     match result {
-        Ok(Ok(doc)) => {
+        Ok(Ok((doc, req_context))) => {
             state.hook_runner.fire_after_event(
                 &def.hooks, &def.fields, HookEvent::AfterChange,
                 slug.clone(), "create".to_string(), doc.fields.clone(),
+                Some(req_context),
             );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
@@ -972,7 +973,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 }
             }
             tx.commit().map_err(|e| anyhow::anyhow!("Commit: {}", e))?;
-            Ok(doc)
+            Ok((doc, HashMap::new()))
         } else {
             crate::service::update_document(
                 &pool, &runner, &slug_owned, &id_owned, &def_owned,
@@ -989,7 +990,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         .map(|l| format!("?locale={}", l))
         .unwrap_or_default();
     match result {
-        Ok(Ok(doc)) => {
+        Ok(Ok((doc, req_context))) => {
             // If a new file was uploaded and old files exist, clean up old files
             if let Some(old_fields) = old_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &old_fields);
@@ -998,6 +999,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
             state.hook_runner.fire_after_event(
                 &def.hooks, &def.fields, HookEvent::AfterChange,
                 slug.to_string(), "update".to_string(), doc.fields.clone(),
+                Some(req_context),
             );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
@@ -1149,7 +1151,7 @@ async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user:
     }).await;
 
     match result {
-        Ok(Ok(())) => {
+        Ok(Ok(req_context)) => {
             // Clean up upload files after successful delete
             if let Some(fields) = upload_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &fields);
@@ -1159,6 +1161,7 @@ async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user:
                 &def.hooks, &def.fields, HookEvent::AfterDelete,
                 slug.to_string(), "delete".to_string(),
                 [("id".to_string(), serde_json::Value::String(id.to_string()))].into(),
+                Some(req_context),
             );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
