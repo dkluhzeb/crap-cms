@@ -6,6 +6,7 @@ pub mod db;
 pub mod hooks;
 pub mod admin;
 pub mod api;
+pub mod scheduler;
 pub mod scaffold;
 pub mod service;
 pub mod typegen;

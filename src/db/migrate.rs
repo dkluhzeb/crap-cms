@@ -30,6 +30,29 @@ pub fn sync_all(pool: &DbPool, registry: &SharedRegistry, locale_config: &Locale
         );"
     ).context("Failed to create _crap_migrations table")?;
 
+    // Create jobs table
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS _crap_jobs (
+            id TEXT PRIMARY KEY,
+            slug TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            queue TEXT NOT NULL DEFAULT 'default',
+            data TEXT DEFAULT '{}',
+            result TEXT,
+            error TEXT,
+            attempt INTEGER NOT NULL DEFAULT 0,
+            max_attempts INTEGER NOT NULL DEFAULT 1,
+            scheduled_by TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            started_at TEXT,
+            completed_at TEXT,
+            heartbeat_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
+        CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
+        CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);"
+    ).context("Failed to create _crap_jobs table")?;
+
     let reg = registry.read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 

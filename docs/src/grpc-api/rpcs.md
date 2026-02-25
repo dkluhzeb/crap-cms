@@ -439,3 +439,115 @@ grpcurl -plaintext -d '{
     "token": "your-jwt-token"
 }' localhost:50051 crap.ContentAPI/Subscribe
 ```
+
+## ListJobs
+
+List all defined jobs and their configuration. Requires authentication.
+
+```protobuf
+message ListJobsRequest {}
+
+message ListJobsResponse {
+  repeated JobDefinitionInfo jobs = 1;
+}
+
+message JobDefinitionInfo {
+  string slug = 1;
+  string handler = 2;
+  optional string schedule = 3;
+  string queue = 4;
+  uint32 retries = 5;
+  uint64 timeout = 6;
+  uint32 concurrency = 7;
+  bool skip_if_running = 8;
+  optional string label = 9;
+}
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{}' \
+    localhost:50051 crap.ContentAPI/ListJobs
+```
+
+## TriggerJob
+
+Queue a job for execution. Requires authentication. Checks the job's `access` function if defined.
+
+```protobuf
+message TriggerJobRequest {
+  string slug = 1;
+  optional string data_json = 2;  // JSON input data
+}
+
+message TriggerJobResponse {
+  string job_id = 1;  // the queued job run ID
+}
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "slug": "cleanup_expired",
+    "data_json": "{\"force\": true}"
+}' localhost:50051 crap.ContentAPI/TriggerJob
+```
+
+## GetJobRun
+
+Get details of a specific job run. Requires authentication.
+
+```protobuf
+message GetJobRunRequest {
+  string id = 1;
+}
+
+message GetJobRunResponse {
+  string id = 1;
+  string slug = 2;
+  string status = 3;
+  string data_json = 4;
+  optional string result_json = 5;
+  optional string error = 6;
+  uint32 attempt = 7;
+  uint32 max_attempts = 8;
+  optional string scheduled_by = 9;
+  optional string created_at = 10;
+  optional string started_at = 11;
+  optional string completed_at = 12;
+}
+```
+
+```bash
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "id": "job_run_id_here"
+}' localhost:50051 crap.ContentAPI/GetJobRun
+```
+
+## ListJobRuns
+
+List job runs with optional filters. Requires authentication.
+
+```protobuf
+message ListJobRunsRequest {
+  optional string slug = 1;
+  optional string status = 2;
+  optional int64 limit = 3;
+  optional int64 offset = 4;
+}
+
+message ListJobRunsResponse {
+  repeated GetJobRunResponse runs = 1;
+}
+```
+
+```bash
+# List all recent job runs
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{}' \
+    localhost:50051 crap.ContentAPI/ListJobRuns
+
+# Filter by slug and status
+grpcurl -plaintext -H "authorization: Bearer $TOKEN" -d '{
+    "slug": "cleanup_expired",
+    "status": "completed",
+    "limit": "20"
+}' localhost:50051 crap.ContentAPI/ListJobRuns
+```

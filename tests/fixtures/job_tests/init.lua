@@ -1,0 +1,1 @@
+-- Job tests init.lua — intentionally empty (jobs/*.lua are auto-loaded)

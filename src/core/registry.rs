@@ -3,11 +3,13 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use super::collection::{CollectionDefinition, GlobalDefinition};
+use super::job::JobDefinition;
 
-/// Holds all collection and global definitions loaded at startup.
+/// Holds all collection, global, and job definitions loaded at startup.
 pub struct Registry {
     pub collections: HashMap<String, CollectionDefinition>,
     pub globals: HashMap<String, GlobalDefinition>,
+    pub jobs: HashMap<String, JobDefinition>,
 }
 
 /// Thread-safe shared reference to the registry.
@@ -25,6 +27,7 @@ impl Registry {
         Self {
             collections: HashMap::new(),
             globals: HashMap::new(),
+            jobs: HashMap::new(),
         }
     }
 
@@ -53,6 +56,17 @@ impl Registry {
     /// Look up a global definition by slug.
     pub fn get_global(&self, slug: &str) -> Option<&GlobalDefinition> {
         self.globals.get(slug)
+    }
+
+    /// Register a job definition, keyed by slug. Overwrites any existing definition.
+    pub fn register_job(&mut self, def: JobDefinition) {
+        tracing::debug!("Registering job '{}'", def.slug);
+        self.jobs.insert(def.slug.clone(), def);
+    }
+
+    /// Look up a job definition by slug.
+    pub fn get_job(&self, slug: &str) -> Option<&JobDefinition> {
+        self.jobs.get(slug)
     }
 }
 

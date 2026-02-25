@@ -121,7 +121,7 @@ impl HookRunner {
         // These read the active transaction from Lua app_data when called inside hooks.
         register_crud_functions(&lua, registry, &config.locale)?;
 
-        // Auto-load collections/*.lua and globals/*.lua
+        // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
         let collections_dir = config_dir.join("collections");
         if collections_dir.exists() {
             crate::hooks::load_lua_dir(&lua, &collections_dir, "collection")?;
@@ -129,6 +129,10 @@ impl HookRunner {
         let globals_dir = config_dir.join("globals");
         if globals_dir.exists() {
             crate::hooks::load_lua_dir(&lua, &globals_dir, "global")?;
+        }
+        let jobs_dir = config_dir.join("jobs");
+        if jobs_dir.exists() {
+            crate::hooks::load_lua_dir(&lua, &jobs_dir, "job")?;
         }
 
         // Execute init.lua so crap.hooks.register() calls take effect in this VM
@@ -809,6 +813,63 @@ impl HookRunner {
                 ))?;
 
             Ok(())
+        })();
+
+        lua.remove_app_data::<TxContext>();
+        lua.remove_app_data::<UserContext>();
+
+        result
+    }
+
+    /// Execute a job handler function with CRUD access via TxContext.
+    /// The handler receives a context table `{ data, job = { slug, attempt, max_attempts, queued_at } }`.
+    /// Returns the handler's return value as JSON string (or None if nil).
+    pub fn run_job_handler(
+        &self,
+        handler_ref: &str,
+        slug: &str,
+        data_json: &str,
+        attempt: u32,
+        max_attempts: u32,
+        conn: &rusqlite::Connection,
+    ) -> Result<Option<String>> {
+        let lua = self.lua.lock()
+            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+
+        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(UserContext(None));
+
+        let result = (|| -> Result<Option<String>> {
+            // Build context table
+            let ctx = lua.create_table()?;
+
+            // Parse data JSON into Lua table
+            let data_value: serde_json::Value = serde_json::from_str(data_json)
+                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+            let data_lua = crate::hooks::api::json_to_lua(&lua, &data_value)?;
+            ctx.set("data", data_lua)?;
+
+            // Job metadata
+            let job_meta = lua.create_table()?;
+            job_meta.set("slug", slug)?;
+            job_meta.set("attempt", attempt)?;
+            job_meta.set("max_attempts", max_attempts)?;
+            ctx.set("job", job_meta)?;
+
+            // Resolve the handler function (e.g., "jobs.cleanup.run")
+            let func = resolve_hook_function(&lua, handler_ref)?;
+
+            // Call handler(ctx)
+            let return_val: mlua::Value = func.call(ctx)?;
+
+            // Convert return value to JSON
+            match return_val {
+                mlua::Value::Nil => Ok(None),
+                other => {
+                    let json_val = crate::hooks::api::lua_to_json(&lua, &other)?;
+                    Ok(Some(serde_json::to_string(&json_val)?))
+                }
+            }
         })();
 
         lua.remove_app_data::<TxContext>();

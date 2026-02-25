@@ -1572,4 +1572,154 @@ impl ContentApi for ContentService {
             document: Some(proto_doc),
         }))
     }
+
+    /// List all defined jobs and their configuration.
+    async fn list_jobs(
+        &self,
+        request: Request<content::ListJobsRequest>,
+    ) -> Result<Response<content::ListJobsResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        if auth_user.is_none() {
+            return Err(Status::unauthenticated("Authentication required"));
+        }
+
+        let reg = self.registry.read()
+            .map_err(|e| Status::internal(format!("Registry lock poisoned: {}", e)))?;
+
+        let jobs: Vec<content::JobDefinitionInfo> = reg.jobs.iter().map(|(slug, def)| {
+            content::JobDefinitionInfo {
+                slug: slug.clone(),
+                handler: def.handler.clone(),
+                schedule: def.schedule.clone(),
+                queue: def.queue.clone(),
+                retries: def.retries,
+                timeout: def.timeout,
+                concurrency: def.concurrency,
+                skip_if_running: def.skip_if_running,
+                label: def.labels.singular.clone(),
+            }
+        }).collect();
+
+        Ok(Response::new(content::ListJobsResponse { jobs }))
+    }
+
+    /// Trigger a job by slug, queuing it for execution.
+    async fn trigger_job(
+        &self,
+        request: Request<content::TriggerJobRequest>,
+    ) -> Result<Response<content::TriggerJobResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        if auth_user.is_none() {
+            return Err(Status::unauthenticated("Authentication required"));
+        }
+        let req = request.into_inner();
+
+        // Look up job definition
+        let job_def = {
+            let reg = self.registry.read()
+                .map_err(|e| Status::internal(format!("Registry lock poisoned: {}", e)))?;
+            reg.get_job(&req.slug).cloned()
+                .ok_or_else(|| Status::not_found(format!("Job '{}' not found", req.slug)))?
+        };
+
+        // Check access if defined
+        if let Some(ref access_ref) = job_def.access {
+            let result = self.require_access(Some(access_ref), &auth_user, None, None)?;
+            if matches!(result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Trigger access denied"));
+            }
+        }
+
+        let data_json = req.data_json.unwrap_or_else(|| "{}".to_string());
+        let conn = self.pool.get()
+            .map_err(|_| Status::internal("Database connection error"))?;
+
+        let job_run = crate::db::query::jobs::insert_job(
+            &conn,
+            &req.slug,
+            &data_json,
+            "grpc",
+            job_def.retries + 1,
+            &job_def.queue,
+        ).map_err(|e| Status::internal(format!("Failed to queue job: {}", e)))?;
+
+        Ok(Response::new(content::TriggerJobResponse {
+            job_id: job_run.id,
+        }))
+    }
+
+    /// Get details of a specific job run.
+    async fn get_job_run(
+        &self,
+        request: Request<content::GetJobRunRequest>,
+    ) -> Result<Response<content::GetJobRunResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        if auth_user.is_none() {
+            return Err(Status::unauthenticated("Authentication required"));
+        }
+        let req = request.into_inner();
+
+        let conn = self.pool.get()
+            .map_err(|_| Status::internal("Database connection error"))?;
+
+        let run = crate::db::query::jobs::get_job_run(&conn, &req.id)
+            .map_err(|e| Status::internal(format!("Query error: {}", e)))?
+            .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", req.id)))?;
+
+        Ok(Response::new(job_run_to_proto(&run)))
+    }
+
+    /// List job runs with optional filters.
+    async fn list_job_runs(
+        &self,
+        request: Request<content::ListJobRunsRequest>,
+    ) -> Result<Response<content::ListJobRunsResponse>, Status> {
+        let metadata = request.metadata().clone();
+        let auth_user = self.extract_auth_user(&metadata);
+        if auth_user.is_none() {
+            return Err(Status::unauthenticated("Authentication required"));
+        }
+        let req = request.into_inner();
+
+        let conn = self.pool.get()
+            .map_err(|_| Status::internal("Database connection error"))?;
+
+        let limit = req.limit.unwrap_or(50);
+        let offset = req.offset.unwrap_or(0);
+
+        let runs = crate::db::query::jobs::list_job_runs(
+            &conn,
+            req.slug.as_deref(),
+            req.status.as_deref(),
+            limit,
+            offset,
+        ).map_err(|e| Status::internal(format!("Query error: {}", e)))?;
+
+        let runs: Vec<content::GetJobRunResponse> = runs.iter()
+            .map(job_run_to_proto)
+            .collect();
+
+        Ok(Response::new(content::ListJobRunsResponse { runs }))
+    }
+}
+
+/// Convert a JobRun to gRPC response.
+fn job_run_to_proto(run: &crate::core::job::JobRun) -> content::GetJobRunResponse {
+    content::GetJobRunResponse {
+        id: run.id.clone(),
+        slug: run.slug.clone(),
+        status: run.status.as_str().to_string(),
+        data_json: run.data.clone(),
+        result_json: run.result.clone(),
+        error: run.error.clone(),
+        attempt: run.attempt,
+        max_attempts: run.max_attempts,
+        scheduled_by: run.scheduled_by.clone(),
+        created_at: run.created_at.clone(),
+        started_at: run.started_at.clone(),
+        completed_at: run.completed_at.clone(),
+    }
 }

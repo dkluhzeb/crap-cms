@@ -78,6 +78,10 @@
 - [Overview](relationships/overview.md)
 - [Population Depth](relationships/population-depth.md)
 
+# Jobs
+
+- [Overview](jobs/overview.md)
+
 # Plugins
 
 - [Overview](plugins/overview.md)
@@ -104,6 +108,7 @@
 - [crap.locale](lua-api/locale.md)
 - [crap.crypto](lua-api/crypto.md)
 - [crap.schema](lua-api/schema.md)
+- [crap.jobs](lua-api/jobs.md)
 - [Filter Operators](lua-api/filter-operators.md)
 
 # gRPC API

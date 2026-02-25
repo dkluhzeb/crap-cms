@@ -9,6 +9,7 @@ pub mod populate;
 pub mod filter;
 pub mod global;
 pub mod versions;
+pub mod jobs;
 
 use anyhow::{Result, bail};
 use std::collections::HashSet;

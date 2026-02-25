@@ -18,6 +18,7 @@ pub struct CrapConfig {
     pub email: EmailConfig,
     pub live: LiveConfig,
     pub locale: LocaleConfig,
+    pub jobs: JobsConfig,
 }
 
 /// Controls relationship population depth defaults and limits.
@@ -113,6 +114,54 @@ impl LocaleConfig {
     /// Returns true if localization is enabled (at least one locale defined).
     pub fn is_enabled(&self) -> bool {
         !self.locales.is_empty()
+    }
+}
+
+/// Background job scheduler configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct JobsConfig {
+    /// Max concurrent job executions across all queues. Default: 10.
+    pub max_concurrent: usize,
+    /// How often to poll for pending jobs, in seconds. Default: 1.
+    pub poll_interval: u64,
+    /// How often to check cron schedules, in seconds. Default: 60.
+    pub cron_interval: u64,
+    /// How often to update heartbeat for running jobs, in seconds. Default: 10.
+    pub heartbeat_interval: u64,
+    /// Auto-purge completed/failed jobs older than this duration string (e.g., "7d").
+    /// Empty string disables auto-purge.
+    pub auto_purge: String,
+}
+
+impl Default for JobsConfig {
+    fn default() -> Self {
+        Self {
+            max_concurrent: 10,
+            poll_interval: 1,
+            cron_interval: 60,
+            heartbeat_interval: 10,
+            auto_purge: "7d".to_string(),
+        }
+    }
+}
+
+impl JobsConfig {
+    /// Parse the `auto_purge` duration string into seconds.
+    /// Supports "Nd" (days), "Nh" (hours), "Nm" (minutes). Returns None if empty or invalid.
+    pub fn auto_purge_seconds(&self) -> Option<u64> {
+        let s = self.auto_purge.trim();
+        if s.is_empty() {
+            return None;
+        }
+        let (num_str, suffix) = s.split_at(s.len().saturating_sub(1));
+        let num: u64 = num_str.parse().ok()?;
+        match suffix {
+            "d" => Some(num * 86400),
+            "h" => Some(num * 3600),
+            "m" => Some(num * 60),
+            _ => None,
+        }
     }
 }
 

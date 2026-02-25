@@ -432,6 +432,52 @@ crap-cms templates extract ./my-project --all --type templates
 crap-cms templates extract ./my-project --all --force
 ```
 
+### `jobs` — Manage background jobs
+
+All jobs subcommands require a config directory.
+
+#### `jobs list`
+
+```bash
+crap-cms jobs list <CONFIG>
+```
+
+Lists all defined jobs with their configuration (handler, schedule, queue, retries, timeout, concurrency).
+
+#### `jobs trigger`
+
+```bash
+crap-cms jobs trigger <CONFIG> <SLUG>
+```
+
+Manually queue a job for execution. Works even while the server is running (SQLite WAL allows concurrent access). Prints the queued job run ID.
+
+#### `jobs status`
+
+```bash
+crap-cms jobs status <CONFIG> [--id <ID>]
+```
+
+Show recent job runs. If `--id` is given, shows details for that specific run. Otherwise lists recent runs across all jobs.
+
+#### `jobs purge`
+
+```bash
+crap-cms jobs purge <CONFIG> [--older-than <DURATION>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--older-than` | `7d` | Delete completed/failed/stale runs older than this. Supports `Nd`, `Nh`, `Nm` formats. |
+
+```bash
+crap-cms jobs list ./my-project
+crap-cms jobs trigger ./my-project cleanup_expired
+crap-cms jobs status ./my-project
+crap-cms jobs status ./my-project --id abc123
+crap-cms jobs purge ./my-project --older-than 30d
+```
+
 ## Environment Variables
 
 | Variable | Description |

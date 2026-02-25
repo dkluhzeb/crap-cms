@@ -807,3 +807,55 @@ grpcurl -plaintext -d '{
   "where": "{\"status\":{\"equals\":\"archived\"}}"
 }' "$ADDR" crap.ContentAPI/DeleteMany
 }
+
+# ── Jobs ─────────────────────────────────────────────────────
+
+# List all defined jobs (requires auth)
+list_jobs() {
+  local token="${1:?Usage: list_jobs <token>}"
+  grpcurl -plaintext -H "authorization: Bearer $token" -d '{}' \
+    "$ADDR" crap.ContentAPI/ListJobs
+}
+
+# Trigger a job by slug (requires auth)
+trigger_job() {
+  local token="${1:?Usage: trigger_job <token> <slug> [data_json]}"
+  local slug="${2:?Usage: trigger_job <token> <slug> [data_json]}"
+  local data_json="${3:-}"
+  if [ -n "$data_json" ]; then
+    grpcurl -plaintext -H "authorization: Bearer $token" -d "{
+      \"slug\": \"$slug\",
+      \"data_json\": \"$data_json\"
+    }" "$ADDR" crap.ContentAPI/TriggerJob
+  else
+    grpcurl -plaintext -H "authorization: Bearer $token" -d "{
+      \"slug\": \"$slug\"
+    }" "$ADDR" crap.ContentAPI/TriggerJob
+  fi
+}
+
+# Get a specific job run by ID (requires auth)
+get_job_run() {
+  local token="${1:?Usage: get_job_run <token> <id>}"
+  local id="${2:?Usage: get_job_run <token> <id>}"
+  grpcurl -plaintext -H "authorization: Bearer $token" -d "{
+    \"id\": \"$id\"
+  }" "$ADDR" crap.ContentAPI/GetJobRun
+}
+
+# List job runs with optional filters (requires auth)
+list_job_runs() {
+  local token="${1:?Usage: list_job_runs <token> [slug] [status]}"
+  local slug="${2:-}"
+  local status="${3:-}"
+  local json="{}"
+  if [ -n "$slug" ] && [ -n "$status" ]; then
+    json="{\"slug\": \"$slug\", \"status\": \"$status\"}"
+  elif [ -n "$slug" ]; then
+    json="{\"slug\": \"$slug\"}"
+  elif [ -n "$status" ]; then
+    json="{\"status\": \"$status\"}"
+  fi
+  grpcurl -plaintext -H "authorization: Bearer $token" -d "$json" \
+    "$ADDR" crap.ContentAPI/ListJobRuns
+}

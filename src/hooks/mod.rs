@@ -34,6 +34,12 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
         load_lua_dir(&lua, &globals_dir, "global")?;
     }
 
+    // Auto-load jobs/*.lua
+    let jobs_dir = config_dir.join("jobs");
+    if jobs_dir.exists() {
+        load_lua_dir(&lua, &jobs_dir, "job")?;
+    }
+
     // Execute init.lua if present
     let init_path = config_dir.join("init.lua");
     if init_path.exists() {

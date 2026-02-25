@@ -1,0 +1,10 @@
+[server]
+admin_port = 3000
+grpc_port = 50051
+
+[jobs]
+max_concurrent = 5
+poll_interval = 1
+cron_interval = 60
+heartbeat_interval = 10
+auto_purge = "7d"
