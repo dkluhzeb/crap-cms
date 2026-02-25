@@ -33,6 +33,7 @@ pub enum HookEvent {
     BeforeDelete,
     AfterDelete,
     BeforeBroadcast,
+    BeforeRender,
 }
 
 impl HookEvent {
@@ -47,6 +48,7 @@ impl HookEvent {
             HookEvent::BeforeDelete => "before_delete",
             HookEvent::AfterDelete => "after_delete",
             HookEvent::BeforeBroadcast => "before_broadcast",
+            HookEvent::BeforeRender => "before_render",
         }
     }
 }
@@ -696,6 +698,70 @@ impl HookRunner {
         result
     }
 
+    /// Run `before_render` hooks on the template context.
+    /// Global registered `before_render` hooks receive the full template context as a
+    /// Lua table and return the (potentially modified) context. No CRUD access.
+    /// On error: logs warning, returns original context unmodified.
+    pub fn run_before_render(&self, mut context: serde_json::Value) -> serde_json::Value {
+        let lua = match self.lua.lock() {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!("Lua VM lock poisoned in run_before_render: {}", e);
+                return context;
+            }
+        };
+
+        if !has_registered_hooks(&lua, "before_render") {
+            return context;
+        }
+
+        // Get the registered hooks table
+        let hooks_table: mlua::Table = match lua.globals().get::<mlua::Table>("_crap_event_hooks")
+            .and_then(|t| t.get::<mlua::Table>("before_render"))
+        {
+            Ok(t) => t,
+            Err(_) => return context,
+        };
+
+        let len = hooks_table.raw_len();
+        for i in 1..=len {
+            let func: mlua::Function = match hooks_table.raw_get(i) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+
+            let ctx_lua = match crate::hooks::api::json_to_lua(&lua, &context) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("before_render: failed to convert context to Lua: {}", e);
+                    return context;
+                }
+            };
+
+            match func.call::<Value>(ctx_lua) {
+                Ok(Value::Table(tbl)) => {
+                    match crate::hooks::api::lua_to_json(&lua, &Value::Table(tbl)) {
+                        Ok(new_ctx) => context = new_ctx,
+                        Err(e) => {
+                            tracing::warn!("before_render: failed to convert Lua result to JSON: {}", e);
+                        }
+                    }
+                }
+                Ok(Value::Nil) => {
+                    // Hook returned nil — keep context unchanged
+                }
+                Ok(_) => {
+                    tracing::warn!("before_render hook returned non-table, non-nil value; ignoring");
+                }
+                Err(e) => {
+                    tracing::warn!("before_render hook error: {}", e);
+                }
+            }
+        }
+
+        context
+    }
+
     /// Run a collection-level or global-level access check.
     ///
     /// `access_ref` is the Lua function ref (e.g., "hooks.access.admin_only").
@@ -1088,7 +1154,7 @@ pub fn hook_ctx_to_string_map(ctx: &HookContext) -> HashMap<String, String> {
 
 
 /// Get the list of hook references for a given event.
-fn get_hook_refs<'a>(hooks: &'a CollectionHooks, event: &HookEvent) -> &'a Vec<String> {
+fn get_hook_refs<'a>(hooks: &'a CollectionHooks, event: &HookEvent) -> &'a [String] {
     match event {
         HookEvent::BeforeValidate => &hooks.before_validate,
         HookEvent::BeforeChange => &hooks.before_change,
@@ -1098,6 +1164,7 @@ fn get_hook_refs<'a>(hooks: &'a CollectionHooks, event: &HookEvent) -> &'a Vec<S
         HookEvent::BeforeDelete => &hooks.before_delete,
         HookEvent::AfterDelete => &hooks.after_delete,
         HookEvent::BeforeBroadcast => &hooks.before_broadcast,
+        HookEvent::BeforeRender => &[], // global-only, no collection-level refs
     }
 }
 

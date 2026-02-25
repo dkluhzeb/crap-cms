@@ -1,5 +1,6 @@
 //! Admin UI: Axum server, Handlebars templates, and HTMX-powered handlers.
 
+pub mod context;
 pub mod server;
 pub mod templates;
 pub mod translations;
@@ -39,49 +40,4 @@ impl AdminState {
             .map_err(|e| format!("Template error: {}", e))
     }
 
-    /// Get collection info for the sidebar navigation.
-    pub fn sidebar_collections(&self) -> Vec<serde_json::Value> {
-        let reg = match self.registry.read() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("Registry lock poisoned: {}", e);
-                return Vec::new();
-            }
-        };
-        let mut collections: Vec<_> = reg.collections.values()
-            .map(|def| {
-                serde_json::json!({
-                    "slug": def.slug,
-                    "display_name": def.display_name(),
-                })
-            })
-            .collect();
-        collections.sort_by(|a, b| {
-            a["slug"].as_str().cmp(&b["slug"].as_str())
-        });
-        collections
-    }
-
-    /// Get global info for the sidebar navigation.
-    pub fn sidebar_globals(&self) -> Vec<serde_json::Value> {
-        let reg = match self.registry.read() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("Registry lock poisoned: {}", e);
-                return Vec::new();
-            }
-        };
-        let mut globals: Vec<_> = reg.globals.values()
-            .map(|def| {
-                serde_json::json!({
-                    "slug": def.slug,
-                    "display_name": def.display_name(),
-                })
-            })
-            .collect();
-        globals.sort_by(|a, b| {
-            a["slug"].as_str().cmp(&b["slug"].as_str())
-        });
-        globals
-    }
 }

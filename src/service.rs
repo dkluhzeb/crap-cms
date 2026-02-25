@@ -162,7 +162,15 @@ pub fn update_document(
             updated_at: existing_doc.updated_at.clone(),
         };
 
-        let snapshot = query::build_snapshot(&tx, slug, def, &snapshot_doc)?;
+        let mut snapshot = query::build_snapshot(&tx, slug, def, &snapshot_doc)?;
+        // Merge incoming join data (blocks/arrays/has-many) into the snapshot.
+        // build_snapshot hydrates from join tables (which have the old/published data),
+        // so we must overwrite with the incoming form data for draft-only saves.
+        if let Some(obj) = snapshot.as_object_mut() {
+            for (k, v) in join_data {
+                obj.insert(k.clone(), v.clone());
+            }
+        }
         query::create_version(&tx, slug, id, "draft", &snapshot)?;
         if let Some(ref vc) = def.versions {
             if vc.max_versions > 0 {

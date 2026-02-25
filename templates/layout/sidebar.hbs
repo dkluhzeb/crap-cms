@@ -8,12 +8,12 @@
           {{t "dashboard"}}
         </a>
       </li>
-      {{#each collections}}
+      {{#each nav.collections}}
       <li>
         {{> layout/sidebar_item}}
       </li>
       {{/each}}
-      {{#each globals}}
+      {{#each nav.globals}}
       <li>
         {{> layout/sidebar_global_item}}
       </li>

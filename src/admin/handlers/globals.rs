@@ -8,6 +8,7 @@ use axum::{
 use std::collections::HashMap;
 
 use crate::admin::AdminState;
+use crate::admin::context::{ContextBuilder, PageType, Breadcrumb};
 use crate::core::auth::{AuthUser, Claims};
 use crate::core::validate::ValidationError;
 use crate::db::{ops, query};
@@ -15,7 +16,7 @@ use crate::db::query::{AccessResult, LocaleContext};
 
 use super::shared::{
     LocaleParams,
-    user_json, get_user_doc,
+    get_user_doc,
     check_access_or_forbid, build_locale_template_data,
     is_non_default_locale,
     build_field_contexts, enrich_field_contexts,
@@ -101,28 +102,19 @@ pub async fn edit_form(
     // Enrich relationship fields with options
     enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, non_default_locale);
 
-    let mut data = serde_json::json!({
-        "page_title": def.display_name(),
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-        "global": {
-            "slug": def.slug,
-            "display_name": def.display_name(),
-        },
-        "fields": fields,
-        "user": user_json(&claims),
-        "breadcrumbs": [
-            { "label": "Dashboard", "url": "/admin" },
-            { "label": def.display_name() },
-        ],
-    });
+    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let data = ContextBuilder::new(&state, claims_ref)
+        .page(PageType::GlobalEdit, def.display_name())
+        .breadcrumbs(vec![
+            Breadcrumb::link("Dashboard", "/admin"),
+            Breadcrumb::current(def.display_name()),
+        ])
+        .global_def(&def)
+        .fields(fields)
+        .merge(locale_data)
+        .build();
 
-    // Merge locale data into template context
-    if let Some(obj) = locale_data.as_object() {
-        for (k, v) in obj {
-            data[k] = v.clone();
-        }
-    }
+    let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "globals/edit", &data).into_response()
 }
@@ -207,16 +199,11 @@ pub async fn update_action(
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
                 let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, false, false);
-                let data = serde_json::json!({
-                    "page_title": def.display_name(),
-                    "collections": state.sidebar_collections(),
-                    "globals": state.sidebar_globals(),
-                    "global": {
-                        "slug": def.slug,
-                        "display_name": def.display_name(),
-                    },
-                    "fields": fields,
-                });
+                let data = ContextBuilder::new(&state, None)
+                    .page(PageType::GlobalEdit, def.display_name())
+                    .global_def(&def)
+                    .fields(fields)
+                    .build();
                 html_with_toast(&state, "globals/edit", &data, &e.to_string())
             } else {
                 tracing::error!("Global update error: {}", e);

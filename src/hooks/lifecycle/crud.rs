@@ -138,6 +138,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
     // crap.collections.find_by_id(collection, id, opts?)
     // opts.depth (optional, default 0): populate relationship fields to this depth
     // opts.locale (optional): locale code or "all"
+    // opts.draft (optional, default false): load draft version snapshot if available
     // opts.overrideAccess (optional, default true): bypass access control
     {
         let reg = registry.clone();
@@ -154,6 +155,10 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
             let locale_str: Option<String> = opts.as_ref()
                 .and_then(|o| o.get::<Option<String>>("locale").ok().flatten());
             let locale_ctx = LocaleContext::from_locale_string(locale_str.as_deref(), &lc);
+
+            let use_draft: bool = opts.as_ref()
+                .and_then(|o| o.get::<Option<bool>>("draft").ok().flatten())
+                .unwrap_or(false);
 
             let override_access: bool = opts.as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
@@ -189,26 +194,15 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 None
             };
 
-            // If constrained, use find with id filter + constraints
-            let mut doc = if let Some(constraints) = access_constraints {
-                let mut filters = constraints;
-                filters.push(FilterClause::Single(Filter {
-                    field: "id".to_string(),
-                    op: FilterOp::Equals(id.clone()),
-                }));
-                let query = FindQuery { filters, ..Default::default() };
-                let docs = query::find(conn, &collection, &def, &query, locale_ctx.as_ref())
-                    .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?;
-                docs.into_iter().next()
-            } else {
-                query::find_by_id(conn, &collection, &def, &id, locale_ctx.as_ref())
-                    .map_err(|e| mlua::Error::RuntimeError(format!("find_by_id error: {}", e)))?
-            };
+            // Unified find: draft overlay + constraints + hydration
+            let mut doc = crate::db::ops::find_by_id_full(
+                conn, &collection, &def, &id,
+                locale_ctx.as_ref(), access_constraints, use_draft,
+            ).map_err(|e| mlua::Error::RuntimeError(format!("find_by_id error: {}", e)))?;
 
+            // Depth population and select stripping (caller-specific)
             if let Some(ref mut d) = doc {
                 let select_slice = select.as_deref();
-                query::hydrate_document(conn, &collection, &def, d, select_slice, locale_ctx.as_ref())
-                    .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
                 if depth > 0 {
                     let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
                         format!("Registry lock: {}", e)

@@ -2,7 +2,7 @@
   <thead>
     <tr>
       <th>{{#if collection.title_field}}{{collection.title_field}}{{else}}{{t "id"}}{{/if}}</th>
-      {{#if has_drafts}}<th>{{t "status"}}</th>{{/if}}
+      {{#if collection.has_drafts}}<th>{{t "status"}}</th>{{/if}}
       <th>{{t "created"}}</th>
       <th></th>
     </tr>

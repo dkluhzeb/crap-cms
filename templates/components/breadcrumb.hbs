@@ -1,3 +1,19 @@
+{{#if page.breadcrumbs}}
+<nav class="breadcrumb" aria-label="Breadcrumb">
+  <ol>
+    {{#each page.breadcrumbs}}
+    <li>
+      {{#if this.url}}
+      <a href="{{this.url}}" hx-get="{{this.url}}" hx-target="body" hx-push-url="true">{{this.label}}</a>
+      {{else}}
+      <span>{{this.label}}</span>
+      {{/if}}
+    </li>
+    {{/each}}
+  </ol>
+</nav>
+{{else}}
+{{!-- Backward compat: fall back to top-level breadcrumbs --}}
 {{#if breadcrumbs}}
 <nav class="breadcrumb" aria-label="Breadcrumb">
   <ol>
@@ -12,4 +28,5 @@
     {{/each}}
   </ol>
 </nav>
+{{/if}}
 {{/if}}

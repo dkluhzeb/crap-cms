@@ -3,6 +3,7 @@
 use anyhow::{Context, Result};
 use handlebars::{Handlebars, RenderError, RenderContext, Helper, HelperDef, ScopedJson};
 use include_dir::{include_dir, Dir};
+use std::cmp::Ordering;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -33,6 +34,17 @@ pub fn create_handlebars(
     hbs.register_helper("render_field", Box::new(RenderFieldHelper));
     hbs.register_helper("eq", Box::new(EqHelper));
     hbs.register_helper("t", Box::new(TranslationHelper { translations }));
+    hbs.register_helper("not", Box::new(NotHelper));
+    hbs.register_helper("and", Box::new(AndHelper));
+    hbs.register_helper("or", Box::new(OrHelper));
+    hbs.register_helper("gt", Box::new(CompareHelper(Ordering::Greater)));
+    hbs.register_helper("lt", Box::new(CompareHelper(Ordering::Less)));
+    hbs.register_helper("gte", Box::new(CompareHelper2(Ordering::Greater, Ordering::Equal)));
+    hbs.register_helper("lte", Box::new(CompareHelper2(Ordering::Less, Ordering::Equal)));
+    hbs.register_helper("contains", Box::new(ContainsHelper));
+    hbs.register_helper("json", Box::new(JsonHelper));
+    hbs.register_helper("default", Box::new(DefaultHelper));
+    hbs.register_helper("concat", Box::new(ConcatHelper));
 
     Ok(Arc::new(hbs))
 }
@@ -183,6 +195,204 @@ impl HelperDef for TranslationHelper {
             let translated = self.translations.get_interpolated(key, &params);
             Ok(ScopedJson::Derived(serde_json::Value::String(translated)))
         }
+    }
+}
+
+/// Boolean negation helper: `{{#if (not val)}}`.
+struct NotHelper;
+
+impl HelperDef for NotHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let val = h.param(0).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        let truthy = is_truthy(val);
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(!truthy)))
+    }
+}
+
+/// Logical AND helper: `{{#if (and a b)}}`.
+struct AndHelper;
+
+impl HelperDef for AndHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let a = h.param(0).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        let b = h.param(1).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(is_truthy(a) && is_truthy(b))))
+    }
+}
+
+/// Logical OR helper: `{{#if (or a b)}}`.
+struct OrHelper;
+
+impl HelperDef for OrHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let a = h.param(0).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        let b = h.param(1).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(is_truthy(a) || is_truthy(b))))
+    }
+}
+
+/// Numeric comparison helper (single ordering, for gt/lt).
+struct CompareHelper(Ordering);
+
+impl HelperDef for CompareHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let a = h.param(0).and_then(|p| as_f64(p.value())).unwrap_or(0.0);
+        let b = h.param(1).and_then(|p| as_f64(p.value())).unwrap_or(0.0);
+        let result = a.partial_cmp(&b).map(|o| o == self.0).unwrap_or(false);
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(result)))
+    }
+}
+
+/// Numeric comparison helper (two orderings, for gte/lte).
+struct CompareHelper2(Ordering, Ordering);
+
+impl HelperDef for CompareHelper2 {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let a = h.param(0).and_then(|p| as_f64(p.value())).unwrap_or(0.0);
+        let b = h.param(1).and_then(|p| as_f64(p.value())).unwrap_or(0.0);
+        let result = a.partial_cmp(&b).map(|o| o == self.0 || o == self.1).unwrap_or(false);
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(result)))
+    }
+}
+
+/// String/array contains helper: `{{#if (contains arr val)}}`.
+struct ContainsHelper;
+
+impl HelperDef for ContainsHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let haystack = h.param(0).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        let needle = h.param(1).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        let result = match haystack {
+            serde_json::Value::String(s) => {
+                needle.as_str().map(|n| s.contains(n)).unwrap_or(false)
+            }
+            serde_json::Value::Array(arr) => arr.contains(needle),
+            _ => false,
+        };
+        Ok(ScopedJson::Derived(serde_json::Value::Bool(result)))
+    }
+}
+
+/// JSON serialization helper: `{{{json value}}}`.
+struct JsonHelper;
+
+impl HelperDef for JsonHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let val = h.param(0).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        let json_str = serde_json::to_string(val).unwrap_or_default();
+        Ok(ScopedJson::Derived(serde_json::Value::String(json_str)))
+    }
+}
+
+/// Default value helper: `{{default val fallback}}`.
+struct DefaultHelper;
+
+impl HelperDef for DefaultHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let val = h.param(0).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        let fallback = h.param(1).map(|p| p.value()).unwrap_or(&serde_json::Value::Null);
+        if is_truthy(val) {
+            Ok(ScopedJson::Derived(val.clone()))
+        } else {
+            Ok(ScopedJson::Derived(fallback.clone()))
+        }
+    }
+}
+
+/// String concatenation helper: `{{concat a b c}}`.
+struct ConcatHelper;
+
+impl HelperDef for ConcatHelper {
+    fn call_inner<'reg: 'rc, 'rc>(
+        &self,
+        h: &Helper<'rc>,
+        _r: &'reg Handlebars<'reg>,
+        _ctx: &'rc handlebars::Context,
+        _rc: &mut RenderContext<'reg, 'rc>,
+    ) -> Result<ScopedJson<'rc>, RenderError> {
+        let mut result = String::new();
+        for i in 0.. {
+            match h.param(i) {
+                Some(p) => match p.value() {
+                    serde_json::Value::String(s) => result.push_str(s),
+                    serde_json::Value::Number(n) => result.push_str(&n.to_string()),
+                    serde_json::Value::Bool(b) => result.push_str(&b.to_string()),
+                    serde_json::Value::Null => {}
+                    other => result.push_str(&other.to_string()),
+                },
+                None => break,
+            }
+        }
+        Ok(ScopedJson::Derived(serde_json::Value::String(result)))
+    }
+}
+
+/// Check if a JSON value is "truthy" (not null, not false, not empty string, not 0).
+fn is_truthy(val: &serde_json::Value) -> bool {
+    match val {
+        serde_json::Value::Null => false,
+        serde_json::Value::Bool(b) => *b,
+        serde_json::Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        serde_json::Value::String(s) => !s.is_empty(),
+        serde_json::Value::Array(a) => !a.is_empty(),
+        serde_json::Value::Object(_) => true,
+    }
+}
+
+/// Try to extract a float from a JSON value.
+fn as_f64(val: &serde_json::Value) -> Option<f64> {
+    match val {
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
     }
 }
 

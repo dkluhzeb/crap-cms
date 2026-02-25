@@ -9,7 +9,8 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::admin::AdminState;
-use crate::core::auth::{AuthUser, Claims};
+use crate::admin::context::{ContextBuilder, PageType};
+use crate::core::auth::AuthUser;
 use crate::core::field::FieldType;
 use crate::core::upload;
 use crate::db::query::{self, AccessResult, LocaleContext};
@@ -26,15 +27,6 @@ pub struct PaginationParams {
 #[derive(Debug, Deserialize)]
 pub struct LocaleParams {
     pub locale: Option<String>,
-}
-
-/// Extract user claims as a JSON value for template rendering.
-pub(super) fn user_json(claims: &Option<Extension<Claims>>) -> Option<serde_json::Value> {
-    claims.as_ref().map(|Extension(c)| serde_json::json!({
-        "email": c.email,
-        "id": c.sub,
-        "collection": c.collection,
-    }))
 }
 
 /// Extract the user document from AuthUser extension (for access checks).
@@ -607,12 +599,11 @@ pub(super) fn enrich_field_contexts(
 
 /// Render a 403 Forbidden page with the given message.
 pub(super) fn forbidden(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
-    let data = serde_json::json!({
-        "title": "Forbidden",
-        "message": message,
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-    });
+    let data = ContextBuilder::new(state, None)
+        .page(PageType::Error403, "Forbidden")
+        .set("message", serde_json::Value::String(message.to_string()))
+        .build();
+    let data = state.hook_runner.run_before_render(data);
     let html = match state.render("errors/403", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>403 Forbidden</h1><p>{}</p>", message)),
@@ -649,12 +640,11 @@ pub(super) fn render_or_error(state: &AdminState, template: &str, data: &serde_j
 
 /// Render a 404 Not Found page with the given message.
 pub(super) fn not_found(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
-    let data = serde_json::json!({
-        "title": "Not Found",
-        "message": message,
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-    });
+    let data = ContextBuilder::new(state, None)
+        .page(PageType::Error404, "Not Found")
+        .set("message", serde_json::Value::String(message.to_string()))
+        .build();
+    let data = state.hook_runner.run_before_render(data);
     let html = match state.render("errors/404", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>404</h1><p>{}</p>", message)),
@@ -664,12 +654,11 @@ pub(super) fn not_found(state: &AdminState, message: &str) -> (StatusCode, Html<
 
 /// Render a 500 Internal Server Error page with the given message.
 pub(super) fn server_error(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
-    let data = serde_json::json!({
-        "title": "Server Error",
-        "message": message,
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-    });
+    let data = ContextBuilder::new(state, None)
+        .page(PageType::Error500, "Server Error")
+        .set("message", serde_json::Value::String(message.to_string()))
+        .build();
+    let data = state.hook_runner.run_before_render(data);
     let html = match state.render("errors/500", &data) {
         Ok(html) => Html(html),
         Err(_) => Html(format!("<h1>500</h1><p>{}</p>", message)),

@@ -7,9 +7,11 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
+use anyhow::Context as _;
 use std::collections::HashMap;
 
 use crate::admin::AdminState;
+use crate::admin::context::{ContextBuilder, PageType, Breadcrumb};
 use crate::core::auth::{AuthUser, Claims};
 use crate::core::field::FieldType;
 use crate::core::upload::{self, UploadedFile};
@@ -19,7 +21,7 @@ use crate::db::query::{AccessResult, FindQuery, Filter, FilterOp, FilterClause, 
 
 use super::shared::{
     PaginationParams, LocaleParams,
-    user_json, get_user_doc, strip_denied_fields,
+    get_user_doc, strip_denied_fields,
     check_access_or_forbid, build_locale_template_data,
     is_non_default_locale,
     build_field_contexts, enrich_field_contexts,
@@ -51,12 +53,13 @@ pub async fn list_collections(
     }
     collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
 
-    let data = serde_json::json!({
-        "title": "Collections",
-        "collections": collections,
-        "globals": state.sidebar_globals(),
-        "user": user_json(&claims),
-    });
+    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let data = ContextBuilder::new(&state, claims_ref)
+        .page(PageType::CollectionList, "Collections")
+        .set("collections", serde_json::json!(collections))
+        .build();
+
+    let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/list", &data).into_response()
 }
@@ -183,7 +186,7 @@ pub async fn list_items(
         doc
     }).collect();
 
-    let total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
+    let _total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
 
     let title_field = def.title_field().map(|s| s.to_string());
     let is_upload = def.is_upload_collection();
@@ -247,32 +250,22 @@ pub async fn list_items(
         })
         .unwrap_or_default();
 
-    let has_drafts = def.has_drafts();
+    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let data = ContextBuilder::new(&state, claims_ref)
+        .page(PageType::CollectionItems, def.display_name())
+        .set("page_title", serde_json::json!(def.display_name()))
+        .collection_def(&def)
+        .items(items)
+        .pagination(
+            page, per_page, total,
+            format!("/admin/collections/{}?page={}{}", slug, page - 1, search_param),
+            format!("/admin/collections/{}?page={}{}", slug, page + 1, search_param),
+        )
+        .set("has_drafts", serde_json::json!(def.has_drafts()))
+        .set("search", serde_json::json!(search))
+        .build();
 
-    let data = serde_json::json!({
-        "page_title": def.display_name(),
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-        "collection": {
-            "slug": def.slug,
-            "display_name": def.display_name(),
-            "singular_name": def.singular_name(),
-            "title_field": title_field,
-        },
-        "items": items,
-        "has_drafts": has_drafts,
-        "search": search,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-        "has_pagination": total_pages > 1,
-        "has_prev": page > 1,
-        "has_next": page < total_pages,
-        "prev_url": format!("/admin/collections/{}?page={}{}", slug, page - 1, search_param),
-        "next_url": format!("/admin/collections/{}?page={}{}", slug, page + 1, search_param),
-        "user": user_json(&claims),
-    });
+    let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/items", &data).into_response()
 }
@@ -324,42 +317,34 @@ pub async fn create_form(
 
     let (_locale_ctx, locale_data) = build_locale_template_data(&state, locale_params.locale.as_deref());
 
-    let mut data = serde_json::json!({
-        "page_title": format!("Create {}", def.singular_name()),
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-        "collection": {
-            "slug": def.slug,
-            "display_name": def.display_name(),
-            "singular_name": def.singular_name(),
-        },
-        "fields": fields,
-        "editing": false,
-        "has_drafts": def.has_drafts(),
-        "user": user_json(&claims),
-        "breadcrumbs": [
-            { "label": "Collections", "url": "/admin/collections" },
-            { "label": def.display_name(), "url": format!("/admin/collections/{}", slug) },
-            { "label": format!("Create {}", def.singular_name()) },
-        ],
-    });
-
-    // Merge locale data into template context
-    if let Some(obj) = locale_data.as_object() {
-        for (k, v) in obj {
-            data[k] = v.clone();
-        }
-    }
+    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let mut data = ContextBuilder::new(&state, claims_ref)
+        .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
+        .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
+        .collection_def(&def)
+        .fields(fields)
+        .set("editing", serde_json::json!(false))
+        .set("has_drafts", serde_json::json!(def.has_drafts()))
+        .breadcrumbs(vec![
+            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
+            Breadcrumb::current(format!("Create {}", def.singular_name())),
+        ])
+        .merge(locale_data)
+        .build();
 
     // Add upload context for upload collections
     if def.is_upload_collection() {
-        data["is_upload"] = serde_json::json!(true);
+        let mut upload_ctx = serde_json::json!({});
         if let Some(ref u) = def.upload {
             if !u.mime_types.is_empty() {
-                data["upload_accept"] = serde_json::json!(u.mime_types.join(","));
+                upload_ctx["accept"] = serde_json::json!(u.mime_types.join(","));
             }
         }
+        data["upload"] = upload_ctx;
     }
+
+    let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/edit", &data).into_response()
 }
@@ -423,19 +408,13 @@ pub async fn create_action(
                 Err(e) => {
                     tracing::error!("Upload processing error: {}", e);
                     let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
-                    let data = serde_json::json!({
-                        "page_title": format!("Create {}", def.singular_name()),
-                        "collections": state.sidebar_collections(),
-                        "globals": state.sidebar_globals(),
-                        "collection": {
-                            "slug": def.slug,
-                            "display_name": def.display_name(),
-                            "singular_name": def.singular_name(),
-                        },
-                        "fields": fields,
-                        "editing": false,
-                        "is_upload": true,
-                    });
+                    let data = ContextBuilder::new(&state, None)
+                        .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
+                        .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
+                        .collection_def(&def)
+                        .fields(fields)
+                        .set("editing", serde_json::json!(false))
+                        .build();
                     return html_with_toast(&state, "collections/edit", &data, &e.to_string());
                 }
             }
@@ -521,19 +500,13 @@ pub async fn create_action(
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
                 let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-                let data = serde_json::json!({
-                    "page_title": format!("Create {}", def.singular_name()),
-                    "collections": state.sidebar_collections(),
-                    "globals": state.sidebar_globals(),
-                    "collection": {
-                        "slug": def.slug,
-                        "display_name": def.display_name(),
-                        "singular_name": def.singular_name(),
-                    },
-                    "fields": fields,
-                    "editing": false,
-                    "is_upload": def.is_upload_collection(),
-                });
+                let data = ContextBuilder::new(&state, None)
+                    .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
+                    .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
+                    .collection_def(&def)
+                    .fields(fields)
+                    .set("editing", serde_json::json!(false))
+                    .build();
                 html_with_toast(&state, "collections/edit", &data, &e.to_string())
             } else {
                 tracing::error!("Create error: {}", e);
@@ -578,7 +551,6 @@ pub async fn edit_form(
     }
 
     let (locale_ctx, locale_data) = build_locale_template_data(&state, locale_params.locale.as_deref());
-    let locale_ctx_for_hydrate = locale_ctx.clone();
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -592,30 +564,22 @@ pub async fn edit_form(
     } else {
         None
     };
+    let has_drafts = def.has_drafts();
     let read_result = tokio::task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "find_by_id", HashMap::new())?;
-        // If constrained, use find with id filter + constraints instead of find_by_id
-        let doc = if let Some(constraints) = access_constraints {
-            let mut filters = constraints;
-            filters.push(FilterClause::Single(Filter {
-                field: "id".to_string(),
-                op: FilterOp::Equals(id_owned.clone()),
-            }));
-            let query = FindQuery { filters, ..Default::default() };
-            let docs = ops::find_documents(&pool, &slug_owned, &def_owned, &query, locale_ctx.as_ref())?;
-            docs.into_iter().next()
-        } else {
-            ops::find_document_by_id(&pool, &slug_owned, &def_owned, &id_owned, locale_ctx.as_ref())?
-        };
+        let conn = pool.get().context("DB connection")?;
+        let mut doc = ops::find_by_id_full(
+            &conn, &slug_owned, &def_owned, &id_owned,
+            locale_ctx.as_ref(), access_constraints, has_drafts,
+        )?;
         // Assemble sizes for upload collections
-        let doc = doc.map(|mut d| {
+        if let Some(ref mut d) = doc {
             if let Some(ref upload_config) = def_owned.upload {
                 if upload_config.enabled {
-                    upload::assemble_sizes_object(&mut d, upload_config);
+                    upload::assemble_sizes_object(d, upload_config);
                 }
             }
-            d
-        });
+        }
         let doc = doc.map(|d| runner.apply_after_read(&hooks, &fields, &slug_owned, "find_by_id", d));
         Ok::<_, anyhow::Error>(doc)
     }).await;
@@ -626,13 +590,6 @@ pub async fn edit_form(
         Ok(Err(e)) => return server_error(&state, &format!("Query error: {}", e)).into_response(),
         Err(e) => return server_error(&state, &format!("Task error: {}", e)).into_response(),
     };
-
-    // Hydrate join table data (has-many relationships and arrays)
-    if let Ok(conn) = state.pool.get() {
-        if let Err(e) = query::hydrate_document(&conn, &slug, &def, &mut document, None, locale_ctx_for_hydrate.as_ref()) {
-            tracing::warn!("Failed to hydrate document {}: {}", id, e);
-        }
-    }
 
     // Strip field-level read-denied fields
     {
@@ -680,7 +637,6 @@ pub async fn edit_form(
         .unwrap_or_else(|| document.id.clone());
 
     // Fetch document status and version history for versioned collections
-    let has_drafts = def.has_drafts();
     let has_versions = def.has_versions();
     let doc_status = if has_drafts {
         document.fields.get("_status")
@@ -712,48 +668,32 @@ pub async fn edit_form(
         (vec![], 0)
     };
 
-    let mut data = serde_json::json!({
-        "page_title": format!("Edit {}", def.singular_name()),
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-        "collection": {
-            "slug": def.slug,
-            "display_name": def.display_name(),
-            "singular_name": def.singular_name(),
-        },
-        "document": {
-            "id": document.id,
-            "created_at": document.created_at,
-            "updated_at": document.updated_at,
-            "status": doc_status,
-        },
-        "fields": fields,
-        "editing": true,
-        "has_drafts": has_drafts,
-        "has_versions": has_versions,
-        "versions": versions,
-        "has_more_versions": total_versions > 3,
-        "user": user_json(&claims),
-        "breadcrumbs": [
-            { "label": "Collections", "url": "/admin/collections" },
-            { "label": def.display_name(), "url": format!("/admin/collections/{}", slug) },
-            { "label": doc_title },
-        ],
-    });
-
-    // Merge locale data into template context
-    if let Some(obj) = locale_data.as_object() {
-        for (k, v) in obj {
-            data[k] = v.clone();
-        }
-    }
+    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let mut data = ContextBuilder::new(&state, claims_ref)
+        .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
+        .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
+        .collection_def(&def)
+        .document_with_status(&document, &doc_status)
+        .fields(fields)
+        .set("editing", serde_json::json!(true))
+        .set("has_drafts", serde_json::json!(has_drafts))
+        .set("has_versions", serde_json::json!(has_versions))
+        .set("versions", serde_json::json!(versions))
+        .set("has_more_versions", serde_json::json!(total_versions > 3))
+        .breadcrumbs(vec![
+            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
+            Breadcrumb::current(doc_title),
+        ])
+        .merge(locale_data)
+        .build();
 
     // Add upload context for upload collections
     if def.is_upload_collection() {
-        data["is_upload"] = serde_json::json!(true);
+        let mut upload_ctx = serde_json::json!({});
         if let Some(ref u) = def.upload {
             if !u.mime_types.is_empty() {
-                data["upload_accept"] = serde_json::json!(u.mime_types.join(","));
+                upload_ctx["accept"] = serde_json::json!(u.mime_types.join(","));
             }
         }
 
@@ -779,7 +719,7 @@ pub async fn edit_form(
                             .map(|s| s.to_string())
                     })
                     .unwrap_or_else(|| url.to_string());
-                data["upload_preview"] = serde_json::json!(preview_url);
+                upload_ctx["preview"] = serde_json::json!(preview_url);
             }
         }
 
@@ -793,9 +733,12 @@ pub async fn edit_form(
             if let (Some(w), Some(h)) = (width, height) {
                 info["dimensions"] = serde_json::json!(format!("{}x{}", w, h));
             }
-            data["upload_info"] = info;
+            upload_ctx["info"] = info;
         }
+        data["upload"] = upload_ctx;
     }
+
+    let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/edit", &data).into_response()
 }
@@ -898,20 +841,14 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 Err(e) => {
                     tracing::error!("Upload processing error: {}", e);
                     let fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
-                    let data = serde_json::json!({
-                        "page_title": format!("Edit {}", def.singular_name()),
-                        "collections": state.sidebar_collections(),
-                        "globals": state.sidebar_globals(),
-                        "collection": {
-                            "slug": def.slug,
-                            "display_name": def.display_name(),
-                            "singular_name": def.singular_name(),
-                        },
-                        "document": { "id": id },
-                        "fields": fields,
-                        "editing": true,
-                        "is_upload": true,
-                    });
+                    let data = ContextBuilder::new(state, None)
+                        .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
+                        .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
+                        .collection_def(&def)
+                        .document_stub(id)
+                        .fields(fields)
+                        .set("editing", serde_json::json!(true))
+                        .build();
                     return html_with_toast(state, "collections/edit", &data, &e.to_string());
                 }
             }
@@ -1002,22 +939,14 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
                 let fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-                let data = serde_json::json!({
-                    "page_title": format!("Edit {}", def.singular_name()),
-                    "collections": state.sidebar_collections(),
-                    "globals": state.sidebar_globals(),
-                    "collection": {
-                        "slug": def.slug,
-                        "display_name": def.display_name(),
-                        "singular_name": def.singular_name(),
-                    },
-                    "document": {
-                        "id": id,
-                    },
-                    "fields": fields,
-                    "editing": true,
-                    "is_upload": def.is_upload_collection(),
-                });
+                let data = ContextBuilder::new(state, None)
+                    .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
+                    .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
+                    .collection_def(&def)
+                    .document_stub(id)
+                    .fields(fields)
+                    .set("editing", serde_json::json!(true))
+                    .build();
                 html_with_toast(state, "collections/edit", &data, &e.to_string())
             } else {
                 tracing::error!("Update error: {}", e);
@@ -1068,19 +997,21 @@ pub async fn delete_confirm(
         .and_then(|f| document.get_str(f))
         .map(|s| s.to_string());
 
-    let data = serde_json::json!({
-        "page_title": format!("Delete {}", def.singular_name()),
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-        "collection": {
-            "slug": def.slug,
-            "display_name": def.display_name(),
-            "singular_name": def.singular_name(),
-        },
-        "document_id": id,
-        "title_value": title_value,
-        "user": user_json(&claims),
-    });
+    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let data = ContextBuilder::new(&state, claims_ref)
+        .page(PageType::CollectionDelete, format!("Delete {}", def.singular_name()))
+        .set("page_title", serde_json::json!(format!("Delete {}", def.singular_name())))
+        .collection_def(&def)
+        .set("document_id", serde_json::json!(id))
+        .set("title_value", serde_json::json!(title_value))
+        .breadcrumbs(vec![
+            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
+            Breadcrumb::current(format!("Delete {}", def.singular_name())),
+        ])
+        .build();
+
+    let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/delete", &data).into_response()
 }
@@ -1289,39 +1220,28 @@ pub async fn list_versions_page(
         }))
         .collect();
 
-    let total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
+    let claims_ref = claims.as_ref().map(|Extension(c)| c);
+    let data = ContextBuilder::new(&state, claims_ref)
+        .page(PageType::CollectionVersions, format!("Version History — {}", doc_title))
+        .set("page_title", serde_json::json!(format!("Version History — {}", doc_title)))
+        .collection_def(&def)
+        .document_stub(&id)
+        .set("doc_title", serde_json::json!(doc_title))
+        .set("versions", serde_json::json!(versions))
+        .pagination(
+            page, per_page, total,
+            format!("/admin/collections/{}/{}/versions?page={}", slug, id, page - 1),
+            format!("/admin/collections/{}/{}/versions?page={}", slug, id, page + 1),
+        )
+        .breadcrumbs(vec![
+            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
+            Breadcrumb::link(doc_title.clone(), format!("/admin/collections/{}/{}", slug, id)),
+            Breadcrumb::current("Version History"),
+        ])
+        .build();
 
-    let data = serde_json::json!({
-        "page_title": format!("Version History — {}", doc_title),
-        "collections": state.sidebar_collections(),
-        "globals": state.sidebar_globals(),
-        "collection": {
-            "slug": def.slug,
-            "display_name": def.display_name(),
-            "singular_name": def.singular_name(),
-        },
-        "document": {
-            "id": document.id,
-        },
-        "doc_title": doc_title,
-        "versions": versions,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "total_pages": total_pages,
-        "has_pagination": total_pages > 1,
-        "has_prev": page > 1,
-        "has_next": page < total_pages,
-        "prev_url": format!("/admin/collections/{}/{}/versions?page={}", slug, id, page - 1),
-        "next_url": format!("/admin/collections/{}/{}/versions?page={}", slug, id, page + 1),
-        "user": user_json(&claims),
-        "breadcrumbs": [
-            { "label": "Collections", "url": "/admin/collections" },
-            { "label": def.display_name(), "url": format!("/admin/collections/{}", slug) },
-            { "label": doc_title, "url": format!("/admin/collections/{}/{}", slug, id) },
-            { "label": "Version History" },
-        ],
-    });
+    let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/versions", &data).into_response()
 }

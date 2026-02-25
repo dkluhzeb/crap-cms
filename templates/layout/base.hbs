@@ -12,7 +12,7 @@
   <script src="/static/prosemirror.js" defer></script>
   <script src="/static/components.js" defer></script>
 
-  <title>{{title}} - Crap CMS</title>
+  <title>{{#if page.title}}{{page.title}}{{else}}{{title}}{{/if}} - Crap CMS</title>
 </head>
 
 <body>

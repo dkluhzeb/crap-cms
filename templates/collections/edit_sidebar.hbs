@@ -3,7 +3,7 @@
   <div class="edit-sidebar__panel">
     <div class="edit-sidebar__panel-body">
       <div class="edit-sidebar__actions">
-        {{#if has_drafts}}
+        {{#if collection.has_drafts}}
           {{#if editing}}
             <button type="submit" form="edit-form" name="_action" value="publish" class="button button--primary">
               {{t "publish"}}
@@ -72,7 +72,7 @@
     </div>
     <div class="edit-sidebar__panel-body">
       <div class="edit-sidebar__meta">
-        {{#if has_drafts}}
+        {{#if collection.has_drafts}}
         <div class="edit-sidebar__meta-row">
           <span class="edit-sidebar__meta-label">{{t "status"}}</span>
           <span class="edit-sidebar__meta-value"><span class="badge badge--{{document.status}}">{{document.status}}</span></span>
@@ -98,7 +98,7 @@
     </div>
   </div>
 
-  {{#if has_versions}}
+  {{#if collection.has_versions}}
   {{!-- Version history panel --}}
   <div class="edit-sidebar__panel">
     <div class="edit-sidebar__panel-header">

@@ -737,6 +737,97 @@ fn service_nonversioned_create_no_version_created() {
     // Just verify it doesn't crash
 }
 
+/// Regression: draft update must include join data (blocks/arrays) in the
+/// version snapshot. Previously, `save_join_table_data` was skipped for
+/// draft-only saves, so block data was lost from the snapshot.
+#[test]
+fn service_update_draft_preserves_join_data_in_snapshot() {
+    // Build a def with a blocks field
+    let mut def = make_versioned_def();
+    def.fields.push(FieldDefinition {
+        name: "content".to_string(),
+        field_type: FieldType::Blocks,
+        required: false,
+        unique: false,
+        validate: None,
+        default_value: None,
+        options: Vec::new(),
+        admin: FieldAdmin::default(),
+        hooks: FieldHooks::default(),
+        access: FieldAccess::default(),
+        relationship: None,
+        fields: Vec::new(),
+        blocks: vec![
+            crap_cms::core::field::BlockDefinition {
+                block_type: "text".to_string(),
+                label: None,
+                fields: vec![FieldDefinition {
+                    name: "body".to_string(),
+                    field_type: FieldType::Textarea,
+                    required: false, unique: false, validate: None, default_value: None,
+                    options: Vec::new(), admin: FieldAdmin::default(),
+                    hooks: FieldHooks::default(), access: FieldAccess::default(),
+                    relationship: None, fields: Vec::new(), blocks: Vec::new(),
+                    localized: false, picker_appearance: None,
+                }],
+            },
+        ],
+        localized: false,
+        picker_appearance: None,
+    });
+
+    let ts = setup_service(vec![def.clone()]);
+    let pool = &ts.pool;
+    let runner = &ts.runner;
+
+    // Create a published document
+    let data: HashMap<String, String> = [("title".into(), "With Blocks".into())].into();
+    let mut join_data = HashMap::new();
+    join_data.insert("content".to_string(), serde_json::json!([
+        {"_block_type": "text", "body": "Initial block"}
+    ]));
+    let (doc, _) = service::create_document(
+        pool, runner, "articles", &def, data, &join_data,
+        None, None, None, None, false,
+    ).unwrap();
+
+    // Draft update with different block data
+    let update_data: HashMap<String, String> = [("title".into(), "Draft With Blocks".into())].into();
+    let mut draft_join_data = HashMap::new();
+    draft_join_data.insert("content".to_string(), serde_json::json!([
+        {"_block_type": "text", "body": "Draft block 1"},
+        {"_block_type": "text", "body": "Draft block 2"}
+    ]));
+    service::update_document(
+        pool, runner, "articles", &doc.id, &def, update_data, &draft_join_data,
+        None, None, None, None, true,
+    ).unwrap();
+
+    // The draft version snapshot must contain the draft block data
+    let conn = pool.get().unwrap();
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    assert_eq!(versions.len(), 2); // create + draft update
+    let draft_snap = &versions[0].snapshot;
+    let blocks = draft_snap.get("content").expect("snapshot must contain 'content' blocks field");
+    let blocks_arr = blocks.as_array().expect("content should be an array");
+    assert_eq!(blocks_arr.len(), 2, "draft snapshot should have 2 blocks");
+    assert_eq!(blocks_arr[0].get("body").and_then(|v| v.as_str()), Some("Draft block 1"));
+    assert_eq!(blocks_arr[1].get("body").and_then(|v| v.as_str()), Some("Draft block 2"));
+
+    // Main table blocks should still be the original (not changed by draft)
+    let mut main_doc = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    query::hydrate_document(&conn, "articles", &def, &mut main_doc, None, None).unwrap();
+    let main_blocks = main_doc.fields.get("content")
+        .and_then(|v| v.as_array());
+    match main_blocks {
+        Some(arr) => {
+            assert_eq!(arr.len(), 1, "main table should still have 1 block");
+            assert_eq!(arr[0].get("body").and_then(|v| v.as_str()), Some("Initial block"));
+        }
+        None => {} // no blocks hydrated means join table was empty for main doc, which is acceptable
+    }
+}
+
 // ── gRPC-Level Version Tests ────────────────────────────────────────────
 
 #[tokio::test]

@@ -366,60 +366,12 @@ impl ContentApi for ContentService {
         let doc = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &collection, "find_by_id", HashMap::new())?;
 
-            // If draft mode, try to load the latest version snapshot
-            if use_draft_version {
-                let conn = pool.get().context("DB connection for version lookup")?;
-                if let Some(version) = query::find_latest_version(&conn, &collection, &id)? {
-                    // Reconstruct Document from version snapshot
-                    let snapshot = version.snapshot;
-                    if let Some(obj) = snapshot.as_object() {
-                        let mut fields_map = HashMap::new();
-                        for (k, v) in obj {
-                            if k != "created_at" && k != "updated_at" {
-                                fields_map.insert(k.clone(), v.clone());
-                            }
-                        }
-                        let doc = crate::core::Document {
-                            id: id.clone(),
-                            fields: fields_map,
-                            created_at: obj.get("created_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                            updated_at: obj.get("updated_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
-                        };
-                        let doc = runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", doc);
-                        return Ok(Some(doc));
-                    }
-                }
-                // Fall through to normal find_by_id if no version found
-            }
+            let conn = pool.get().context("DB connection")?;
+            let mut doc = ops::find_by_id_full(
+                &conn, &collection, &def_owned, &id,
+                locale_ctx.as_ref(), access_constraints, use_draft_version,
+            )?;
 
-            // If constrained, use find with id filter + constraints instead of find_by_id
-            let mut doc = if let Some(constraints) = access_constraints {
-                let mut filters = constraints;
-                filters.push(FilterClause::Single(Filter {
-                    field: "id".to_string(),
-                    op: FilterOp::Equals(id.clone()),
-                }));
-                let query = FindQuery {
-                    filters,
-                    ..Default::default()
-                };
-                let docs = ops::find_documents(
-                    &pool,
-                    &collection,
-                    &def_owned,
-                    &query,
-                    locale_ctx.as_ref(),
-                )?;
-                docs.into_iter().next()
-            } else {
-                ops::find_document_by_id(&pool, &collection, &def_owned, &id, locale_ctx.as_ref())?
-            };
-            let select_slice = select.as_deref();
-            // Hydrate join table data (has-many relationships and arrays)
-            if let Some(ref mut d) = doc {
-                let conn = pool.get().context("DB connection for hydration")?;
-                query::hydrate_document(&conn, &collection, &def_owned, d, select_slice, locale_ctx.as_ref())?;
-            }
             // Assemble sizes for upload collections
             if let Some(ref mut d) = doc {
                 if let Some(ref upload_config) = def_owned.upload {
@@ -430,10 +382,10 @@ impl ContentApi for ContentService {
             }
             let mut doc =
                 doc.map(|d| runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d));
+            let select_slice = select.as_deref();
             // Populate relationships if depth > 0
             if depth > 0 {
                 if let Some(ref mut d) = doc {
-                    let conn = pool.get().context("DB connection for population")?;
                     let reg = registry
                         .read()
                         .map_err(|e| anyhow::anyhow!("Registry lock: {}", e))?;

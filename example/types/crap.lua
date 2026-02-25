@@ -349,6 +349,7 @@ function crap.collections.find(collection, query) end
 --- @field depth?          integer   Population depth for relationship fields (default: 0). 0 = IDs only.
 --- @field locale?         string    Locale code for localized fields (e.g., "en", "de", "all"). Nil = default locale.
 --- @field select?         string[]  Fields to return. Nil/empty = all fields. Always includes id.
+--- @field draft?          boolean   When true and the collection has `versions.drafts`, returns the latest draft version snapshot instead of the published main-table data. Default: false.
 --- @field overrideAccess? boolean   Skip access control checks (default: true). Set to false to enforce collection-level and field-level access for the current user.
 
 --- Find a single document by ID.
@@ -504,6 +505,7 @@ crap.hooks = {}
 --- | "before_delete"
 --- | "after_delete"
 --- | "before_broadcast"
+--- | "before_render"
 --- | "after_login"
 --- | "after_logout"
 --- | "on_init"

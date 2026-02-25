@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::AdminState;
 use crate::core::auth;
 use crate::core::email;
@@ -28,14 +29,16 @@ pub async fn login_page(
     let all_disable_local = all_disable_local(&state);
     let show_forgot_password = show_forgot_password(&state);
 
-    let data = serde_json::json!({
-        "title": "Login",
-        "collections": auth_collections,
-        "show_collection_picker": auth_collections.len() > 1,
-        "disable_local": all_disable_local,
-        "show_forgot_password": show_forgot_password,
-        "success": query.success.as_deref(),
-    });
+    let data = ContextBuilder::auth(&state)
+        .page(PageType::AuthLogin, "Login")
+        .set("collections", serde_json::json!(auth_collections))
+        .set("show_collection_picker", serde_json::json!(auth_collections.len() > 1))
+        .set("disable_local", serde_json::json!(all_disable_local))
+        .set("show_forgot_password", serde_json::json!(show_forgot_password))
+        .set("success", serde_json::json!(query.success.as_deref()))
+        .build();
+
+    let data = state.hook_runner.run_before_render(data);
 
     match state.render("auth/login", &data) {
         Ok(html) => Html(html),
@@ -188,11 +191,13 @@ pub struct ForgotPasswordForm {
 pub async fn forgot_password_page(State(state): State<AdminState>) -> Html<String> {
     let auth_collections = get_auth_collections(&state);
 
-    let data = serde_json::json!({
-        "title": "Forgot Password",
-        "collections": auth_collections,
-        "show_collection_picker": auth_collections.len() > 1,
-    });
+    let data = ContextBuilder::auth(&state)
+        .page(PageType::AuthForgot, "Forgot Password")
+        .set("collections", serde_json::json!(auth_collections))
+        .set("show_collection_picker", serde_json::json!(auth_collections.len() > 1))
+        .build();
+
+    let data = state.hook_runner.run_before_render(data);
 
     match state.render("auth/forgot_password", &data) {
         Ok(html) => Html(html),
@@ -290,12 +295,12 @@ pub async fn forgot_password_action(
 }
 
 fn render_forgot_success(state: &AdminState, auth_collections: &[serde_json::Value]) -> Html<String> {
-    let data = serde_json::json!({
-        "title": "Forgot Password",
-        "success": true,
-        "collections": auth_collections,
-        "show_collection_picker": auth_collections.len() > 1,
-    });
+    let data = ContextBuilder::auth(state)
+        .page(PageType::AuthForgot, "Forgot Password")
+        .set("success", serde_json::json!(true))
+        .set("collections", serde_json::json!(auth_collections))
+        .set("show_collection_picker", serde_json::json!(auth_collections.len() > 1))
+        .build();
 
     match state.render("auth/forgot_password", &data) {
         Ok(html) => Html(html),
@@ -348,17 +353,17 @@ pub async fn reset_password_page(
         false
     }).await.unwrap_or(false);
 
-    let data = if valid {
-        serde_json::json!({
-            "title": "Reset Password",
-            "token": query.token,
-        })
+    let mut builder = ContextBuilder::auth(&state)
+        .page(PageType::AuthReset, "Reset Password");
+
+    if valid {
+        builder = builder.set("token", serde_json::json!(query.token));
     } else {
-        serde_json::json!({
-            "title": "Reset Password",
-            "error": "Invalid or expired reset link. Please request a new one.",
-        })
-    };
+        builder = builder.set("error", serde_json::json!("Invalid or expired reset link. Please request a new one."));
+    }
+
+    let data = builder.build();
+    let data = state.hook_runner.run_before_render(data);
 
     match state.render("auth/reset_password", &data) {
         Ok(html) => Html(html),
@@ -372,11 +377,11 @@ pub async fn reset_password_action(
     Form(form): Form<ResetPasswordForm>,
 ) -> axum::response::Response {
     if form.password != form.password_confirm {
-        let data = serde_json::json!({
-            "title": "Reset Password",
-            "token": form.token,
-            "error": "Passwords do not match",
-        });
+        let data = ContextBuilder::auth(&state)
+            .page(PageType::AuthReset, "Reset Password")
+            .set("token", serde_json::json!(form.token))
+            .set("error", serde_json::json!("Passwords do not match"))
+            .build();
         return match state.render("auth/reset_password", &data) {
             Ok(html) => Html(html).into_response(),
             Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
@@ -384,11 +389,11 @@ pub async fn reset_password_action(
     }
 
     if form.password.len() < 6 {
-        let data = serde_json::json!({
-            "title": "Reset Password",
-            "token": form.token,
-            "error": "Password must be at least 6 characters",
-        });
+        let data = ContextBuilder::auth(&state)
+            .page(PageType::AuthReset, "Reset Password")
+            .set("token", serde_json::json!(form.token))
+            .set("error", serde_json::json!("Password must be at least 6 characters"))
+            .build();
         return match state.render("auth/reset_password", &data) {
             Ok(html) => Html(html).into_response(),
             Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
@@ -433,10 +438,10 @@ pub async fn reset_password_action(
             } else {
                 "Invalid or expired reset link."
             };
-            let data = serde_json::json!({
-                "title": "Reset Password",
-                "error": msg,
-            });
+            let data = ContextBuilder::auth(&state)
+                .page(PageType::AuthReset, "Reset Password")
+                .set("error", serde_json::json!(msg))
+                .build();
             match state.render("auth/reset_password", &data) {
                 Ok(html) => Html(html).into_response(),
                 Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
@@ -444,10 +449,10 @@ pub async fn reset_password_action(
         }
         Err(e) => {
             tracing::error!("Reset password task error: {}", e);
-            let data = serde_json::json!({
-                "title": "Reset Password",
-                "error": "An internal error occurred",
-            });
+            let data = ContextBuilder::auth(&state)
+                .page(PageType::AuthReset, "Reset Password")
+                .set("error", serde_json::json!("An internal error occurred"))
+                .build();
             match state.render("auth/reset_password", &data) {
                 Ok(html) => Html(html).into_response(),
                 Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
@@ -506,15 +511,15 @@ fn login_error(state: &AdminState, error: &str, email: &str) -> axum::response::
     let all_disable_local = all_disable_local(state);
     let show_forgot_password = show_forgot_password(state);
 
-    let data = serde_json::json!({
-        "title": "Login",
-        "error": error,
-        "email": email,
-        "collections": auth_collections,
-        "show_collection_picker": auth_collections.len() > 1,
-        "disable_local": all_disable_local,
-        "show_forgot_password": show_forgot_password,
-    });
+    let data = ContextBuilder::auth(state)
+        .page(PageType::AuthLogin, "Login")
+        .set("error", serde_json::json!(error))
+        .set("email", serde_json::json!(email))
+        .set("collections", serde_json::json!(auth_collections))
+        .set("show_collection_picker", serde_json::json!(auth_collections.len() > 1))
+        .set("disable_local", serde_json::json!(all_disable_local))
+        .set("show_forgot_password", serde_json::json!(show_forgot_password))
+        .build();
 
     match state.render("auth/login", &data) {
         Ok(html) => Html(html).into_response(),

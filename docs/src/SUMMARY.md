@@ -134,6 +134,7 @@
 
 - [Overview](admin-ui/overview.md)
 - [Template Overlay](admin-ui/template-overlay.md)
+- [Template Context](admin-ui/template-context.md)
 - [Static Files](admin-ui/static-files.md)
 - [Themes](admin-ui/themes.md)
 

@@ -1,8 +1,8 @@
-{{#> layout/base title="Dashboard"}}
+{{#> layout/base}}
 <h1>{{t "dashboard"}}</h1>
 
 <div class="cards">
-  {{#each collections}}
+  {{#each collection_cards}}
   <a class="card" href="/admin/collections/{{this.slug}}"
     hx-get="/admin/collections/{{this.slug}}" hx-target="body" hx-push-url="true">
     <div class="card__header">
@@ -16,10 +16,10 @@
   {{/each}}
 </div>
 
-{{#if globals}}
+{{#if global_cards}}
 <h2 style="margin-top: var(--space-xl);">{{t "globals"}}</h2>
 <div class="cards">
-  {{#each globals}}
+  {{#each global_cards}}
   <a class="card" href="/admin/globals/{{this.slug}}"
     hx-get="/admin/globals/{{this.slug}}" hx-target="body" hx-push-url="true">
     <div class="card__header">
