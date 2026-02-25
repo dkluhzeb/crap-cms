@@ -20,7 +20,6 @@ use crate::admin::server::load_auth_user;
 use crate::core::auth::{self, AuthUser};
 use crate::core::upload::{self, inject_upload_metadata};
 use crate::db::query::{self, AccessResult};
-use crate::hooks::lifecycle::HookEvent;
 
 /// Build the upload API router with all routes.
 pub fn upload_router(state: AdminState) -> Router<AdminState> {
@@ -157,13 +156,7 @@ async fn create_upload(
     }).await;
 
     match result {
-        Ok(Ok((doc, req_context))) => {
-            // Fire after-hooks and publish event (fire-and-forget)
-            state.hook_runner.fire_after_event(
-                &def.hooks, &def.fields, HookEvent::AfterChange,
-                slug.clone(), "create".to_string(), doc.fields.clone(),
-                Some(req_context),
-            );
+        Ok(Ok((doc, _req_context))) => {
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,
@@ -288,17 +281,12 @@ async fn update_upload(
     }).await;
 
     match result {
-        Ok(Ok((doc, req_context))) => {
+        Ok(Ok((doc, _req_context))) => {
             // Clean up old files on success
             if let Some(old_fields) = old_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &old_fields);
             }
 
-            state.hook_runner.fire_after_event(
-                &def.hooks, &def.fields, HookEvent::AfterChange,
-                slug.clone(), "update".to_string(), doc.fields.clone(),
-                Some(req_context),
-            );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,
@@ -375,18 +363,12 @@ async fn delete_upload(
     }).await;
 
     match result {
-        Ok(Ok(req_context)) => {
+        Ok(Ok(_req_context)) => {
             // Clean up upload files
             if let Some(fields) = upload_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &fields);
             }
 
-            state.hook_runner.fire_after_event(
-                &def.hooks, &def.fields, HookEvent::AfterDelete,
-                slug.clone(), "delete".to_string(),
-                [("id".to_string(), serde_json::Value::String(id.clone()))].into(),
-                Some(req_context),
-            );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,

@@ -51,7 +51,7 @@ pub fn create_document(
         data: data.iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect(),
-        locale,
+        locale: locale.clone(),
         draft: Some(is_draft),
         context: HashMap::new(),
     };
@@ -84,6 +84,21 @@ pub fn create_document(
         }
         let _ = version; // version created but not returned
     }
+
+    // After-hooks: run inside the same transaction, with CRUD access
+    let after_ctx = HookContext {
+        collection: slug.to_string(),
+        operation: "create".to_string(),
+        data: doc.fields.clone(),
+        locale,
+        draft: Some(is_draft),
+        context: req_context,
+    };
+    let after_result = runner.run_after_write(
+        &def.hooks, &def.fields, HookEvent::AfterChange,
+        after_ctx, &tx, user,
+    )?;
+    let req_context = after_result.context;
 
     tx.commit().context("Commit transaction")?;
     Ok((doc, req_context))
@@ -119,7 +134,7 @@ pub fn update_document(
         data: data.iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect(),
-        locale,
+        locale: locale.clone(),
         draft: Some(is_draft),
         context: HashMap::new(),
     };
@@ -155,6 +170,21 @@ pub fn update_document(
             }
         }
 
+        // After-hooks: run inside the same transaction, with CRUD access
+        let after_ctx = HookContext {
+            collection: slug.to_string(),
+            operation: "update".to_string(),
+            data: existing_doc.fields.clone(),
+            locale: locale.clone(),
+            draft: Some(is_draft),
+            context: req_context,
+        };
+        let after_result = runner.run_after_write(
+            &def.hooks, &def.fields, HookEvent::AfterChange,
+            after_ctx, &tx, user,
+        )?;
+        let req_context = after_result.context;
+
         tx.commit().context("Commit transaction")?;
         Ok((existing_doc, req_context))
     } else {
@@ -182,6 +212,21 @@ pub fn update_document(
                 }
             }
         }
+
+        // After-hooks: run inside the same transaction, with CRUD access
+        let after_ctx = HookContext {
+            collection: slug.to_string(),
+            operation: "update".to_string(),
+            data: doc.fields.clone(),
+            locale: locale.clone(),
+            draft: Some(is_draft),
+            context: req_context,
+        };
+        let after_result = runner.run_after_write(
+            &def.hooks, &def.fields, HookEvent::AfterChange,
+            after_ctx, &tx, user,
+        )?;
+        let req_context = after_result.context;
 
         tx.commit().context("Commit transaction")?;
         Ok((doc, req_context))
@@ -212,8 +257,19 @@ pub fn delete_document(
     let final_ctx = runner.run_hooks_with_conn(hooks, HookEvent::BeforeDelete, hook_ctx, &tx, user)?;
     query::delete(&tx, slug, id)?;
 
+    // After-hooks: run inside the same transaction, with CRUD access
+    let after_ctx = HookContext {
+        collection: slug.to_string(),
+        operation: "delete".to_string(),
+        data: [("id".to_string(), serde_json::Value::String(id.to_string()))].into(),
+        locale: None,
+        draft: None,
+        context: final_ctx.context,
+    };
+    let after_result = runner.run_hooks_with_conn(hooks, HookEvent::AfterDelete, after_ctx, &tx, user)?;
+
     tx.commit().context("Commit transaction")?;
-    Ok(final_ctx.context)
+    Ok(after_result.context)
 }
 
 /// Update a global document within a single transaction: before-hooks → update.
@@ -237,7 +293,7 @@ pub fn update_global_document(
         data: data.iter()
             .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
             .collect(),
-        locale,
+        locale: locale.clone(),
         draft: None,
         context: HashMap::new(),
     };
@@ -248,6 +304,21 @@ pub fn update_global_document(
     let req_context = final_ctx.context.clone();
     let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
     let doc = query::update_global(&tx, slug, def, &final_data, locale_ctx)?;
+
+    // After-hooks: run inside the same transaction, with CRUD access
+    let after_ctx = HookContext {
+        collection: slug.to_string(),
+        operation: "update".to_string(),
+        data: doc.fields.clone(),
+        locale,
+        draft: None,
+        context: req_context,
+    };
+    let after_result = runner.run_after_write(
+        &def.hooks, &def.fields, HookEvent::AfterChange,
+        after_ctx, &tx, user,
+    )?;
+    let req_context = after_result.context;
 
     tx.commit().context("Commit transaction")?;
     Ok((doc, req_context))

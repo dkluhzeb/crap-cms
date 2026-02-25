@@ -8,11 +8,11 @@ Hooks can call back into the Crap CMS CRUD API. Whether a hook has CRUD access d
 |-------|-------------|--------|
 | `before_validate` | Yes | Runs inside the write transaction |
 | `before_change` | Yes | Runs inside the write transaction |
-| `after_change` | **No** | Fires after commit, in the background |
+| `after_change` | **Yes** | Runs inside the write transaction, after the DB operation |
 | `before_read` | No | Read operations don't open a write transaction |
 | `after_read` | **No** | Fire-and-forget, no transaction |
 | `before_delete` | Yes | Runs inside the delete transaction |
-| `after_delete` | **No** | Fires after commit, in the background |
+| `after_delete` | **Yes** | Runs inside the delete transaction, after the DB delete |
 
 This applies to all three hook levels (field, collection, registered).
 
@@ -41,9 +41,11 @@ CRUD calls inside hooks share the **same database transaction** as the parent op
 - If the hook fails, the entire parent operation rolls back
 - All changes are atomic — either everything commits or nothing does
 
+This applies to **all write hooks**: `before_validate`, `before_change`, `after_change`, `before_delete`, and `after_delete`.
+
 ## Error Handling
 
-If a before-hook returns an error or throws a Lua error, the entire transaction is rolled back and the operation fails with an error message.
+If any hook (before or after) returns an error or throws a Lua error, the entire transaction is rolled back and the operation fails with an error message. This includes after-hooks — an `after_change` error will roll back the main DB operation too.
 
 ## Calling CRUD Outside Hooks
 

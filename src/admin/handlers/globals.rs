@@ -12,7 +12,6 @@ use crate::core::auth::{AuthUser, Claims};
 use crate::core::validate::ValidationError;
 use crate::db::{ops, query};
 use crate::db::query::{AccessResult, LocaleContext};
-use crate::hooks::lifecycle::HookEvent;
 
 use super::shared::{
     LocaleParams,
@@ -195,12 +194,7 @@ pub async fn update_action(
         .map(|l| format!("?locale={}", l))
         .unwrap_or_default();
     match result {
-        Ok(Ok((doc, req_context))) => {
-            state.hook_runner.fire_after_event(
-                &def.hooks, &def.fields, HookEvent::AfterChange,
-                slug.clone(), "update".to_string(), doc.fields.clone(),
-                Some(req_context),
-            );
+        Ok(Ok((doc, _req_context))) => {
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Global,

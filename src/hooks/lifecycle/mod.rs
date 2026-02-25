@@ -453,47 +453,34 @@ impl HookRunner {
         self.run_hooks_with_conn(hooks, HookEvent::BeforeChange, ctx, conn, user)
     }
 
-    /// Fire an after-event hook in the background (non-blocking, no transaction).
-    /// For AfterChange events, field-level after_change hooks run first.
-    /// `req_context` carries the request-scoped shared table from before-hooks.
-    pub fn fire_after_event(
+    /// Run after-write hooks inside the transaction (with CRUD access).
+    /// Field-level after_change hooks run first, then collection-level, then registered.
+    /// Errors propagate up and cause the caller's transaction to roll back.
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_after_write(
         &self,
         hooks: &CollectionHooks,
         fields: &[FieldDefinition],
         event: HookEvent,
-        collection: String,
-        operation: String,
-        data: HashMap<String, serde_json::Value>,
-        req_context: Option<HashMap<String, serde_json::Value>>,
-    ) {
-        let runner = self.clone();
-        let hooks = hooks.clone();
-        let fields = fields.to_vec();
-        tokio::task::spawn_blocking(move || {
-            let mut data = data;
-            // Run field-level after_change hooks before collection-level
-            if matches!(event, HookEvent::AfterChange) {
-                let has_field_hooks = fields.iter()
-                    .any(|f| !f.hooks.after_change.is_empty());
-                if has_field_hooks {
-                    if let Err(e) = runner.run_field_hooks(
-                        &fields, FieldHookEvent::AfterChange,
-                        &mut data, &collection, &operation,
-                    ) {
-                        tracing::warn!("field after_change hook error for {}: {}", collection, e);
-                    }
-                }
+        ctx: HookContext,
+        conn: &rusqlite::Connection,
+        user: Option<&Document>,
+    ) -> Result<HookContext> {
+        // Run field-level after_change hooks (with CRUD access)
+        if matches!(event, HookEvent::AfterChange) {
+            let has_field_hooks = fields.iter()
+                .any(|f| !f.hooks.after_change.is_empty());
+            if has_field_hooks {
+                let mut data = ctx.data.clone();
+                self.run_field_hooks_with_conn(
+                    fields, FieldHookEvent::AfterChange,
+                    &mut data, &ctx.collection, &ctx.operation, conn, user,
+                )?;
             }
-            let ctx = HookContext {
-                collection,
-                operation,
-                data,
-                locale: None,
-                draft: None,
-                context: req_context.unwrap_or_default(),
-            };
-            let _ = runner.run_hooks(&hooks, event, ctx);
-        });
+        }
+
+        // Run collection-level + registered hooks (with CRUD access)
+        self.run_hooks_with_conn(hooks, event, ctx, conn, user)
     }
 
     /// Run before_broadcast hooks. Returns Ok(Some(data)) to broadcast (possibly

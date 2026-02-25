@@ -21,7 +21,7 @@ use crate::core::SharedRegistry;
 use crate::db::query::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext};
 use crate::db::DbPool;
 use crate::db::{ops, query};
-use crate::hooks::lifecycle::{HookEvent, HookRunner};
+use crate::hooks::lifecycle::HookRunner;
 
 use convert::{
     document_to_proto, field_def_to_proto, json_to_prost_value, parse_where_json,
@@ -534,7 +534,7 @@ impl ContentApi for ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let (doc, req_context) = tokio::task::spawn_blocking(move || {
+        let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             crate::service::create_document(
                 &pool,
                 &runner,
@@ -555,24 +555,14 @@ impl ContentApi for ContentService {
 
         {
             let def = self.get_collection_def(&req.collection);
-            let (hooks, fields, should_verify, live) = match &def {
+            let (hooks, should_verify, live) = match &def {
                 Ok(d) => (
                     d.hooks.clone(),
-                    d.fields.clone(),
                     d.is_auth_collection() && d.auth.as_ref().is_some_and(|a| a.verify_email),
                     d.live.clone(),
                 ),
-                Err(_) => (Default::default(), Vec::new(), false, None),
+                Err(_) => (Default::default(), false, None),
             };
-            self.hook_runner.fire_after_event(
-                &hooks,
-                &fields,
-                HookEvent::AfterChange,
-                req.collection.clone(),
-                "create".to_string(),
-                doc.fields.clone(),
-                Some(req_context),
-            );
             self.hook_runner.publish_event(
                 &self.event_bus,
                 &hooks,
@@ -672,7 +662,7 @@ impl ContentApi for ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let (doc, req_context) = tokio::task::spawn_blocking(move || {
+        let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             crate::service::update_document(
                 &pool,
                 &runner,
@@ -694,19 +684,10 @@ impl ContentApi for ContentService {
 
         {
             let def = self.get_collection_def(&req.collection);
-            let (hooks, fields, live) = match &def {
-                Ok(d) => (d.hooks.clone(), d.fields.clone(), d.live.clone()),
-                Err(_) => (Default::default(), Vec::new(), None),
+            let (hooks, live) = match &def {
+                Ok(d) => (d.hooks.clone(), d.live.clone()),
+                Err(_) => (Default::default(), None),
             };
-            self.hook_runner.fire_after_event(
-                &hooks,
-                &fields,
-                HookEvent::AfterChange,
-                req.collection.clone(),
-                "update".to_string(),
-                doc.fields.clone(),
-                Some(req_context),
-            );
             self.hook_runner.publish_event(
                 &self.event_bus,
                 &hooks,
@@ -754,7 +735,7 @@ impl ContentApi for ContentService {
         let collection = req.collection.clone();
         let id = req.id.clone();
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let req_context = tokio::task::spawn_blocking(move || {
+        let _req_context = tokio::task::spawn_blocking(move || {
             crate::service::delete_document(
                 &pool,
                 &runner,
@@ -768,15 +749,6 @@ impl ContentApi for ContentService {
         .map_err(|e| Status::internal(format!("Task error: {}", e)))?
         .map_err(|e| Status::internal(format!("Delete error: {}", e)))?;
 
-        self.hook_runner.fire_after_event(
-            &def.hooks,
-            &def.fields,
-            HookEvent::AfterDelete,
-            req.collection.clone(),
-            "delete".to_string(),
-            [("id".to_string(), serde_json::Value::String(req.id.clone()))].into(),
-            Some(req_context),
-        );
         self.hook_runner.publish_event(
             &self.event_bus,
             &def.hooks,
@@ -1139,7 +1111,7 @@ impl ContentApi for ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let (doc, req_context) = tokio::task::spawn_blocking(move || {
+        let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             crate::service::update_global_document(
                 &pool,
                 &runner,
@@ -1157,19 +1129,10 @@ impl ContentApi for ContentService {
 
         {
             let def = self.get_global_def(&req.slug);
-            let (hooks, fields, live) = match &def {
-                Ok(d) => (d.hooks.clone(), d.fields.clone(), d.live.clone()),
-                Err(_) => (Default::default(), Vec::new(), None),
+            let (hooks, live) = match &def {
+                Ok(d) => (d.hooks.clone(), d.live.clone()),
+                Err(_) => (Default::default(), None),
             };
-            self.hook_runner.fire_after_event(
-                &hooks,
-                &fields,
-                HookEvent::AfterChange,
-                req.slug.clone(),
-                "update".to_string(),
-                doc.fields.clone(),
-                Some(req_context),
-            );
             self.hook_runner.publish_event(
                 &self.event_bus,
                 &hooks,

@@ -8,29 +8,29 @@ Eight lifecycle events fire during CRUD operations.
 |-------|----------|-------------|-------------|-------|
 | `before_validate` | create, update | Yes | Yes | Normalize inputs before validation |
 | `before_change` | create, update | Yes | Yes | Transform data after validation passes |
-| `after_change` | create, update | No | No | Fire-and-forget. Notifications, cache invalidation. |
+| `after_change` | create, update | Yes | Yes | Runs inside the transaction. Audit logs, counters, side-effects. Errors roll back the entire operation. |
 | `before_read` | find, find_by_id | No | No | Can abort the read by returning an error |
 | `after_read` | find, find_by_id | Yes | No | Transform data before it reaches the client |
 | `before_delete` | delete | No | Yes | Can abort the delete. CRUD access for cascading deletes. |
-| `after_delete` | delete | No | No | Fire-and-forget. Cleanup tasks. |
+| `after_delete` | delete | No | Yes | Runs inside the transaction. Cleanup, cascading deletes. Errors roll back the entire operation. |
 | `before_broadcast` | create, update, delete | Yes (data) | No | Can suppress or transform live update events. See [Live Updates](../live-updates/hooks.md). |
 
 ## Write Lifecycle (create/update)
 
 ```
-1. field before_validate hooks
-2. collection before_validate hooks
-3. global registered before_validate hooks
+1. field before_validate hooks (CRUD access)
+2. collection before_validate hooks (CRUD access)
+3. global registered before_validate hooks (CRUD access)
 4. field validation (required, unique, custom validate)
-5. field before_change hooks
-6. collection before_change hooks
-7. global registered before_change hooks
+5. field before_change hooks (CRUD access)
+6. collection before_change hooks (CRUD access)
+7. global registered before_change hooks (CRUD access)
 8. database write (INSERT or UPDATE)
 9. join table write (has-many relationships, arrays)
-10. transaction commit
-11. field after_change hooks (background, no CRUD)
-12. collection after_change hooks (background, no CRUD)
-13. global registered after_change hooks (background, no CRUD)
+10. field after_change hooks (CRUD access, same transaction)
+11. collection after_change hooks (CRUD access, same transaction)
+12. global registered after_change hooks (CRUD access, same transaction)
+13. transaction commit
 14. live setting check (background)
 15. before_broadcast hooks (background, no CRUD)
 16. EventBus publish (if not suppressed)
@@ -53,9 +53,10 @@ Eight lifecycle events fire during CRUD operations.
 1. collection before_delete hooks (CRUD access)
 2. global registered before_delete hooks (CRUD access)
 3. database delete
-4. collection after_delete hooks (background, no CRUD)
-5. global registered after_delete hooks (background, no CRUD)
-6. live setting check (background)
-7. before_broadcast hooks (background, no CRUD)
-8. EventBus publish (if not suppressed)
+4. collection after_delete hooks (CRUD access, same transaction)
+5. global registered after_delete hooks (CRUD access, same transaction)
+6. transaction commit
+7. live setting check (background)
+8. before_broadcast hooks (background, no CRUD)
+9. EventBus publish (if not suppressed)
 ```

@@ -16,7 +16,6 @@ use crate::core::upload::{self, UploadedFile};
 use crate::core::validate::ValidationError;
 use crate::db::{ops, query};
 use crate::db::query::{AccessResult, FindQuery, Filter, FilterOp, FilterClause, LocaleContext};
-use crate::hooks::lifecycle::HookEvent;
 
 use super::shared::{
     PaginationParams, LocaleParams,
@@ -493,12 +492,7 @@ pub async fn create_action(
     }).await;
 
     match result {
-        Ok(Ok((doc, req_context))) => {
-            state.hook_runner.fire_after_event(
-                &def.hooks, &def.fields, HookEvent::AfterChange,
-                slug.clone(), "create".to_string(), doc.fields.clone(),
-                Some(req_context),
-            );
+        Ok(Ok((doc, _req_context))) => {
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,
@@ -990,17 +984,12 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         .map(|l| format!("?locale={}", l))
         .unwrap_or_default();
     match result {
-        Ok(Ok((doc, req_context))) => {
+        Ok(Ok((doc, _req_context))) => {
             // If a new file was uploaded and old files exist, clean up old files
             if let Some(old_fields) = old_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &old_fields);
             }
 
-            state.hook_runner.fire_after_event(
-                &def.hooks, &def.fields, HookEvent::AfterChange,
-                slug.to_string(), "update".to_string(), doc.fields.clone(),
-                Some(req_context),
-            );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,
@@ -1151,18 +1140,12 @@ async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user:
     }).await;
 
     match result {
-        Ok(Ok(req_context)) => {
+        Ok(Ok(_req_context)) => {
             // Clean up upload files after successful delete
             if let Some(fields) = upload_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &fields);
             }
 
-            state.hook_runner.fire_after_event(
-                &def.hooks, &def.fields, HookEvent::AfterDelete,
-                slug.to_string(), "delete".to_string(),
-                [("id".to_string(), serde_json::Value::String(id.to_string()))].into(),
-                Some(req_context),
-            );
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,

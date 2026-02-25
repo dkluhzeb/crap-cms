@@ -2318,3 +2318,157 @@ fn context_starts_empty() {
 
     assert!(ctx.context.is_empty(), "Context should start empty");
 }
+
+// ── After-Hook CRUD Access Tests ─────────────────────────────────────────────
+
+#[test]
+fn after_hook_has_crud_access() {
+    use crap_cms::core::collection::CollectionHooks;
+    use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
+
+    let (_tmp, pool, registry, runner) = setup_with_db();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("articles").unwrap().clone();
+    drop(reg);
+
+    // Build hooks with an after_change hook that creates a side-effect document
+    let hooks = CollectionHooks {
+        after_change: vec!["hooks.after_crud.create_side_effect".to_string()],
+        ..Default::default()
+    };
+
+    // First, create a document so the after-hook has something to work with
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data = [
+        ("title".to_string(), "original".to_string()),
+        ("status".to_string(), "published".to_string()),
+    ].into();
+    let doc = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
+
+    // Run after_change hooks inside the same transaction
+    let ctx = HookContext {
+        collection: "articles".to_string(),
+        operation: "create".to_string(),
+        data: doc.fields.clone(),
+        locale: None,
+        draft: None,
+        context: std::collections::HashMap::new(),
+    };
+    let result = runner.run_after_write(
+        &hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None,
+    );
+    assert!(result.is_ok(), "after_change hook with CRUD should succeed: {:?}", result.err());
+
+    // Commit the transaction
+    tx.commit().unwrap();
+
+    // Verify the side-effect document was created
+    let conn2 = pool.get().unwrap();
+    let docs = crap_cms::db::query::find(
+        &conn2, "articles", &def,
+        &crap_cms::db::query::FindQuery::default(), None,
+    ).unwrap();
+
+    let side_effect = docs.iter().find(|d| {
+        d.fields.get("title").and_then(|v| v.as_str()) == Some("side-effect-from-after-hook")
+    });
+    assert!(side_effect.is_some(), "Side-effect document should have been created by after_change hook");
+}
+
+#[test]
+fn after_hook_error_rolls_back() {
+    use crap_cms::core::collection::CollectionHooks;
+    use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
+
+    let (_tmp, pool, registry, runner) = setup_with_db();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("articles").unwrap().clone();
+    drop(reg);
+
+    // Build hooks with an after_change hook that errors
+    let hooks = CollectionHooks {
+        after_change: vec!["hooks.after_crud.error_hook".to_string()],
+        ..Default::default()
+    };
+
+    // Create a document inside a transaction
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data = [
+        ("title".to_string(), "should-be-rolled-back".to_string()),
+        ("status".to_string(), "published".to_string()),
+    ].into();
+    let doc = crap_cms::db::query::create(&tx, "articles", &def, &data, None).unwrap();
+    let doc_id = doc.id.clone();
+
+    // Run after_change hooks — this should error
+    let ctx = HookContext {
+        collection: "articles".to_string(),
+        operation: "create".to_string(),
+        data: doc.fields.clone(),
+        locale: None,
+        draft: None,
+        context: std::collections::HashMap::new(),
+    };
+    let result = runner.run_after_write(
+        &hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None,
+    );
+    assert!(result.is_err(), "after_change hook error should propagate");
+
+    // Drop the transaction without committing (simulates rollback)
+    drop(tx);
+
+    // Verify the document was NOT persisted (transaction was not committed)
+    let conn2 = pool.get().unwrap();
+    let found = crap_cms::db::query::find_by_id(
+        &conn2, "articles", &def, &doc_id, None,
+    ).unwrap();
+    assert!(found.is_none(), "Document should NOT exist after after-hook error (tx rolled back)");
+}
+
+#[test]
+fn context_flows_to_after_hooks() {
+    use crap_cms::core::collection::CollectionHooks;
+    use crap_cms::hooks::lifecycle::{HookContext, HookEvent};
+
+    let (_tmp, pool, _registry, runner) = setup_with_db();
+
+    // Build hooks with an after_change hook that reads ctx.context
+    let hooks = CollectionHooks {
+        after_change: vec!["hooks.after_crud.check_context".to_string()],
+        ..Default::default()
+    };
+
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    // Simulate a context that was set by before-hooks
+    let mut req_context = HashMap::new();
+    req_context.insert(
+        "before_marker".to_string(),
+        serde_json::json!("set-by-before-hook"),
+    );
+
+    let ctx = HookContext {
+        collection: "articles".to_string(),
+        operation: "create".to_string(),
+        data: HashMap::new(),
+        locale: None,
+        draft: None,
+        context: req_context,
+    };
+
+    let result = runner.run_after_write(
+        &hooks, &[], HookEvent::AfterChange, ctx, &tx, None,
+    );
+    assert!(result.is_ok(), "after_change hook should succeed");
+
+    let result_ctx = result.unwrap();
+    // The hook reads ctx.context.before_marker and writes it to ctx.data._context_received
+    assert_eq!(
+        result_ctx.data.get("_context_received").and_then(|v| v.as_str()),
+        Some("set-by-before-hook"),
+        "after_change hook should receive the context set by before-hooks"
+    );
+}

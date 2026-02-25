@@ -60,9 +60,11 @@ Each event contains:
 ## Event Pipeline
 
 ```
-Mutation committed
-  -> fire_after_event()        (existing hooks, unchanged)
-  -> publish_event()           (new)
+Transaction:
+  before-hooks → DB operation → after-hooks → commit
+
+After commit:
+  -> publish_event()
        1. live setting check
        2. before_broadcast hooks
        3. EventBus.publish()

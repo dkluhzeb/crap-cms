@@ -1007,32 +1007,36 @@ fn field_after_read_hook_transforms_value() {
 }
 
 #[test]
-fn fire_after_event_runs_hooks() {
-    // fire_after_event spawns a background task, but we can verify it doesn't panic
-    // and the function returns without blocking. Testing side effects from background
-    // tasks requires waiting, so we just verify it compiles and doesn't error.
-    let (_tmp, _pool, registry, runner) = setup();
+fn run_after_write_runs_hooks_with_crud_access() {
+    // run_after_write runs after-hooks inside the transaction with CRUD access.
+    let (_tmp, pool, registry, runner) = setup();
     let reg = registry.read().unwrap();
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
     let data = HashMap::new();
-    // This spawns into a tokio background task
-    let rt = tokio::runtime::Runtime::new().unwrap();
-    rt.block_on(async {
-        runner.fire_after_event(
-            &def.hooks,
-            &def.fields,
-            crap_cms::hooks::lifecycle::HookEvent::AfterChange,
-            "articles".to_string(),
-            "create".to_string(),
-            data,
-            None,
-        );
-        // Give the background task a moment to execute
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    });
-    // If we get here without panic, the after event hooks ran successfully
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    let ctx = crap_cms::hooks::lifecycle::HookContext {
+        collection: "articles".to_string(),
+        operation: "create".to_string(),
+        data,
+        locale: None,
+        draft: None,
+        context: HashMap::new(),
+    };
+    let result = runner.run_after_write(
+        &def.hooks,
+        &def.fields,
+        crap_cms::hooks::lifecycle::HookEvent::AfterChange,
+        ctx,
+        &tx,
+        None,
+    );
+    // Should succeed (no after_change hooks defined in the fixture = no-op)
+    assert!(result.is_ok());
+    tx.commit().unwrap();
 }
 
 // ── 4D. Before Broadcast ─────────────────────────────────────────────────────
