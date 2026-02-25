@@ -17,7 +17,7 @@ dev_mode = true
 # enabled = true                # enable SSE + gRPC Subscribe for live mutation events
 # channel_capacity = 1024       # broadcast channel buffer size
 
-# [locale]
-# default_locale = "en"         # default locale for content
-# locales = ["en", "de"]        # supported locales (empty = disabled)
-# fallback = true               # fall back to default locale if field is empty
+[locale]
+default_locale = "en"         # default locale for content
+locales = ["en", "de"]        # supported locales (empty = disabled)
+fallback = true               # fall back to default locale if field is empty

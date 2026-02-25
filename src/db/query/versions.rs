@@ -19,7 +19,7 @@ pub fn build_snapshot(
     }
     // Hydrate join table data into the snapshot
     let mut doc_clone = doc.clone();
-    super::hydrate_document(conn, slug, def, &mut doc_clone, None)?;
+    super::hydrate_document(conn, slug, def, &mut doc_clone, None, None)?;
     for (k, v) in &doc_clone.fields {
         data.insert(k.clone(), v.clone());
     }
@@ -238,7 +238,7 @@ pub fn restore_version(
         }
     }
     if !join_data.is_empty() {
-        super::save_join_table_data(conn, slug, def, parent_id, &join_data)?;
+        super::save_join_table_data(conn, slug, def, parent_id, &join_data, None)?;
     }
 
     // Update status

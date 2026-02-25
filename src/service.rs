@@ -56,7 +56,7 @@ pub fn create_document(
     let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
     let doc = query::create(&tx, slug, def, &final_data, locale_ctx)?;
 
-    query::save_join_table_data(&tx, slug, def, &doc.id, join_data)?;
+    query::save_join_table_data(&tx, slug, def, &doc.id, join_data, locale_ctx)?;
 
     if let Some(pw) = password {
         if !pw.is_empty() {
@@ -153,7 +153,7 @@ pub fn update_document(
         // Normal update: write to main table
         let doc = query::update(&tx, slug, def, id, &final_data, locale_ctx)?;
 
-        query::save_join_table_data(&tx, slug, def, &doc.id, join_data)?;
+        query::save_join_table_data(&tx, slug, def, &doc.id, join_data, locale_ctx)?;
 
         if let Some(pw) = password {
             if !pw.is_empty() {

@@ -15,12 +15,14 @@ crap.collections.define("pages", {
             name = "title",
             type = "text",
             required = true,
+            localized = true,
         },
         {
             name = "slug",
             type = "text",
             required = true,
             unique = true,
+            localized = true,
             admin = {
                 description = "URL path (e.g., 'about' for /about)",
                 width = "half",
@@ -32,6 +34,7 @@ crap.collections.define("pages", {
         {
             name = "content",
             type = "blocks",
+            localized = true,
             blocks = {
                 {
                     type = "richtext",
@@ -78,6 +81,7 @@ crap.collections.define("pages", {
                 {
                     name = "meta_title",
                     type = "text",
+                    localized = true,
                     admin = {
                         label = "Meta Title",
                         placeholder = "Custom SEO title...",
@@ -86,6 +90,7 @@ crap.collections.define("pages", {
                 {
                     name = "meta_description",
                     type = "textarea",
+                    localized = true,
                     admin = {
                         label = "Meta Description",
                         placeholder = "Describe this page for search engines...",

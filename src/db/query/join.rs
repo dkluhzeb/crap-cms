@@ -4,56 +4,123 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 
 use crate::core::{CollectionDefinition, Document};
-use crate::core::field::FieldType;
-use super::coerce_value;
+use crate::core::field::{FieldDefinition, FieldType};
+use super::{coerce_value, LocaleContext, LocaleMode};
+
+/// Resolve the effective locale string for a join table operation.
+/// Returns Some("en") when the field is localized and locale is enabled,
+/// None otherwise (same pattern as locale_write_column for regular columns).
+fn resolve_join_locale(
+    field: &FieldDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Option<String> {
+    let ctx = locale_ctx?;
+    if !field.localized || !ctx.config.is_enabled() { return None; }
+    let locale = match &ctx.mode {
+        LocaleMode::Single(l) => l.as_str(),
+        _ => ctx.config.default_locale.as_str(),
+    };
+    Some(locale.to_string())
+}
+
+/// When fallback is enabled and we're querying a non-default locale,
+/// returns the default locale to fall back to if the primary query returns empty.
+fn resolve_join_fallback_locale(
+    field: &FieldDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Option<String> {
+    let ctx = locale_ctx?;
+    if !field.localized || !ctx.config.is_enabled() || !ctx.config.fallback { return None; }
+    match &ctx.mode {
+        LocaleMode::Single(l) if l != &ctx.config.default_locale => {
+            Some(ctx.config.default_locale.clone())
+        }
+        _ => None,
+    }
+}
 
 /// Set related IDs for a has-many relationship junction table.
 /// Deletes all existing rows for the parent and inserts new ones with _order.
+/// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
 pub fn set_related_ids(
     conn: &rusqlite::Connection,
     collection: &str,
     field: &str,
     parent_id: &str,
     ids: &[String],
+    locale: Option<&str>,
 ) -> Result<()> {
     let table_name = format!("{}_{}", collection, field);
-    conn.execute(
-        &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
-        [parent_id],
-    ).with_context(|| format!("Failed to clear junction table {}", table_name))?;
+    if let Some(loc) = locale {
+        conn.execute(
+            &format!("DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2", table_name),
+            rusqlite::params![parent_id, loc],
+        ).with_context(|| format!("Failed to clear junction table {}", table_name))?;
+    } else {
+        conn.execute(
+            &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
+            [parent_id],
+        ).with_context(|| format!("Failed to clear junction table {}", table_name))?;
+    }
 
-    let sql = format!(
-        "INSERT INTO {} (parent_id, related_id, _order) VALUES (?1, ?2, ?3)",
-        table_name
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    for (i, id) in ids.iter().enumerate() {
-        stmt.execute(rusqlite::params![parent_id, id, i as i64])?;
+    if let Some(loc) = locale {
+        let sql = format!(
+            "INSERT INTO {} (parent_id, related_id, _order, _locale) VALUES (?1, ?2, ?3, ?4)",
+            table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        for (i, id) in ids.iter().enumerate() {
+            stmt.execute(rusqlite::params![parent_id, id, i as i64, loc])?;
+        }
+    } else {
+        let sql = format!(
+            "INSERT INTO {} (parent_id, related_id, _order) VALUES (?1, ?2, ?3)",
+            table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        for (i, id) in ids.iter().enumerate() {
+            stmt.execute(rusqlite::params![parent_id, id, i as i64])?;
+        }
     }
     Ok(())
 }
 
 /// Find related IDs for a has-many relationship junction table, ordered.
+/// When `locale` is Some, filters by `_locale`.
 pub fn find_related_ids(
     conn: &rusqlite::Connection,
     collection: &str,
     field: &str,
     parent_id: &str,
+    locale: Option<&str>,
 ) -> Result<Vec<String>> {
     let table_name = format!("{}_{}", collection, field);
-    let sql = format!(
-        "SELECT related_id FROM {} WHERE parent_id = ?1 ORDER BY _order",
-        table_name
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let ids: Vec<String> = stmt.query_map([parent_id], |row| {
-        row.get::<_, String>(0)
-    })?.filter_map(|r| r.ok()).collect();
-    Ok(ids)
+    if let Some(loc) = locale {
+        let sql = format!(
+            "SELECT related_id FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",
+            table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let ids: Vec<String> = stmt.query_map(rusqlite::params![parent_id, loc], |row| {
+            row.get::<_, String>(0)
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(ids)
+    } else {
+        let sql = format!(
+            "SELECT related_id FROM {} WHERE parent_id = ?1 ORDER BY _order",
+            table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let ids: Vec<String> = stmt.query_map([parent_id], |row| {
+            row.get::<_, String>(0)
+        })?.filter_map(|r| r.ok()).collect();
+        Ok(ids)
+    }
 }
 
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
+/// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
 pub fn set_array_rows(
     conn: &rusqlite::Connection,
     collection: &str,
@@ -61,12 +128,20 @@ pub fn set_array_rows(
     parent_id: &str,
     rows: &[HashMap<String, String>],
     sub_fields: &[crate::core::field::FieldDefinition],
+    locale: Option<&str>,
 ) -> Result<()> {
     let table_name = format!("{}_{}", collection, field_name);
-    conn.execute(
-        &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
-        [parent_id],
-    ).with_context(|| format!("Failed to clear array table {}", table_name))?;
+    if let Some(loc) = locale {
+        conn.execute(
+            &format!("DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2", table_name),
+            rusqlite::params![parent_id, loc],
+        ).with_context(|| format!("Failed to clear array table {}", table_name))?;
+    } else {
+        conn.execute(
+            &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
+            [parent_id],
+        ).with_context(|| format!("Failed to clear array table {}", table_name))?;
+    }
 
     if rows.is_empty() || sub_fields.is_empty() {
         return Ok(());
@@ -74,14 +149,27 @@ pub fn set_array_rows(
 
     // Build column list from sub-fields
     let col_names: Vec<&str> = sub_fields.iter().map(|f| f.name.as_str()).collect();
-    let all_cols = format!(
-        "id, parent_id, _order, {}",
-        col_names.join(", ")
-    );
-    let placeholders = format!(
-        "?1, ?2, ?3, {}",
-        (4..4 + col_names.len()).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(", ")
-    );
+    let (all_cols, placeholders) = if let Some(_) = locale {
+        let all_cols = format!(
+            "id, parent_id, _order, _locale, {}",
+            col_names.join(", ")
+        );
+        let placeholders = format!(
+            "?1, ?2, ?3, ?4, {}",
+            (5..5 + col_names.len()).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(", ")
+        );
+        (all_cols, placeholders)
+    } else {
+        let all_cols = format!(
+            "id, parent_id, _order, {}",
+            col_names.join(", ")
+        );
+        let placeholders = format!(
+            "?1, ?2, ?3, {}",
+            (4..4 + col_names.len()).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(", ")
+        );
+        (all_cols, placeholders)
+    };
     let sql = format!("INSERT INTO {} ({}) VALUES ({})", table_name, all_cols, placeholders);
 
     let mut stmt = conn.prepare(&sql)?;
@@ -92,6 +180,9 @@ pub fn set_array_rows(
             Box::new(parent_id.to_string()),
             Box::new(order as i64),
         ];
+        if let Some(loc) = locale {
+            params.push(Box::new(loc.to_string()));
+        }
         for sf in sub_fields {
             let value = row.get(&sf.name).cloned().unwrap_or_default();
             params.push(coerce_value(&sf.field_type, &value));
@@ -103,12 +194,14 @@ pub fn set_array_rows(
 }
 
 /// Find array rows for an array field join table, ordered.
+/// When `locale` is Some, filters by `_locale`.
 pub fn find_array_rows(
     conn: &rusqlite::Connection,
     collection: &str,
     field_name: &str,
     parent_id: &str,
     sub_fields: &[crate::core::field::FieldDefinition],
+    locale: Option<&str>,
 ) -> Result<Vec<serde_json::Value>> {
     let table_name = format!("{}_{}", collection, field_name);
     let col_names: Vec<&str> = sub_fields.iter().map(|f| f.name.as_str()).collect();
@@ -117,12 +210,25 @@ pub fn find_array_rows(
     } else {
         format!("id, {}", col_names.join(", "))
     };
-    let sql = format!(
-        "SELECT {} FROM {} WHERE parent_id = ?1 ORDER BY _order",
-        select_cols, table_name
-    );
+    let sql = if locale.is_some() {
+        format!(
+            "SELECT {} FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",
+            select_cols, table_name
+        )
+    } else {
+        format!(
+            "SELECT {} FROM {} WHERE parent_id = ?1 ORDER BY _order",
+            select_cols, table_name
+        )
+    };
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([parent_id], |row| {
+    let params: Vec<Box<dyn rusqlite::types::ToSql>> = if let Some(loc) = locale {
+        vec![Box::new(parent_id.to_string()), Box::new(loc.to_string())]
+    } else {
+        vec![Box::new(parent_id.to_string())]
+    };
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt.query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
         let mut map = serde_json::Map::new();
         let id: String = row.get(0)?;
         map.insert("id".to_string(), serde_json::Value::String(id));
@@ -144,61 +250,107 @@ pub fn find_array_rows(
 
 /// Set block rows for a blocks field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
+/// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
 pub fn set_block_rows(
     conn: &rusqlite::Connection,
     collection: &str,
     field_name: &str,
     parent_id: &str,
     rows: &[serde_json::Value],
+    locale: Option<&str>,
 ) -> Result<()> {
     let table_name = format!("{}_{}", collection, field_name);
-    conn.execute(
-        &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
-        [parent_id],
-    ).with_context(|| format!("Failed to clear blocks table {}", table_name))?;
+    if let Some(loc) = locale {
+        conn.execute(
+            &format!("DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2", table_name),
+            rusqlite::params![parent_id, loc],
+        ).with_context(|| format!("Failed to clear blocks table {}", table_name))?;
+    } else {
+        conn.execute(
+            &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
+            [parent_id],
+        ).with_context(|| format!("Failed to clear blocks table {}", table_name))?;
+    }
 
     if rows.is_empty() {
         return Ok(());
     }
 
-    let sql = format!(
-        "INSERT INTO {} (id, parent_id, _order, _block_type, data) VALUES (?1, ?2, ?3, ?4, ?5)",
-        table_name
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    for (order, row) in rows.iter().enumerate() {
-        let id = nanoid::nanoid!();
-        let block_type = row.get("_block_type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
-        // Store everything except _block_type as JSON data
-        let mut data_map = match row.as_object() {
-            Some(m) => m.clone(),
-            None => serde_json::Map::new(),
-        };
-        data_map.remove("_block_type");
-        data_map.remove("id");
-        let data_json = serde_json::Value::Object(data_map).to_string();
-        stmt.execute(rusqlite::params![id, parent_id, order as i64, block_type, data_json])?;
+    if let Some(loc) = locale {
+        let sql = format!(
+            "INSERT INTO {} (id, parent_id, _order, _block_type, data, _locale) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        for (order, row) in rows.iter().enumerate() {
+            let id = nanoid::nanoid!();
+            let block_type = row.get("_block_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let mut data_map = match row.as_object() {
+                Some(m) => m.clone(),
+                None => serde_json::Map::new(),
+            };
+            data_map.remove("_block_type");
+            data_map.remove("id");
+            let data_json = serde_json::Value::Object(data_map).to_string();
+            stmt.execute(rusqlite::params![id, parent_id, order as i64, block_type, data_json, loc])?;
+        }
+    } else {
+        let sql = format!(
+            "INSERT INTO {} (id, parent_id, _order, _block_type, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            table_name
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        for (order, row) in rows.iter().enumerate() {
+            let id = nanoid::nanoid!();
+            let block_type = row.get("_block_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let mut data_map = match row.as_object() {
+                Some(m) => m.clone(),
+                None => serde_json::Map::new(),
+            };
+            data_map.remove("_block_type");
+            data_map.remove("id");
+            let data_json = serde_json::Value::Object(data_map).to_string();
+            stmt.execute(rusqlite::params![id, parent_id, order as i64, block_type, data_json])?;
+        }
     }
     Ok(())
 }
 
 /// Find block rows for a blocks field join table, ordered.
+/// When `locale` is Some, filters by `_locale`.
 pub fn find_block_rows(
     conn: &rusqlite::Connection,
     collection: &str,
     field_name: &str,
     parent_id: &str,
+    locale: Option<&str>,
 ) -> Result<Vec<serde_json::Value>> {
     let table_name = format!("{}_{}", collection, field_name);
-    let sql = format!(
-        "SELECT id, _block_type, data FROM {} WHERE parent_id = ?1 ORDER BY _order",
-        table_name
-    );
+    let sql = if locale.is_some() {
+        format!(
+            "SELECT id, _block_type, data FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",
+            table_name
+        )
+    } else {
+        format!(
+            "SELECT id, _block_type, data FROM {} WHERE parent_id = ?1 ORDER BY _order",
+            table_name
+        )
+    };
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map([parent_id], |row| {
+    let params: Vec<Box<dyn rusqlite::types::ToSql>> = if let Some(loc) = locale {
+        vec![Box::new(parent_id.to_string()), Box::new(loc.to_string())]
+    } else {
+        vec![Box::new(parent_id.to_string())]
+    };
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let rows = stmt.query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
         let id: String = row.get(0)?;
         let block_type: String = row.get(1)?;
         let data_json: String = row.get(2)?;
@@ -218,12 +370,14 @@ pub fn find_block_rows(
 /// Hydrate a document with join table data (has-many relationships and arrays).
 /// Populates `doc.fields` with JSON arrays for each join-table field.
 /// If `select` is provided, skip hydrating fields not in the select list.
+/// When `locale_ctx` is provided, localized join fields are filtered by locale.
 pub fn hydrate_document(
     conn: &rusqlite::Connection,
     slug: &str,
     def: &CollectionDefinition,
     doc: &mut Document,
     select: Option<&[String]>,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     for field in &def.fields {
         // Skip hydrating fields not in the select list
@@ -232,11 +386,18 @@ pub fn hydrate_document(
                 continue;
             }
         }
+        let locale = resolve_join_locale(field, locale_ctx);
+        let locale_ref = locale.as_deref();
+        let fallback_locale = resolve_join_fallback_locale(field, locale_ctx);
+        let fallback_ref = fallback_locale.as_deref();
         match field.field_type {
             FieldType::Relationship => {
                 if let Some(ref rc) = field.relationship {
                     if rc.has_many {
-                        let ids = find_related_ids(conn, slug, &field.name, &doc.id)?;
+                        let mut ids = find_related_ids(conn, slug, &field.name, &doc.id, locale_ref)?;
+                        if ids.is_empty() && fallback_ref.is_some() {
+                            ids = find_related_ids(conn, slug, &field.name, &doc.id, fallback_ref)?;
+                        }
                         let json_ids: Vec<serde_json::Value> = ids.into_iter()
                             .map(serde_json::Value::String)
                             .collect();
@@ -245,7 +406,10 @@ pub fn hydrate_document(
                 }
             }
             FieldType::Array => {
-                let rows = find_array_rows(conn, slug, &field.name, &doc.id, &field.fields)?;
+                let mut rows = find_array_rows(conn, slug, &field.name, &doc.id, &field.fields, locale_ref)?;
+                if rows.is_empty() && fallback_ref.is_some() {
+                    rows = find_array_rows(conn, slug, &field.name, &doc.id, &field.fields, fallback_ref)?;
+                }
                 doc.fields.insert(field.name.clone(), serde_json::Value::Array(rows));
             }
             FieldType::Group => {
@@ -260,7 +424,10 @@ pub fn hydrate_document(
                 doc.fields.insert(field.name.clone(), serde_json::Value::Object(group_obj));
             }
             FieldType::Blocks => {
-                let rows = find_block_rows(conn, slug, &field.name, &doc.id)?;
+                let mut rows = find_block_rows(conn, slug, &field.name, &doc.id, locale_ref)?;
+                if rows.is_empty() && fallback_ref.is_some() {
+                    rows = find_block_rows(conn, slug, &field.name, &doc.id, fallback_ref)?;
+                }
                 doc.fields.insert(field.name.clone(), serde_json::Value::Array(rows));
             }
             _ => {}
@@ -271,14 +438,18 @@ pub fn hydrate_document(
 
 /// Save join table data for has-many relationships and arrays.
 /// Extracts relevant data from the data map and writes to join tables.
+/// When `locale_ctx` is provided, localized join fields are scoped by locale.
 pub fn save_join_table_data(
     conn: &rusqlite::Connection,
     slug: &str,
     def: &CollectionDefinition,
     parent_id: &str,
     data: &HashMap<String, serde_json::Value>,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     for field in &def.fields {
+        let locale = resolve_join_locale(field, locale_ctx);
+        let locale_ref = locale.as_deref();
         match field.field_type {
             FieldType::Relationship => {
                 if let Some(ref rc) = field.relationship {
@@ -298,7 +469,7 @@ pub fn save_join_table_data(
                                 }
                                 _ => Vec::new(),
                             };
-                            set_related_ids(conn, slug, &field.name, parent_id, &ids)?;
+                            set_related_ids(conn, slug, &field.name, parent_id, &ids, locale_ref)?;
                         }
                     }
                 }
@@ -324,7 +495,7 @@ pub fn save_join_table_data(
                         }
                         _ => Vec::new(),
                     };
-                    set_array_rows(conn, slug, &field.name, parent_id, &rows, &field.fields)?;
+                    set_array_rows(conn, slug, &field.name, parent_id, &rows, &field.fields, locale_ref)?;
                 }
             }
             FieldType::Blocks => {
@@ -333,7 +504,7 @@ pub fn save_join_table_data(
                         serde_json::Value::Array(arr) => arr.clone(),
                         _ => Vec::new(),
                     };
-                    set_block_rows(conn, slug, &field.name, parent_id, &rows)?;
+                    set_block_rows(conn, slug, &field.name, parent_id, &rows, locale_ref)?;
                 }
             }
             _ => {}
@@ -467,9 +638,9 @@ mod tests {
     fn set_and_find_related_ids() {
         let conn = setup_join_db();
         let ids = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
-        set_related_ids(&conn, "posts", "tags", "p1", &ids).unwrap();
+        set_related_ids(&conn, "posts", "tags", "p1", &ids, None).unwrap();
 
-        let found = find_related_ids(&conn, "posts", "tags", "p1").unwrap();
+        let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
         assert_eq!(found, vec!["t1", "t2", "t3"], "Should return IDs in insertion order");
     }
 
@@ -477,12 +648,12 @@ mod tests {
     fn replace_related_ids() {
         let conn = setup_join_db();
         let ids_old = vec!["t1".to_string(), "t2".to_string()];
-        set_related_ids(&conn, "posts", "tags", "p1", &ids_old).unwrap();
+        set_related_ids(&conn, "posts", "tags", "p1", &ids_old, None).unwrap();
 
         let ids_new = vec!["t3".to_string(), "t4".to_string()];
-        set_related_ids(&conn, "posts", "tags", "p1", &ids_new).unwrap();
+        set_related_ids(&conn, "posts", "tags", "p1", &ids_new, None).unwrap();
 
-        let found = find_related_ids(&conn, "posts", "tags", "p1").unwrap();
+        let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
         assert_eq!(found, vec!["t3", "t4"], "Old IDs should be replaced by new ones");
     }
 
@@ -491,10 +662,10 @@ mod tests {
         let conn = setup_join_db();
         // Set some IDs first, then clear them
         let ids = vec!["t1".to_string()];
-        set_related_ids(&conn, "posts", "tags", "p1", &ids).unwrap();
-        set_related_ids(&conn, "posts", "tags", "p1", &[]).unwrap();
+        set_related_ids(&conn, "posts", "tags", "p1", &ids, None).unwrap();
+        set_related_ids(&conn, "posts", "tags", "p1", &[], None).unwrap();
 
-        let found = find_related_ids(&conn, "posts", "tags", "p1").unwrap();
+        let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
         assert!(found.is_empty(), "Should return empty list after setting empty IDs");
     }
 
@@ -514,9 +685,9 @@ mod tests {
                 ("value".to_string(), "Value B".to_string()),
             ]),
         ];
-        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub).unwrap();
+        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
 
-        let found = find_array_rows(&conn, "posts", "items", "p1", &sub).unwrap();
+        let found = find_array_rows(&conn, "posts", "items", "p1", &sub, None).unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[0]["label"], "Label A");
         assert_eq!(found[0]["value"], "Value A");
@@ -537,7 +708,7 @@ mod tests {
                 ("value".to_string(), "Old Val".to_string()),
             ]),
         ];
-        set_array_rows(&conn, "posts", "items", "p1", &rows_old, &sub).unwrap();
+        set_array_rows(&conn, "posts", "items", "p1", &rows_old, &sub, None).unwrap();
 
         let rows_new = vec![
             HashMap::from([
@@ -545,9 +716,9 @@ mod tests {
                 ("value".to_string(), "New Val".to_string()),
             ]),
         ];
-        set_array_rows(&conn, "posts", "items", "p1", &rows_new, &sub).unwrap();
+        set_array_rows(&conn, "posts", "items", "p1", &rows_new, &sub, None).unwrap();
 
-        let found = find_array_rows(&conn, "posts", "items", "p1", &sub).unwrap();
+        let found = find_array_rows(&conn, "posts", "items", "p1", &sub, None).unwrap();
         assert_eq!(found.len(), 1, "Old rows should be replaced");
         assert_eq!(found[0]["label"], "New");
         assert_eq!(found[0]["value"], "New Val");
@@ -563,10 +734,10 @@ mod tests {
                 ("value".to_string(), "Y".to_string()),
             ]),
         ];
-        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub).unwrap();
-        set_array_rows(&conn, "posts", "items", "p1", &[], &sub).unwrap();
+        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
+        set_array_rows(&conn, "posts", "items", "p1", &[], &sub, None).unwrap();
 
-        let found = find_array_rows(&conn, "posts", "items", "p1", &sub).unwrap();
+        let found = find_array_rows(&conn, "posts", "items", "p1", &sub, None).unwrap();
         assert!(found.is_empty(), "Should return empty after setting empty rows");
     }
 
@@ -579,9 +750,9 @@ mod tests {
             serde_json::json!({"_block_type": "paragraph", "text": "Hello world"}),
             serde_json::json!({"_block_type": "image", "url": "/img/photo.jpg", "alt": "A photo"}),
         ];
-        set_block_rows(&conn, "posts", "content", "p1", &blocks).unwrap();
+        set_block_rows(&conn, "posts", "content", "p1", &blocks, None).unwrap();
 
-        let found = find_block_rows(&conn, "posts", "content", "p1").unwrap();
+        let found = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
         assert_eq!(found.len(), 2);
         assert_eq!(found[0]["_block_type"], "paragraph");
         assert_eq!(found[0]["text"], "Hello world");
@@ -599,14 +770,14 @@ mod tests {
         let blocks_old = vec![
             serde_json::json!({"_block_type": "paragraph", "text": "Old text"}),
         ];
-        set_block_rows(&conn, "posts", "content", "p1", &blocks_old).unwrap();
+        set_block_rows(&conn, "posts", "content", "p1", &blocks_old, None).unwrap();
 
         let blocks_new = vec![
             serde_json::json!({"_block_type": "heading", "level": 1, "text": "New heading"}),
         ];
-        set_block_rows(&conn, "posts", "content", "p1", &blocks_new).unwrap();
+        set_block_rows(&conn, "posts", "content", "p1", &blocks_new, None).unwrap();
 
-        let found = find_block_rows(&conn, "posts", "content", "p1").unwrap();
+        let found = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
         assert_eq!(found.len(), 1, "Old blocks should be replaced");
         assert_eq!(found[0]["_block_type"], "heading");
         assert_eq!(found[0]["text"], "New heading");
@@ -621,7 +792,7 @@ mod tests {
 
         // Set up has-many relationship data
         let tag_ids = vec!["t1".to_string(), "t2".to_string()];
-        set_related_ids(&conn, "posts", "tags", "p1", &tag_ids).unwrap();
+        set_related_ids(&conn, "posts", "tags", "p1", &tag_ids, None).unwrap();
 
         // Set up array data
         let sub = array_sub_fields();
@@ -631,19 +802,19 @@ mod tests {
                 ("value".to_string(), "Val 1".to_string()),
             ]),
         ];
-        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub).unwrap();
+        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
 
         // Set up blocks data
         let blocks = vec![
             serde_json::json!({"_block_type": "text", "body": "Hello"}),
         ];
-        set_block_rows(&conn, "posts", "content", "p1", &blocks).unwrap();
+        set_block_rows(&conn, "posts", "content", "p1", &blocks, None).unwrap();
 
         // Create a document to hydrate
         let mut doc = crate::core::Document::new("p1".to_string());
         doc.fields.insert("title".to_string(), serde_json::json!("Post 1"));
 
-        hydrate_document(&conn, "posts", &def, &mut doc, None).unwrap();
+        hydrate_document(&conn, "posts", &def, &mut doc, None, None).unwrap();
 
         // Verify has-many tags
         let tags = doc.fields.get("tags").expect("tags should be populated");

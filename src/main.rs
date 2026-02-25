@@ -1695,7 +1695,7 @@ fn export_command(
         let mut docs = db::query::find(&conn, slug, def, &query, None)?;
 
         for doc in &mut docs {
-            db::query::hydrate_document(&conn, slug, def, doc, None)?;
+            db::query::hydrate_document(&conn, slug, def, doc, None, None)?;
         }
 
         let docs_json: Vec<serde_json::Value> = docs.into_iter()
@@ -1860,7 +1860,7 @@ fn import_command(
 
             // Save join table data
             if !join_data.is_empty() {
-                db::query::save_join_table_data(&tx, slug, def, id, &join_data)?;
+                db::query::save_join_table_data(&tx, slug, def, id, &join_data, None)?;
             }
 
             total_imported += 1;

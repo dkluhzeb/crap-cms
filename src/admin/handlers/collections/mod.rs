@@ -579,6 +579,7 @@ pub async fn edit_form(
     }
 
     let (locale_ctx, locale_data) = build_locale_template_data(&state, locale_params.locale.as_deref());
+    let locale_ctx_for_hydrate = locale_ctx.clone();
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -629,7 +630,7 @@ pub async fn edit_form(
 
     // Hydrate join table data (has-many relationships and arrays)
     if let Ok(conn) = state.pool.get() {
-        if let Err(e) = query::hydrate_document(&conn, &slug, &def, &mut document, None) {
+        if let Err(e) = query::hydrate_document(&conn, &slug, &def, &mut document, None, locale_ctx_for_hydrate.as_ref()) {
             tracing::warn!("Failed to hydrate document {}: {}", id, e);
         }
     }

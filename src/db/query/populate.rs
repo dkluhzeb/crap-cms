@@ -97,7 +97,7 @@ pub fn populate_relationships(
                 }
                 match find_by_id(conn, &rel.collection, &rel_def, id, None)? {
                     Some(mut related_doc) => {
-                        hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc, None)?;
+                        hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc, None, None)?;
                         if let Some(ref uc) = rel_def.upload {
                             if uc.enabled {
                                 crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
@@ -127,7 +127,7 @@ pub fn populate_relationships(
             }
 
             if let Some(mut related_doc) = find_by_id(conn, &rel.collection, &rel_def, &id, None)? {
-                hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc, None)?;
+                hydrate_document(conn, &rel.collection, &rel_def, &mut related_doc, None, None)?;
                 if let Some(ref uc) = rel_def.upload {
                     if uc.enabled {
                         crate::core::upload::assemble_sizes_object(&mut related_doc, uc);

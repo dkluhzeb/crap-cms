@@ -261,7 +261,7 @@ impl ContentApi for ContentService {
             let conn = pool.get().context("DB connection for hydration")?;
             let select_slice = select.as_deref();
             for doc in &mut docs {
-                query::hydrate_document(&conn, &collection, &def_owned, doc, select_slice)?;
+                query::hydrate_document(&conn, &collection, &def_owned, doc, select_slice, locale_ctx.as_ref())?;
             }
             // Assemble sizes for upload collections
             if let Some(ref upload_config) = def_owned.upload {
@@ -418,7 +418,7 @@ impl ContentApi for ContentService {
             // Hydrate join table data (has-many relationships and arrays)
             if let Some(ref mut d) = doc {
                 let conn = pool.get().context("DB connection for hydration")?;
-                query::hydrate_document(&conn, &collection, &def_owned, d, select_slice)?;
+                query::hydrate_document(&conn, &collection, &def_owned, d, select_slice, locale_ctx.as_ref())?;
             }
             // Assemble sizes for upload collections
             if let Some(ref mut d) = doc {
