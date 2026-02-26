@@ -67,38 +67,43 @@ crap.collections.define("pages", {
 					},
 				},
 				{
-					name = "deep",
-					type = "blocks",
-					localized = true,
-					blocks = {
+					type = "deep",
+					label = "Deep Nesting",
+					fields = {
 						{
-							type = "richtext",
-							label = "Rich Text",
-							fields = {
-								{ name = "body", type = "richtext" },
-							},
-						},
-						{
-							type = "image",
-							label = "Image",
-							fields = {
+							name = "nested",
+							type = "blocks",
+							blocks = {
 								{
-									name = "image",
-									type = "upload",
-									required = true,
-									relationship = { collection = "media" },
+									type = "richtext",
+									label = "Rich Text",
+									fields = {
+										{ name = "body", type = "richtext" },
+									},
 								},
-								{ name = "caption", type = "text" },
-							},
-						},
-						{
-							type = "cta",
-							label = "Call to Action",
-							fields = {
-								{ name = "heading", type = "text", required = true },
-								{ name = "body", type = "textarea" },
-								{ name = "button_text", type = "text", required = true },
-								{ name = "button_url", type = "text", required = true },
+								{
+									type = "image",
+									label = "Image",
+									fields = {
+										{
+											name = "image",
+											type = "upload",
+											required = true,
+											relationship = { collection = "media" },
+										},
+										{ name = "caption", type = "text" },
+									},
+								},
+								{
+									type = "cta",
+									label = "Call to Action",
+									fields = {
+										{ name = "heading", type = "text", required = true },
+										{ name = "body", type = "textarea" },
+										{ name = "button_text", type = "text", required = true },
+										{ name = "button_url", type = "text", required = true },
+									},
+								},
 							},
 						},
 					},

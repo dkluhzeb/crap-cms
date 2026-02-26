@@ -238,7 +238,16 @@ pub fn find_array_rows(
                 rusqlite::types::Value::Null => serde_json::Value::Null,
                 rusqlite::types::Value::Integer(n) => serde_json::json!(n),
                 rusqlite::types::Value::Real(f) => serde_json::json!(f),
-                rusqlite::types::Value::Text(s) => serde_json::Value::String(s),
+                rusqlite::types::Value::Text(s) => {
+                    // Composite sub-fields store JSON in TEXT columns —
+                    // attempt to parse so nested data comes back structured.
+                    match sf.field_type {
+                        FieldType::Array | FieldType::Blocks | FieldType::Group | FieldType::Json => {
+                            serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+                        }
+                        _ => serde_json::Value::String(s),
+                    }
+                }
                 rusqlite::types::Value::Blob(_) => serde_json::Value::Null,
             };
             map.insert(sf.name.clone(), json_val);

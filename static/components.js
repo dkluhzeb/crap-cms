@@ -1127,51 +1127,115 @@ function toggleArrayRow(header) {
 }
 
 /**
+ * Escape a string for safe use inside a RegExp.
+ *
+ * @param {string} str - The string to escape.
+ * @returns {string} The escaped string.
+ */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Replace the first occurrence of `__INDEX__` in relevant attributes
+ * within a DOM subtree. Does NOT descend into nested `<template>` content
+ * automatically — use `replaceIndexInNestedTemplates` for that.
+ *
+ * @param {Element|DocumentFragment} root - The DOM subtree to process
+ * @param {number} index - The index to substitute
+ */
+function replaceIndexInSubtree(root, index) {
+  root.querySelectorAll('.form__array-row-title').forEach(
+    /** @param {HTMLElement} el */ (el) => {
+      if (el.textContent && el.textContent.includes('__INDEX__')) {
+        el.textContent = el.textContent.replace('__INDEX__', String(index));
+      }
+    }
+  );
+  root.querySelectorAll('input, select, textarea').forEach(
+    /** @param {HTMLInputElement} input */ (input) => {
+      if (input.name) {
+        input.name = input.name.replace('__INDEX__', String(index));
+      }
+    }
+  );
+  root.querySelectorAll('[data-field-name*="__INDEX__"]').forEach(
+    /** @param {HTMLElement} el */ (el) => {
+      const fn = el.getAttribute('data-field-name');
+      if (fn) {
+        el.setAttribute('data-field-name', fn.replace('__INDEX__', String(index)));
+      }
+    }
+  );
+  root.querySelectorAll('[id*="__INDEX__"]').forEach(
+    /** @param {HTMLElement} el */ (el) => {
+      el.id = el.id.replace('__INDEX__', String(index));
+    }
+  );
+  root.querySelectorAll('[onclick*="__INDEX__"]').forEach(
+    /** @param {HTMLElement} el */ (el) => {
+      const onclick = el.getAttribute('onclick');
+      if (onclick) {
+        el.setAttribute('onclick', onclick.replace('__INDEX__', String(index)));
+      }
+    }
+  );
+}
+
+/**
+ * Recursively replace the first `__INDEX__` inside nested `<template>`
+ * element content. Template content is inert (querySelectorAll on the parent
+ * won't reach it), so we must explicitly descend into each template's
+ * `.content` DocumentFragment.
+ *
+ * This is critical for nested composites: when the outer template is cloned,
+ * the outer-level `__INDEX__` in nested template inputs must be replaced so
+ * that when those nested templates are later cloned, only their OWN-level
+ * `__INDEX__` remains.
+ *
+ * @param {Element|DocumentFragment} root - The DOM subtree containing templates
+ * @param {number} index - The index to substitute
+ */
+function replaceIndexInNestedTemplates(root, index) {
+  root.querySelectorAll('template').forEach(
+    /** @param {HTMLTemplateElement} tmpl */ (tmpl) => {
+      replaceIndexInSubtree(tmpl.content, index);
+      // Recurse into deeper nested templates
+      replaceIndexInNestedTemplates(tmpl.content, index);
+    }
+  );
+}
+
+/**
+ * Replace the first occurrence of `__INDEX__` in each attribute value
+ * within a cloned template fragment, including inside nested `<template>`
+ * content (which is inert and not reachable by regular querySelectorAll).
+ *
+ * Uses `String.replace` (no regex /g flag) so only the first `__INDEX__`
+ * per attribute is replaced. This means each nesting level's placeholder
+ * is resolved in order: outer first, inner when that template is cloned.
+ *
+ * @param {HTMLElement} html - The cloned row element
+ * @param {number} index - The index to substitute
+ */
+function replaceTemplateIndex(html, index) {
+  html.setAttribute('data-row-index', String(index));
+  // Replace in the visible DOM subtree
+  replaceIndexInSubtree(html, index);
+  // Recursively replace in nested <template> content (inert DOM)
+  replaceIndexInNestedTemplates(html, index);
+}
+
+/**
  * Add a new row to an array field repeater.
  * Clones the <template> for the field, replaces __INDEX__ placeholders
  * with the next row index, and appends to the rows container.
  *
- * @param {string} fieldName - The array field name (matches data-field-name on the fieldset)
+ * @param {string} templateId - The template ID suffix (safe version of field name)
  */
-function addArrayRow(fieldName) {
-  const template = document.getElementById(`array-template-${fieldName}`);
-  const container = document.getElementById(`array-rows-${fieldName}`);
-  if (!template || !container) return;
-
-  const nextIndex = container.children.length;
-  const clone = template.content.cloneNode(true);
-
-  // Replace all __INDEX__ placeholders in the cloned content
-  const html = /** @type {HTMLElement} */ (clone.firstElementChild);
-  if (html) {
-    html.setAttribute('data-row-index', String(nextIndex));
-    html.querySelectorAll('input, select, textarea').forEach(
-      /** @param {HTMLInputElement} input */ (input) => {
-        if (input.name) {
-          input.name = input.name.replace(/__INDEX__/g, String(nextIndex));
-        }
-      }
-    );
-  }
-
-  container.appendChild(clone);
-}
-
-/**
- * Add a new block row to a blocks repeater.
- * Reads the selected block type from the dropdown, clones the matching
- * template, replaces __INDEX__ placeholders, and appends.
- *
- * @param {string} fieldName - The blocks field name (e.g. "content")
- */
-function addBlockRow(fieldName) {
-  const typeSelect = /** @type {HTMLSelectElement} */ (
-    document.getElementById(`block-type-${fieldName}`)
-  );
-  if (!typeSelect) return;
-  const blockType = typeSelect.value;
-  const template = document.getElementById(`block-template-${fieldName}-${blockType}`);
-  const container = document.getElementById(`array-rows-${fieldName}`);
+function addArrayRow(templateId) {
+  const template = document.getElementById(`array-template-${templateId}`);
+  const container = document.getElementById(`array-rows-${templateId}`);
   if (!template || !container) return;
 
   const nextIndex = container.children.length;
@@ -1179,28 +1243,61 @@ function addBlockRow(fieldName) {
 
   const html = /** @type {HTMLElement} */ (clone.firstElementChild);
   if (html) {
-    html.setAttribute('data-row-index', String(nextIndex));
-    // Replace __INDEX__ in title text
-    html.querySelectorAll('.form__array-row-title').forEach(
-      /** @param {HTMLElement} el */ (el) => {
-        el.textContent = el.textContent.replace(/__INDEX__/g, String(nextIndex));
-      }
-    );
-    html.querySelectorAll('input, select, textarea').forEach(
-      /** @param {HTMLInputElement} input */ (input) => {
-        if (input.name) {
-          input.name = input.name.replace(/__INDEX__/g, String(nextIndex));
-        }
-      }
-    );
+    replaceTemplateIndex(html, nextIndex);
   }
 
   container.appendChild(clone);
+  // Initialize any richtext editors in the new row
+  if (html) {
+    html.querySelectorAll('crap-richtext').forEach(
+      /** @param {HTMLElement} el */ (el) => {
+        if (el.connectedCallback) el.connectedCallback();
+      }
+    );
+  }
+}
+
+/**
+ * Add a new block row to a blocks repeater.
+ * Reads the selected block type from the dropdown, clones the matching
+ * template, replaces __INDEX__ placeholders, and appends.
+ *
+ * @param {string} templateId - The template ID suffix (safe version of field name)
+ */
+function addBlockRow(templateId) {
+  const typeSelect = /** @type {HTMLSelectElement} */ (
+    document.getElementById(`block-type-${templateId}`)
+  );
+  if (!typeSelect) return;
+  const blockType = typeSelect.value;
+  const template = document.getElementById(`block-template-${templateId}-${blockType}`);
+  const container = document.getElementById(`array-rows-${templateId}`);
+  if (!template || !container) return;
+
+  const nextIndex = container.children.length;
+  const clone = /** @type {HTMLTemplateElement} */ (template).content.cloneNode(true);
+
+  const html = /** @type {HTMLElement} */ (clone.firstElementChild);
+  if (html) {
+    replaceTemplateIndex(html, nextIndex);
+  }
+
+  container.appendChild(clone);
+  // Initialize any richtext editors in the new row
+  if (html) {
+    html.querySelectorAll('crap-richtext').forEach(
+      /** @param {HTMLElement} el */ (el) => {
+        if (el.connectedCallback) el.connectedCallback();
+      }
+    );
+  }
 }
 
 /**
  * Remove an array row from the repeater.
  * Re-indexes remaining rows so form keys stay sequential.
+ * Scopes the reindexing to the correct nesting level using the parent
+ * fieldset's data-field-name attribute.
  *
  * @param {HTMLButtonElement} btn - The remove button inside the row
  */
@@ -1209,10 +1306,14 @@ function removeArrayRow(btn) {
   if (!row) return;
 
   const container = row.parentElement;
+  const fieldset = container ? container.closest('.form__array') : null;
+  const fieldName = fieldset ? fieldset.getAttribute('data-field-name') || '' : '';
+
   row.remove();
 
-  // Re-index remaining rows
-  if (container) {
+  // Re-index remaining rows at this level only
+  if (container && fieldName) {
+    const pattern = new RegExp('(' + escapeRegex(fieldName) + '\\[)\\d+(\\])');
     Array.from(container.children).forEach(
       /** @param {Element} child @param {number} idx */
       (child, idx) => {
@@ -1220,7 +1321,7 @@ function removeArrayRow(btn) {
         child.querySelectorAll('input, select, textarea').forEach(
           /** @param {HTMLInputElement} input */ (input) => {
             if (input.name) {
-              input.name = input.name.replace(/\[\d+\]/, `[${idx}]`);
+              input.name = input.name.replace(pattern, `$1${idx}$2`);
             }
           }
         );

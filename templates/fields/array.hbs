@@ -4,7 +4,7 @@
     {{#if required}}<span class="required">*</span>{{/if}}
   </legend>
 
-  <div class="form__array-rows" id="array-rows-{{name}}">
+  <div class="form__array-rows" id="array-rows-{{template_id}}">
     {{#each rows}}
     <div class="form__array-row" data-row-index="{{this.index}}">
       <div class="form__array-row-header" onclick="toggleArrayRow(this)">
@@ -27,7 +27,7 @@
     {{/each}}
   </div>
 
-  <template id="array-template-{{name}}">
+  <template id="array-template-{{template_id}}">
     <div class="form__array-row" data-row-index="__INDEX__">
       <div class="form__array-row-header" onclick="toggleArrayRow(this)">
         <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
@@ -40,32 +40,7 @@
         <div class="form__array-row-fields">
           {{#each sub_fields}}
           <div class="form__field">
-            <label>{{this.label}}</label>
-            {{#if (eq this.field_type "richtext")}}
-            <crap-richtext>
-              <textarea name="{{../name}}[__INDEX__][{{this.name}}]"></textarea>
-            </crap-richtext>
-            {{else if (eq this.field_type "textarea")}}
-            <textarea name="{{../name}}[__INDEX__][{{this.name}}]" class="form__textarea"></textarea>
-            {{else if (eq this.field_type "checkbox")}}
-            <input type="hidden" name="{{../name}}[__INDEX__][{{this.name}}]" value="0" />
-            <input type="checkbox" name="{{../name}}[__INDEX__][{{this.name}}]" value="1" />
-            {{else if (eq this.field_type "select")}}
-            <select name="{{../name}}[__INDEX__][{{this.name}}]" class="form__select">
-              <option value="">—</option>
-              {{#each this.options}}
-              <option value="{{this.value}}">{{this.label}}</option>
-              {{/each}}
-            </select>
-            {{else if (eq this.field_type "number")}}
-            <input type="number" name="{{../name}}[__INDEX__][{{this.name}}]" value="" />
-            {{else if (eq this.field_type "date")}}
-            <input type="date" name="{{../name}}[__INDEX__][{{this.name}}]" value="" />
-            {{else if (eq this.field_type "email")}}
-            <input type="email" name="{{../name}}[__INDEX__][{{this.name}}]" value="" />
-            {{else}}
-            <input type="text" name="{{../name}}[__INDEX__][{{this.name}}]" value="" />
-            {{/if}}
+            {{{render_field this}}}
           </div>
           {{/each}}
         </div>
@@ -73,7 +48,7 @@
     </div>
   </template>
 
-  <button type="button" class="button button--ghost button--small" onclick="addArrayRow('{{name}}')">
+  <button type="button" class="button button--ghost button--small" onclick="addArrayRow('{{template_id}}')">
     <span class="material-symbols-outlined" style="font-size:16px">add</span>
     Add Row
   </button>
