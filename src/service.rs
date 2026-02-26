@@ -23,6 +23,8 @@ use crate::hooks::lifecycle::{self, HookContext, HookEvent, HookRunner};
 pub type WriteResult = (Document, HashMap<String, serde_json::Value>);
 
 /// Save a draft-only version: merge incoming hook-processed data onto existing doc,
+/// create a version snapshot, and prune. `final_ctx_data` contains all hook-modified
+/// data including join table fields (arrays, blocks, relationships).
 /// merge join data, create a draft version snapshot, and prune.
 fn save_draft_version(
     tx: &rusqlite::Transaction,
@@ -32,7 +34,6 @@ fn save_draft_version(
     versions: Option<&VersionsConfig>,
     existing_doc: &Document,
     final_ctx_data: &HashMap<String, serde_json::Value>,
-    join_data: &HashMap<String, serde_json::Value>,
 ) -> Result<()> {
     let mut snapshot_fields = existing_doc.fields.clone();
     for (k, v) in final_ctx_data {
@@ -46,12 +47,21 @@ fn save_draft_version(
     };
 
     let mut snapshot = query::build_snapshot(tx, table, fields, &snapshot_doc)?;
-    // Merge incoming join data (blocks/arrays/has-many) into the snapshot.
+    // Merge incoming hook-modified join data (blocks/arrays/has-many) into the snapshot.
     // build_snapshot hydrates from join tables (which have the old/published data),
-    // so we must overwrite with the incoming form data for draft-only saves.
+    // so we must overwrite with the hook-processed data for draft-only saves.
     if let Some(obj) = snapshot.as_object_mut() {
-        for (k, v) in join_data {
-            obj.insert(k.clone(), v.clone());
+        for field in fields {
+            match field.field_type {
+                crate::core::field::FieldType::Array
+                | crate::core::field::FieldType::Blocks
+                | crate::core::field::FieldType::Relationship => {
+                    if let Some(v) = final_ctx_data.get(&field.name) {
+                        obj.insert(field.name.clone(), v.clone());
+                    }
+                }
+                _ => {}
+            }
         }
     }
     query::create_version(tx, table, parent_id, "draft", &snapshot)?;
@@ -132,10 +142,12 @@ pub fn create_document(
         &def.hooks, &def.fields, hook_ctx, &tx, slug, None, user, is_draft,
     )?;
     let req_context = final_ctx.context.clone();
-    let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
+    let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx, &def.fields);
     let doc = query::create(&tx, slug, def, &final_data, locale_ctx)?;
 
-    query::save_join_table_data(&tx, slug, &def.fields, &doc.id, join_data, locale_ctx)?;
+    // Use hook-modified data so before_change hooks that alter arrays/blocks/relationships
+    // have their changes persisted.
+    query::save_join_table_data(&tx, slug, &def.fields, &doc.id, &final_ctx.data, locale_ctx)?;
 
     if let Some(pw) = password {
         if !pw.is_empty() {
@@ -214,7 +226,7 @@ pub fn update_document(
         &def.hooks, &def.fields, hook_ctx, &tx, slug, Some(id), user, is_draft,
     )?;
     let req_context = final_ctx.context.clone();
-    let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
+    let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx, &def.fields);
 
     if is_draft && def.has_versions() {
         // Version-only save: do NOT update the main table.
@@ -223,7 +235,7 @@ pub fn update_document(
 
         save_draft_version(
             &tx, slug, id, &def.fields, def.versions.as_ref(),
-            &existing_doc, &final_ctx.data, join_data,
+            &existing_doc, &final_ctx.data,
         )?;
 
         // After-hooks: run inside the same transaction, with CRUD access
@@ -247,7 +259,9 @@ pub fn update_document(
         // Normal update: write to main table
         let doc = query::update(&tx, slug, def, id, &final_data, locale_ctx)?;
 
-        query::save_join_table_data(&tx, slug, &def.fields, &doc.id, join_data, locale_ctx)?;
+        // Use hook-modified data so before_change hooks that alter arrays/blocks/relationships
+        // have their changes persisted.
+        query::save_join_table_data(&tx, slug, &def.fields, &doc.id, &final_ctx.data, locale_ctx)?;
 
         if let Some(pw) = password {
             if !pw.is_empty() {
@@ -365,7 +379,7 @@ pub fn update_global_document(
         &def.hooks, &def.fields, hook_ctx, &tx, &global_table, Some("default"), user, is_draft,
     )?;
     let req_context = final_ctx.context.clone();
-    let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx);
+    let final_data = lifecycle::hook_ctx_to_string_map(&final_ctx, &def.fields);
 
     if is_draft && def.has_versions() {
         // Version-only save: do NOT update the main table.
@@ -373,7 +387,7 @@ pub fn update_global_document(
 
         save_draft_version(
             &tx, &global_table, "default", &def.fields, def.versions.as_ref(),
-            &existing_doc, &final_ctx.data, join_data,
+            &existing_doc, &final_ctx.data,
         )?;
 
         // After-hooks
@@ -397,8 +411,9 @@ pub fn update_global_document(
         // Normal update: write to main table
         let doc = query::update_global(&tx, slug, def, &final_data, locale_ctx)?;
 
-        // Save join table data (arrays, blocks, has-many relationships)
-        query::save_join_table_data(&tx, &global_table, &def.fields, "default", join_data, locale_ctx)?;
+        // Use hook-modified data so before_change hooks that alter arrays/blocks/relationships
+        // have their changes persisted.
+        query::save_join_table_data(&tx, &global_table, &def.fields, "default", &final_ctx.data, locale_ctx)?;
 
         // Versioning: set status to published and create version
         if def.has_versions() {

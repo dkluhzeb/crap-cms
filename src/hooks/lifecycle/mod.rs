@@ -1406,13 +1406,38 @@ fn context_to_lua_table(lua: &Lua, context: &HookContext) -> mlua::Result<mlua::
 
 /// Convert hook context data (JSON values) back to string map for query functions.
 /// Only includes fields that have parent table columns (skips array/has-many).
-pub fn hook_ctx_to_string_map(ctx: &HookContext) -> HashMap<String, String> {
-    ctx.data.iter().map(|(k, v)| {
-        (k.clone(), match v {
+/// Group fields are flattened from `{ "seo": { "meta_title": "X" } }` to
+/// `{ "seo__meta_title": "X" }` so `query::create/update` can find them.
+pub fn hook_ctx_to_string_map(
+    ctx: &HookContext,
+    fields: &[crate::core::field::FieldDefinition],
+) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for (k, v) in &ctx.data {
+        // Check if this key is a group field that needs flattening
+        let is_group = fields.iter().any(|f| {
+            f.name == *k && f.field_type == crate::core::field::FieldType::Group
+        });
+        if is_group {
+            if let Some(obj) = v.as_object() {
+                for (sub_key, sub_val) in obj {
+                    let flat_key = format!("{}__{}", k, sub_key);
+                    let flat_val = match sub_val {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    map.insert(flat_key, flat_val);
+                }
+                continue;
+            }
+            // If the value is already a string (e.g. from form data), fall through
+        }
+        map.insert(k.clone(), match v {
             serde_json::Value::String(s) => s.clone(),
             other => other.to_string(),
-        })
-    }).collect()
+        });
+    }
+    map
 }
 
 

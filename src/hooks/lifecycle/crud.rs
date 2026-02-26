@@ -271,6 +271,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
             };
 
             let mut data = lua_table_to_hashmap(&data_table)?;
+            flatten_lua_groups(&data_table, &def.fields, &mut data)?;
 
             // Enforce access control when overrideAccess = false
             if !override_access {
@@ -374,6 +375,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
             };
 
             let mut data = lua_table_to_hashmap(&data_table)?;
+            flatten_lua_groups(&data_table, &def.fields, &mut data)?;
 
             // Enforce access control when overrideAccess = false
             if !override_access {
@@ -1029,6 +1031,36 @@ pub(crate) fn lua_table_to_hashmap(tbl: &mlua::Table) -> mlua::Result<HashMap<St
         map.insert(k, s);
     }
     Ok(map)
+}
+
+/// Flatten group fields from a Lua data table into the data map.
+/// Converts `seo = { meta_title = "X" }` → `seo__meta_title = "X"`.
+pub(crate) fn flatten_lua_groups(
+    tbl: &mlua::Table,
+    fields: &[crate::core::field::FieldDefinition],
+    data: &mut HashMap<String, String>,
+) -> mlua::Result<()> {
+    for field in fields {
+        if field.field_type != crate::core::field::FieldType::Group {
+            continue;
+        }
+        if let Ok(sub_table) = tbl.get::<mlua::Table>(field.name.as_str()) {
+            for sub in &field.fields {
+                if let Ok(val) = sub_table.get::<Value>(sub.name.as_str()) {
+                    let s = match val {
+                        Value::String(s) => s.to_str()?.to_string(),
+                        Value::Integer(i) => i.to_string(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Boolean(b) => b.to_string(),
+                        Value::Nil => continue,
+                        _ => continue,
+                    };
+                    data.insert(format!("{}__{}", field.name, sub.name), s);
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Convert a Document to a Lua table.

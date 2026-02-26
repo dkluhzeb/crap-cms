@@ -1695,3 +1695,427 @@ async fn find_by_id_default_depth_populates() {
     let cat_field = fields.fields.get("category");
     assert!(cat_field.is_some(), "category field should be present in FindByID");
 }
+
+// ── Dot-notation filter e2e tests ────────────────────────────────────────────
+
+fn make_products_def() -> CollectionDefinition {
+    CollectionDefinition {
+        slug: "products".to_string(),
+        labels: CollectionLabels {
+            singular: Some(LocalizedString::Plain("Product".to_string())),
+            plural: Some(LocalizedString::Plain("Products".to_string())),
+        },
+        timestamps: true,
+        fields: vec![
+            FieldDefinition {
+                name: "name".to_string(),
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![FieldDefinition {
+                    name: "meta_title".to_string(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "variants".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![
+                    FieldDefinition {
+                        name: "color".to_string(),
+                        ..Default::default()
+                    },
+                    FieldDefinition {
+                        name: "dimensions".to_string(),
+                        field_type: FieldType::Group,
+                        fields: vec![
+                            FieldDefinition {
+                                name: "width".to_string(),
+                                ..Default::default()
+                            },
+                            FieldDefinition {
+                                name: "height".to_string(),
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                blocks: vec![
+                    BlockDefinition {
+                        block_type: "text".to_string(),
+                        fields: vec![FieldDefinition {
+                            name: "body".to_string(),
+                            field_type: FieldType::Textarea,
+                            ..Default::default()
+                        }],
+                        ..Default::default()
+                    },
+                    BlockDefinition {
+                        block_type: "section".to_string(),
+                        fields: vec![
+                            FieldDefinition {
+                                name: "heading".to_string(),
+                                ..Default::default()
+                            },
+                            FieldDefinition {
+                                name: "meta".to_string(),
+                                field_type: FieldType::Group,
+                                fields: vec![FieldDefinition {
+                                    name: "author".to_string(),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ],
+        admin: CollectionAdmin::default(),
+        hooks: CollectionHooks::default(),
+        auth: None,
+        upload: None,
+        access: CollectionAccess::default(),
+        live: None,
+        versions: None,
+    }
+}
+
+/// Build a proto Value from a string.
+fn str_val(s: &str) -> Value {
+    Value {
+        kind: Some(Kind::StringValue(s.to_string())),
+    }
+}
+
+/// Build a proto StructValue from key-value pairs.
+fn struct_val(pairs: &[(&str, Value)]) -> Value {
+    let mut fields = BTreeMap::new();
+    for (k, v) in pairs {
+        fields.insert(k.to_string(), v.clone());
+    }
+    Value {
+        kind: Some(Kind::StructValue(Struct { fields })),
+    }
+}
+
+/// Build a proto ListValue from values.
+fn list_val(items: Vec<Value>) -> Value {
+    Value {
+        kind: Some(Kind::ListValue(prost_types::ListValue { values: items })),
+    }
+}
+
+/// Build a products Struct for gRPC Create.
+fn make_product_struct(
+    name: &str,
+    seo_meta_title: &str,
+    variant_color: &str,
+    dim_width: &str,
+    dim_height: &str,
+    blocks: Vec<Value>,
+) -> Struct {
+    let mut fields = BTreeMap::new();
+    fields.insert("name".to_string(), str_val(name));
+    fields.insert(
+        "seo".to_string(),
+        struct_val(&[("meta_title", str_val(seo_meta_title))]),
+    );
+    fields.insert(
+        "variants".to_string(),
+        list_val(vec![struct_val(&[
+            ("color", str_val(variant_color)),
+            (
+                "dimensions",
+                struct_val(&[("width", str_val(dim_width)), ("height", str_val(dim_height))]),
+            ),
+        ])]),
+    );
+    fields.insert("content".to_string(), list_val(blocks));
+    Struct { fields }
+}
+
+#[tokio::test]
+async fn find_with_where_dot_notation() {
+    let ts = setup_service(vec![make_products_def()], vec![]);
+
+    // Create Product 1: "Widget" — red variant, text block
+    let widget_data = make_product_struct(
+        "Widget",
+        "Buy Widget",
+        "red",
+        "10",
+        "20",
+        vec![struct_val(&[
+            ("_block_type", str_val("text")),
+            ("body", str_val("Widget description here")),
+        ])],
+    );
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "products".to_string(),
+            data: Some(widget_data),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // Create Product 2: "Gadget" — blue variant, section block with group
+    let gadget_data = make_product_struct(
+        "Gadget",
+        "Buy Gadget",
+        "blue",
+        "5",
+        "15",
+        vec![struct_val(&[
+            ("_block_type", str_val("section")),
+            ("heading", str_val("About Gadget")),
+            ("meta", struct_val(&[("author", str_val("Alice"))])),
+        ])],
+    );
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "products".to_string(),
+            data: Some(gadget_data),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // 1. Group sub-field: seo.meta_title contains "Widget"
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"seo.meta_title": {"contains": "Widget"}}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "group sub-field filter");
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "name").as_deref(),
+        Some("Widget")
+    );
+
+    // 2. Array sub-field: variants.color = "red"
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"variants.color": "red"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "array sub-field filter");
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "name").as_deref(),
+        Some("Widget")
+    );
+
+    // 3. Group-in-array: variants.dimensions.width = "10"
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"variants.dimensions.width": "10"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "group-in-array filter");
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "name").as_deref(),
+        Some("Widget")
+    );
+
+    // 4. Block sub-field: content.body contains "description"
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"content.body": {"contains": "description"}}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "block sub-field filter");
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "name").as_deref(),
+        Some("Widget")
+    );
+
+    // 5. Block type: content._block_type = "section"
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"content._block_type": "section"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "block type filter");
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "name").as_deref(),
+        Some("Gadget")
+    );
+
+    // 6. Group-in-block: content.meta.author = "Alice"
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"content.meta.author": "Alice"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "group-in-block filter");
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "name").as_deref(),
+        Some("Gadget")
+    );
+}
+
+// ── Hook-modified join data persistence test ─────────────────────────────────
+
+/// Set up a service with an init.lua that registers a before_change hook
+/// to modify array data. This tests that save_join_table_data uses the
+/// hook-modified data, not the original request data.
+fn setup_service_with_hook(
+    collections: Vec<CollectionDefinition>,
+    init_lua: &str,
+) -> TestSetup {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::default();
+    config.database.path = "test.db".to_string();
+    config.auth.secret = "test-jwt-secret".to_string();
+
+    // Write init.lua so HookRunner picks up the registered hook
+    std::fs::write(tmp.path().join("init.lua"), init_lua).expect("write init.lua");
+
+    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
+
+    let registry = Registry::shared();
+    {
+        let mut reg = registry.write().unwrap();
+        for def in &collections {
+            reg.register_collection(def.clone());
+        }
+    }
+
+    migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
+
+    let hook_runner =
+        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
+
+    let email_renderer =
+        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+
+    let service = ContentService::new(
+        db_pool,
+        registry,
+        hook_runner,
+        config.auth.secret.clone(),
+        &config.depth,
+        config.email.clone(),
+        email_renderer,
+        config.server.clone(),
+        None,
+        config.locale.clone(),
+    );
+
+    TestSetup { _tmp: tmp, service }
+}
+
+#[tokio::test]
+async fn before_change_hook_modifies_array_data() {
+    // Register a before_change hook that injects a "hook_injected" color variant
+    let init_lua = r#"
+        crap.hooks.register("before_change", function(ctx)
+            if ctx.collection == "products" and ctx.data.variants then
+                ctx.data.variants[#ctx.data.variants + 1] = {
+                    color = "hook_injected",
+                    dimensions = { width = "99", height = "99" },
+                }
+            end
+            return ctx
+        end)
+    "#;
+
+    let ts = setup_service_with_hook(vec![make_products_def()], init_lua);
+
+    // Create a product with one variant — the hook should add a second
+    let data = make_product_struct(
+        "HookTest",
+        "Test SEO",
+        "original",
+        "1",
+        "2",
+        vec![struct_val(&[
+            ("_block_type", str_val("text")),
+            ("body", str_val("test body")),
+        ])],
+    );
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "products".to_string(),
+            data: Some(data),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // Find the product and check that the hook-injected variant exists
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"variants.color": "hook_injected"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "hook-injected variant should be findable");
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "name").as_deref(),
+        Some("HookTest")
+    );
+
+    // Also verify the original variant is still there
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "products".to_string(),
+            r#where: Some(r#"{"variants.color": "original"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(resp.total, 1, "original variant should still exist");
+}

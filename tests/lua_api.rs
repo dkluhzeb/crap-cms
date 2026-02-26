@@ -2730,3 +2730,80 @@ fn collections_list_can_filter_and_redefine() {
     "#);
     assert_eq!(result, "plugin_field");
 }
+
+// ── Dot-notation filter e2e tests ────────────────────────────────────────────
+
+#[test]
+fn lua_find_dot_notation_filters() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        -- Create Product 1: "Widget" with red variant, text block
+        crap.collections.create("products", {
+            name = "Widget",
+            seo = { meta_title = "Buy Widget" },
+            variants = {
+                { color = "red", dimensions = { width = "10", height = "20" } },
+            },
+            content = {
+                { _block_type = "text", body = "Widget description here" },
+            },
+        })
+
+        -- Create Product 2: "Gadget" with blue variant, section block
+        crap.collections.create("products", {
+            name = "Gadget",
+            seo = { meta_title = "Buy Gadget" },
+            variants = {
+                { color = "blue", dimensions = { width = "5", height = "15" } },
+            },
+            content = {
+                { _block_type = "section", heading = "About Gadget", meta = { author = "Alice" } },
+            },
+        })
+
+        -- 1. Group sub-field: seo.meta_title contains "Widget"
+        local r1 = crap.collections.find("products", {
+            filters = { ["seo.meta_title"] = { contains = "Widget" } },
+        })
+        if r1.total ~= 1 then return "GROUP:WRONG_TOTAL:" .. tostring(r1.total) end
+        if r1.documents[1].name ~= "Widget" then return "GROUP:WRONG_NAME:" .. r1.documents[1].name end
+
+        -- 2. Array sub-field: variants.color = "red"
+        local r2 = crap.collections.find("products", {
+            filters = { ["variants.color"] = "red" },
+        })
+        if r2.total ~= 1 then return "ARRAY:WRONG_TOTAL:" .. tostring(r2.total) end
+        if r2.documents[1].name ~= "Widget" then return "ARRAY:WRONG_NAME:" .. r2.documents[1].name end
+
+        -- 3. Group-in-array: variants.dimensions.width = "10"
+        local r3 = crap.collections.find("products", {
+            filters = { ["variants.dimensions.width"] = "10" },
+        })
+        if r3.total ~= 1 then return "GIA:WRONG_TOTAL:" .. tostring(r3.total) end
+        if r3.documents[1].name ~= "Widget" then return "GIA:WRONG_NAME:" .. r3.documents[1].name end
+
+        -- 4. Block sub-field: content.body contains "description"
+        local r4 = crap.collections.find("products", {
+            filters = { ["content.body"] = { contains = "description" } },
+        })
+        if r4.total ~= 1 then return "BLOCK:WRONG_TOTAL:" .. tostring(r4.total) end
+        if r4.documents[1].name ~= "Widget" then return "BLOCK:WRONG_NAME:" .. r4.documents[1].name end
+
+        -- 5. Block type: content._block_type = "section"
+        local r5 = crap.collections.find("products", {
+            filters = { ["content._block_type"] = "section" },
+        })
+        if r5.total ~= 1 then return "BTYPE:WRONG_TOTAL:" .. tostring(r5.total) end
+        if r5.documents[1].name ~= "Gadget" then return "BTYPE:WRONG_NAME:" .. r5.documents[1].name end
+
+        -- 6. Group-in-block: content.meta.author = "Alice"
+        local r6 = crap.collections.find("products", {
+            filters = { ["content.meta.author"] = "Alice" },
+        })
+        if r6.total ~= 1 then return "GIB:WRONG_TOTAL:" .. tostring(r6.total) end
+        if r6.documents[1].name ~= "Gadget" then return "GIB:WRONG_NAME:" .. r6.documents[1].name end
+
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
