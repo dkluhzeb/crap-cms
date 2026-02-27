@@ -722,7 +722,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
             if is_draft && def.has_versions() {
                 // Version-only save: do NOT update the main table.
                 let existing_doc = crate::service::persist_draft_version(
-                    conn, &collection, &id, &def, &hook_data, None,
+                    conn, &collection, &id, &def, &hook_data, locale_ctx.as_ref(),
                 ).map_err(|e| mlua::Error::RuntimeError(format!("draft version error: {}", e)))?;
 
                 // After-change hooks (draft path)
@@ -739,6 +739,11 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                         .map_err(|e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)))?;
                     lua.set_app_data(HookDepth(current_depth));
                 }
+
+                // Hydrate join-table fields before returning
+                let mut existing_doc = existing_doc;
+                query::hydrate_document(conn, &collection, &def.fields, &mut existing_doc, None, locale_ctx.as_ref())
+                    .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
 
                 document_to_lua_table(lua, &existing_doc)
             } else {

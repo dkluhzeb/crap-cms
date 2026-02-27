@@ -25,7 +25,6 @@ pub type WriteResult = (Document, HashMap<String, serde_json::Value>);
 /// Save a draft-only version: merge incoming hook-processed data onto existing doc,
 /// create a version snapshot, and prune. `final_ctx_data` contains all hook-modified
 /// data including join table fields (arrays, blocks, relationships).
-/// merge join data, create a draft version snapshot, and prune.
 fn save_draft_version(
     conn: &rusqlite::Connection,
     table: &str,
@@ -327,7 +326,7 @@ pub fn update_document(
     if is_draft && def.has_versions() {
         // Version-only save: do NOT update the main table.
         let existing_doc = persist_draft_version(
-            &tx, slug, id, def, &final_ctx.data, None,
+            &tx, slug, id, def, &final_ctx.data, locale_ctx,
         )?;
 
         // After-hooks: run inside the same transaction, with CRUD access

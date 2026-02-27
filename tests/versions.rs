@@ -1871,3 +1871,270 @@ async fn grpc_update_unpublish() {
     assert!(versions.versions.len() >= 2, "should have at least 2 versions, got {}", versions.versions.len());
     assert_eq!(versions.versions[0].status, "draft", "latest version should be draft");
 }
+
+// ── persist_* Direct Tests ────────────────────────────────────────────────
+
+#[test]
+fn persist_create_published() {
+    let def = make_versioned_def();
+    let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
+    let conn = pool.get().unwrap();
+
+    let final_data: HashMap<String, String> = [
+        ("title".into(), "Persist Published".into()),
+        ("body".into(), "Content".into()),
+    ].into();
+    let hook_data: HashMap<String, serde_json::Value> = final_data.iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+
+    let doc = service::persist_create(&conn, "articles", &def, &final_data, &hook_data, None, None, false).unwrap();
+    assert_eq!(doc.get_str("title"), Some("Persist Published"));
+
+    // Document should exist in main table
+    let found = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap();
+    assert!(found.is_some());
+
+    // Version snapshot should exist with status "published"
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].status, "published");
+
+    // Status column should be published
+    let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
+    assert_eq!(status.as_deref(), Some("published"));
+}
+
+#[test]
+fn persist_create_draft() {
+    let def = make_versioned_def();
+    let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
+    let conn = pool.get().unwrap();
+
+    let final_data: HashMap<String, String> = [
+        ("title".into(), "Persist Draft".into()),
+    ].into();
+    let hook_data: HashMap<String, serde_json::Value> = final_data.iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+
+    let doc = service::persist_create(&conn, "articles", &def, &final_data, &hook_data, None, None, true).unwrap();
+
+    // Document should exist with _status = "draft"
+    let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
+    assert_eq!(status.as_deref(), Some("draft"));
+
+    // Version snapshot should exist with status "draft"
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].status, "draft");
+}
+
+#[test]
+fn persist_update_publishes() {
+    let def = make_versioned_def();
+    let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
+    let conn = pool.get().unwrap();
+
+    // Create a document first
+    let create_data: HashMap<String, String> = [
+        ("title".into(), "Before Update".into()),
+    ].into();
+    let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
+
+    // Now use persist_update
+    let update_data: HashMap<String, String> = [
+        ("title".into(), "After Update".into()),
+        ("body".into(), "New body".into()),
+    ].into();
+    let hook_data: HashMap<String, serde_json::Value> = update_data.iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+
+    let updated = service::persist_update(&conn, "articles", &doc.id, &def, &update_data, &hook_data, None, None).unwrap();
+    assert_eq!(updated.get_str("title"), Some("After Update"));
+
+    // Main table should be updated
+    let found = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    assert_eq!(found.get_str("title"), Some("After Update"));
+
+    // Version snapshot should exist with status "published"
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].status, "published");
+}
+
+#[test]
+fn persist_draft_version_merges_data() {
+    let def = make_versioned_def();
+    let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
+    let conn = pool.get().unwrap();
+
+    // Create a published document
+    let create_data: HashMap<String, String> = [
+        ("title".into(), "Original".into()),
+        ("body".into(), "Original body".into()),
+    ].into();
+    let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
+
+    // Call persist_draft_version with modified hook data
+    let hook_data: HashMap<String, serde_json::Value> = [
+        ("title".to_string(), serde_json::Value::String("Draft Title".to_string())),
+    ].into();
+
+    let existing = service::persist_draft_version(&conn, "articles", &doc.id, &def, &hook_data, None).unwrap();
+
+    // Returned doc is the existing (unchanged) doc
+    assert_eq!(existing.get_str("title"), Some("Original"));
+
+    // Main table should still have original data
+    let main = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    assert_eq!(main.get_str("title"), Some("Original"));
+
+    // Draft version snapshot should have the merged "Draft Title"
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].status, "draft");
+    assert_eq!(
+        versions[0].snapshot.get("title").and_then(|v| v.as_str()),
+        Some("Draft Title"),
+        "draft snapshot should contain merged title"
+    );
+    // Body should be carried from existing doc
+    assert_eq!(
+        versions[0].snapshot.get("body").and_then(|v| v.as_str()),
+        Some("Original body"),
+        "draft snapshot should carry existing body"
+    );
+}
+
+#[test]
+fn persist_unpublish_sets_draft_status() {
+    let def = make_versioned_def();
+    let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
+    let conn = pool.get().unwrap();
+
+    // Create a published document
+    let create_data: HashMap<String, String> = [
+        ("title".into(), "To Unpublish".into()),
+    ].into();
+    let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
+    query::set_document_status(&conn, "articles", &doc.id, "published").unwrap();
+
+    // Call persist_unpublish
+    let result = service::persist_unpublish(&conn, "articles", &doc.id, &def).unwrap();
+    assert_eq!(result.get_str("title"), Some("To Unpublish"));
+
+    // Status should now be "draft"
+    let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
+    assert_eq!(status.as_deref(), Some("draft"));
+
+    // A draft version snapshot should have been created
+    let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+    assert_eq!(versions.len(), 1);
+    assert_eq!(versions[0].status, "draft");
+}
+
+// ── Locale Regression Tests ──────────────────────────────────────────────
+
+/// Regression: persist_draft_version must receive the caller's locale_ctx
+/// so that find_by_id_raw reads locale-resolved columns. Previously `None`
+/// was always passed, causing the wrong column values to be read for
+/// locale-specific draft saves.
+#[test]
+fn service_update_draft_uses_locale_context() {
+    // Build a versioned def with a localized title field
+    let mut def = make_versioned_def();
+    for field in &mut def.fields {
+        if field.name == "title" {
+            field.localized = true;
+        }
+    }
+
+    let locale_config = LocaleConfig {
+        default_locale: "en".to_string(),
+        locales: vec!["en".to_string(), "de".to_string()],
+        fallback: true,
+    };
+
+    // Setup DB with locale-aware migration
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::default();
+    config.database.path = "test.db".to_string();
+    config.locale = locale_config.clone();
+
+    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
+    let registry = Registry::shared();
+    {
+        let mut reg = registry.write().unwrap();
+        reg.register_collection(def.clone());
+    }
+    migrate::sync_all(&db_pool, &registry, &locale_config).expect("sync");
+
+    let hook_runner = HookRunner::new(tmp.path(), registry.clone(), &config).expect("hook runner");
+
+    // Locale contexts
+    let en_ctx = query::LocaleContext {
+        mode: query::LocaleMode::Single("en".to_string()),
+        config: locale_config.clone(),
+    };
+    let de_ctx = query::LocaleContext {
+        mode: query::LocaleMode::Single("de".to_string()),
+        config: locale_config.clone(),
+    };
+
+    // 1. Create a published document with EN title
+    let data: HashMap<String, String> = [
+        ("title".into(), "English Title".into()),
+        ("body".into(), "Body".into()),
+    ].into();
+    let (doc, _) = service::create_document(
+        &db_pool, &hook_runner, "articles", &def, data, &HashMap::new(),
+        None, Some(&en_ctx), Some("en".to_string()), None, false,
+    ).unwrap();
+
+    // 2. Add German translation via direct query
+    let de_data: HashMap<String, String> = [
+        ("title".into(), "Deutscher Titel".into()),
+    ].into();
+    {
+        let conn = db_pool.get().unwrap();
+        query::update(&conn, "articles", &def, &doc.id, &de_data, Some(&de_ctx)).unwrap();
+    }
+
+    // 3. Draft update with DE locale, changing the German title
+    let draft_data: HashMap<String, String> = [
+        ("title".into(), "Neuer Deutscher Titel".into()),
+    ].into();
+    let (result, _) = service::update_document(
+        &db_pool, &hook_runner, "articles", &doc.id, &def,
+        draft_data, &HashMap::new(),
+        None, Some(&de_ctx), Some("de".to_string()), None, true,
+    ).unwrap();
+
+    // Result should be the existing doc (main table unchanged by draft)
+    // With the fix, persist_draft_version reads with DE locale context,
+    // so it sees the German title
+    assert_eq!(result.get_str("title"), Some("Deutscher Titel"));
+
+    // 4. Main table EN title should be unchanged
+    {
+        let conn = db_pool.get().unwrap();
+        let en_doc = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&en_ctx)).unwrap().unwrap();
+        assert_eq!(en_doc.get_str("title"), Some("English Title"), "EN title should be unchanged");
+    }
+
+    // 5. The draft version snapshot should have the new DE title
+    {
+        let conn = db_pool.get().unwrap();
+        let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
+        // Should have 2 versions: initial published create + draft update
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[0].status, "draft");
+        assert_eq!(
+            versions[0].snapshot.get("title").and_then(|v| v.as_str()),
+            Some("Neuer Deutscher Titel"),
+            "draft snapshot should contain the updated DE title"
+        );
+    }
+}
