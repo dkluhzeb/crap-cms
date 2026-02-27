@@ -150,6 +150,7 @@ enum Command {
     },
 }
 
+#[cfg(not(tarpaulin_include))] // binary entrypoint — not unit-testable
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();

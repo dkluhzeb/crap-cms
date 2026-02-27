@@ -301,6 +301,113 @@ mod tests {
     }
 
     #[test]
+    fn test_copy_dir_recursive_nested_dirs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        // Build a deeper nested tree
+        fs::create_dir_all(src.join("a/b/c")).unwrap();
+        fs::write(src.join("a/b/c/deep.txt"), "deep content").unwrap();
+        fs::write(src.join("a/top.txt"), "top content").unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        copy_dir_recursive(&src, &dst, &[]).unwrap();
+
+        assert!(dst.join("a/b/c/deep.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dst.join("a/b/c/deep.txt")).unwrap(),
+            "deep content"
+        );
+        assert!(dst.join("a/top.txt").exists());
+        assert_eq!(
+            fs::read_to_string(dst.join("a/top.txt")).unwrap(),
+            "top content"
+        );
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_skip_multiple() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        fs::create_dir_all(src.join("data")).unwrap();
+        fs::create_dir_all(src.join("uploads")).unwrap();
+        fs::create_dir_all(src.join("types")).unwrap();
+        fs::create_dir_all(src.join("collections")).unwrap();
+        fs::write(src.join("crap.toml"), "# config").unwrap();
+        fs::write(src.join("data/crap.db"), "db").unwrap();
+        fs::write(src.join("uploads/photo.jpg"), "photo").unwrap();
+        fs::write(src.join("types/crap.lua"), "types").unwrap();
+        fs::write(src.join("collections/posts.lua"), "posts").unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        copy_dir_recursive(&src, &dst, BLUEPRINT_SKIP).unwrap();
+
+        assert!(dst.join("crap.toml").exists());
+        assert!(dst.join("collections/posts.lua").exists());
+        assert!(!dst.join("data").exists(), "data/ should be skipped");
+        assert!(!dst.join("uploads").exists(), "uploads/ should be skipped");
+        assert!(!dst.join("types").exists(), "types/ should be skipped");
+    }
+
+    #[test]
+    fn test_copy_dir_recursive_skip_only_top_level() {
+        // Skip should only apply at the top level of copy_dir_recursive
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        // "data" at top level should be skipped, but nested "data" should not
+        fs::create_dir_all(src.join("data")).unwrap();
+        fs::create_dir_all(src.join("subdir/data")).unwrap();
+        fs::write(src.join("data/file.txt"), "top data").unwrap();
+        fs::write(src.join("subdir/data/file.txt"), "nested data").unwrap();
+
+        fs::create_dir_all(&dst).unwrap();
+        copy_dir_recursive(&src, &dst, &["data"]).unwrap();
+
+        assert!(!dst.join("data").exists(), "top-level data/ should be skipped");
+        // Nested "data" inside "subdir" should NOT be skipped because skip
+        // only applies at the top level; the recursive call passes &[].
+        assert!(dst.join("subdir/data/file.txt").exists(), "nested data/ should NOT be skipped");
+    }
+
+    #[test]
+    fn test_count_lua_files_mixed_extensions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("test");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("a.lua"), "").unwrap();
+        fs::write(dir.join("b.lua"), "").unwrap();
+        fs::write(dir.join("c.txt"), "").unwrap();
+        fs::write(dir.join("d.rs"), "").unwrap();
+        fs::write(dir.join("e"), "").unwrap(); // no extension
+        assert_eq!(count_lua_files(&dir), 2);
+    }
+
+    #[test]
+    fn test_count_lua_files_empty_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("empty");
+        fs::create_dir_all(&dir).unwrap();
+        assert_eq!(count_lua_files(&dir), 0);
+    }
+
+    #[test]
+    fn test_validate_blueprint_name_special_chars() {
+        assert!(validate_blueprint_name("abc123").is_ok());
+        assert!(validate_blueprint_name("my_blog_v2").is_ok());
+        assert!(validate_blueprint_name("A-B-C").is_ok());
+        assert!(validate_blueprint_name("a.b").is_err());
+        assert!(validate_blueprint_name("a/b").is_err());
+        assert!(validate_blueprint_name("a\\b").is_err());
+        assert!(validate_blueprint_name("a b").is_err());
+        assert!(validate_blueprint_name("a@b").is_err());
+    }
+
+    #[test]
     fn test_blueprint_roundtrip() {
         // Save a blueprint and use it to create a new project
         let tmp = tempfile::tempdir().expect("tempdir");

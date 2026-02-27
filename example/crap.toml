@@ -10,14 +10,29 @@ path = "data/crap.db"
 dev_mode = true
 
 [auth]
-# secret = "your-secret-here"   # omit to auto-generate (tokens won't survive restarts)
+# secret = "your-secret-here"   # omit to auto-generate (persisted to data/.jwt_secret)
 # token_expiry = 7200           # seconds, default 2 hours
+# max_login_attempts = 5        # failed attempts before lockout
+# login_lockout_seconds = 300   # lockout duration after max attempts
 
 [live]
 enabled = true                # enable SSE + gRPC Subscribe for live mutation events
 # channel_capacity = 1024       # broadcast channel buffer size
 
+[hooks]
+# vm_pool_size = 4              # number of Lua VMs for concurrent hook execution
+                                # default: min(available_parallelism, 8)
+# max_depth = 3                 # max hook recursion depth (CRUD → hook → CRUD chains)
+
 [locale]
 default_locale = "en"         # default locale for content
 locales = ["en", "de"]        # supported locales (empty = disabled)
 fallback = true               # fall back to default locale if field is empty
+
+# [cors]
+# allowed_origins = ["https://example.com"]  # empty = CORS disabled (default)
+# allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+# allowed_headers = ["Content-Type", "Authorization"]
+# exposed_headers = []
+# max_age_seconds = 3600
+# allow_credentials = false

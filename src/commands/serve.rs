@@ -80,9 +80,35 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // Resolve JWT secret
     let jwt_secret = if cfg.auth.secret.is_empty() {
-        let secret = nanoid::nanoid!(64);
-        warn!("No auth.secret in crap.toml — generated random JWT secret (tokens won't survive restarts)");
-        secret
+        // Persist auto-generated secret so sessions survive restarts
+        let secret_path = config_dir.join("data").join(".jwt_secret");
+        if secret_path.exists() {
+            match std::fs::read_to_string(&secret_path) {
+                Ok(s) if !s.trim().is_empty() => {
+                    info!("Using persisted JWT secret from {}", secret_path.display());
+                    s.trim().to_string()
+                }
+                _ => {
+                    let secret = nanoid::nanoid!(64);
+                    let _ = std::fs::create_dir_all(secret_path.parent().unwrap());
+                    if let Err(e) = std::fs::write(&secret_path, &secret) {
+                        warn!("Failed to write JWT secret to {}: {}", secret_path.display(), e);
+                    } else {
+                        warn!("Generated and persisted JWT secret to {}", secret_path.display());
+                    }
+                    secret
+                }
+            }
+        } else {
+            let secret = nanoid::nanoid!(64);
+            let _ = std::fs::create_dir_all(secret_path.parent().unwrap());
+            if let Err(e) = std::fs::write(&secret_path, &secret) {
+                warn!("Failed to write JWT secret to {}: {}", secret_path.display(), e);
+            } else {
+                warn!("Generated and persisted JWT secret to {}", secret_path.display());
+            }
+            secret
+        }
     } else {
         cfg.auth.secret.clone()
     };

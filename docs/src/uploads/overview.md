@@ -118,6 +118,10 @@ The `sizes` field in API responses is a structured object assembled from the per
 
 Empty `mime_types` array also accepts any file.
 
+## Error Cleanup
+
+If an error occurs during upload processing (e.g., image resize fails partway through), all files written so far are automatically cleaned up. This prevents orphaned files from accumulating on disk.
+
 ## File Deletion
 
 When a document in an upload collection is deleted, all associated files (original + resized + format variants) are deleted from disk.

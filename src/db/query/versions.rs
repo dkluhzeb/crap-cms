@@ -502,3 +502,268 @@ pub fn restore_global_version(
 
     Ok(doc)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_versions_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO posts (id, title, _status) VALUES ('p1', 'Hello', 'published');"
+        ).unwrap();
+        conn
+    }
+
+    #[test]
+    fn create_and_find_latest_version() {
+        let conn = setup_versions_db();
+        let snapshot = serde_json::json!({"title": "Hello"});
+
+        let v = create_version(&conn, "posts", "p1", "published", &snapshot).unwrap();
+        assert_eq!(v.parent, "p1");
+        assert_eq!(v.version, 1);
+        assert_eq!(v.status, "published");
+        assert!(v.latest);
+        assert_eq!(v.snapshot, snapshot);
+
+        let latest = find_latest_version(&conn, "posts", "p1").unwrap();
+        assert!(latest.is_some());
+        let latest = latest.unwrap();
+        assert_eq!(latest.version, 1);
+        assert!(latest.latest);
+    }
+
+    #[test]
+    fn create_multiple_versions_latest_flag() {
+        let conn = setup_versions_db();
+
+        let v1 = create_version(&conn, "posts", "p1", "published", &serde_json::json!({"title": "V1"})).unwrap();
+        assert_eq!(v1.version, 1);
+
+        let v2 = create_version(&conn, "posts", "p1", "draft", &serde_json::json!({"title": "V2"})).unwrap();
+        assert_eq!(v2.version, 2);
+        assert!(v2.latest);
+
+        // v1 should no longer be latest
+        let v1_refetched = find_version_by_id(&conn, "posts", &v1.id).unwrap().unwrap();
+        assert!(!v1_refetched.latest, "v1 should no longer be latest");
+
+        let latest = find_latest_version(&conn, "posts", "p1").unwrap().unwrap();
+        assert_eq!(latest.version, 2);
+    }
+
+    #[test]
+    fn find_latest_version_none() {
+        let conn = setup_versions_db();
+        let result = find_latest_version(&conn, "posts", "nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn count_versions_empty_and_populated() {
+        let conn = setup_versions_db();
+        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 0);
+
+        create_version(&conn, "posts", "p1", "published", &serde_json::json!({})).unwrap();
+        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 1);
+
+        create_version(&conn, "posts", "p1", "draft", &serde_json::json!({})).unwrap();
+        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 2);
+    }
+
+    #[test]
+    fn list_versions_order_and_pagination() {
+        let conn = setup_versions_db();
+        for i in 0..5 {
+            create_version(&conn, "posts", "p1", "published", &serde_json::json!({"v": i})).unwrap();
+        }
+
+        // List all, newest first
+        let all = list_versions(&conn, "posts", "p1", None, None).unwrap();
+        assert_eq!(all.len(), 5);
+        assert_eq!(all[0].version, 5); // newest first
+        assert_eq!(all[4].version, 1);
+
+        // Limit
+        let limited = list_versions(&conn, "posts", "p1", Some(2), None).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0].version, 5);
+        assert_eq!(limited[1].version, 4);
+
+        // Offset
+        let offset = list_versions(&conn, "posts", "p1", Some(2), Some(2)).unwrap();
+        assert_eq!(offset.len(), 2);
+        assert_eq!(offset[0].version, 3);
+        assert_eq!(offset[1].version, 2);
+    }
+
+    #[test]
+    fn find_version_by_id_found_and_not_found() {
+        let conn = setup_versions_db();
+        let v = create_version(&conn, "posts", "p1", "published", &serde_json::json!({"title": "Test"})).unwrap();
+
+        let found = find_version_by_id(&conn, "posts", &v.id).unwrap();
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().id, v.id);
+
+        let missing = find_version_by_id(&conn, "posts", "nonexistent").unwrap();
+        assert!(missing.is_none());
+    }
+
+    #[test]
+    fn set_and_get_document_status() {
+        let conn = setup_versions_db();
+
+        let status = get_document_status(&conn, "posts", "p1").unwrap();
+        assert_eq!(status, Some("published".to_string()));
+
+        set_document_status(&conn, "posts", "p1", "draft").unwrap();
+        let status = get_document_status(&conn, "posts", "p1").unwrap();
+        assert_eq!(status, Some("draft".to_string()));
+    }
+
+    #[test]
+    fn get_document_status_not_found() {
+        let conn = setup_versions_db();
+        let status = get_document_status(&conn, "posts", "nonexistent").unwrap();
+        assert!(status.is_none());
+    }
+
+    #[test]
+    fn prune_versions_unlimited() {
+        let conn = setup_versions_db();
+        for _ in 0..5 {
+            create_version(&conn, "posts", "p1", "published", &serde_json::json!({})).unwrap();
+        }
+        // max_versions = 0 means unlimited -- should not delete anything
+        prune_versions(&conn, "posts", "p1", 0).unwrap();
+        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 5);
+    }
+
+    #[test]
+    fn prune_versions_caps() {
+        let conn = setup_versions_db();
+        for _ in 0..5 {
+            create_version(&conn, "posts", "p1", "published", &serde_json::json!({})).unwrap();
+        }
+        prune_versions(&conn, "posts", "p1", 3).unwrap();
+        assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 3);
+
+        // The remaining should be the 3 newest
+        let remaining = list_versions(&conn, "posts", "p1", None, None).unwrap();
+        assert_eq!(remaining[0].version, 5);
+        assert_eq!(remaining[2].version, 3);
+    }
+
+    #[test]
+    fn snapshot_val_to_string_variants() {
+        assert_eq!(snapshot_val_to_string(Some(&serde_json::json!("hello"))), Some("hello".to_string()));
+        assert_eq!(snapshot_val_to_string(Some(&serde_json::json!(42))), Some("42".to_string()));
+        assert_eq!(snapshot_val_to_string(Some(&serde_json::json!(true))), Some("true".to_string()));
+        assert_eq!(snapshot_val_to_string(Some(&serde_json::json!(false))), Some("false".to_string()));
+        assert_eq!(snapshot_val_to_string(Some(&serde_json::Value::Null)), Some(String::new()));
+        assert_eq!(snapshot_val_to_string(None), Some(String::new()));
+        // Complex types return None
+        assert_eq!(snapshot_val_to_string(Some(&serde_json::json!([1, 2]))), None);
+        assert_eq!(snapshot_val_to_string(Some(&serde_json::json!({"a": 1}))), None);
+    }
+
+    #[test]
+    fn extract_snapshot_data_basic() {
+        let fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: crate::core::field::FieldType::Text,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "count".to_string(),
+                field_type: crate::core::field::FieldType::Number,
+                ..Default::default()
+            },
+        ];
+
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"title": "Hello", "count": 42})
+        ).unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+        assert_eq!(data.get("title"), Some(&"Hello".to_string()));
+        assert_eq!(data.get("count"), Some(&"42".to_string()));
+    }
+
+    #[test]
+    fn extract_snapshot_data_skips_localized_when_enabled() {
+        let fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: crate::core::field::FieldType::Text,
+                localized: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "slug".to_string(),
+                field_type: crate::core::field::FieldType::Text,
+                ..Default::default()
+            },
+        ];
+
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"title": "Hello", "slug": "hello"})
+        ).unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, true);
+        assert!(!data.contains_key("title"), "localized field should be skipped");
+        assert_eq!(data.get("slug"), Some(&"hello".to_string()));
+    }
+
+    #[test]
+    fn extract_snapshot_data_group_fields() {
+        let fields = vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: crate::core::field::FieldType::Group,
+                fields: vec![
+                    FieldDefinition {
+                        name: "title".to_string(),
+                        field_type: crate::core::field::FieldType::Text,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        // Flat format: seo__title
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"seo__title": "SEO Title"})
+        ).unwrap();
+        let data = extract_snapshot_data(&obj, &fields, false);
+        assert_eq!(data.get("seo__title"), Some(&"SEO Title".to_string()));
+
+        // Nested format: seo: { title: "..." }
+        let obj2: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"seo": {"title": "Nested SEO"}})
+        ).unwrap();
+        let data2 = extract_snapshot_data(&obj2, &fields, false);
+        assert_eq!(data2.get("seo__title"), Some(&"Nested SEO".to_string()));
+    }
+}

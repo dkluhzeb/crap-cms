@@ -2,7 +2,7 @@
 
 ## Login
 
-Authenticate with email and password to get a JWT token:
+Authenticate with email and password to get a JWT token. Login is rate-limited — after too many failed attempts for an email, further attempts are temporarily blocked (configurable via `max_login_attempts` and `login_lockout_seconds` in `crap.toml`).
 
 ```bash
 grpcurl -plaintext -d '{
@@ -40,6 +40,12 @@ grpcurl -plaintext -d '{
 ## Token Expiry
 
 Tokens expire after `token_expiry` seconds (default: 7200 = 2 hours). Configurable globally in `crap.toml` or per auth collection.
+
+## Security
+
+- **Rate limiting** — per-email tracking. After `max_login_attempts` (default: 5) failures, the email is locked out for `login_lockout_seconds` (default: 300).
+- **Timing safety** — login always performs a full Argon2id hash comparison, even for non-existent users, preventing timing-based email enumeration.
+- **JWT persistence** — when no `secret` is set in `crap.toml`, an auto-generated secret is persisted to `data/.jwt_secret` so tokens survive server restarts.
 
 ## Creating Users via gRPC
 

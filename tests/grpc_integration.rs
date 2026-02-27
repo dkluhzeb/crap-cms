@@ -176,6 +176,7 @@ fn setup_service(
         None, // no event bus
         config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
 
     TestSetup { _tmp: tmp, service, pool: db_pool }
@@ -2049,6 +2050,7 @@ fn setup_service_with_hook(
         None,
         config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
 
     TestSetup { _tmp: tmp, service, pool: db_pool }
@@ -2478,6 +2480,7 @@ return M
         db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2589,6 +2592,7 @@ return M
         db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2679,6 +2683,7 @@ return M
         db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2784,6 +2789,7 @@ return M
         db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2880,6 +2886,7 @@ return M
         db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2992,6 +2999,7 @@ fn setup_service_with_locale(
         None,
         config.locale.clone(),
         tmp.path().to_path_buf(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
     );
 
     TestSetup { _tmp: tmp, service, pool: db_pool }
@@ -4081,4 +4089,639 @@ async fn find_depth_0_returns_id_only() {
             );
         }
     }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Count RPC Tests
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn count_empty_collection() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let resp = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .expect("Count failed");
+
+    assert_eq!(resp.into_inner().count, 0);
+}
+
+#[tokio::test]
+async fn count_with_documents() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for title in &["A", "B", "C"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title)])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.count, 3);
+}
+
+#[tokio::test]
+async fn count_with_filters() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for (title, status) in &[("A", "draft"), ("B", "published"), ("C", "published")] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", status)])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            filters: [("status".to_string(), "published".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.count, 2);
+}
+
+#[tokio::test]
+async fn count_with_where_json() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for (title, status) in &[("A", "draft"), ("B", "published")] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", status)])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.count, 1);
+}
+
+#[tokio::test]
+async fn count_nonexistent_collection() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "nonexistent".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// UpdateMany / DeleteMany Tests
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn update_many_basic() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for title in &["X", "Y", "Z"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", "draft")])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .update_many(Request::new(content::UpdateManyRequest {
+            collection: "posts".to_string(),
+            filters: [("status".to_string(), "draft".to_string())]
+                .into_iter()
+                .collect(),
+            data: Some(make_struct(&[("status", "published")])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.modified, 3);
+}
+
+#[tokio::test]
+async fn update_many_with_where() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for (title, status) in &[("A", "draft"), ("B", "published"), ("C", "draft")] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", status)])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .update_many(Request::new(content::UpdateManyRequest {
+            collection: "posts".to_string(),
+            r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            data: Some(make_struct(&[("status", "published")])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.modified, 2);
+}
+
+#[tokio::test]
+async fn update_many_no_matches() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let resp = ts
+        .service
+        .update_many(Request::new(content::UpdateManyRequest {
+            collection: "posts".to_string(),
+            filters: [("status".to_string(), "nonexistent".to_string())]
+                .into_iter()
+                .collect(),
+            data: Some(make_struct(&[("status", "published")])),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.modified, 0);
+}
+
+#[tokio::test]
+async fn delete_many_basic() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for title in &["A", "B", "C"] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", "draft")])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "posts".to_string(),
+            filters: [("status".to_string(), "draft".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 3);
+
+    // Verify all deleted
+    let count = ts
+        .service
+        .count(Request::new(content::CountRequest {
+            collection: "posts".to_string(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .count;
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+async fn delete_many_with_where() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for (title, status) in &[("A", "draft"), ("B", "published"), ("C", "draft")] {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", title), ("status", status)])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "posts".to_string(),
+            r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 2);
+}
+
+#[tokio::test]
+async fn delete_many_no_matches() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "posts".to_string(),
+            filters: [("status".to_string(), "nonexistent".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 0);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Versioning RPCs (collection without versions)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn list_versions_no_versioning() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "V Test")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let err = ts
+        .service
+        .list_versions(Request::new(content::ListVersionsRequest {
+            collection: "posts".to_string(),
+            id: doc.id,
+            limit: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+    assert!(err.message().contains("versioning"));
+}
+
+#[tokio::test]
+async fn restore_version_no_versioning() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .restore_version(Request::new(content::RestoreVersionRequest {
+            collection: "posts".to_string(),
+            document_id: "some-id".to_string(),
+            version_id: "some-version".to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Job RPCs (unauthenticated)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn list_jobs_unauthenticated() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .list_jobs(Request::new(content::ListJobsRequest {}))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn trigger_job_unauthenticated() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .trigger_job(Request::new(content::TriggerJobRequest {
+            slug: "cleanup".to_string(),
+            data_json: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn get_job_run_unauthenticated() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .get_job_run(Request::new(content::GetJobRunRequest {
+            id: "some-id".to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+}
+
+#[tokio::test]
+async fn list_job_runs_unauthenticated() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .list_job_runs(Request::new(content::ListJobRunsRequest {
+            slug: None,
+            status: None,
+            limit: None,
+            offset: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FindByID with select fields
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn find_by_id_with_select() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Select Me"), ("status", "published")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    let found = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            depth: Some(0),
+            locale: None,
+            select: vec!["title".to_string()],
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    assert!(get_proto_field(&found, "title").is_some());
+    // status should be stripped by select
+    assert!(get_proto_field(&found, "status").is_none());
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Update global nonexistent
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn update_global_nonexistent() {
+    let ts = setup_service(vec![], vec![]);
+
+    let err = ts
+        .service
+        .update_global(Request::new(content::UpdateGlobalRequest {
+            slug: "nonexistent".to_string(),
+            data: Some(make_struct(&[("key", "value")])),
+            locale: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Describe collection with auth and upload flags
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn describe_auth_collection() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    let resp = ts
+        .service
+        .describe_collection(Request::new(content::DescribeCollectionRequest {
+            slug: "users".to_string(),
+            is_global: false,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.slug, "users");
+    assert!(resp.auth);
+    assert!(resp.timestamps);
+    assert!(!resp.upload);
+    assert!(!resp.drafts);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Login with locked account
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn login_locked_account() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    // Create user
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "locked@example.com"),
+                ("password", "secret123"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Lock the user directly in the DB
+    {
+        let conn = ts.pool.get().unwrap();
+        conn.execute(
+            "UPDATE users SET _locked = 1 WHERE id = ?1",
+            rusqlite::params![doc.id],
+        )
+        .unwrap();
+    }
+
+    // Try to login
+    let err = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "locked@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(err.message().to_lowercase().contains("locked"));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FindByID not found
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn find_by_id_not_found() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let resp = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: "nonexistent-id".to_string(),
+            depth: Some(0),
+            locale: None,
+            select: vec![],
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(resp.document.is_none());
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Delete nonexistent collection
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[tokio::test]
+async fn delete_nonexistent_collection() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .delete(Request::new(content::DeleteRequest {
+            collection: "nonexistent".to_string(),
+            id: "some-id".to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+#[tokio::test]
+async fn update_nonexistent_collection() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    let err = ts
+        .service
+        .update(Request::new(content::UpdateRequest {
+            collection: "nonexistent".to_string(),
+            id: "some-id".to_string(),
+            data: Some(make_struct(&[("title", "Test")])),
+            locale: None,
+            draft: None,
+            unpublish: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::NotFound);
 }

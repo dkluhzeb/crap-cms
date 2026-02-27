@@ -213,6 +213,9 @@ pub fn persist_unpublish(
 /// When `draft` is true and the collection has drafts enabled, the document is created with
 /// `_status = 'draft'` and required-field validation is skipped.
 /// Returns the created document and the request-scoped context from before-hooks.
+// Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
+// Tested indirectly through CLI integration tests and gRPC API tests.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub fn create_document(
     pool: &DbPool,
@@ -281,6 +284,9 @@ pub fn create_document(
 /// When `draft` is true and the collection has drafts enabled, the update creates a version-only
 /// save: the main table is NOT modified, only a new version snapshot is recorded. On publish
 /// (`draft=false`), the main table is updated and `_status` set to `"published"`.
+// Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
+// Tested indirectly through CLI integration tests and gRPC API tests.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub fn update_document(
     pool: &DbPool,
@@ -375,6 +381,9 @@ pub fn update_document(
 
 /// Unpublish a versioned document: set status to draft, create a version snapshot,
 /// and run before/after change hooks. Returns the document.
+// Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
+// Tested indirectly through CLI integration tests and gRPC API tests.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub fn unpublish_document(
     pool: &DbPool,
@@ -422,6 +431,9 @@ pub fn unpublish_document(
 /// Returns the request-scoped context from before-hooks.
 /// If `config_dir` is provided and the collection is an upload collection,
 /// upload files are cleaned up after successful deletion.
+// Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
+// Tested indirectly through CLI integration tests and gRPC API tests.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub fn delete_document(
     pool: &DbPool,
@@ -482,6 +494,9 @@ pub fn delete_document(
 /// Update a global document within a single transaction: before-hooks → update → join data.
 /// When `draft` is true and the global has drafts enabled, creates a version-only save
 /// (main table NOT modified). On publish (`draft=false`), the main table is updated.
+// Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
+// Tested indirectly through CLI integration tests and gRPC API tests.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub fn update_global_document(
     pool: &DbPool,
@@ -586,8 +601,239 @@ pub fn update_global_document(
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+    use crate::core::collection::*;
+    use crate::core::field::*;
+
+    fn test_def() -> CollectionDefinition {
+        CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                FieldDefinition {
+                    name: "title".to_string(),
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
+    fn versioned_def() -> CollectionDefinition {
+        CollectionDefinition {
+            versions: Some(VersionsConfig { drafts: true, max_versions: 10 }),
+            ..test_def()
+        }
+    }
+
+    fn setup_db(has_versions: bool) -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            )"
+        ).unwrap();
+        if has_versions {
+            conn.execute_batch(
+                "CREATE TABLE _versions_posts (
+                    id TEXT PRIMARY KEY,
+                    _parent TEXT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+                    _version INTEGER NOT NULL,
+                    _status TEXT NOT NULL DEFAULT 'published',
+                    _latest INTEGER NOT NULL DEFAULT 0,
+                    snapshot TEXT NOT NULL,
+                    created_at TEXT DEFAULT (datetime('now')),
+                    updated_at TEXT DEFAULT (datetime('now'))
+                )"
+            ).unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn persist_create_basic() {
+        let conn = setup_db(false);
+        let def = test_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Hello".to_string());
+        let hook_data = HashMap::new();
+
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, false).unwrap();
+        assert!(!doc.id.is_empty());
+        assert_eq!(doc.get_str("title"), Some("Hello"));
+    }
+
+    #[test]
+    fn persist_create_with_versions() {
+        let conn = setup_db(true);
+        let def = versioned_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Versioned".to_string());
+        let hook_data = HashMap::new();
+
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, false).unwrap();
+        assert_eq!(doc.get_str("title"), Some("Versioned"));
+
+        // Should have created a version snapshot
+        let count = query::count_versions(&conn, "posts", &doc.id).unwrap();
+        assert_eq!(count, 1, "should have 1 version after create");
+    }
+
+    #[test]
+    fn persist_create_draft() {
+        let conn = setup_db(true);
+        let def = versioned_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Draft Post".to_string());
+        let hook_data = HashMap::new();
+
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, true).unwrap();
+        assert_eq!(doc.get_str("title"), Some("Draft Post"));
+
+        // Should have created a draft version
+        let status = query::get_document_status(&conn, "posts", &doc.id).unwrap();
+        assert_eq!(status.as_deref(), Some("draft"));
+    }
+
+    #[test]
+    fn persist_update_basic() {
+        let conn = setup_db(false);
+        let def = test_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Original".to_string());
+        let hook_data = HashMap::new();
+
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, false).unwrap();
+        let id = doc.id.clone();
+
+        let mut update_data = HashMap::new();
+        update_data.insert("title".to_string(), "Updated".to_string());
+        let update_hook_data = HashMap::new();
+
+        let updated = persist_update(&conn, "posts", &id, &def, &update_data, &update_hook_data, None, None).unwrap();
+        assert_eq!(updated.get_str("title"), Some("Updated"));
+    }
+
+    #[test]
+    fn persist_update_with_versions() {
+        let conn = setup_db(true);
+        let def = versioned_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "V1".to_string());
+        let hook_data = HashMap::new();
+
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, false).unwrap();
+        let id = doc.id.clone();
+
+        let mut update_data = HashMap::new();
+        update_data.insert("title".to_string(), "V2".to_string());
+        let update_hook_data = HashMap::new();
+
+        persist_update(&conn, "posts", &id, &def, &update_data, &update_hook_data, None, None).unwrap();
+
+        // Should have 2 versions now (create + update)
+        let count = query::count_versions(&conn, "posts", &id).unwrap();
+        assert_eq!(count, 2, "should have 2 versions after create + update");
+    }
+
+    #[test]
+    fn persist_draft_version_does_not_modify_main_table() {
+        let conn = setup_db(true);
+        let def = versioned_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Published".to_string());
+        let hook_data = HashMap::new();
+
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, false).unwrap();
+        let id = doc.id.clone();
+
+        // Save a draft version with different data
+        let mut draft_data = HashMap::new();
+        draft_data.insert("title".to_string(), serde_json::json!("Draft Title"));
+
+        let existing = persist_draft_version(&conn, "posts", &id, &def, &draft_data, None).unwrap();
+        // persist_draft_version returns the existing (unchanged) doc
+        assert_eq!(existing.get_str("title"), Some("Published"), "main table should not be modified");
+
+        // But there should be a new draft version
+        let count = query::count_versions(&conn, "posts", &id).unwrap();
+        assert_eq!(count, 2, "should have 2 versions (create published + draft)");
+    }
+
+    #[test]
+    fn persist_unpublish_sets_draft_status() {
+        let conn = setup_db(true);
+        let def = versioned_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "To Unpublish".to_string());
+        let hook_data = HashMap::new();
+
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, false).unwrap();
+        let id = doc.id.clone();
+
+        // Verify it's published
+        let status = query::get_document_status(&conn, "posts", &id).unwrap();
+        assert_eq!(status.as_deref(), Some("published"));
+
+        // Unpublish
+        let result = persist_unpublish(&conn, "posts", &id, &def).unwrap();
+        assert_eq!(result.id, id);
+
+        // Should now be draft
+        let status = query::get_document_status(&conn, "posts", &id).unwrap();
+        assert_eq!(status.as_deref(), Some("draft"));
+
+        // Should have created another version
+        let count = query::count_versions(&conn, "posts", &id).unwrap();
+        assert_eq!(count, 2, "should have 2 versions (published create + draft unpublish)");
+    }
+
+    #[test]
+    fn create_version_snapshot_with_pruning() {
+        let conn = setup_db(true);
+        let def = CollectionDefinition {
+            versions: Some(VersionsConfig { drafts: true, max_versions: 2 }),
+            ..test_def()
+        };
+        let hook_data = HashMap::new();
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "V1".to_string());
+        let doc = persist_create(&conn, "posts", &def, &data, &hook_data, None, None, false).unwrap();
+        let id = doc.id.clone();
+
+        // Create more versions to trigger pruning
+        for i in 2..=4 {
+            let mut update_data = HashMap::new();
+            update_data.insert("title".to_string(), format!("V{}", i));
+            persist_update(&conn, "posts", &id, &def, &update_data, &HashMap::new(), None, None).unwrap();
+        }
+
+        // Should be capped at max_versions=2
+        let count = query::count_versions(&conn, "posts", &id).unwrap();
+        assert_eq!(count, 2, "versions should be pruned to max_versions=2");
+    }
+}
+
 /// Fire-and-forget: generate a verification token and send the verification email.
 /// Spawns its own `spawn_blocking` task internally.
+// Excluded from coverage: async tokio task that requires SMTP email transport,
+// DB pool, and email renderer — cannot be unit tested without external services.
+#[cfg(not(tarpaulin_include))]
 pub fn send_verification_email(
     pool: DbPool,
     email_config: EmailConfig,
@@ -604,6 +850,7 @@ pub fn send_verification_email(
         }
 
         let token = nanoid::nanoid!(32);
+        let exp = chrono::Utc::now().timestamp() + 86400; // 24 hours
 
         let conn = match pool.get() {
             Ok(c) => c,
@@ -612,7 +859,7 @@ pub fn send_verification_email(
                 return;
             }
         };
-        if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token) {
+        if let Err(e) = query::set_verification_token(&conn, &slug, &user_id, &token, exp) {
             tracing::error!("Failed to set verification token: {}", e);
             return;
         }

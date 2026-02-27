@@ -300,6 +300,88 @@ mod tests {
     }
 
     #[test]
+    fn test_singularize() {
+        // ies -> y
+        assert_eq!(singularize("categories"), "category");
+        assert_eq!(singularize("stories"), "story");
+        // ses, xes, zes, shes, ches
+        assert_eq!(singularize("addresses"), "address");
+        assert_eq!(singularize("boxes"), "box");
+        assert_eq!(singularize("buzzes"), "buzz");
+        assert_eq!(singularize("dishes"), "dish");
+        assert_eq!(singularize("watches"), "watch");
+        // regular s
+        assert_eq!(singularize("posts"), "post");
+        assert_eq!(singularize("tags"), "tag");
+        // no change (doesn't end in s, or ends in ss)
+        assert_eq!(singularize("address"), "address");
+        assert_eq!(singularize("glass"), "glass");
+        // single char
+        assert_eq!(singularize("s"), "s");
+    }
+
+    #[test]
+    fn test_pluralize_more_cases() {
+        assert_eq!(pluralize(""), "");
+        assert_eq!(pluralize("Quiz"), "Quizes");
+        assert_eq!(pluralize("Brush"), "Brushes");
+        assert_eq!(pluralize("Church"), "Churches");
+        assert_eq!(pluralize("Boy"), "Boys");
+        assert_eq!(pluralize("Day"), "Days");
+        assert_eq!(pluralize("Toy"), "Toys");
+        assert_eq!(pluralize("Guy"), "Guys");
+    }
+
+    #[test]
+    fn test_make_collection_auth() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_collection(tmp.path(), "users", None, false, true, false, false, false).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/users.lua")).unwrap();
+        assert!(content.contains("auth = true"));
+        assert!(content.contains("use_as_title = \"email\""));
+    }
+
+    #[test]
+    fn test_make_collection_upload() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_collection(tmp.path(), "media", None, false, false, true, false, false).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/media.lua")).unwrap();
+        assert!(content.contains("upload = true"));
+        assert!(content.contains("name = \"alt\""));
+    }
+
+    #[test]
+    fn test_make_collection_versions() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_collection(tmp.path(), "posts", None, false, false, false, true, false).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
+        assert!(content.contains("versions = true"));
+    }
+
+    #[test]
+    fn test_make_collection_with_localized_fields() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_collection(
+            tmp.path(), "posts",
+            Some("title:text:required:localized,body:textarea:localized"),
+            false, false, false, false, false,
+        ).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
+        assert!(content.contains("localized = true"));
+    }
+
+    #[test]
+    fn test_make_collection_invalid_slug() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = make_collection(tmp.path(), "Bad Slug", None, false, false, false, false, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn test_make_collection_refuses_overwrite() {
         let tmp = tempfile::tempdir().expect("tempdir");
         make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();

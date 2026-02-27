@@ -477,6 +477,115 @@ mod tests {
     }
 
     #[test]
+    fn test_make_hook_condition_number() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut opts = make_hook_opts(
+            tmp.path(), "show_if_count", HookType::Condition,
+            "posts", "table", None, false,
+        );
+        opts.condition_field = Some(ConditionFieldInfo {
+            name: "count".to_string(),
+            field_type: "number".to_string(),
+            select_options: vec![],
+        });
+        make_hook(&opts).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/posts/show_if_count.lua")).unwrap();
+        assert!(content.contains(r#"field = "count""#));
+        assert!(content.contains(r#"not_equals = "0""#));
+    }
+
+    #[test]
+    fn test_make_hook_condition_text_fallback() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut opts = make_hook_opts(
+            tmp.path(), "show_if_email", HookType::Condition,
+            "posts", "table", None, false,
+        );
+        opts.condition_field = Some(ConditionFieldInfo {
+            name: "email".to_string(),
+            field_type: "email".to_string(),
+            select_options: vec![],
+        });
+        make_hook(&opts).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/posts/show_if_email.lua")).unwrap();
+        assert!(content.contains(r#"field = "email""#));
+        assert!(content.contains("is_truthy = true"));
+    }
+
+    #[test]
+    fn test_make_hook_condition_select_empty_options() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut opts = make_hook_opts(
+            tmp.path(), "show_if_sel", HookType::Condition,
+            "posts", "table", None, false,
+        );
+        opts.condition_field = Some(ConditionFieldInfo {
+            name: "status".to_string(),
+            field_type: "select".to_string(),
+            select_options: vec![], // empty options => falls through to default text-like template
+        });
+        make_hook(&opts).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/posts/show_if_sel.lua")).unwrap();
+        assert!(content.contains(r#"field = "status""#));
+        assert!(content.contains("is_truthy = true"));
+    }
+
+    #[test]
+    fn test_make_hook_condition_boolean_no_field_info() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = make_hook_opts(
+            tmp.path(), "bool_hook", HookType::Condition,
+            "posts", "boolean", None, false,
+        );
+        make_hook(&opts).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/posts/bool_hook.lua")).unwrap();
+        assert!(content.contains("Display condition for posts (server-evaluated)"));
+        assert!(content.contains("data.field_name"));
+    }
+
+    #[test]
+    fn test_hook_type_from_str() {
+        assert_eq!(HookType::from_str("collection"), Some(HookType::Collection));
+        assert_eq!(HookType::from_str("field"), Some(HookType::Field));
+        assert_eq!(HookType::from_str("access"), Some(HookType::Access));
+        assert_eq!(HookType::from_str("condition"), Some(HookType::Condition));
+        assert_eq!(HookType::from_str("COLLECTION"), Some(HookType::Collection));
+        assert_eq!(HookType::from_str("unknown"), None);
+    }
+
+    #[test]
+    fn test_hook_type_label() {
+        assert_eq!(HookType::Collection.label(), "collection");
+        assert_eq!(HookType::Field.label(), "field");
+        assert_eq!(HookType::Access.label(), "access");
+        assert_eq!(HookType::Condition.label(), "condition");
+    }
+
+    #[test]
+    fn test_hook_type_valid_positions() {
+        assert!(HookType::Collection.valid_positions().contains(&"before_validate"));
+        assert!(HookType::Collection.valid_positions().contains(&"before_broadcast"));
+        assert!(HookType::Field.valid_positions().contains(&"after_read"));
+        assert!(HookType::Access.valid_positions().contains(&"read"));
+        assert!(HookType::Condition.valid_positions().contains(&"table"));
+        assert!(HookType::Condition.valid_positions().contains(&"boolean"));
+    }
+
+    #[test]
+    fn test_make_hook_invalid_collection_slug() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = make_hook_opts(
+            tmp.path(), "hook", HookType::Collection,
+            "Bad Slug", "before_change", None, false,
+        );
+        assert!(make_hook(&opts).is_err());
+    }
+
+    #[test]
     fn test_make_hook_field_requires_field_name() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let opts = make_hook_opts(

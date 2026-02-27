@@ -1014,3 +1014,764 @@ pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> 
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // --- hex_encode tests ---
+
+    #[test]
+    fn test_hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn test_hex_encode_single_byte() {
+        assert_eq!(hex_encode(&[0x00]), "00");
+        assert_eq!(hex_encode(&[0xff]), "ff");
+        assert_eq!(hex_encode(&[0x0a]), "0a");
+    }
+
+    #[test]
+    fn test_hex_encode_multiple_bytes() {
+        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+        assert_eq!(hex_encode(&[0x01, 0x23, 0x45, 0x67]), "01234567");
+    }
+
+    // --- lua_to_json tests ---
+
+    #[test]
+    fn test_lua_to_json_nil() {
+        let lua = Lua::new();
+        let result = lua_to_json(&lua, &Value::Nil).unwrap();
+        assert_eq!(result, json!(null));
+    }
+
+    #[test]
+    fn test_lua_to_json_boolean() {
+        let lua = Lua::new();
+        let result = lua_to_json(&lua, &Value::Boolean(true)).unwrap();
+        assert_eq!(result, json!(true));
+        let result = lua_to_json(&lua, &Value::Boolean(false)).unwrap();
+        assert_eq!(result, json!(false));
+    }
+
+    #[test]
+    fn test_lua_to_json_integer() {
+        let lua = Lua::new();
+        let result = lua_to_json(&lua, &Value::Integer(42)).unwrap();
+        assert_eq!(result, json!(42));
+        let result = lua_to_json(&lua, &Value::Integer(-1)).unwrap();
+        assert_eq!(result, json!(-1));
+    }
+
+    #[test]
+    fn test_lua_to_json_number() {
+        let lua = Lua::new();
+        let result = lua_to_json(&lua, &Value::Number(3.14)).unwrap();
+        assert_eq!(result, json!(3.14));
+    }
+
+    #[test]
+    fn test_lua_to_json_string() {
+        let lua = Lua::new();
+        let s = lua.create_string("hello world").unwrap();
+        let result = lua_to_json(&lua, &Value::String(s)).unwrap();
+        assert_eq!(result, json!("hello world"));
+    }
+
+    #[test]
+    fn test_lua_to_json_array_table() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set(1, "a").unwrap();
+        tbl.set(2, "b").unwrap();
+        tbl.set(3, "c").unwrap();
+        let result = lua_to_json(&lua, &Value::Table(tbl)).unwrap();
+        assert_eq!(result, json!(["a", "b", "c"]));
+    }
+
+    #[test]
+    fn test_lua_to_json_object_table() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("name", "test").unwrap();
+        tbl.set("count", 42).unwrap();
+        let result = lua_to_json(&lua, &Value::Table(tbl)).unwrap();
+        assert_eq!(result["name"], json!("test"));
+        assert_eq!(result["count"], json!(42));
+    }
+
+    #[test]
+    fn test_lua_to_json_function_becomes_null() {
+        let lua = Lua::new();
+        let f = lua.create_function(|_, ()| Ok(())).unwrap();
+        let result = lua_to_json(&lua, &Value::Function(f)).unwrap();
+        assert_eq!(result, json!(null));
+    }
+
+    // --- json_to_lua tests ---
+
+    #[test]
+    fn test_json_to_lua_null() {
+        let lua = Lua::new();
+        let result = json_to_lua(&lua, &json!(null)).unwrap();
+        assert!(matches!(result, Value::Nil));
+    }
+
+    #[test]
+    fn test_json_to_lua_bool() {
+        let lua = Lua::new();
+        let result = json_to_lua(&lua, &json!(true)).unwrap();
+        assert!(matches!(result, Value::Boolean(true)));
+    }
+
+    #[test]
+    fn test_json_to_lua_integer() {
+        let lua = Lua::new();
+        let result = json_to_lua(&lua, &json!(42)).unwrap();
+        assert!(matches!(result, Value::Integer(42)));
+    }
+
+    #[test]
+    fn test_json_to_lua_float() {
+        let lua = Lua::new();
+        let result = json_to_lua(&lua, &json!(3.14)).unwrap();
+        match result {
+            Value::Number(n) => assert!((n - 3.14).abs() < f64::EPSILON),
+            _ => panic!("Expected Number"),
+        }
+    }
+
+    #[test]
+    fn test_json_to_lua_string() {
+        let lua = Lua::new();
+        let result = json_to_lua(&lua, &json!("hello")).unwrap();
+        match result {
+            Value::String(s) => assert_eq!(s.to_str().unwrap(), "hello"),
+            _ => panic!("Expected String"),
+        }
+    }
+
+    #[test]
+    fn test_json_to_lua_array() {
+        let lua = Lua::new();
+        let result = json_to_lua(&lua, &json!([1, 2, 3])).unwrap();
+        match result {
+            Value::Table(tbl) => {
+                assert_eq!(tbl.raw_len(), 3);
+                let v1: i64 = tbl.get(1).unwrap();
+                let v2: i64 = tbl.get(2).unwrap();
+                let v3: i64 = tbl.get(3).unwrap();
+                assert_eq!(v1, 1);
+                assert_eq!(v2, 2);
+                assert_eq!(v3, 3);
+            }
+            _ => panic!("Expected Table"),
+        }
+    }
+
+    #[test]
+    fn test_json_to_lua_object() {
+        let lua = Lua::new();
+        let result = json_to_lua(&lua, &json!({"name": "test", "active": true})).unwrap();
+        match result {
+            Value::Table(tbl) => {
+                let name: String = tbl.get("name").unwrap();
+                let active: bool = tbl.get("active").unwrap();
+                assert_eq!(name, "test");
+                assert!(active);
+            }
+            _ => panic!("Expected Table"),
+        }
+    }
+
+    #[test]
+    fn test_json_lua_roundtrip() {
+        let lua = Lua::new();
+        let original = json!({
+            "title": "Hello",
+            "count": 42,
+            "tags": ["a", "b"],
+            "active": true,
+            "empty": null
+        });
+        let lua_val = json_to_lua(&lua, &original).unwrap();
+        let back = lua_to_json(&lua, &lua_val).unwrap();
+        assert_eq!(back["title"], json!("Hello"));
+        assert_eq!(back["count"], json!(42));
+        assert_eq!(back["tags"], json!(["a", "b"]));
+        assert_eq!(back["active"], json!(true));
+        assert_eq!(back["empty"], json!(null));
+    }
+
+    // --- localized_string_to_lua tests ---
+
+    #[test]
+    fn test_localized_string_plain() {
+        let lua = Lua::new();
+        let ls = crate::core::field::LocalizedString::Plain("Hello".to_string());
+        let result = localized_string_to_lua(&lua, &ls).unwrap();
+        match result {
+            Value::String(s) => assert_eq!(s.to_str().unwrap(), "Hello"),
+            _ => panic!("Expected String"),
+        }
+    }
+
+    #[test]
+    fn test_localized_string_localized() {
+        let lua = Lua::new();
+        let mut map = std::collections::HashMap::new();
+        map.insert("en".to_string(), "Hello".to_string());
+        map.insert("de".to_string(), "Hallo".to_string());
+        let ls = crate::core::field::LocalizedString::Localized(map);
+        let result = localized_string_to_lua(&lua, &ls).unwrap();
+        match result {
+            Value::Table(tbl) => {
+                let en: String = tbl.get("en").unwrap();
+                let de: String = tbl.get("de").unwrap();
+                assert_eq!(en, "Hello");
+                assert_eq!(de, "Hallo");
+            }
+            _ => panic!("Expected Table"),
+        }
+    }
+
+    // --- collection_config_to_lua round-trip tests ---
+
+    #[test]
+    fn test_collection_config_to_lua_basic() {
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: crate::core::collection::CollectionLabels {
+                singular: Some(crate::core::field::LocalizedString::Plain("Post".to_string())),
+                plural: Some(crate::core::field::LocalizedString::Plain("Posts".to_string())),
+            },
+            timestamps: true,
+            fields: vec![
+                crate::core::field::FieldDefinition {
+                    name: "title".to_string(),
+                    field_type: crate::core::field::FieldType::Text,
+                    required: true,
+                    ..Default::default()
+                },
+            ],
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let labels: mlua::Table = tbl.get("labels").unwrap();
+        let singular: String = labels.get("singular").unwrap();
+        assert_eq!(singular, "Post");
+        assert_eq!(tbl.get::<bool>("timestamps").unwrap(), true);
+
+        let fields: mlua::Table = tbl.get("fields").unwrap();
+        let f1: mlua::Table = fields.get(1).unwrap();
+        let fname: String = f1.get("name").unwrap();
+        assert_eq!(fname, "title");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_with_auth_simple() {
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "users".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: Some(crate::core::collection::CollectionAuth {
+                enabled: true,
+                ..Default::default()
+            }),
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        // Simple auth = true should be serialized as bool true
+        let auth_val: bool = tbl.get("auth").unwrap();
+        assert!(auth_val);
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_with_auth_complex() {
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "users".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: Some(crate::core::collection::CollectionAuth {
+                enabled: true,
+                token_expiry: 3600,
+                disable_local: true,
+                verify_email: true,
+                forgot_password: false,
+                strategies: vec![crate::core::collection::AuthStrategy {
+                    name: "oauth".to_string(),
+                    authenticate: "hooks.auth.oauth".to_string(),
+                }],
+            }),
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let auth_tbl: mlua::Table = tbl.get("auth").unwrap();
+        assert_eq!(auth_tbl.get::<u64>("token_expiry").unwrap(), 3600);
+        assert_eq!(auth_tbl.get::<bool>("disable_local").unwrap(), true);
+        assert_eq!(auth_tbl.get::<bool>("verify_email").unwrap(), true);
+        assert_eq!(auth_tbl.get::<bool>("forgot_password").unwrap(), false);
+        let strats: mlua::Table = auth_tbl.get("strategies").unwrap();
+        let s1: mlua::Table = strats.get(1).unwrap();
+        let sname: String = s1.get("name").unwrap();
+        assert_eq!(sname, "oauth");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_with_upload() {
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "media".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: Some(crate::core::upload::CollectionUpload {
+                enabled: true,
+                mime_types: vec!["image/png".to_string()],
+                max_file_size: Some(1000000),
+                image_sizes: vec![crate::core::upload::ImageSize {
+                    name: "thumb".to_string(),
+                    width: 200,
+                    height: 200,
+                    fit: crate::core::upload::ImageFit::Cover,
+                }],
+                admin_thumbnail: Some("thumb".to_string()),
+                format_options: crate::core::upload::FormatOptions {
+                    webp: Some(crate::core::upload::FormatQuality { quality: 80 }),
+                    avif: None,
+                },
+            }),
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let upload: mlua::Table = tbl.get("upload").unwrap();
+        let mt: mlua::Table = upload.get("mime_types").unwrap();
+        let m1: String = mt.get(1).unwrap();
+        assert_eq!(m1, "image/png");
+        assert_eq!(upload.get::<u64>("max_file_size").unwrap(), 1000000);
+        let sizes: mlua::Table = upload.get("image_sizes").unwrap();
+        let s1: mlua::Table = sizes.get(1).unwrap();
+        assert_eq!(s1.get::<String>("name").unwrap(), "thumb");
+        assert_eq!(s1.get::<String>("fit").unwrap(), "cover");
+        let fo: mlua::Table = upload.get("format_options").unwrap();
+        let webp: mlua::Table = fo.get("webp").unwrap();
+        assert_eq!(webp.get::<u8>("quality").unwrap(), 80);
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_live_settings() {
+        let lua = Lua::new();
+
+        // live = None -> true
+        let def_none_live = crate::core::CollectionDefinition {
+            slug: "t".to_string(),
+            live: None,
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def_none_live).unwrap();
+        assert_eq!(tbl.get::<bool>("live").unwrap(), true);
+
+        // live = Disabled -> false
+        let def_disabled = crate::core::CollectionDefinition {
+            slug: "t".to_string(),
+            live: Some(crate::core::collection::LiveSetting::Disabled),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def_disabled).unwrap();
+        assert_eq!(tbl.get::<bool>("live").unwrap(), false);
+
+        // live = Function -> string
+        let def_func = crate::core::CollectionDefinition {
+            slug: "t".to_string(),
+            live: Some(crate::core::collection::LiveSetting::Function("hooks.live.filter".to_string())),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def_func).unwrap();
+        assert_eq!(tbl.get::<String>("live").unwrap(), "hooks.live.filter");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_versions() {
+        let lua = Lua::new();
+
+        // versions simple (drafts=true, max=0) -> true
+        let def = crate::core::CollectionDefinition {
+            slug: "t".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: Some(crate::core::collection::VersionsConfig {
+                drafts: true,
+                max_versions: 0,
+            }),
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        assert_eq!(tbl.get::<bool>("versions").unwrap(), true);
+
+        // versions table
+        let def2 = crate::core::CollectionDefinition {
+            slug: "t".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: Some(crate::core::collection::VersionsConfig {
+                drafts: false,
+                max_versions: 100,
+            }),
+        };
+        let tbl = collection_config_to_lua(&lua, &def2).unwrap();
+        let v: mlua::Table = tbl.get("versions").unwrap();
+        assert_eq!(v.get::<bool>("drafts").unwrap(), false);
+        assert_eq!(v.get::<u32>("max_versions").unwrap(), 100);
+    }
+
+    // --- global_config_to_lua tests ---
+
+    #[test]
+    fn test_global_config_to_lua_basic() {
+        let lua = Lua::new();
+        let def = crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: crate::core::collection::CollectionLabels {
+                singular: Some(crate::core::field::LocalizedString::Plain("Settings".to_string())),
+                plural: None,
+            },
+            fields: vec![crate::core::field::FieldDefinition {
+                name: "site_name".to_string(),
+                ..Default::default()
+            }],
+            hooks: crate::core::collection::CollectionHooks::default(),
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let tbl = global_config_to_lua(&lua, &def).unwrap();
+        let labels: mlua::Table = tbl.get("labels").unwrap();
+        let singular: String = labels.get("singular").unwrap();
+        assert_eq!(singular, "Settings");
+        let fields: mlua::Table = tbl.get("fields").unwrap();
+        let f1: mlua::Table = fields.get(1).unwrap();
+        assert_eq!(f1.get::<String>("name").unwrap(), "site_name");
+    }
+
+    #[test]
+    fn test_global_config_to_lua_with_live() {
+        let lua = Lua::new();
+        let def = crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            fields: Vec::new(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            access: crate::core::collection::CollectionAccess {
+                read: Some("hooks.access.allow".to_string()),
+                ..Default::default()
+            },
+            live: Some(crate::core::collection::LiveSetting::Disabled),
+            versions: None,
+        };
+        let tbl = global_config_to_lua(&lua, &def).unwrap();
+        assert_eq!(tbl.get::<bool>("live").unwrap(), false);
+        let access: mlua::Table = tbl.get("access").unwrap();
+        assert_eq!(access.get::<String>("read").unwrap(), "hooks.access.allow");
+    }
+
+    // --- field_config_to_lua tests ---
+
+    #[test]
+    fn test_field_config_to_lua_simple() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "title".to_string(),
+            field_type: crate::core::field::FieldType::Text,
+            required: true,
+            unique: true,
+            validate: Some("hooks.validate.title_check".to_string()),
+            default_value: Some(serde_json::json!("untitled")),
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        assert_eq!(tbl.get::<String>("name").unwrap(), "title");
+        assert_eq!(tbl.get::<String>("type").unwrap(), "text");
+        assert_eq!(tbl.get::<bool>("required").unwrap(), true);
+        assert_eq!(tbl.get::<bool>("unique").unwrap(), true);
+        assert_eq!(tbl.get::<String>("validate").unwrap(), "hooks.validate.title_check");
+        assert_eq!(tbl.get::<String>("default_value").unwrap(), "untitled");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_with_relationship() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "author".to_string(),
+            field_type: crate::core::field::FieldType::Relationship,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "users".to_string(),
+                has_many: true,
+                max_depth: Some(2),
+            }),
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let rel: mlua::Table = tbl.get("relationship").unwrap();
+        assert_eq!(rel.get::<String>("collection").unwrap(), "users");
+        assert_eq!(rel.get::<bool>("has_many").unwrap(), true);
+        assert_eq!(rel.get::<i32>("max_depth").unwrap(), 2);
+    }
+
+    #[test]
+    fn test_field_config_to_lua_with_options() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "status".to_string(),
+            field_type: crate::core::field::FieldType::Select,
+            options: vec![
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Draft".to_string()),
+                    value: "draft".to_string(),
+                },
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Published".to_string()),
+                    value: "published".to_string(),
+                },
+            ],
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let opts: mlua::Table = tbl.get("options").unwrap();
+        let o1: mlua::Table = opts.get(1).unwrap();
+        assert_eq!(o1.get::<String>("value").unwrap(), "draft");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_with_blocks() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "content".to_string(),
+            field_type: crate::core::field::FieldType::Blocks,
+            blocks: vec![crate::core::field::BlockDefinition {
+                block_type: "text".to_string(),
+                label: Some(crate::core::field::LocalizedString::Plain("Text Block".to_string())),
+                fields: vec![crate::core::field::FieldDefinition {
+                    name: "body".to_string(),
+                    ..Default::default()
+                }],
+                label_field: None,
+            }],
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let blocks: mlua::Table = tbl.get("blocks").unwrap();
+        let b1: mlua::Table = blocks.get(1).unwrap();
+        assert_eq!(b1.get::<String>("type").unwrap(), "text");
+        assert_eq!(b1.get::<String>("label").unwrap(), "Text Block");
+        let bf: mlua::Table = b1.get("fields").unwrap();
+        let bf1: mlua::Table = bf.get(1).unwrap();
+        assert_eq!(bf1.get::<String>("name").unwrap(), "body");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_with_admin_and_hooks() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "title".to_string(),
+            admin: crate::core::field::FieldAdmin {
+                label: Some(crate::core::field::LocalizedString::Plain("Title".to_string())),
+                placeholder: Some(crate::core::field::LocalizedString::Plain("Enter title".to_string())),
+                description: Some(crate::core::field::LocalizedString::Plain("The document title".to_string())),
+                hidden: true,
+                readonly: true,
+                width: Some("50%".to_string()),
+                collapsed: true,
+                ..Default::default()
+            },
+            hooks: crate::core::field::FieldHooks {
+                before_validate: vec!["hooks.field.trim".to_string()],
+                before_change: vec!["hooks.field.upper".to_string()],
+                after_change: Vec::new(),
+                after_read: vec!["hooks.field.format".to_string()],
+            },
+            access: crate::core::field::FieldAccess {
+                read: Some("hooks.access.check".to_string()),
+                create: Some("hooks.access.admin".to_string()),
+                update: None,
+            },
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+
+        let admin: mlua::Table = tbl.get("admin").unwrap();
+        assert_eq!(admin.get::<String>("label").unwrap(), "Title");
+        assert_eq!(admin.get::<bool>("hidden").unwrap(), true);
+        assert_eq!(admin.get::<bool>("readonly").unwrap(), true);
+        assert_eq!(admin.get::<String>("width").unwrap(), "50%");
+        assert_eq!(admin.get::<bool>("collapsed").unwrap(), true);
+
+        let hooks: mlua::Table = tbl.get("hooks").unwrap();
+        let bv: mlua::Table = hooks.get("before_validate").unwrap();
+        assert_eq!(bv.get::<String>(1).unwrap(), "hooks.field.trim");
+        let bc: mlua::Table = hooks.get("before_change").unwrap();
+        assert_eq!(bc.get::<String>(1).unwrap(), "hooks.field.upper");
+        let ar: mlua::Table = hooks.get("after_read").unwrap();
+        assert_eq!(ar.get::<String>(1).unwrap(), "hooks.field.format");
+
+        let access: mlua::Table = tbl.get("access").unwrap();
+        assert_eq!(access.get::<String>("read").unwrap(), "hooks.access.check");
+        assert_eq!(access.get::<String>("create").unwrap(), "hooks.access.admin");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_default_values() {
+        let lua = Lua::new();
+
+        // Bool default
+        let f_bool = crate::core::field::FieldDefinition {
+            name: "active".to_string(),
+            default_value: Some(serde_json::json!(true)),
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f_bool).unwrap();
+        assert_eq!(tbl.get::<bool>("default_value").unwrap(), true);
+
+        // Integer default
+        let f_int = crate::core::field::FieldDefinition {
+            name: "count".to_string(),
+            default_value: Some(serde_json::json!(42)),
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f_int).unwrap();
+        assert_eq!(tbl.get::<i64>("default_value").unwrap(), 42);
+
+        // Float default
+        let f_float = crate::core::field::FieldDefinition {
+            name: "price".to_string(),
+            default_value: Some(serde_json::json!(3.14)),
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f_float).unwrap();
+        let val: f64 = tbl.get("default_value").unwrap();
+        assert!((val - 3.14).abs() < f64::EPSILON);
+    }
+
+    // --- collection_hooks_to_lua tests ---
+
+    #[test]
+    fn test_collection_hooks_to_lua() {
+        let lua = Lua::new();
+        let hooks = crate::core::collection::CollectionHooks {
+            before_validate: vec!["hooks.v".to_string()],
+            before_change: vec!["hooks.c1".to_string(), "hooks.c2".to_string()],
+            after_change: Vec::new(),
+            before_read: Vec::new(),
+            after_read: Vec::new(),
+            before_delete: Vec::new(),
+            after_delete: Vec::new(),
+            before_broadcast: vec!["hooks.b".to_string()],
+        };
+        let tbl = collection_hooks_to_lua(&lua, &hooks).unwrap();
+        let bv: mlua::Table = tbl.get("before_validate").unwrap();
+        assert_eq!(bv.raw_len(), 1);
+        let bc: mlua::Table = tbl.get("before_change").unwrap();
+        assert_eq!(bc.raw_len(), 2);
+        let bb: mlua::Table = tbl.get("before_broadcast").unwrap();
+        assert_eq!(bb.raw_len(), 1);
+        // Empty hooks should not have entries
+        let ac: Value = tbl.get("after_change").unwrap();
+        assert!(matches!(ac, Value::Nil));
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_with_admin() {
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin {
+                use_as_title: Some("title".to_string()),
+                default_sort: Some("-created_at".to_string()),
+                hidden: true,
+                list_searchable_fields: vec!["title".to_string(), "body".to_string()],
+            },
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let admin: mlua::Table = tbl.get("admin").unwrap();
+        assert_eq!(admin.get::<String>("use_as_title").unwrap(), "title");
+        assert_eq!(admin.get::<String>("default_sort").unwrap(), "-created_at");
+        assert_eq!(admin.get::<bool>("hidden").unwrap(), true);
+        let lsf: mlua::Table = admin.get("list_searchable_fields").unwrap();
+        assert_eq!(lsf.raw_len(), 2);
+    }
+}

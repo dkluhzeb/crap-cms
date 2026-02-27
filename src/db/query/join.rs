@@ -830,4 +830,198 @@ mod tests {
         // Original title field should be unchanged
         assert_eq!(doc.get_str("title"), Some("Post 1"));
     }
+
+    // ── hydrate_document with select ────────────────────────────────────────
+
+    #[test]
+    fn hydrate_with_select_filters_fields() {
+        let conn = setup_join_db();
+        let def = posts_def_with_joins();
+
+        // Set up data for all join types
+        let tag_ids = vec!["t1".to_string()];
+        set_related_ids(&conn, "posts", "tags", "p1", &tag_ids, None).unwrap();
+        let sub = array_sub_fields();
+        let rows = vec![HashMap::from([
+            ("label".to_string(), "Item 1".to_string()),
+            ("value".to_string(), "Val 1".to_string()),
+        ])];
+        set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
+
+        let mut doc = crate::core::Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Post 1"));
+
+        // Only hydrate "tags", skip "items" and "content"
+        let select = vec!["tags".to_string(), "title".to_string()];
+        hydrate_document(&conn, "posts", &def.fields, &mut doc, Some(&select), None).unwrap();
+
+        assert!(doc.fields.contains_key("tags"), "tags should be hydrated");
+        assert!(!doc.fields.contains_key("items"), "items should NOT be hydrated (not in select)");
+        assert!(!doc.fields.contains_key("content"), "content should NOT be hydrated (not in select)");
+    }
+
+    // ── save_join_table_data ────────────────────────────────────────────────
+
+    #[test]
+    fn save_join_table_data_has_many_from_string() {
+        let conn = setup_join_db();
+        let def = posts_def_with_joins();
+
+        // Pass has-many IDs as a comma-separated string
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), serde_json::json!("t1, t2, t3"));
+
+        save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
+
+        let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
+        assert_eq!(found, vec!["t1", "t2", "t3"]);
+    }
+
+    #[test]
+    fn save_join_table_data_has_many_from_array() {
+        let conn = setup_join_db();
+        let def = posts_def_with_joins();
+
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), serde_json::json!(["t1", "t2"]));
+
+        save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
+
+        let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
+        assert_eq!(found, vec!["t1", "t2"]);
+    }
+
+    #[test]
+    fn save_join_table_data_has_many_empty_string() {
+        let conn = setup_join_db();
+        let def = posts_def_with_joins();
+
+        // Pre-populate some IDs
+        set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string()], None).unwrap();
+
+        // Sending an empty string should clear the junction table
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), serde_json::json!(""));
+
+        save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
+
+        let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
+        assert!(found.is_empty());
+    }
+
+    #[test]
+    fn save_join_table_data_blocks() {
+        let conn = setup_join_db();
+        let def = posts_def_with_joins();
+
+        let mut data = HashMap::new();
+        data.insert("content".to_string(), serde_json::json!([
+            {"_block_type": "paragraph", "text": "Hello"},
+            {"_block_type": "image", "url": "/img.jpg"},
+        ]));
+
+        save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
+
+        let found = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
+        assert_eq!(found.len(), 2);
+        assert_eq!(found[0]["_block_type"], "paragraph");
+        assert_eq!(found[1]["_block_type"], "image");
+    }
+
+    #[test]
+    fn save_join_table_data_skips_absent_fields() {
+        let conn = setup_join_db();
+        let def = posts_def_with_joins();
+
+        // Pre-populate tags
+        set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string()], None).unwrap();
+
+        // Save data that does NOT include "tags" -- should NOT touch the junction table
+        let data = HashMap::new(); // empty
+
+        save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
+
+        let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
+        assert_eq!(found, vec!["t1"], "tags should be preserved when not in data");
+    }
+
+    // ── locale-aware join operations ────────────────────────────────────────
+
+    #[test]
+    fn set_and_find_related_ids_with_locale() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts_tags (
+                parent_id TEXT,
+                related_id TEXT,
+                _order INTEGER,
+                _locale TEXT
+            );"
+        ).unwrap();
+
+        set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string(), "t2".to_string()], Some("en")).unwrap();
+        set_related_ids(&conn, "posts", "tags", "p1", &["t3".to_string()], Some("de")).unwrap();
+
+        let en = find_related_ids(&conn, "posts", "tags", "p1", Some("en")).unwrap();
+        assert_eq!(en, vec!["t1", "t2"]);
+
+        let de = find_related_ids(&conn, "posts", "tags", "p1", Some("de")).unwrap();
+        assert_eq!(de, vec!["t3"]);
+
+        // Replacing en should not affect de
+        set_related_ids(&conn, "posts", "tags", "p1", &["t4".to_string()], Some("en")).unwrap();
+        let en = find_related_ids(&conn, "posts", "tags", "p1", Some("en")).unwrap();
+        assert_eq!(en, vec!["t4"]);
+        let de = find_related_ids(&conn, "posts", "tags", "p1", Some("de")).unwrap();
+        assert_eq!(de, vec!["t3"]);
+    }
+
+    // ── Group field hydration ───────────────────────────────────────────────
+
+    #[test]
+    fn hydrate_group_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                seo__meta_title TEXT,
+                seo__meta_desc TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts VALUES ('p1', 'Test', 'SEO Title', 'SEO Desc', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition { name: "meta_title".to_string(), ..Default::default() },
+                    FieldDefinition { name: "meta_desc".to_string(), ..Default::default() },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Test"));
+        doc.fields.insert("seo__meta_title".to_string(), serde_json::json!("SEO Title"));
+        doc.fields.insert("seo__meta_desc".to_string(), serde_json::json!("SEO Desc"));
+
+        hydrate_document(&conn, "posts", &fields, &mut doc, None, None).unwrap();
+
+        // Group fields should be reconstructed as nested objects
+        let seo = doc.fields.get("seo").expect("seo group should exist");
+        assert_eq!(seo.get("meta_title").and_then(|v| v.as_str()), Some("SEO Title"));
+        assert_eq!(seo.get("meta_desc").and_then(|v| v.as_str()), Some("SEO Desc"));
+        // Prefixed keys should be removed
+        assert!(!doc.fields.contains_key("seo__meta_title"));
+        assert!(!doc.fields.contains_key("seo__meta_desc"));
+    }
 }

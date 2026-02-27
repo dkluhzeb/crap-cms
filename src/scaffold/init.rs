@@ -117,7 +117,7 @@ crap.log.info("init.lua loaded successfully")
     // .gitignore — data and uploads (runtime artifacts)
     fs::write(
         target.join(".gitignore"),
-        "data/\nuploads/\ntypes/\n",
+        "data/\nuploads/\ntypes/\ndata/.jwt_secret\n",
     )
     .context("Failed to write .gitignore")?;
 

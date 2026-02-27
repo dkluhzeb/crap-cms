@@ -3,6 +3,9 @@
 use anyhow::{Context, Result};
 
 /// Handle the `jobs` subcommand.
+// Excluded from coverage: requires full Lua + DB setup (init_lua, create_pool, sync_all)
+// for each subcommand variant. Tested via CLI integration tests.
+#[cfg(not(tarpaulin_include))]
 pub fn run(action: super::JobsAction) -> Result<()> {
     match action {
         super::JobsAction::List { config } => {

@@ -15,6 +15,7 @@ use crate::config::CrapConfig;
 use crate::core::SharedRegistry;
 use crate::core::email::EmailRenderer;
 use crate::core::event::EventBus;
+use crate::core::rate_limit::LoginRateLimiter;
 use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
@@ -31,6 +32,7 @@ pub struct AdminState {
     pub jwt_secret: String,
     pub email_renderer: Arc<EmailRenderer>,
     pub event_bus: Option<EventBus>,
+    pub login_limiter: Arc<LoginRateLimiter>,
 }
 
 impl AdminState {

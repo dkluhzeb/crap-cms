@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Export collection data to JSON.
+// Excluded from coverage: requires full Lua + DB setup via load_config_and_sync.
+// Tested via CLI integration tests in tests/cli_integration.rs.
+#[cfg(not(tarpaulin_include))]
 pub fn export(
     config_dir: &Path,
     collection_filter: Option<String>,
@@ -72,6 +75,9 @@ pub fn export(
 }
 
 /// Import collection data from JSON.
+// Excluded from coverage: requires full Lua + DB setup via load_config_and_sync.
+// Tested via CLI integration tests in tests/cli_integration.rs.
+#[cfg(not(tarpaulin_include))]
 pub fn import(
     config_dir: &Path,
     file: &Path,

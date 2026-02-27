@@ -163,6 +163,7 @@ mod tests {
     use crate::core::collection::{
         CollectionAccess, CollectionAdmin, CollectionHooks, CollectionLabels,
     };
+    use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition {
@@ -172,16 +173,25 @@ mod tests {
         }
     }
 
+    fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
+        CollectionDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields,
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
     #[test]
     fn python_collection_output() {
-        let col = CollectionDefinition {
-            slug: "posts".to_string(), labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![text_field("title", true), text_field("content", false)],
-            admin: CollectionAdmin::default(), hooks: CollectionHooks::default(),
-            auth: None, upload: None, access: CollectionAccess::default(),
-            live: None, versions: None,
-        };
+        let col = make_col("posts", vec![text_field("title", true), text_field("content", false)]);
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -192,5 +202,253 @@ mod tests {
         assert!(out.contains("    title: str = \"\""));
         assert!(out.contains("    content: Optional[str] = None"));
         assert!(out.contains("    created_at: Optional[str] = None"));
+    }
+
+    #[test]
+    fn python_relationship_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "tags".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Optional[list[str]]"));
+    }
+
+    #[test]
+    fn python_relationship_has_one() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "author".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "users".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("author: str = \"\""));
+    }
+
+    #[test]
+    fn python_number_and_checkbox_fields() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "price".to_string(),
+                field_type: FieldType::Number,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "active".to_string(),
+                field_type: FieldType::Checkbox,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("price: float = 0.0"));
+        assert!(out.contains("active: Optional[bool] = None"));
+    }
+
+    #[test]
+    fn python_json_field() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "data".to_string(),
+                field_type: FieldType::Json,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Optional[Any]"));
+    }
+
+    #[test]
+    fn python_array_field() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "rows".to_string(),
+                field_type: FieldType::Array,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Optional[list[dict]]"));
+    }
+
+    #[test]
+    fn python_array_field_with_subfields() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![
+                    text_field("label", true),
+                    text_field("value", false),
+                ],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Sub-type should be generated
+        assert!(out.contains("class PostsItems:"));
+        assert!(out.contains("label: str = \"\""));
+        assert!(out.contains("value: Optional[str] = None"));
+    }
+
+    #[test]
+    fn python_group_field() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Optional[dict]"));
+    }
+
+    #[test]
+    fn python_blocks_field() {
+        let col = make_col("pages", vec![
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                blocks: vec![BlockDefinition {
+                    block_type: "text".to_string(),
+                    fields: vec![text_field("body", true)],
+                    label: Some(LocalizedString::Plain("Text".to_string())),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Optional[list[dict]]"));
+    }
+
+    #[test]
+    fn python_upload_field() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "image".to_string(),
+                field_type: FieldType::Upload,
+                required: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("image: str = \"\""));
+    }
+
+    #[test]
+    fn python_select_with_options_docstring() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "status".to_string(),
+                field_type: FieldType::Select,
+                required: true,
+                options: vec![
+                    SelectOption { label: LocalizedString::Plain("Draft".into()), value: "draft".into() },
+                    SelectOption { label: LocalizedString::Plain("Published".into()), value: "published".into() },
+                ],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Should have a docstring with select options
+        assert!(out.contains("Select fields"));
+        assert!(out.contains("\"draft\""));
+        assert!(out.contains("\"published\""));
+    }
+
+    #[test]
+    fn python_global_output() {
+        let global = crate::core::collection::GlobalDefinition {
+            slug: "site_settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![
+                text_field("site_name", true),
+                text_field("tagline", false),
+            ],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(out.contains("class SiteSettings:"));
+        assert!(out.contains("id: str = \"\""));
+        assert!(out.contains("site_name: str = \"\""));
+        assert!(out.contains("tagline: Optional[str] = None"));
+        assert!(out.contains("created_at: Optional[str] = None"));
+        assert!(out.contains("updated_at: Optional[str] = None"));
+    }
+
+    #[test]
+    fn python_full_render() {
+        let mut registry = Registry::new();
+        registry.register_collection(make_col("posts", vec![text_field("title", true)]));
+        registry.register_global(crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![text_field("name", true)],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        });
+        let out = render(&registry);
+        assert!(out.contains("from dataclasses import dataclass"));
+        assert!(out.contains("class Posts:"));
+        assert!(out.contains("class Settings:"));
+    }
+
+    #[test]
+    fn python_no_timestamps() {
+        let mut col = make_col("tags", vec![text_field("name", true)]);
+        col.timestamps = false;
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(!out.contains("created_at"));
+    }
+
+    #[test]
+    fn python_email_date_richtext_textarea() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "contact".to_string(), field_type: FieldType::Email, required: true, ..Default::default() },
+            FieldDefinition { name: "at".to_string(), field_type: FieldType::Date, required: true, ..Default::default() },
+            FieldDefinition { name: "body".to_string(), field_type: FieldType::Richtext, required: true, ..Default::default() },
+            FieldDefinition { name: "notes".to_string(), field_type: FieldType::Textarea, required: true, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("contact: str = \"\""));
+        assert!(out.contains("at: str = \"\""));
+        assert!(out.contains("body: str = \"\""));
+        assert!(out.contains("notes: str = \"\""));
     }
 }

@@ -753,3 +753,657 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<crate::core::j
         access,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mlua::Lua;
+    use crate::core::field::LocalizedString;
+
+    // --- Helper function tests ---
+
+    #[test]
+    fn test_get_string_present() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("name", "hello").unwrap();
+        assert_eq!(get_string(&tbl, "name"), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_get_string_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert_eq!(get_string(&tbl, "name"), None);
+    }
+
+    #[test]
+    fn test_get_string_non_string_value() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("num", 42).unwrap();
+        // Lua coerces integers to strings, so this returns Some("42")
+        assert_eq!(get_string(&tbl, "num"), Some("42".to_string()));
+
+        // Tables and functions cannot be coerced to strings
+        let inner = lua.create_table().unwrap();
+        tbl.set("tbl", inner).unwrap();
+        assert_eq!(get_string(&tbl, "tbl"), None);
+    }
+
+    #[test]
+    fn test_get_bool_present() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("active", true).unwrap();
+        assert!(get_bool(&tbl, "active", false));
+    }
+
+    #[test]
+    fn test_get_bool_absent_default_true() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(get_bool(&tbl, "active", true));
+    }
+
+    #[test]
+    fn test_get_bool_absent_default_false() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(!get_bool(&tbl, "active", false));
+    }
+
+    #[test]
+    fn test_get_string_val_present() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("key", "value").unwrap();
+        assert_eq!(get_string_val(&tbl, "key").unwrap(), "value");
+    }
+
+    #[test]
+    fn test_get_string_val_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(get_string_val(&tbl, "key").is_err());
+    }
+
+    #[test]
+    fn test_get_table_present() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let inner = lua.create_table().unwrap();
+        inner.set("foo", "bar").unwrap();
+        tbl.set("inner", inner).unwrap();
+        let result = get_table(&tbl, "inner");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_table_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(get_table(&tbl, "inner").is_err());
+    }
+
+    // --- get_localized_string tests ---
+
+    #[test]
+    fn test_get_localized_string_plain() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("label", "Hello").unwrap();
+        let result = get_localized_string(&tbl, "label");
+        match result {
+            Some(LocalizedString::Plain(s)) => assert_eq!(s, "Hello"),
+            other => panic!("Expected Plain, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_localized_string_localized() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let locale_tbl = lua.create_table().unwrap();
+        locale_tbl.set("en", "Hello").unwrap();
+        locale_tbl.set("de", "Hallo").unwrap();
+        tbl.set("label", locale_tbl).unwrap();
+        let result = get_localized_string(&tbl, "label");
+        match result {
+            Some(LocalizedString::Localized(map)) => {
+                assert_eq!(map.get("en").unwrap(), "Hello");
+                assert_eq!(map.get("de").unwrap(), "Hallo");
+            }
+            other => panic!("Expected Localized, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_get_localized_string_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(get_localized_string(&tbl, "label").is_none());
+    }
+
+    #[test]
+    fn test_get_localized_string_empty_table() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let empty = lua.create_table().unwrap();
+        tbl.set("label", empty).unwrap();
+        // Empty table returns None
+        assert!(get_localized_string(&tbl, "label").is_none());
+    }
+
+    // --- parse_job_definition tests ---
+
+    #[test]
+    fn test_parse_job_definition_minimal() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("handler", "jobs.my_job.run").unwrap();
+
+        let job = parse_job_definition("my-job", &tbl).unwrap();
+        assert_eq!(job.slug, "my-job");
+        assert_eq!(job.handler, "jobs.my_job.run");
+        assert!(job.schedule.is_none());
+        assert_eq!(job.queue, "default");
+        assert_eq!(job.retries, 0);
+        assert_eq!(job.timeout, 60);
+        assert_eq!(job.concurrency, 1);
+        assert!(job.skip_if_running);
+        assert!(job.access.is_none());
+    }
+
+    #[test]
+    fn test_parse_job_definition_full() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("handler", "jobs.sync.run").unwrap();
+        tbl.set("schedule", "*/5 * * * *").unwrap();
+        tbl.set("queue", "sync").unwrap();
+        tbl.set("retries", 3u32).unwrap();
+        tbl.set("timeout", 300u64).unwrap();
+        tbl.set("concurrency", 2u32).unwrap();
+        tbl.set("skip_if_running", false).unwrap();
+        tbl.set("access", "access.admin_only").unwrap();
+
+        let labels_tbl = lua.create_table().unwrap();
+        labels_tbl.set("singular", "Sync Job").unwrap();
+        tbl.set("labels", labels_tbl).unwrap();
+
+        let job = parse_job_definition("sync", &tbl).unwrap();
+        assert_eq!(job.slug, "sync");
+        assert_eq!(job.handler, "jobs.sync.run");
+        assert_eq!(job.schedule.as_deref(), Some("*/5 * * * *"));
+        assert_eq!(job.queue, "sync");
+        assert_eq!(job.retries, 3);
+        assert_eq!(job.timeout, 300);
+        assert_eq!(job.concurrency, 2);
+        assert!(!job.skip_if_running);
+        assert_eq!(job.access.as_deref(), Some("access.admin_only"));
+        assert_eq!(job.labels.singular.as_deref(), Some("Sync Job"));
+    }
+
+    #[test]
+    fn test_parse_job_definition_missing_handler() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let result = parse_job_definition("bad-job", &tbl);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing required 'handler'"));
+    }
+
+    #[test]
+    fn test_parse_job_definition_invalid_cron() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("handler", "jobs.bad.run").unwrap();
+        tbl.set("schedule", "not a cron").unwrap();
+        let result = parse_job_definition("bad-job", &tbl);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid cron expression"));
+    }
+
+    // --- parse_versions_config tests ---
+
+    #[test]
+    fn test_parse_versions_config_true() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("versions", true).unwrap();
+        let result = parse_versions_config(&tbl);
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert!(v.drafts);
+        assert_eq!(v.max_versions, 0);
+    }
+
+    #[test]
+    fn test_parse_versions_config_false() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("versions", false).unwrap();
+        assert!(parse_versions_config(&tbl).is_none());
+    }
+
+    #[test]
+    fn test_parse_versions_config_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(parse_versions_config(&tbl).is_none());
+    }
+
+    #[test]
+    fn test_parse_versions_config_table() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let ver = lua.create_table().unwrap();
+        ver.set("drafts", false).unwrap();
+        ver.set("max_versions", 50u32).unwrap();
+        tbl.set("versions", ver).unwrap();
+        let result = parse_versions_config(&tbl);
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert!(!v.drafts);
+        assert_eq!(v.max_versions, 50);
+    }
+
+    #[test]
+    fn test_parse_versions_config_table_defaults() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let ver = lua.create_table().unwrap();
+        // No drafts or max_versions set — should use defaults
+        tbl.set("versions", ver).unwrap();
+        let result = parse_versions_config(&tbl);
+        assert!(result.is_some());
+        let v = result.unwrap();
+        assert!(v.drafts); // default true
+        assert_eq!(v.max_versions, 0); // default 0
+    }
+
+    // --- parse_live_setting tests ---
+
+    #[test]
+    fn test_parse_live_setting_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        assert!(parse_live_setting(&tbl).is_none());
+    }
+
+    #[test]
+    fn test_parse_live_setting_true() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("live", true).unwrap();
+        assert!(parse_live_setting(&tbl).is_none()); // true = None = broadcast all
+    }
+
+    #[test]
+    fn test_parse_live_setting_false() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("live", false).unwrap();
+        let result = parse_live_setting(&tbl);
+        assert!(matches!(result, Some(crate::core::collection::LiveSetting::Disabled)));
+    }
+
+    #[test]
+    fn test_parse_live_setting_function_ref() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("live", "hooks.live.filter_published").unwrap();
+        let result = parse_live_setting(&tbl);
+        match result {
+            Some(crate::core::collection::LiveSetting::Function(ref s)) => {
+                assert_eq!(s, "hooks.live.filter_published");
+            }
+            other => panic!("Expected Function, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_live_setting_empty_string() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("live", "").unwrap();
+        // Empty string = None (broadcast all)
+        assert!(parse_live_setting(&tbl).is_none());
+    }
+
+    // --- parse_image_sizes tests ---
+
+    #[test]
+    fn test_parse_image_sizes_basic() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let s1 = lua.create_table().unwrap();
+        s1.set("name", "thumbnail").unwrap();
+        s1.set("width", 200u32).unwrap();
+        s1.set("height", 200u32).unwrap();
+        tbl.set(1, s1).unwrap();
+        let sizes = parse_image_sizes(&tbl);
+        assert_eq!(sizes.len(), 1);
+        assert_eq!(sizes[0].name, "thumbnail");
+        assert_eq!(sizes[0].width, 200);
+        assert_eq!(sizes[0].height, 200);
+    }
+
+    #[test]
+    fn test_parse_image_sizes_with_fit() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        for (i, (name, fit)) in [("a", "cover"), ("b", "contain"), ("c", "inside"), ("d", "fill")].iter().enumerate() {
+            let s = lua.create_table().unwrap();
+            s.set("name", *name).unwrap();
+            s.set("width", 100u32).unwrap();
+            s.set("height", 100u32).unwrap();
+            s.set("fit", *fit).unwrap();
+            tbl.set(i + 1, s).unwrap();
+        }
+        let sizes = parse_image_sizes(&tbl);
+        assert_eq!(sizes.len(), 4);
+        assert!(matches!(sizes[0].fit, crate::core::upload::ImageFit::Cover));
+        assert!(matches!(sizes[1].fit, crate::core::upload::ImageFit::Contain));
+        assert!(matches!(sizes[2].fit, crate::core::upload::ImageFit::Inside));
+        assert!(matches!(sizes[3].fit, crate::core::upload::ImageFit::Fill));
+    }
+
+    #[test]
+    fn test_parse_image_sizes_skips_missing_name() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let s1 = lua.create_table().unwrap();
+        // No name set
+        s1.set("width", 200u32).unwrap();
+        s1.set("height", 200u32).unwrap();
+        tbl.set(1, s1).unwrap();
+        let sizes = parse_image_sizes(&tbl);
+        assert!(sizes.is_empty());
+    }
+
+    #[test]
+    fn test_parse_image_sizes_skips_zero_dimensions() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let s1 = lua.create_table().unwrap();
+        s1.set("name", "bad").unwrap();
+        s1.set("width", 0u32).unwrap();
+        s1.set("height", 200u32).unwrap();
+        tbl.set(1, s1).unwrap();
+        let sizes = parse_image_sizes(&tbl);
+        assert!(sizes.is_empty());
+    }
+
+    // --- parse_format_options tests ---
+
+    #[test]
+    fn test_parse_format_options_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let fo = parse_format_options(&tbl);
+        assert!(fo.webp.is_none());
+        assert!(fo.avif.is_none());
+    }
+
+    #[test]
+    fn test_parse_format_options_webp_only() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let fo_tbl = lua.create_table().unwrap();
+        let webp = lua.create_table().unwrap();
+        webp.set("quality", 90u8).unwrap();
+        fo_tbl.set("webp", webp).unwrap();
+        tbl.set("format_options", fo_tbl).unwrap();
+        let fo = parse_format_options(&tbl);
+        assert!(fo.webp.is_some());
+        assert_eq!(fo.webp.unwrap().quality, 90);
+        assert!(fo.avif.is_none());
+    }
+
+    #[test]
+    fn test_parse_format_options_both() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let fo_tbl = lua.create_table().unwrap();
+        let webp = lua.create_table().unwrap();
+        webp.set("quality", 75u8).unwrap();
+        fo_tbl.set("webp", webp).unwrap();
+        let avif = lua.create_table().unwrap();
+        avif.set("quality", 50u8).unwrap();
+        fo_tbl.set("avif", avif).unwrap();
+        tbl.set("format_options", fo_tbl).unwrap();
+        let fo = parse_format_options(&tbl);
+        assert_eq!(fo.webp.unwrap().quality, 75);
+        assert_eq!(fo.avif.unwrap().quality, 50);
+    }
+
+    // --- inject_upload_fields tests ---
+
+    #[test]
+    fn test_inject_upload_fields_basic() {
+        let mut fields = vec![FieldDefinition {
+            name: "alt_text".to_string(),
+            ..Default::default()
+        }];
+        let upload = crate::core::upload::CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        };
+        inject_upload_fields(&mut fields, &upload);
+        // Should have base upload fields (filename, mime_type, filesize, width, height, url) + original alt_text
+        assert_eq!(fields.len(), 7); // 6 base + 1 user
+        assert_eq!(fields[0].name, "filename");
+        assert_eq!(fields[1].name, "mime_type");
+        assert_eq!(fields[2].name, "filesize");
+        assert_eq!(fields[3].name, "width");
+        assert_eq!(fields[4].name, "height");
+        assert_eq!(fields[5].name, "url");
+        assert_eq!(fields[6].name, "alt_text"); // user field pushed to end
+    }
+
+    #[test]
+    fn test_inject_upload_fields_with_image_sizes() {
+        let mut fields = Vec::new();
+        let upload = crate::core::upload::CollectionUpload {
+            enabled: true,
+            image_sizes: vec![
+                crate::core::upload::ImageSize {
+                    name: "thumb".to_string(),
+                    width: 200,
+                    height: 200,
+                    fit: crate::core::upload::ImageFit::Cover,
+                },
+            ],
+            ..Default::default()
+        };
+        inject_upload_fields(&mut fields, &upload);
+        // 6 base + 3 per-size (thumb_url, thumb_width, thumb_height)
+        assert_eq!(fields.len(), 9);
+        assert_eq!(fields[6].name, "thumb_url");
+        assert_eq!(fields[7].name, "thumb_width");
+        assert_eq!(fields[8].name, "thumb_height");
+    }
+
+    #[test]
+    fn test_inject_upload_fields_with_format_variants() {
+        let mut fields = Vec::new();
+        let upload = crate::core::upload::CollectionUpload {
+            enabled: true,
+            image_sizes: vec![
+                crate::core::upload::ImageSize {
+                    name: "card".to_string(),
+                    width: 400,
+                    height: 300,
+                    fit: crate::core::upload::ImageFit::Cover,
+                },
+            ],
+            format_options: crate::core::upload::FormatOptions {
+                webp: Some(crate::core::upload::FormatQuality { quality: 80 }),
+                avif: Some(crate::core::upload::FormatQuality { quality: 60 }),
+            },
+            ..Default::default()
+        };
+        inject_upload_fields(&mut fields, &upload);
+        // 6 base + 3 per-size + 2 format variants (card_webp_url, card_avif_url)
+        assert_eq!(fields.len(), 11);
+        let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"card_webp_url"));
+        assert!(names.contains(&"card_avif_url"));
+    }
+
+    // --- parse_collection_auth tests ---
+
+    #[test]
+    fn test_parse_collection_auth_true() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("auth", true).unwrap();
+        let auth = parse_collection_auth(&tbl);
+        assert!(auth.is_some());
+        let auth = auth.unwrap();
+        assert!(auth.enabled);
+        assert_eq!(auth.token_expiry, 7200);
+        assert!(!auth.disable_local);
+        assert!(!auth.verify_email);
+    }
+
+    #[test]
+    fn test_parse_collection_auth_false() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("auth", false).unwrap();
+        assert!(parse_collection_auth(&tbl).is_none());
+    }
+
+    #[test]
+    fn test_parse_collection_auth_table() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        auth_tbl.set("token_expiry", 3600u64).unwrap();
+        auth_tbl.set("disable_local", true).unwrap();
+        auth_tbl.set("verify_email", true).unwrap();
+        auth_tbl.set("forgot_password", false).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+        let auth = parse_collection_auth(&tbl);
+        assert!(auth.is_some());
+        let auth = auth.unwrap();
+        assert!(auth.enabled);
+        assert_eq!(auth.token_expiry, 3600);
+        assert!(auth.disable_local);
+        assert!(auth.verify_email);
+        assert!(!auth.forgot_password);
+    }
+
+    #[test]
+    fn test_parse_collection_auth_with_strategies() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let strats = lua.create_table().unwrap();
+        let s1 = lua.create_table().unwrap();
+        s1.set("name", "oauth").unwrap();
+        s1.set("authenticate", "hooks.auth.oauth_check").unwrap();
+        strats.set(1, s1).unwrap();
+        auth_tbl.set("strategies", strats).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+        let auth = parse_collection_auth(&tbl).unwrap();
+        assert_eq!(auth.strategies.len(), 1);
+        assert_eq!(auth.strategies[0].name, "oauth");
+        assert_eq!(auth.strategies[0].authenticate, "hooks.auth.oauth_check");
+    }
+
+    // --- parse_collection_upload tests ---
+
+    #[test]
+    fn test_parse_collection_upload_true() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("upload", true).unwrap();
+        let upload = parse_collection_upload(&tbl);
+        assert!(upload.is_some());
+        assert!(upload.unwrap().enabled);
+    }
+
+    #[test]
+    fn test_parse_collection_upload_false() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("upload", false).unwrap();
+        assert!(parse_collection_upload(&tbl).is_none());
+    }
+
+    #[test]
+    fn test_parse_collection_upload_table_with_details() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        let mime_types = lua.create_table().unwrap();
+        mime_types.set(1, "image/png").unwrap();
+        mime_types.set(2, "image/jpeg").unwrap();
+        upload_tbl.set("mime_types", mime_types).unwrap();
+        upload_tbl.set("max_file_size", 5000000u64).unwrap();
+        upload_tbl.set("admin_thumbnail", "thumb").unwrap();
+
+        let sizes = lua.create_table().unwrap();
+        let s1 = lua.create_table().unwrap();
+        s1.set("name", "thumb").unwrap();
+        s1.set("width", 200u32).unwrap();
+        s1.set("height", 200u32).unwrap();
+        sizes.set(1, s1).unwrap();
+        upload_tbl.set("image_sizes", sizes).unwrap();
+
+        tbl.set("upload", upload_tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap();
+        assert!(upload.enabled);
+        assert_eq!(upload.mime_types, vec!["image/png", "image/jpeg"]);
+        assert_eq!(upload.max_file_size, Some(5000000));
+        assert_eq!(upload.admin_thumbnail.as_deref(), Some("thumb"));
+        assert_eq!(upload.image_sizes.len(), 1);
+        assert_eq!(upload.image_sizes[0].name, "thumb");
+    }
+
+    // --- parse_access_config tests ---
+
+    #[test]
+    fn test_parse_access_config_absent() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let access = parse_access_config(&tbl);
+        assert!(access.read.is_none());
+        assert!(access.create.is_none());
+        assert!(access.update.is_none());
+        assert!(access.delete.is_none());
+    }
+
+    #[test]
+    fn test_parse_access_config_present() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let access_tbl = lua.create_table().unwrap();
+        access_tbl.set("read", "hooks.access.allow_all").unwrap();
+        access_tbl.set("create", "hooks.access.admin_only").unwrap();
+        tbl.set("access", access_tbl).unwrap();
+        let access = parse_access_config(&tbl);
+        assert_eq!(access.read.as_deref(), Some("hooks.access.allow_all"));
+        assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
+        assert!(access.update.is_none());
+        assert!(access.delete.is_none());
+    }
+
+    // --- parse_field_access tests ---
+
+    #[test]
+    fn test_parse_field_access() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("read", "hooks.access.check_role").unwrap();
+        tbl.set("create", "hooks.access.admin_only").unwrap();
+        let access = parse_field_access(&tbl);
+        assert_eq!(access.read.as_deref(), Some("hooks.access.check_role"));
+        assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
+        assert!(access.update.is_none());
+    }
+}

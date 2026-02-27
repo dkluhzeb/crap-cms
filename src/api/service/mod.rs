@@ -16,6 +16,7 @@ use crate::config::{EmailConfig, LocaleConfig, ServerConfig};
 use crate::core::auth::AuthUser;
 use crate::core::email::EmailRenderer;
 use crate::core::event::EventBus;
+use crate::core::rate_limit::LoginRateLimiter;
 use crate::core::upload;
 use crate::core::SharedRegistry;
 use crate::db::query::{AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext};
@@ -44,8 +45,12 @@ pub struct ContentService {
     event_bus: Option<EventBus>,
     locale_config: LocaleConfig,
     config_dir: std::path::PathBuf,
+    login_limiter: std::sync::Arc<LoginRateLimiter>,
 }
 
+/// Untestable as unit: helper methods require full pool + registry + hook_runner.
+/// Covered by integration tests in tests/ directory.
+#[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Create a new gRPC content service with all dependencies.
     #[allow(clippy::too_many_arguments)]
@@ -61,6 +66,7 @@ impl ContentService {
         event_bus: Option<EventBus>,
         locale_config: LocaleConfig,
         config_dir: std::path::PathBuf,
+        login_limiter: std::sync::Arc<LoginRateLimiter>,
     ) -> Self {
         Self {
             pool,
@@ -75,6 +81,7 @@ impl ContentService {
             event_bus,
             locale_config,
             config_dir,
+            login_limiter,
         }
     }
 
@@ -172,6 +179,9 @@ impl ContentService {
     }
 }
 
+/// Untestable as unit: all methods are async gRPC handlers requiring full server + Lua VM + DB.
+/// Covered by integration tests in tests/ directory.
+#[cfg(not(tarpaulin_include))]
 #[tonic::async_trait]
 impl ContentApi for ContentService {
     /// Find documents in a collection with optional filters, sorting, and pagination.
@@ -1734,6 +1744,7 @@ impl ContentApi for ContentService {
 }
 
 /// Convert a JobRun to gRPC response.
+#[cfg(not(tarpaulin_include))]
 fn job_run_to_proto(run: &crate::core::job::JobRun) -> content::GetJobRunResponse {
     content::GetJobRunResponse {
         id: run.id.clone(),

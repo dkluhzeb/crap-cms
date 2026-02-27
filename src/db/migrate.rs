@@ -352,6 +352,7 @@ fn create_collection_table(
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
             columns.push("_verified INTEGER DEFAULT 0".to_string());
             columns.push("_verification_token TEXT".to_string());
+            columns.push("_verification_token_exp INTEGER".to_string());
         }
     }
 
@@ -457,7 +458,7 @@ fn alter_collection_table(
             }
         }
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
-            for col in ["_verified INTEGER DEFAULT 0", "_verification_token TEXT"] {
+            for col in ["_verified INTEGER DEFAULT 0", "_verification_token TEXT", "_verification_token_exp INTEGER"] {
                 let col_name = col.split_whitespace().next().unwrap();
                 if !existing_columns.contains(col_name) {
                     let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
@@ -511,7 +512,7 @@ fn alter_collection_table(
     let system_columns: HashSet<&str> = [
         "id", "created_at", "updated_at", "_password_hash",
         "_reset_token", "_reset_token_exp", "_verified", "_verification_token",
-        "_locked", "_status",
+        "_verification_token_exp", "_locked", "_status",
     ].into();
     for col in &existing_columns {
         if !field_names.contains(col) && !system_columns.contains(col.as_str()) {
@@ -1283,5 +1284,695 @@ mod tests {
         let conn = pool.get().unwrap();
         assert!(!table_exists(&conn, "posts").unwrap());
         assert!(!table_exists(&conn, "users").unwrap());
+    }
+
+    // ── global table alter (add new field to existing global) ─────────────
+
+    #[test]
+    fn global_table_alter_adds_new_column() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_global("settings", vec![text_field("site_name")]);
+        sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
+
+        // Now add a new field
+        let def2 = simple_global("settings", vec![
+            text_field("site_name"),
+            text_field("site_url"),
+        ]);
+        sync_global_table(&conn, "settings", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("site_url"), "New column should be added via ALTER");
+    }
+
+    // ── global table with localized fields ──────────────────────────────
+
+    #[test]
+    fn global_table_localized_fields() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_global("settings", vec![localized_field("site_name")]);
+        sync_global_table(&conn, "settings", &def, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("site_name__en"));
+        assert!(cols.contains("site_name__de"));
+        assert!(!cols.contains("site_name"));
+    }
+
+    // ── global table alter with localized fields ────────────────────────
+
+    #[test]
+    fn global_table_alter_adds_localized_columns() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_global("settings", vec![text_field("name")]);
+        sync_global_table(&conn, "settings", &def1, &locale_en_de()).unwrap();
+
+        // Add a localized field to existing table
+        let def2 = simple_global("settings", vec![
+            text_field("name"),
+            localized_field("description"),
+        ]);
+        sync_global_table(&conn, "settings", &def2, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("description__en"));
+        assert!(cols.contains("description__de"));
+    }
+
+    // ── global table with group fields ──────────────────────────────────
+
+    #[test]
+    fn global_table_group_fields_create() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_global("settings", vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![text_field("title"), text_field("description")],
+                ..Default::default()
+            },
+        ]);
+        sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("seo__title"));
+        assert!(cols.contains("seo__description"));
+    }
+
+    #[test]
+    fn global_table_group_fields_alter() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_global("settings", vec![text_field("name")]);
+        sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
+
+        // Add a group field to existing table
+        let def2 = simple_global("settings", vec![
+            text_field("name"),
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![text_field("title")],
+                ..Default::default()
+            },
+        ]);
+        sync_global_table(&conn, "settings", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("seo__title"));
+    }
+
+    // ── global table with localized group fields ────────────────────────
+
+    #[test]
+    fn global_table_localized_group_create() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_global("settings", vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                localized: true,
+                fields: vec![text_field("title")],
+                ..Default::default()
+            },
+        ]);
+        sync_global_table(&conn, "settings", &def, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("seo__title__en"));
+        assert!(cols.contains("seo__title__de"));
+    }
+
+    #[test]
+    fn global_table_localized_group_alter() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_global("settings", vec![text_field("name")]);
+        sync_global_table(&conn, "settings", &def1, &locale_en_de()).unwrap();
+
+        let def2 = simple_global("settings", vec![
+            text_field("name"),
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                localized: true,
+                fields: vec![text_field("title")],
+                ..Default::default()
+            },
+        ]);
+        sync_global_table(&conn, "settings", &def2, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("seo__title__en"));
+        assert!(cols.contains("seo__title__de"));
+    }
+
+    // ── versioned global table ──────────────────────────────────────────
+
+    #[test]
+    fn versioned_global_creates_versions_table() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_global("settings", vec![text_field("name")]);
+        def.versions = Some(VersionsConfig { drafts: true, max_versions: 5 });
+        sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "_versions__global_settings").unwrap());
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("_status"), "Drafts global should have _status column");
+    }
+
+    // ── global table alter adds _status for drafts ──────────────────────
+
+    #[test]
+    fn global_table_alter_adds_status_for_drafts() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_global("settings", vec![text_field("name")]);
+        sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
+
+        let cols_before = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(!cols_before.contains("_status"));
+
+        // Now enable drafts
+        let mut def2 = simple_global("settings", vec![text_field("name")]);
+        def2.versions = Some(VersionsConfig { drafts: true, max_versions: 5 });
+        sync_global_table(&conn, "settings", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "_global_settings").unwrap();
+        assert!(cols.contains("_status"));
+    }
+
+    // ── global table with join tables ───────────────────────────────────
+
+    #[test]
+    fn global_table_creates_join_tables() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_global("settings", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![text_field("label")],
+                ..Default::default()
+            },
+        ]);
+        sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "_global_settings_items").unwrap());
+    }
+
+    // ── alter adds auth system columns ──────────────────────────────────
+
+    #[test]
+    fn alter_adds_auth_system_columns() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("users", vec![text_field("email")]);
+        create_collection_table(&conn, "users", &def1, &no_locale()).unwrap();
+
+        // Now make it an auth collection with verify_email
+        let mut def2 = simple_collection("users", vec![text_field("email")]);
+        def2.auth = Some(CollectionAuth {
+            enabled: true,
+            verify_email: true,
+            ..Default::default()
+        });
+        alter_collection_table(&conn, "users", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "users").unwrap();
+        assert!(cols.contains("_password_hash"));
+        assert!(cols.contains("_reset_token"));
+        assert!(cols.contains("_reset_token_exp"));
+        assert!(cols.contains("_locked"));
+        assert!(cols.contains("_verified"));
+        assert!(cols.contains("_verification_token"));
+    }
+
+    // ── alter adds _status for drafts ───────────────────────────────────
+
+    #[test]
+    fn alter_adds_status_for_drafts() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        // Enable drafts on existing collection
+        let mut def2 = simple_collection("posts", vec![text_field("title")]);
+        def2.versions = Some(VersionsConfig { drafts: true, max_versions: 5 });
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("_status"));
+    }
+
+    // ── alter adds timestamps to existing table ─────────────────────────
+
+    #[test]
+    fn alter_adds_timestamps() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        // Create a table without timestamps
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT)", []).unwrap();
+
+        let def = simple_collection("posts", vec![text_field("title")]);
+        alter_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("created_at"));
+        assert!(cols.contains("updated_at"));
+    }
+
+    // ── alter warns about removed columns ───────────────────────────────
+
+    #[test]
+    fn alter_collection_with_localized_fields() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![localized_field("title")]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+
+        // Add a new localized field via alter
+        let def2 = simple_collection("posts", vec![
+            localized_field("title"),
+            localized_field("body"),
+        ]);
+        alter_collection_table(&conn, "posts", &def2, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("body__en"));
+        assert!(cols.contains("body__de"));
+    }
+
+    // ── alter group fields on collection ────────────────────────────────
+
+    #[test]
+    fn alter_adds_group_fields() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        let def2 = simple_collection("posts", vec![
+            text_field("title"),
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![text_field("meta_title"), text_field("meta_desc")],
+                ..Default::default()
+            },
+        ]);
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("seo__meta_title"));
+        assert!(cols.contains("seo__meta_desc"));
+    }
+
+    // ── alter localized group fields on collection ──────────────────────
+
+    #[test]
+    fn alter_adds_localized_group_fields() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &locale_en_de()).unwrap();
+
+        let def2 = simple_collection("posts", vec![
+            text_field("title"),
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                localized: true,
+                fields: vec![text_field("meta_title")],
+                ..Default::default()
+            },
+        ]);
+        alter_collection_table(&conn, "posts", &def2, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("seo__meta_title__en"));
+        assert!(cols.contains("seo__meta_title__de"));
+    }
+
+    // ── localized has-many junction table ───────────────────────────────
+
+    #[test]
+    fn localized_has_many_creates_junction_with_locale() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                localized: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "tags".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        assert!(table_exists(&conn, "posts_tags").unwrap());
+        let cols = get_table_columns(&conn, "posts_tags").unwrap();
+        assert!(cols.contains("_locale"), "Localized junction table should have _locale column");
+    }
+
+    // ── localized array table ───────────────────────────────────────────
+
+    #[test]
+    fn localized_array_creates_table_with_locale() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                localized: true,
+                fields: vec![text_field("label")],
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        assert!(table_exists(&conn, "posts_items").unwrap());
+        let cols = get_table_columns(&conn, "posts_items").unwrap();
+        assert!(cols.contains("_locale"));
+    }
+
+    // ── localized blocks table ──────────────────────────────────────────
+
+    #[test]
+    fn localized_blocks_creates_table_with_locale() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                localized: true,
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        assert!(table_exists(&conn, "posts_content").unwrap());
+        let cols = get_table_columns(&conn, "posts_content").unwrap();
+        assert!(cols.contains("_locale"));
+    }
+
+    // ── ensure_locale_column on existing table ──────────────────────────
+
+    #[test]
+    fn ensure_locale_column_adds_to_existing() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE test_join (parent_id TEXT, related_id TEXT)", []).unwrap();
+
+        ensure_locale_column(&conn, "test_join", "en").unwrap();
+
+        let cols = get_table_columns(&conn, "test_join").unwrap();
+        assert!(cols.contains("_locale"));
+
+        // Calling again should be a no-op (idempotent)
+        ensure_locale_column(&conn, "test_join", "en").unwrap();
+    }
+
+    // ── existing localized join table adds _locale via alter ─────────────
+
+    #[test]
+    fn existing_has_many_adds_locale_column() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        // Create parent and junction table without _locale
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute("CREATE TABLE posts_tags (parent_id TEXT, related_id TEXT, _order INTEGER)", []).unwrap();
+
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                localized: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "tags".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_tags").unwrap();
+        assert!(cols.contains("_locale"));
+    }
+
+    // ── existing array table adds sub-field columns and _locale ─────────
+
+    #[test]
+    fn existing_array_adds_new_subfield_columns() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", []).unwrap();
+
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![text_field("label"), text_field("value")],
+                ..Default::default()
+            },
+        ]);
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_items").unwrap();
+        assert!(cols.contains("value"), "New sub-field column should be added");
+    }
+
+    // ── existing blocks table adds _locale ──────────────────────────────
+
+    #[test]
+    fn existing_blocks_adds_locale_column() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute(
+            "CREATE TABLE posts_content (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, _block_type TEXT, data TEXT)",
+            [],
+        ).unwrap();
+
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                localized: true,
+                ..Default::default()
+            },
+        ]);
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_content").unwrap();
+        assert!(cols.contains("_locale"));
+    }
+
+    // ── existing localized array table adds _locale ─────────────────────
+
+    #[test]
+    fn existing_array_adds_locale_column() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", []).unwrap();
+
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                localized: true,
+                fields: vec![text_field("label")],
+                ..Default::default()
+            },
+        ]);
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_items").unwrap();
+        assert!(cols.contains("_locale"));
+    }
+
+    // ── get_applied_migrations_desc with no table ──────────────────────
+
+    #[test]
+    fn get_applied_migrations_desc_no_table() {
+        let pool = in_memory_pool();
+        let result = get_applied_migrations_desc(&pool).unwrap();
+        assert!(result.is_empty());
+    }
+
+    // ── get_applied_migrations_desc ordering ───────────────────────────
+
+    #[test]
+    fn get_applied_migrations_desc_ordering() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
+        ).unwrap();
+        record_migration(&conn, "001_a.lua").unwrap();
+        record_migration(&conn, "002_b.lua").unwrap();
+        record_migration(&conn, "003_c.lua").unwrap();
+
+        let applied = get_applied_migrations_desc(&pool).unwrap();
+        assert_eq!(applied, vec!["003_c.lua", "002_b.lua", "001_a.lua"]);
+    }
+
+    // ── create_collection_table with default values ─────────────────────
+
+    #[test]
+    fn create_with_default_values() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "status".to_string(),
+                field_type: FieldType::Text,
+                default_value: Some(serde_json::json!("draft")),
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "count".to_string(),
+                field_type: FieldType::Number,
+                default_value: Some(serde_json::json!(0)),
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        // Just verify it was created (defaults encoded in DDL)
+        assert!(table_exists(&conn, "posts").unwrap());
+    }
+
+    // ── create_collection_table with required + unique fields ────────────
+
+    #[test]
+    fn create_with_required_unique_fields() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "slug".to_string(),
+                field_type: FieldType::Text,
+                required: true,
+                unique: true,
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        assert!(table_exists(&conn, "posts").unwrap());
+    }
+
+    // ── create_collection with no timestamps ────────────────────────────
+
+    #[test]
+    fn create_collection_no_timestamps() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection("posts", vec![text_field("title")]);
+        def.timestamps = false;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(!cols.contains("created_at"));
+        assert!(!cols.contains("updated_at"));
+    }
+
+    // ── create_collection with localized group sub-field ────────────────
+
+    #[test]
+    fn create_localized_group_subfield() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition {
+                        name: "title".to_string(),
+                        field_type: FieldType::Text,
+                        localized: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("seo__title__en"));
+        assert!(cols.contains("seo__title__de"));
+    }
+
+    // ── create_collection with required localized field on default locale ─
+
+    #[test]
+    fn create_required_localized_field() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: FieldType::Text,
+                localized: true,
+                required: true,
+                unique: true,
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+
+        // Should succeed — NOT NULL only on default locale
+        assert!(table_exists(&conn, "posts").unwrap());
+    }
+
+    // ── create_collection with required localized group sub-field ────────
+
+    #[test]
+    fn create_required_localized_group_subfield() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                localized: true,
+                fields: vec![
+                    FieldDefinition {
+                        name: "title".to_string(),
+                        field_type: FieldType::Text,
+                        required: true,
+                        unique: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("seo__title__en"));
+        assert!(cols.contains("seo__title__de"));
     }
 }

@@ -269,6 +269,7 @@ impl GlobalDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     fn make_collection(slug: &str, singular: Option<&str>, plural: Option<&str>, title_field: Option<&str>) -> CollectionDefinition {
         CollectionDefinition {
@@ -365,5 +366,290 @@ mod tests {
     fn is_upload_collection_false_default() {
         let col = make_collection("posts", None, None, None);
         assert!(!col.is_upload_collection());
+    }
+
+    // ── has_versions / has_drafts tests ──────────────────────────────────
+
+    #[test]
+    fn has_versions_true() {
+        let mut col = make_collection("posts", None, None, None);
+        col.versions = Some(VersionsConfig { drafts: false, max_versions: 0 });
+        assert!(col.has_versions());
+    }
+
+    #[test]
+    fn has_versions_false_default() {
+        let col = make_collection("posts", None, None, None);
+        assert!(!col.has_versions());
+    }
+
+    #[test]
+    fn has_drafts_true() {
+        let mut col = make_collection("posts", None, None, None);
+        col.versions = Some(VersionsConfig { drafts: true, max_versions: 5 });
+        assert!(col.has_drafts());
+    }
+
+    #[test]
+    fn has_drafts_false_when_no_versions() {
+        let col = make_collection("posts", None, None, None);
+        assert!(!col.has_drafts());
+    }
+
+    #[test]
+    fn has_drafts_false_when_versions_but_no_drafts() {
+        let mut col = make_collection("posts", None, None, None);
+        col.versions = Some(VersionsConfig { drafts: false, max_versions: 10 });
+        assert!(!col.has_drafts());
+    }
+
+    // ── display_name_for / singular_name_for (locale-aware) ─────────────
+
+    fn make_localized_collection() -> CollectionDefinition {
+        let mut labels = HashMap::new();
+        labels.insert("en".to_string(), "Posts".to_string());
+        labels.insert("de".to_string(), "Beiträge".to_string());
+
+        let mut singular_labels = HashMap::new();
+        singular_labels.insert("en".to_string(), "Post".to_string());
+        singular_labels.insert("de".to_string(), "Beitrag".to_string());
+
+        CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels {
+                singular: Some(LocalizedString::Localized(singular_labels)),
+                plural: Some(LocalizedString::Localized(labels)),
+            },
+            timestamps: true,
+            fields: Vec::new(),
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
+    #[test]
+    fn display_name_for_returns_locale() {
+        let col = make_localized_collection();
+        assert_eq!(col.display_name_for("de", "en"), "Beiträge");
+    }
+
+    #[test]
+    fn display_name_for_falls_back_to_default_locale() {
+        let col = make_localized_collection();
+        assert_eq!(col.display_name_for("fr", "en"), "Posts");
+    }
+
+    #[test]
+    fn display_name_for_falls_back_to_slug() {
+        let col = make_collection("posts", None, None, None);
+        assert_eq!(col.display_name_for("de", "en"), "posts");
+    }
+
+    #[test]
+    fn singular_name_for_returns_locale() {
+        let col = make_localized_collection();
+        assert_eq!(col.singular_name_for("de", "en"), "Beitrag");
+    }
+
+    #[test]
+    fn singular_name_for_falls_back_to_default_locale() {
+        let col = make_localized_collection();
+        assert_eq!(col.singular_name_for("fr", "en"), "Post");
+    }
+
+    #[test]
+    fn singular_name_for_falls_back_to_slug() {
+        let col = make_collection("posts", None, None, None);
+        assert_eq!(col.singular_name_for("de", "en"), "posts");
+    }
+
+    // ── empty label strings fall back to slug ───────────────────────────
+
+    #[test]
+    fn display_name_empty_string_falls_back_to_slug() {
+        let col = make_collection("posts", None, Some(""), None);
+        assert_eq!(col.display_name(), "posts");
+    }
+
+    #[test]
+    fn singular_name_empty_string_falls_back_to_slug() {
+        let col = make_collection("posts", Some(""), None, None);
+        assert_eq!(col.singular_name(), "posts");
+    }
+
+    #[test]
+    fn display_name_for_empty_localized_falls_back_to_slug() {
+        let labels = HashMap::new(); // empty map
+        let col = CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels {
+                singular: None,
+                plural: Some(LocalizedString::Localized(labels)),
+            },
+            timestamps: true,
+            fields: Vec::new(),
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        assert_eq!(col.display_name_for("en", "en"), "posts");
+    }
+
+    // ── is_upload_collection disabled ────────────────────────────────────
+
+    #[test]
+    fn is_upload_collection_false_when_disabled() {
+        use crate::core::upload::CollectionUpload;
+        let mut col = make_collection("media", None, None, None);
+        col.upload = Some(CollectionUpload {
+            enabled: false,
+            ..Default::default()
+        });
+        assert!(!col.is_upload_collection());
+    }
+
+    // ── GlobalDefinition tests ──────────────────────────────────────────
+
+    fn make_global(slug: &str, singular: Option<&str>) -> GlobalDefinition {
+        GlobalDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels {
+                singular: singular.map(|s| LocalizedString::Plain(s.to_string())),
+                plural: None,
+            },
+            fields: Vec::new(),
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
+    #[test]
+    fn global_display_name_uses_singular_label() {
+        let g = make_global("site_settings", Some("Site Settings"));
+        assert_eq!(g.display_name(), "Site Settings");
+    }
+
+    #[test]
+    fn global_display_name_falls_back_to_slug() {
+        let g = make_global("site_settings", None);
+        assert_eq!(g.display_name(), "site_settings");
+    }
+
+    #[test]
+    fn global_display_name_empty_falls_back_to_slug() {
+        let g = make_global("site_settings", Some(""));
+        assert_eq!(g.display_name(), "site_settings");
+    }
+
+    #[test]
+    fn global_display_name_for_locale() {
+        let mut labels = HashMap::new();
+        labels.insert("en".to_string(), "Site Settings".to_string());
+        labels.insert("de".to_string(), "Seiteneinstellungen".to_string());
+        let g = GlobalDefinition {
+            slug: "site_settings".to_string(),
+            labels: CollectionLabels {
+                singular: Some(LocalizedString::Localized(labels)),
+                plural: None,
+            },
+            fields: Vec::new(),
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        assert_eq!(g.display_name_for("de", "en"), "Seiteneinstellungen");
+        assert_eq!(g.display_name_for("fr", "en"), "Site Settings");
+    }
+
+    #[test]
+    fn global_display_name_for_falls_back_to_slug() {
+        let g = make_global("site_settings", None);
+        assert_eq!(g.display_name_for("de", "en"), "site_settings");
+    }
+
+    #[test]
+    fn global_has_versions_true() {
+        let mut g = make_global("site_settings", None);
+        g.versions = Some(VersionsConfig { drafts: false, max_versions: 0 });
+        assert!(g.has_versions());
+    }
+
+    #[test]
+    fn global_has_versions_false() {
+        let g = make_global("site_settings", None);
+        assert!(!g.has_versions());
+    }
+
+    #[test]
+    fn global_has_drafts_true() {
+        let mut g = make_global("site_settings", None);
+        g.versions = Some(VersionsConfig { drafts: true, max_versions: 0 });
+        assert!(g.has_drafts());
+    }
+
+    #[test]
+    fn global_has_drafts_false_no_versions() {
+        let g = make_global("site_settings", None);
+        assert!(!g.has_drafts());
+    }
+
+    #[test]
+    fn global_has_drafts_false_drafts_disabled() {
+        let mut g = make_global("site_settings", None);
+        g.versions = Some(VersionsConfig { drafts: false, max_versions: 0 });
+        assert!(!g.has_drafts());
+    }
+
+    // ── CollectionAuth default values ───────────────────────────────────
+
+    #[test]
+    fn collection_auth_defaults() {
+        let auth = CollectionAuth::default();
+        assert!(!auth.enabled);
+        assert_eq!(auth.token_expiry, 7200);
+        assert!(auth.strategies.is_empty());
+        assert!(!auth.disable_local);
+        assert!(!auth.verify_email);
+        assert!(auth.forgot_password);
+    }
+
+    // ── VersionsConfig ──────────────────────────────────────────────────
+
+    #[test]
+    fn versions_config_defaults() {
+        let v = VersionsConfig { drafts: false, max_versions: 0 };
+        assert!(!v.drafts);
+        assert_eq!(v.max_versions, 0);
+    }
+
+    // ── LiveSetting variants ────────────────────────────────────────────
+
+    #[test]
+    fn live_setting_disabled() {
+        let mut col = make_collection("posts", None, None, None);
+        col.live = Some(LiveSetting::Disabled);
+        assert!(matches!(col.live, Some(LiveSetting::Disabled)));
+    }
+
+    #[test]
+    fn live_setting_function() {
+        let mut col = make_collection("posts", None, None, None);
+        col.live = Some(LiveSetting::Function("hooks.live_filter".to_string()));
+        match &col.live {
+            Some(LiveSetting::Function(s)) => assert_eq!(s, "hooks.live_filter"),
+            _ => panic!("expected LiveSetting::Function"),
+        }
     }
 }

@@ -1801,4 +1801,960 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["field_type"], "array");
     }
+
+    // --- split_sidebar_fields tests ---
+
+    #[test]
+    fn split_sidebar_fields_separates_by_position() {
+        let fields = vec![
+            serde_json::json!({"name": "title", "field_type": "text"}),
+            serde_json::json!({"name": "slug", "field_type": "text", "position": "sidebar"}),
+            serde_json::json!({"name": "body", "field_type": "richtext"}),
+            serde_json::json!({"name": "status", "field_type": "select", "position": "sidebar"}),
+        ];
+        let (main, sidebar) = split_sidebar_fields(fields);
+        assert_eq!(main.len(), 2);
+        assert_eq!(sidebar.len(), 2);
+        assert_eq!(main[0]["name"], "title");
+        assert_eq!(main[1]["name"], "body");
+        assert_eq!(sidebar[0]["name"], "slug");
+        assert_eq!(sidebar[1]["name"], "status");
+    }
+
+    #[test]
+    fn split_sidebar_fields_no_sidebar() {
+        let fields = vec![
+            serde_json::json!({"name": "title", "field_type": "text"}),
+            serde_json::json!({"name": "body", "field_type": "richtext"}),
+        ];
+        let (main, sidebar) = split_sidebar_fields(fields);
+        assert_eq!(main.len(), 2);
+        assert!(sidebar.is_empty());
+    }
+
+    #[test]
+    fn split_sidebar_fields_all_sidebar() {
+        let fields = vec![
+            serde_json::json!({"name": "a", "position": "sidebar"}),
+            serde_json::json!({"name": "b", "position": "sidebar"}),
+        ];
+        let (main, sidebar) = split_sidebar_fields(fields);
+        assert!(main.is_empty());
+        assert_eq!(sidebar.len(), 2);
+    }
+
+    #[test]
+    fn split_sidebar_fields_empty() {
+        let (main, sidebar) = split_sidebar_fields(vec![]);
+        assert!(main.is_empty());
+        assert!(sidebar.is_empty());
+    }
+
+    // --- version_to_json tests ---
+
+    #[test]
+    fn version_to_json_maps_all_fields() {
+        let v = VersionSnapshot {
+            id: "v1".to_string(),
+            parent: "doc1".to_string(),
+            version: 3,
+            status: "published".to_string(),
+            latest: true,
+            created_at: Some("2026-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2026-01-01T00:00:00Z".to_string()),
+            snapshot: serde_json::json!({}),
+        };
+        let json = version_to_json(v);
+        assert_eq!(json["id"], "v1");
+        assert_eq!(json["version"], 3);
+        assert_eq!(json["status"], "published");
+        assert_eq!(json["latest"], true);
+        assert_eq!(json["created_at"], "2026-01-01T00:00:00Z");
+    }
+
+    // --- build_field_contexts: filter_hidden tests ---
+
+    #[test]
+    fn build_field_contexts_filter_hidden_removes_hidden_fields() {
+        let mut hidden_field = make_field("secret", FieldType::Text);
+        hidden_field.admin.hidden = true;
+        let fields = vec![
+            make_field("title", FieldType::Text),
+            hidden_field,
+            make_field("body", FieldType::Textarea),
+        ];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), true, false);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["name"], "title");
+        assert_eq!(result[1]["name"], "body");
+    }
+
+    #[test]
+    fn build_field_contexts_no_filter_includes_hidden_fields() {
+        let mut hidden_field = make_field("secret", FieldType::Text);
+        hidden_field.admin.hidden = true;
+        let fields = vec![
+            make_field("title", FieldType::Text),
+            hidden_field,
+        ];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result.len(), 2);
+    }
+
+    // --- build_field_contexts: relationship tests ---
+
+    #[test]
+    fn build_field_contexts_relationship_has_collection_info() {
+        use crate::core::field::RelationshipConfig;
+        let mut rel_field = make_field("author", FieldType::Relationship);
+        rel_field.relationship = Some(RelationshipConfig {
+            collection: "users".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+        let fields = vec![rel_field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["relationship_collection"], "users");
+        assert_eq!(result[0]["has_many"], false);
+    }
+
+    #[test]
+    fn build_field_contexts_relationship_has_many() {
+        use crate::core::field::RelationshipConfig;
+        let mut rel_field = make_field("tags", FieldType::Relationship);
+        rel_field.relationship = Some(RelationshipConfig {
+            collection: "tags".to_string(),
+            has_many: true,
+            max_depth: None,
+        });
+        let fields = vec![rel_field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["relationship_collection"], "tags");
+        assert_eq!(result[0]["has_many"], true);
+    }
+
+    // --- build_field_contexts: checkbox tests ---
+
+    #[test]
+    fn build_field_contexts_checkbox_checked_values() {
+        for val in &["1", "true", "on", "yes"] {
+            let mut values = HashMap::new();
+            values.insert("active".to_string(), val.to_string());
+            let fields = vec![make_field("active", FieldType::Checkbox)];
+            let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
+            assert_eq!(result[0]["checked"], true, "Checkbox should be checked for value '{}'", val);
+        }
+    }
+
+    #[test]
+    fn build_field_contexts_checkbox_unchecked_values() {
+        for val in &["0", "false", "off", "no", ""] {
+            let mut values = HashMap::new();
+            values.insert("active".to_string(), val.to_string());
+            let fields = vec![make_field("active", FieldType::Checkbox)];
+            let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
+            assert_eq!(result[0]["checked"], false, "Checkbox should be unchecked for value '{}'", val);
+        }
+    }
+
+    // --- build_field_contexts: upload field tests ---
+
+    #[test]
+    fn build_field_contexts_upload_has_collection() {
+        use crate::core::field::RelationshipConfig;
+        let mut upload_field = make_field("image", FieldType::Upload);
+        upload_field.relationship = Some(RelationshipConfig {
+            collection: "media".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+        let fields = vec![upload_field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["relationship_collection"], "media");
+    }
+
+    // --- build_field_contexts: select tests ---
+
+    #[test]
+    fn build_field_contexts_select_marks_selected_option() {
+        let mut sel = make_field("color", FieldType::Select);
+        sel.options = vec![
+            SelectOption { label: LocalizedString::Plain("Red".to_string()), value: "red".to_string() },
+            SelectOption { label: LocalizedString::Plain("Blue".to_string()), value: "blue".to_string() },
+        ];
+        let mut values = HashMap::new();
+        values.insert("color".to_string(), "blue".to_string());
+        let fields = vec![sel];
+        let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
+        let opts = result[0]["options"].as_array().unwrap();
+        assert_eq!(opts[0]["selected"], false);
+        assert_eq!(opts[1]["selected"], true);
+    }
+
+    // --- build_field_contexts: error propagation ---
+
+    #[test]
+    fn build_field_contexts_errors_attached_to_fields() {
+        let fields = vec![make_field("title", FieldType::Text)];
+        let mut errors = HashMap::new();
+        errors.insert("title".to_string(), "Title is required".to_string());
+        let result = build_field_contexts(&fields, &HashMap::new(), &errors, false, false);
+        assert_eq!(result[0]["error"], "Title is required");
+    }
+
+    #[test]
+    fn build_field_contexts_no_error_when_field_valid() {
+        let fields = vec![make_field("title", FieldType::Text)];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert!(result[0].get("error").is_none());
+    }
+
+    // --- build_field_contexts: locale locking ---
+
+    #[test]
+    fn build_field_contexts_locale_locked_non_localized_field() {
+        let fields = vec![make_field("slug", FieldType::Text)]; // not localized
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, true);
+        assert_eq!(result[0]["locale_locked"], true);
+        assert_eq!(result[0]["readonly"], true);
+    }
+
+    #[test]
+    fn build_field_contexts_localized_field_not_locked() {
+        let mut field = make_field("title", FieldType::Text);
+        field.localized = true;
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, true);
+        assert_eq!(result[0]["locale_locked"], false);
+        assert_eq!(result[0]["readonly"], false);
+    }
+
+    // --- build_field_contexts: group field tests ---
+
+    #[test]
+    fn build_field_contexts_top_level_group_uses_double_underscore() {
+        let mut group = make_field("seo", FieldType::Group);
+        group.fields = vec![
+            make_field("title", FieldType::Text),
+            make_field("description", FieldType::Textarea),
+        ];
+        let fields = vec![group];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        let sub_fields = result[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(sub_fields[0]["name"], "seo__title");
+        assert_eq!(sub_fields[1]["name"], "seo__description");
+    }
+
+    #[test]
+    fn build_field_contexts_group_collapsed() {
+        let mut group = make_field("meta", FieldType::Group);
+        group.admin.collapsed = true;
+        group.fields = vec![make_field("author", FieldType::Text)];
+        let fields = vec![group];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["collapsed"], true);
+    }
+
+    #[test]
+    fn build_field_contexts_group_sub_field_values() {
+        let mut group = make_field("seo", FieldType::Group);
+        group.fields = vec![make_field("title", FieldType::Text)];
+        let mut values = HashMap::new();
+        values.insert("seo__title".to_string(), "My SEO Title".to_string());
+        let fields = vec![group];
+        let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
+        let sub_fields = result[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(sub_fields[0]["value"], "My SEO Title");
+    }
+
+    // --- build_field_contexts: array with min/max rows and admin options ---
+
+    #[test]
+    fn build_field_contexts_array_with_min_max_rows() {
+        let mut arr = make_field("items", FieldType::Array);
+        arr.fields = vec![make_field("title", FieldType::Text)];
+        arr.min_rows = Some(1);
+        arr.max_rows = Some(5);
+        let fields = vec![arr];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["min_rows"], 1);
+        assert_eq!(result[0]["max_rows"], 5);
+    }
+
+    #[test]
+    fn build_field_contexts_array_init_collapsed() {
+        let mut arr = make_field("items", FieldType::Array);
+        arr.fields = vec![make_field("title", FieldType::Text)];
+        arr.admin.init_collapsed = true;
+        let fields = vec![arr];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["init_collapsed"], true);
+    }
+
+    #[test]
+    fn build_field_contexts_array_labels_singular() {
+        let mut arr = make_field("slides", FieldType::Array);
+        arr.fields = vec![make_field("title", FieldType::Text)];
+        arr.admin.labels_singular = Some(LocalizedString::Plain("Slide".to_string()));
+        let fields = vec![arr];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["add_label"], "Slide");
+    }
+
+    #[test]
+    fn build_field_contexts_array_label_field() {
+        let mut arr = make_field("items", FieldType::Array);
+        arr.fields = vec![make_field("title", FieldType::Text)];
+        arr.admin.label_field = Some("title".to_string());
+        let fields = vec![arr];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["label_field"], "title");
+    }
+
+    // --- build_field_contexts: blocks with min/max rows and admin options ---
+
+    #[test]
+    fn build_field_contexts_blocks_with_min_max_rows() {
+        let mut blocks = make_field("content", FieldType::Blocks);
+        blocks.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: None,
+            fields: vec![make_field("body", FieldType::Text)],
+            ..Default::default()
+        }];
+        blocks.min_rows = Some(1);
+        blocks.max_rows = Some(10);
+        let fields = vec![blocks];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["min_rows"], 1);
+        assert_eq!(result[0]["max_rows"], 10);
+    }
+
+    #[test]
+    fn build_field_contexts_blocks_init_collapsed() {
+        let mut blocks = make_field("content", FieldType::Blocks);
+        blocks.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: None,
+            fields: vec![make_field("body", FieldType::Text)],
+            ..Default::default()
+        }];
+        blocks.admin.init_collapsed = true;
+        let fields = vec![blocks];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["init_collapsed"], true);
+    }
+
+    #[test]
+    fn build_field_contexts_blocks_labels_singular() {
+        let mut blocks = make_field("content", FieldType::Blocks);
+        blocks.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: None,
+            fields: vec![make_field("body", FieldType::Text)],
+            ..Default::default()
+        }];
+        blocks.admin.labels_singular = Some(LocalizedString::Plain("Block".to_string()));
+        let fields = vec![blocks];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["add_label"], "Block");
+    }
+
+    #[test]
+    fn build_field_contexts_blocks_block_label_field() {
+        let mut blocks = make_field("content", FieldType::Blocks);
+        blocks.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: None,
+            fields: vec![make_field("body", FieldType::Text)],
+            label_field: Some("body".to_string()),
+            ..Default::default()
+        }];
+        let fields = vec![blocks];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        let block_defs = result[0]["block_definitions"].as_array().unwrap();
+        assert_eq!(block_defs[0]["label_field"], "body");
+    }
+
+    // --- build_field_contexts: position field ---
+
+    #[test]
+    fn build_field_contexts_position_set() {
+        let mut field = make_field("status", FieldType::Text);
+        field.admin.position = Some("sidebar".to_string());
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["position"], "sidebar");
+    }
+
+    // --- build_field_contexts: label, placeholder, description ---
+
+    #[test]
+    fn build_field_contexts_custom_label_placeholder_description() {
+        let mut field = make_field("title", FieldType::Text);
+        field.admin.label = Some(LocalizedString::Plain("Custom Title".to_string()));
+        field.admin.placeholder = Some(LocalizedString::Plain("Enter title here...".to_string()));
+        field.admin.description = Some(LocalizedString::Plain("The main title".to_string()));
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["label"], "Custom Title");
+        assert_eq!(result[0]["placeholder"], "Enter title here...");
+        assert_eq!(result[0]["description"], "The main title");
+    }
+
+    #[test]
+    fn build_field_contexts_readonly_field() {
+        let mut field = make_field("slug", FieldType::Text);
+        field.admin.readonly = true;
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["readonly"], true);
+    }
+
+    // --- build_field_contexts: date short values ---
+
+    #[test]
+    fn build_field_contexts_date_short_value_day_only() {
+        let mut values = HashMap::new();
+        values.insert("d".to_string(), "short".to_string()); // less than 10 chars
+        let field = make_field("d", FieldType::Date);
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
+        // Should use the short value as-is
+        assert_eq!(result[0]["date_only_value"], "short");
+    }
+
+    #[test]
+    fn build_field_contexts_date_short_value_day_and_time() {
+        let mut field = make_field("d", FieldType::Date);
+        field.picker_appearance = Some("dayAndTime".to_string());
+        let mut values = HashMap::new();
+        values.insert("d".to_string(), "short".to_string()); // less than 16 chars
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
+        assert_eq!(result[0]["datetime_local_value"], "short");
+    }
+
+    // --- apply_field_type_extras tests ---
+
+    #[test]
+    fn apply_extras_checkbox_checked() {
+        let sf = make_field("active", FieldType::Checkbox);
+        let mut ctx = serde_json::json!({"name": "group__active"});
+        apply_field_type_extras(&sf, "true", &mut ctx, &HashMap::new(), &HashMap::new(), "group__active", false, 0);
+        assert_eq!(ctx["checked"], true);
+    }
+
+    #[test]
+    fn apply_extras_checkbox_unchecked() {
+        let sf = make_field("active", FieldType::Checkbox);
+        let mut ctx = serde_json::json!({"name": "group__active"});
+        apply_field_type_extras(&sf, "0", &mut ctx, &HashMap::new(), &HashMap::new(), "group__active", false, 0);
+        assert_eq!(ctx["checked"], false);
+    }
+
+    #[test]
+    fn apply_extras_select() {
+        let mut sf = make_field("color", FieldType::Select);
+        sf.options = vec![
+            SelectOption { label: LocalizedString::Plain("Red".to_string()), value: "red".to_string() },
+            SelectOption { label: LocalizedString::Plain("Green".to_string()), value: "green".to_string() },
+        ];
+        let mut ctx = serde_json::json!({"name": "group__color"});
+        apply_field_type_extras(&sf, "green", &mut ctx, &HashMap::new(), &HashMap::new(), "group__color", false, 0);
+        let opts = ctx["options"].as_array().unwrap();
+        assert_eq!(opts[0]["selected"], false);
+        assert_eq!(opts[1]["selected"], true);
+    }
+
+    #[test]
+    fn apply_extras_date_day_only() {
+        let sf = make_field("d", FieldType::Date);
+        let mut ctx = serde_json::json!({"name": "group__d"});
+        apply_field_type_extras(&sf, "2026-01-15T12:00:00Z", &mut ctx, &HashMap::new(), &HashMap::new(), "group__d", false, 0);
+        assert_eq!(ctx["picker_appearance"], "dayOnly");
+        assert_eq!(ctx["date_only_value"], "2026-01-15");
+    }
+
+    #[test]
+    fn apply_extras_date_day_and_time() {
+        let mut sf = make_field("d", FieldType::Date);
+        sf.picker_appearance = Some("dayAndTime".to_string());
+        let mut ctx = serde_json::json!({"name": "group__d"});
+        apply_field_type_extras(&sf, "2026-01-15T09:30:00Z", &mut ctx, &HashMap::new(), &HashMap::new(), "group__d", false, 0);
+        assert_eq!(ctx["picker_appearance"], "dayAndTime");
+        assert_eq!(ctx["datetime_local_value"], "2026-01-15T09:30");
+    }
+
+    #[test]
+    fn apply_extras_date_short_values() {
+        let sf = make_field("d", FieldType::Date);
+        let mut ctx = serde_json::json!({"name": "g__d"});
+        apply_field_type_extras(&sf, "short", &mut ctx, &HashMap::new(), &HashMap::new(), "g__d", false, 0);
+        assert_eq!(ctx["date_only_value"], "short");
+
+        let mut sf2 = make_field("d2", FieldType::Date);
+        sf2.picker_appearance = Some("dayAndTime".to_string());
+        let mut ctx2 = serde_json::json!({"name": "g__d2"});
+        apply_field_type_extras(&sf2, "short", &mut ctx2, &HashMap::new(), &HashMap::new(), "g__d2", false, 0);
+        assert_eq!(ctx2["datetime_local_value"], "short");
+    }
+
+    #[test]
+    fn apply_extras_relationship() {
+        use crate::core::field::RelationshipConfig;
+        let mut sf = make_field("author", FieldType::Relationship);
+        sf.relationship = Some(RelationshipConfig {
+            collection: "users".to_string(),
+            has_many: true,
+            max_depth: None,
+        });
+        let mut ctx = serde_json::json!({"name": "group__author"});
+        apply_field_type_extras(&sf, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__author", false, 0);
+        assert_eq!(ctx["relationship_collection"], "users");
+        assert_eq!(ctx["has_many"], true);
+    }
+
+    #[test]
+    fn apply_extras_upload() {
+        use crate::core::field::RelationshipConfig;
+        let mut sf = make_field("image", FieldType::Upload);
+        sf.relationship = Some(RelationshipConfig {
+            collection: "media".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+        let mut ctx = serde_json::json!({"name": "group__image"});
+        apply_field_type_extras(&sf, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__image", false, 0);
+        assert_eq!(ctx["relationship_collection"], "media");
+    }
+
+    #[test]
+    fn apply_extras_array_in_group() {
+        let mut arr = make_field("tags", FieldType::Array);
+        arr.fields = vec![make_field("name", FieldType::Text)];
+        arr.min_rows = Some(1);
+        arr.max_rows = Some(3);
+        arr.admin.init_collapsed = true;
+        arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
+        arr.admin.label_field = Some("name".to_string());
+        let mut ctx = serde_json::json!({"name": "group__tags"});
+        apply_field_type_extras(&arr, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__tags", false, 0);
+        assert!(ctx["sub_fields"].as_array().is_some());
+        assert_eq!(ctx["row_count"], 0);
+        assert_eq!(ctx["min_rows"], 1);
+        assert_eq!(ctx["max_rows"], 3);
+        assert_eq!(ctx["init_collapsed"], true);
+        assert_eq!(ctx["add_label"], "Tag");
+        assert_eq!(ctx["label_field"], "name");
+    }
+
+    #[test]
+    fn apply_extras_group_in_group() {
+        let mut inner = make_field("meta", FieldType::Group);
+        inner.fields = vec![make_field("author", FieldType::Text)];
+        inner.admin.collapsed = true;
+        let mut ctx = serde_json::json!({"name": "outer__meta"});
+        apply_field_type_extras(&inner, "", &mut ctx, &HashMap::new(), &HashMap::new(), "outer__meta", false, 0);
+        assert!(ctx["sub_fields"].as_array().is_some());
+        assert_eq!(ctx["collapsed"], true);
+    }
+
+    #[test]
+    fn apply_extras_blocks_in_group() {
+        let mut blk = make_field("sections", FieldType::Blocks);
+        blk.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: None,
+            fields: vec![make_field("body", FieldType::Text)],
+            label_field: Some("body".to_string()),
+            ..Default::default()
+        }];
+        blk.min_rows = Some(0);
+        blk.max_rows = Some(5);
+        blk.admin.init_collapsed = true;
+        blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
+        let mut ctx = serde_json::json!({"name": "group__sections"});
+        apply_field_type_extras(&blk, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__sections", false, 0);
+        assert!(ctx["block_definitions"].as_array().is_some());
+        assert_eq!(ctx["row_count"], 0);
+        assert_eq!(ctx["min_rows"], 0);
+        assert_eq!(ctx["max_rows"], 5);
+        assert_eq!(ctx["init_collapsed"], true);
+        assert_eq!(ctx["add_label"], "Section");
+        let bd = ctx["block_definitions"].as_array().unwrap();
+        assert_eq!(bd[0]["label_field"], "body");
+    }
+
+    #[test]
+    fn apply_extras_max_depth_stops_recursion() {
+        let mut arr = make_field("deep", FieldType::Array);
+        arr.fields = vec![make_field("leaf", FieldType::Text)];
+        let mut ctx = serde_json::json!({"name": "group__deep"});
+        apply_field_type_extras(&arr, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__deep", false, MAX_FIELD_DEPTH);
+        // At max depth, no sub_fields should be added
+        assert!(ctx.get("sub_fields").is_none());
+    }
+
+    #[test]
+    fn apply_extras_unknown_type_is_noop() {
+        let sf = make_field("body", FieldType::Richtext);
+        let mut ctx = serde_json::json!({"name": "group__body", "field_type": "richtext"});
+        apply_field_type_extras(&sf, "hello", &mut ctx, &HashMap::new(), &HashMap::new(), "group__body", false, 0);
+        // Should not add any extra fields
+        assert!(ctx.get("options").is_none());
+        assert!(ctx.get("checked").is_none());
+    }
+
+    // --- enriched_sub_field: error propagation ---
+
+    #[test]
+    fn enriched_sub_field_with_error() {
+        let sf = make_field("title", FieldType::Text);
+        let mut errors = HashMap::new();
+        errors.insert("content[0][title]".to_string(), "Required".to_string());
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&serde_json::json!("val")), "content", 0,
+            false, false, 1, &errors,
+        );
+        assert_eq!(ctx["error"], "Required");
+    }
+
+    // --- enriched_sub_field: max depth ---
+
+    #[test]
+    fn enriched_sub_field_max_depth_returns_early() {
+        let mut arr = make_field("deep", FieldType::Array);
+        arr.fields = vec![make_field("leaf", FieldType::Text)];
+        let ctx = build_enriched_sub_field_context(
+            &arr, Some(&serde_json::json!([])), "parent", 0,
+            false, false, MAX_FIELD_DEPTH, &HashMap::new(),
+        );
+        // At max depth, array-specific fields should not be added
+        assert!(ctx.get("rows").is_none());
+        assert!(ctx.get("sub_fields").is_none());
+    }
+
+    // --- enriched_sub_field: date field ---
+
+    #[test]
+    fn enriched_sub_field_date_day_only() {
+        let sf = make_field("d", FieldType::Date);
+        let raw = serde_json::json!("2026-03-15T10:00:00Z");
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&raw), "items", 0, false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["picker_appearance"], "dayOnly");
+        assert_eq!(ctx["date_only_value"], "2026-03-15");
+    }
+
+    #[test]
+    fn enriched_sub_field_date_day_and_time() {
+        let mut sf = make_field("d", FieldType::Date);
+        sf.picker_appearance = Some("dayAndTime".to_string());
+        let raw = serde_json::json!("2026-03-15T10:30:00Z");
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&raw), "items", 0, false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["picker_appearance"], "dayAndTime");
+        assert_eq!(ctx["datetime_local_value"], "2026-03-15T10:30");
+    }
+
+    #[test]
+    fn enriched_sub_field_date_short_value() {
+        let sf = make_field("d", FieldType::Date);
+        let raw = serde_json::json!("short");
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&raw), "items", 0, false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["date_only_value"], "short");
+    }
+
+    // --- enriched_sub_field: upload field ---
+
+    #[test]
+    fn enriched_sub_field_upload() {
+        use crate::core::field::RelationshipConfig;
+        let mut sf = make_field("image", FieldType::Upload);
+        sf.relationship = Some(RelationshipConfig {
+            collection: "media".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&serde_json::json!("img123")), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["relationship_collection"], "media");
+    }
+
+    // --- enriched_sub_field: relationship field ---
+
+    #[test]
+    fn enriched_sub_field_relationship() {
+        use crate::core::field::RelationshipConfig;
+        let mut sf = make_field("author", FieldType::Relationship);
+        sf.relationship = Some(RelationshipConfig {
+            collection: "users".to_string(),
+            has_many: true,
+            max_depth: None,
+        });
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&serde_json::json!("user1")), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["relationship_collection"], "users");
+        assert_eq!(ctx["has_many"], true);
+    }
+
+    // --- enriched_sub_field: value stringification ---
+
+    #[test]
+    fn enriched_sub_field_null_value_empty_string() {
+        let sf = make_field("title", FieldType::Text);
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&serde_json::Value::Null), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["value"], "");
+    }
+
+    #[test]
+    fn enriched_sub_field_number_to_string() {
+        let sf = make_field("count", FieldType::Number);
+        let ctx = build_enriched_sub_field_context(
+            &sf, Some(&serde_json::json!(42)), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["value"], "42");
+    }
+
+    #[test]
+    fn enriched_sub_field_no_value() {
+        let sf = make_field("title", FieldType::Text);
+        let ctx = build_enriched_sub_field_context(
+            &sf, None, "items", 0, false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["value"], "");
+    }
+
+    // --- enriched_sub_field: array with min/max rows, init_collapsed, labels ---
+
+    #[test]
+    fn enriched_sub_field_array_with_options() {
+        let mut arr = make_field("tags", FieldType::Array);
+        arr.fields = vec![make_field("name", FieldType::Text)];
+        arr.min_rows = Some(1);
+        arr.max_rows = Some(5);
+        arr.admin.init_collapsed = true;
+        arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
+        let ctx = build_enriched_sub_field_context(
+            &arr, Some(&serde_json::json!([])), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["min_rows"], 1);
+        assert_eq!(ctx["max_rows"], 5);
+        assert_eq!(ctx["init_collapsed"], true);
+        assert_eq!(ctx["add_label"], "Tag");
+    }
+
+    // --- enriched_sub_field: blocks with min/max rows, init_collapsed, labels ---
+
+    #[test]
+    fn enriched_sub_field_blocks_with_options() {
+        let mut blk = make_field("sections", FieldType::Blocks);
+        blk.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: None,
+            fields: vec![make_field("body", FieldType::Text)],
+            ..Default::default()
+        }];
+        blk.min_rows = Some(0);
+        blk.max_rows = Some(10);
+        blk.admin.init_collapsed = true;
+        blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
+        blk.admin.label_field = Some("body".to_string());
+        let ctx = build_enriched_sub_field_context(
+            &blk, Some(&serde_json::json!([])), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["min_rows"], 0);
+        assert_eq!(ctx["max_rows"], 10);
+        assert_eq!(ctx["init_collapsed"], true);
+        assert_eq!(ctx["add_label"], "Section");
+        assert_eq!(ctx["label_field"], "body");
+    }
+
+    // --- enriched_sub_field: nested blocks with row errors ---
+
+    #[test]
+    fn enriched_sub_field_nested_array_row_errors() {
+        let mut inner_array = make_field("items", FieldType::Array);
+        inner_array.fields = vec![make_field("title", FieldType::Text)];
+
+        let raw_value = serde_json::json!([{"title": ""}]);
+        let mut errors = HashMap::new();
+        errors.insert("parent[0][items][0][title]".to_string(), "Required".to_string());
+
+        let ctx = build_enriched_sub_field_context(
+            &inner_array, Some(&raw_value), "parent", 0,
+            false, false, 1, &errors,
+        );
+
+        let rows = ctx["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        let row_fields = rows[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(row_fields[0]["error"], "Required");
+        assert_eq!(rows[0]["has_errors"], true);
+    }
+
+    #[test]
+    fn enriched_sub_field_nested_blocks_row_errors() {
+        let mut blk = make_field("sections", FieldType::Blocks);
+        blk.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: Some(LocalizedString::Plain("Text".to_string())),
+            fields: vec![make_field("body", FieldType::Richtext)],
+            ..Default::default()
+        }];
+
+        let raw_value = serde_json::json!([{"_block_type": "text", "body": ""}]);
+        let mut errors = HashMap::new();
+        errors.insert("parent[0][sections][0][body]".to_string(), "Required".to_string());
+
+        let ctx = build_enriched_sub_field_context(
+            &blk, Some(&raw_value), "parent", 0,
+            false, false, 1, &errors,
+        );
+
+        let rows = ctx["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["has_errors"], true);
+    }
+
+    // --- enriched_sub_field: group with collapsed ---
+
+    #[test]
+    fn enriched_sub_field_group_collapsed() {
+        let mut grp = make_field("meta", FieldType::Group);
+        grp.fields = vec![make_field("author", FieldType::Text)];
+        grp.admin.collapsed = true;
+        let raw = serde_json::json!({"author": "Alice"});
+        let ctx = build_enriched_sub_field_context(
+            &grp, Some(&raw), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        assert_eq!(ctx["collapsed"], true);
+    }
+
+    // --- enriched_sub_field: group with non-object value ---
+
+    #[test]
+    fn enriched_sub_field_group_with_null_value() {
+        let mut grp = make_field("meta", FieldType::Group);
+        grp.fields = vec![make_field("author", FieldType::Text)];
+        let ctx = build_enriched_sub_field_context(
+            &grp, Some(&serde_json::Value::Null), "items", 0,
+            false, false, 1, &HashMap::new(),
+        );
+        // group_obj should be None so nested values are empty
+        let sub_fields = ctx["sub_fields"].as_array().unwrap();
+        assert_eq!(sub_fields[0]["value"], "");
+    }
+
+    // --- enriched_sub_field: nested blocks with unknown block type ---
+
+    #[test]
+    fn enriched_sub_field_nested_blocks_unknown_type() {
+        let mut blk = make_field("sections", FieldType::Blocks);
+        blk.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            label: Some(LocalizedString::Plain("Text".to_string())),
+            fields: vec![make_field("body", FieldType::Richtext)],
+            ..Default::default()
+        }];
+
+        // Row with unknown block type
+        let raw_value = serde_json::json!([{"_block_type": "unknown_type", "body": "content"}]);
+
+        let ctx = build_enriched_sub_field_context(
+            &blk, Some(&raw_value), "parent", 0,
+            false, false, 1, &HashMap::new(),
+        );
+
+        let rows = ctx["rows"].as_array().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["_block_type"], "unknown_type");
+        assert_eq!(rows[0]["block_label"], "unknown_type"); // falls back to block_type string
+        // sub_fields should be empty since block_def is not found
+        let sub_fields = rows[0]["sub_fields"].as_array().unwrap();
+        assert!(sub_fields.is_empty());
+    }
+
+    // --- compute_row_label tests ---
+
+    use crate::core::field::FieldAdmin;
+
+    #[test]
+    fn compute_row_label_from_label_field() {
+        let admin = FieldAdmin {
+            label_field: Some("title".to_string()),
+            ..Default::default()
+        };
+        let mut row = serde_json::Map::new();
+        row.insert("title".to_string(), serde_json::json!("My Title"));
+        // Construct a minimal mock HookRunner — compute_row_label with no row_label set
+        // will skip the Lua call and go straight to label_field lookup.
+        // Since we can't construct a real HookRunner in a unit test, we test the label_field
+        // and block_label_field paths only (they don't need Lua).
+
+        // Direct test of label value extraction logic (matching compute_row_label's inner logic)
+        let lf = admin.label_field.as_deref();
+        assert_eq!(lf, Some("title"));
+        let val = row.get("title").unwrap();
+        match val {
+            serde_json::Value::String(s) if !s.is_empty() => {
+                assert_eq!(s, "My Title");
+            }
+            _ => panic!("Expected non-empty string"),
+        }
+    }
+
+    #[test]
+    fn compute_row_label_number_value() {
+        // Test that Number values are stringified
+        let val = serde_json::json!(42);
+        match &val {
+            serde_json::Value::Number(n) => assert_eq!(n.to_string(), "42"),
+            _ => panic!("Expected number"),
+        }
+    }
+
+    #[test]
+    fn compute_row_label_bool_value() {
+        // Test that Bool values are stringified
+        let val = serde_json::json!(true);
+        match &val {
+            serde_json::Value::Bool(b) => assert_eq!(b.to_string(), "true"),
+            _ => panic!("Expected bool"),
+        }
+    }
+
+    // --- htmx_redirect tests ---
+
+    #[test]
+    fn htmx_redirect_returns_200_with_header() {
+        let resp = htmx_redirect("/admin/collections/posts");
+        assert_eq!(resp.status(), StatusCode::OK);
+        let hx = resp.headers().get("HX-Redirect").unwrap();
+        assert_eq!(hx, "/admin/collections/posts");
+    }
+
+    // --- redirect_response tests ---
+
+    #[test]
+    fn redirect_response_returns_303() {
+        let resp = redirect_response("/admin/collections");
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    }
 }

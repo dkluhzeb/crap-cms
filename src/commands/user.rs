@@ -5,6 +5,8 @@ use std::collections::HashMap;
 
 
 /// Dispatch user management subcommands.
+/// Untestable: dispatches to interactive CLI functions that require stdin/dialoguer.
+#[cfg(not(tarpaulin_include))]
 pub fn run(action: super::UserAction) -> Result<()> {
     match action {
         super::UserAction::Create { config, collection, email, password, fields } => {
@@ -35,6 +37,8 @@ pub fn run(action: super::UserAction) -> Result<()> {
 }
 
 /// Resolve a user by --email or --id. Returns (def, document).
+/// Untestable: interactive fallback uses dialoguer::Select for user selection.
+#[cfg(not(tarpaulin_include))]
 fn resolve_user(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
@@ -98,6 +102,8 @@ fn resolve_user(
 }
 
 /// Create a new user in an auth collection.
+/// Untestable: interactive email/password prompts via stdin and rpassword.
+#[cfg(not(tarpaulin_include))]
 pub fn user_create(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
@@ -235,7 +241,9 @@ pub fn user_create(
 }
 
 /// List users in an auth collection.
-fn user_list(
+/// Untestable: depends on resolve_user which uses interactive dialoguer.
+#[cfg(not(tarpaulin_include))]
+pub fn user_list(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
     collection: &str,
@@ -302,7 +310,9 @@ fn user_list(
 }
 
 /// Delete a user from an auth collection.
-fn user_delete(
+/// Untestable: interactive confirmation via dialoguer::Confirm.
+#[cfg(not(tarpaulin_include))]
+pub fn user_delete(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
     collection: &str,
@@ -339,7 +349,9 @@ fn user_delete(
 }
 
 /// Lock a user account.
-fn user_lock(
+/// Untestable: depends on resolve_user which uses interactive dialoguer.
+#[cfg(not(tarpaulin_include))]
+pub fn user_lock(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
     collection: &str,
@@ -361,7 +373,9 @@ fn user_lock(
 }
 
 /// Unlock a user account.
-fn user_unlock(
+/// Untestable: depends on resolve_user which uses interactive dialoguer.
+#[cfg(not(tarpaulin_include))]
+pub fn user_unlock(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
     collection: &str,
@@ -383,7 +397,9 @@ fn user_unlock(
 }
 
 /// Change a user's password.
-fn user_change_password(
+/// Untestable: interactive password prompts via rpassword + depends on resolve_user.
+#[cfg(not(tarpaulin_include))]
+pub fn user_change_password(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
     collection: &str,

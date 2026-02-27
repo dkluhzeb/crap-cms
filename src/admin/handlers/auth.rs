@@ -56,6 +56,11 @@ pub async fn login_action(
     State(state): State<AdminState>,
     Form(form): Form<LoginForm>,
 ) -> axum::response::Response {
+    // Check rate limit before doing any work
+    if state.login_limiter.is_blocked(&form.email) {
+        return login_error(&state, "Too many login attempts. Please try again later.", &form.email);
+    }
+
     let def = {
         let reg = match state.registry.read() {
             Ok(r) => r,
@@ -83,14 +88,14 @@ pub async fn login_action(
         let user = query::find_by_email(&conn, &slug, &def_owned, &email)?;
         let user = match user {
             Some(u) => u,
-            None => return Ok(None),
+            None => { auth::dummy_verify(); return Ok(None); }
         };
 
         // Verify password
         let hash = query::get_password_hash(&conn, &slug, &user.id)?;
         let hash = match hash {
             Some(h) => h,
-            None => return Ok(None),
+            None => { auth::dummy_verify(); return Ok(None); }
         };
 
         if !auth::verify_password(&password, &hash)? {
@@ -115,8 +120,14 @@ pub async fn login_action(
 
     let user = match result {
         Ok(Ok(Some(Ok(user)))) => user,
-        Ok(Ok(Some(Err(msg)))) => return login_error(&state, &msg, &form.email),
-        Ok(Ok(None)) => return login_error(&state, "Invalid email or password", &form.email),
+        Ok(Ok(Some(Err(msg)))) => {
+            state.login_limiter.record_failure(&form.email);
+            return login_error(&state, &msg, &form.email);
+        }
+        Ok(Ok(None)) => {
+            state.login_limiter.record_failure(&form.email);
+            return login_error(&state, "Invalid email or password", &form.email);
+        }
         Ok(Err(e)) => {
             tracing::error!("Login error: {}", e);
             return login_error(&state, "Internal error", &form.email);
@@ -126,6 +137,9 @@ pub async fn login_action(
             return login_error(&state, "Internal error", &form.email);
         }
     };
+
+    // Successful login — clear any rate limit state
+    state.login_limiter.clear(&form.email);
 
     // Get email from user document
     let user_email = user.fields.get("email")
@@ -155,10 +169,7 @@ pub async fn login_action(
     };
 
     // Set cookie and redirect
-    let cookie = format!(
-        "crap_session={}; HttpOnly; Path=/; SameSite=Lax; Max-Age={}",
-        token, expiry
-    );
+    let cookie = session_cookie(&token, expiry, state.config.admin.dev_mode);
 
     let mut response = Redirect::to("/admin").into_response();
     response.headers_mut().insert(
@@ -169,8 +180,10 @@ pub async fn login_action(
 }
 
 /// POST /admin/logout — clear cookie, redirect to login.
-pub async fn logout_action() -> axum::response::Response {
-    let cookie = "crap_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0";
+pub async fn logout_action(
+    State(state): State<AdminState>,
+) -> axum::response::Response {
+    let cookie = clear_session_cookie(state.config.admin.dev_mode);
     let mut response = Redirect::to("/admin/login").into_response();
     response.headers_mut().insert(
         axum::http::header::SET_COOKIE,
@@ -485,7 +498,11 @@ pub async fn verify_email(
         for def in reg.collections.values() {
             if !def.is_auth_collection() { continue; }
             if !def.auth.as_ref().is_some_and(|a| a.verify_email) { continue; }
-            if let Some(user) = query::find_by_verification_token(&conn, &def.slug, def, &token)? {
+            if let Some((user, exp)) = query::find_by_verification_token(&conn, &def.slug, def, &token)? {
+                if chrono::Utc::now().timestamp() >= exp {
+                    // Token expired — don't verify
+                    return Ok(false);
+                }
                 query::mark_verified(&conn, &def.slug, &user.id)?;
                 return Ok(true);
             }
@@ -502,6 +519,24 @@ pub async fn verify_email(
             Redirect::to("/admin/login").into_response()
         }
     }
+}
+
+// ── Cookie helpers ────────────────────────────────────────────────────────
+
+/// Build a `Set-Cookie` header value for the session cookie.
+/// Adds `Secure` flag when not in dev mode.
+fn session_cookie(token: &str, expiry: u64, dev_mode: bool) -> String {
+    let secure = if dev_mode { "" } else { "; Secure" };
+    format!(
+        "crap_session={}; HttpOnly; Path=/; SameSite=Lax; Max-Age={}{}",
+        token, expiry, secure,
+    )
+}
+
+/// Build a `Set-Cookie` header value that clears the session cookie.
+fn clear_session_cookie(dev_mode: bool) -> String {
+    let secure = if dev_mode { "" } else { "; Secure" };
+    format!("crap_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0{}", secure)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -573,4 +608,42 @@ fn get_auth_collections(state: &AdminState) -> Vec<serde_json::Value> {
         .collect();
     collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
     collections
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_cookie_dev_mode() {
+        let cookie = session_cookie("tok123", 7200, true);
+        assert!(cookie.contains("crap_session=tok123"));
+        assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Max-Age=7200"));
+        assert!(!cookie.contains("Secure"), "dev mode should not set Secure");
+    }
+
+    #[test]
+    fn session_cookie_production_mode() {
+        let cookie = session_cookie("tok456", 3600, false);
+        assert!(cookie.contains("crap_session=tok456"));
+        assert!(cookie.contains("Max-Age=3600"));
+        assert!(cookie.contains("; Secure"), "production should set Secure");
+    }
+
+    #[test]
+    fn clear_session_cookie_dev_mode() {
+        let cookie = clear_session_cookie(true);
+        assert!(cookie.contains("crap_session=;"));
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(!cookie.contains("Secure"));
+    }
+
+    #[test]
+    fn clear_session_cookie_production_mode() {
+        let cookie = clear_session_cookie(false);
+        assert!(cookie.contains("crap_session=;"));
+        assert!(cookie.contains("Max-Age=0"));
+        assert!(cookie.contains("; Secure"));
+    }
 }

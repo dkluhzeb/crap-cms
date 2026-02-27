@@ -382,3 +382,356 @@ fn has_auth_collections(state: &AdminState) -> bool {
     };
     reg.collections.values().any(|def| def.is_auth_collection())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- PageType::as_str ---
+
+    #[test]
+    fn page_type_as_str_covers_all_variants() {
+        assert_eq!(PageType::Dashboard.as_str(), "dashboard");
+        assert_eq!(PageType::CollectionList.as_str(), "collection_list");
+        assert_eq!(PageType::CollectionItems.as_str(), "collection_items");
+        assert_eq!(PageType::CollectionEdit.as_str(), "collection_edit");
+        assert_eq!(PageType::CollectionCreate.as_str(), "collection_create");
+        assert_eq!(PageType::CollectionDelete.as_str(), "collection_delete");
+        assert_eq!(PageType::CollectionVersions.as_str(), "collection_versions");
+        assert_eq!(PageType::GlobalEdit.as_str(), "global_edit");
+        assert_eq!(PageType::GlobalVersions.as_str(), "global_versions");
+        assert_eq!(PageType::AuthLogin.as_str(), "auth_login");
+        assert_eq!(PageType::AuthForgot.as_str(), "auth_forgot");
+        assert_eq!(PageType::AuthReset.as_str(), "auth_reset");
+        assert_eq!(PageType::Error403.as_str(), "error_403");
+        assert_eq!(PageType::Error404.as_str(), "error_404");
+        assert_eq!(PageType::Error500.as_str(), "error_500");
+    }
+
+    // --- Breadcrumb ---
+
+    #[test]
+    fn breadcrumb_link_has_url() {
+        let bc = Breadcrumb::link("Home", "/admin");
+        assert_eq!(bc.label, "Home");
+        assert_eq!(bc.url, Some("/admin".to_string()));
+    }
+
+    #[test]
+    fn breadcrumb_current_has_no_url() {
+        let bc = Breadcrumb::current("Current Page");
+        assert_eq!(bc.label, "Current Page");
+        assert!(bc.url.is_none());
+    }
+
+    // --- build_collection_context ---
+
+    #[test]
+    fn build_collection_context_includes_all_fields() {
+        let def = CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: crate::core::collection::CollectionLabels {
+                singular: Some(crate::core::field::LocalizedString::Plain("Post".to_string())),
+                plural: Some(crate::core::field::LocalizedString::Plain("Posts".to_string())),
+            },
+            timestamps: true,
+            fields: vec![FieldDefinition {
+                name: "title".to_string(),
+                required: true,
+                ..Default::default()
+            }],
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let ctx = build_collection_context(&def);
+        assert_eq!(ctx["slug"], "posts");
+        assert_eq!(ctx["display_name"], "Posts");
+        assert_eq!(ctx["singular_name"], "Post");
+        assert_eq!(ctx["timestamps"], true);
+        assert_eq!(ctx["is_auth"], false);
+        assert_eq!(ctx["is_upload"], false);
+        assert_eq!(ctx["has_drafts"], false);
+        assert_eq!(ctx["has_versions"], false);
+        let meta = ctx["fields_meta"].as_array().unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0]["name"], "title");
+    }
+
+    // --- build_global_context ---
+
+    #[test]
+    fn build_global_context_includes_all_fields() {
+        let def = crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: crate::core::collection::CollectionLabels {
+                singular: Some(crate::core::field::LocalizedString::Plain("Settings".to_string())),
+                plural: None,
+            },
+            fields: vec![FieldDefinition {
+                name: "site_name".to_string(),
+                ..Default::default()
+            }],
+            hooks: crate::core::collection::CollectionHooks::default(),
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let ctx = build_global_context(&def);
+        assert_eq!(ctx["slug"], "settings");
+        assert_eq!(ctx["display_name"], "Settings");
+        assert_eq!(ctx["has_drafts"], false);
+        assert_eq!(ctx["has_versions"], false);
+        let meta = ctx["fields_meta"].as_array().unwrap();
+        assert_eq!(meta.len(), 1);
+        assert_eq!(meta[0]["name"], "site_name");
+    }
+
+    // --- build_fields_meta ---
+
+    #[test]
+    fn build_fields_meta_includes_admin_info() {
+        let field = FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            unique: true,
+            localized: true,
+            admin: crate::core::field::FieldAdmin {
+                label: Some(crate::core::field::LocalizedString::Plain("Title".to_string())),
+                hidden: false,
+                readonly: true,
+                width: Some("50%".to_string()),
+                description: Some(crate::core::field::LocalizedString::Plain("The title field".to_string())),
+                placeholder: Some(crate::core::field::LocalizedString::Plain("Enter title".to_string())),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let meta = build_fields_meta(&[field]);
+        let arr = meta.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let m = &arr[0];
+        assert_eq!(m["name"], "title");
+        assert_eq!(m["field_type"], "text");
+        assert_eq!(m["required"], true);
+        assert_eq!(m["unique"], true);
+        assert_eq!(m["localized"], true);
+        assert_eq!(m["admin"]["label"], "Title");
+        assert_eq!(m["admin"]["hidden"], false);
+        assert_eq!(m["admin"]["readonly"], true);
+        assert_eq!(m["admin"]["width"], "50%");
+        assert_eq!(m["admin"]["description"], "The title field");
+        assert_eq!(m["admin"]["placeholder"], "Enter title");
+    }
+
+    #[test]
+    fn build_fields_meta_empty_fields() {
+        let meta = build_fields_meta(&[]);
+        assert_eq!(meta, Value::Array(vec![]));
+    }
+
+    // --- ContextBuilder: merge ---
+
+    #[test]
+    fn context_builder_merge_adds_keys() {
+        // We can test ContextBuilder::merge without state by using auth() which we can't call,
+        // but we can test the merge logic directly
+        let mut data = Map::new();
+        data.insert("existing".into(), json!("value"));
+        let mut builder = ContextBuilder { data };
+        builder = builder.merge(json!({
+            "new_key": "new_value",
+            "another": 42,
+        }));
+        let result = builder.build();
+        assert_eq!(result["existing"], "value");
+        assert_eq!(result["new_key"], "new_value");
+        assert_eq!(result["another"], 42);
+    }
+
+    #[test]
+    fn context_builder_merge_non_object_is_noop() {
+        let mut data = Map::new();
+        data.insert("key".into(), json!("val"));
+        let builder = ContextBuilder { data };
+        let builder = builder.merge(json!("not an object"));
+        let result = builder.build();
+        assert_eq!(result["key"], "val");
+    }
+
+    // --- ContextBuilder: set ---
+
+    #[test]
+    fn context_builder_set_adds_value() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.set("foo", json!("bar"));
+        let result = builder.build();
+        assert_eq!(result["foo"], "bar");
+    }
+
+    // --- ContextBuilder: items ---
+
+    #[test]
+    fn context_builder_items_sets_array() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.items(vec![json!({"id": "1"}), json!({"id": "2"})]);
+        let result = builder.build();
+        let items = result["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+    }
+
+    // --- ContextBuilder: fields ---
+
+    #[test]
+    fn context_builder_fields_sets_array() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.fields(vec![json!({"name": "title"})]);
+        let result = builder.build();
+        let fields = result["fields"].as_array().unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0]["name"], "title");
+    }
+
+    // --- ContextBuilder: document_stub ---
+
+    #[test]
+    fn context_builder_document_stub_sets_id() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.document_stub("abc123");
+        let result = builder.build();
+        assert_eq!(result["document"]["id"], "abc123");
+    }
+
+    // --- ContextBuilder: pagination ---
+
+    #[test]
+    fn context_builder_pagination_computes_total_pages() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.pagination(2, 10, 25, "/prev".to_string(), "/next".to_string());
+        let result = builder.build();
+        assert_eq!(result["pagination"]["page"], 2);
+        assert_eq!(result["pagination"]["per_page"], 10);
+        assert_eq!(result["pagination"]["total"], 25);
+        assert_eq!(result["pagination"]["total_pages"], 3);
+        assert_eq!(result["pagination"]["has_prev"], true);
+        assert_eq!(result["pagination"]["has_next"], true);
+        assert_eq!(result["has_pagination"], true);
+    }
+
+    #[test]
+    fn context_builder_pagination_first_page_no_prev() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.pagination(1, 10, 5, "/prev".to_string(), "/next".to_string());
+        let result = builder.build();
+        assert_eq!(result["pagination"]["has_prev"], false);
+        assert_eq!(result["pagination"]["has_next"], false);
+        assert_eq!(result["has_pagination"], false);
+    }
+
+    // --- ContextBuilder: page ---
+
+    #[test]
+    fn context_builder_page_sets_type_and_title() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.page(PageType::Dashboard, "My Dashboard");
+        let result = builder.build();
+        assert_eq!(result["title"], "My Dashboard");
+        assert_eq!(result["page"]["title"], "My Dashboard");
+        assert_eq!(result["page"]["type"], "dashboard");
+    }
+
+    // --- ContextBuilder: breadcrumbs ---
+
+    #[test]
+    fn context_builder_breadcrumbs_sets_both() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.breadcrumbs(vec![
+            Breadcrumb::link("Home", "/admin"),
+            Breadcrumb::current("Posts"),
+        ]);
+        let result = builder.build();
+        let crumbs = result["breadcrumbs"].as_array().unwrap();
+        assert_eq!(crumbs.len(), 2);
+        assert_eq!(crumbs[0]["label"], "Home");
+        assert_eq!(crumbs[0]["url"], "/admin");
+        assert_eq!(crumbs[1]["label"], "Posts");
+        assert!(crumbs[1].get("url").is_none() || crumbs[1]["url"].is_null());
+        // Also check page.breadcrumbs
+        let page_crumbs = result["page"]["breadcrumbs"].as_array().unwrap();
+        assert_eq!(page_crumbs.len(), 2);
+    }
+
+    // --- ContextBuilder: document_with_status ---
+
+    #[test]
+    fn context_builder_document_with_status() {
+        let doc = crate::core::Document {
+            id: "doc1".to_string(),
+            fields: std::collections::HashMap::from([
+                ("title".to_string(), json!("Hello")),
+            ]),
+            created_at: Some("2026-01-01".to_string()),
+            updated_at: Some("2026-01-02".to_string()),
+        };
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.document_with_status(&doc, "draft");
+        let result = builder.build();
+        assert_eq!(result["document"]["id"], "doc1");
+        assert_eq!(result["document"]["status"], "draft");
+        assert_eq!(result["document"]["created_at"], "2026-01-01");
+        assert_eq!(result["document"]["updated_at"], "2026-01-02");
+    }
+
+    // --- ContextBuilder: document ---
+
+    #[test]
+    fn context_builder_document_includes_status_from_fields() {
+        let doc = crate::core::Document {
+            id: "doc2".to_string(),
+            fields: std::collections::HashMap::from([
+                ("_status".to_string(), json!("published")),
+                ("title".to_string(), json!("Test")),
+            ]),
+            created_at: Some("2026-01-01".to_string()),
+            updated_at: Some("2026-01-02".to_string()),
+        };
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.document(&doc);
+        let result = builder.build();
+        assert_eq!(result["document"]["id"], "doc2");
+        assert_eq!(result["document"]["status"], "published");
+    }
+
+    #[test]
+    fn context_builder_document_no_status() {
+        let doc = crate::core::Document {
+            id: "doc3".to_string(),
+            fields: std::collections::HashMap::from([
+                ("title".to_string(), json!("No Status")),
+            ]),
+            created_at: Some("2026-01-01".to_string()),
+            updated_at: Some("2026-01-02".to_string()),
+        };
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let builder = builder.document(&doc);
+        let result = builder.build();
+        assert_eq!(result["document"]["id"], "doc3");
+        // No status field means no status key in the document context
+        assert!(result["document"].get("status").is_none() || result["document"]["status"].is_null());
+    }
+}

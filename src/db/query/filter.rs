@@ -1312,6 +1312,234 @@ mod tests {
     }
 
     #[test]
+    fn resolve_filter_has_one_relationship_rejects_dot() {
+        let fields = vec![FieldDefinition {
+            name: "author".to_string(),
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig {
+                collection: "users".to_string(),
+                has_many: false,
+                max_depth: None,
+            }),
+            ..Default::default()
+        }];
+        let result = resolve_filter("author.name", "posts", &fields);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Has-one"));
+    }
+
+    #[test]
+    fn resolve_filter_unsupported_field_type() {
+        let fields = vec![make_field("title", FieldType::Text, false)];
+        let result = resolve_filter("title.sub", "posts", &fields);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not support sub-field filtering"));
+    }
+
+    #[test]
+    fn resolve_filter_relationship_missing_config() {
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Relationship,
+            relationship: None,
+            ..Default::default()
+        }];
+        let result = resolve_filter("tags.id", "posts", &fields);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing relationship config"));
+    }
+
+    #[test]
+    fn resolve_filter_unknown_root_field() {
+        let fields = vec![make_field("title", FieldType::Text, false)];
+        let result = resolve_filter("nonexistent.sub", "posts", &fields);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown field"));
+    }
+
+    #[test]
+    fn resolve_filter_array_nested_non_group_error() {
+        let fields = vec![make_array_field("items", vec![
+            make_field("name", FieldType::Text, false),
+        ])];
+        let result = resolve_filter("items.name.deep", "posts", &fields);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Nested dot path"));
+    }
+
+    #[test]
+    fn resolve_filter_array_invalid_segment() {
+        let fields = vec![make_array_field("items", vec![
+            make_field("name", FieldType::Text, false),
+        ])];
+        let result = resolve_filter("items.bad field", "posts", &fields);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid segment"));
+    }
+
+    #[test]
+    fn resolve_filter_blocks_invalid_segment() {
+        let fields = vec![make_blocks_field("content", vec![
+            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
+        ])];
+        let result = resolve_filter("content.bad field", "posts", &fields);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn walk_block_empty_path_error() {
+        let block_defs = vec![make_block_def("text", vec![])];
+        let result = walk_block_fields(&[], &block_defs, "table");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty path"));
+    }
+
+    #[test]
+    fn walk_block_scalar_with_subpath_error() {
+        let block_defs = vec![
+            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
+        ];
+        let result = walk_block_fields(&["body", "extra"], &block_defs, "table");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Scalar field"));
+    }
+
+    #[test]
+    fn walk_block_container_as_leaf_error() {
+        let mut nested = make_field("nested", FieldType::Blocks, false);
+        nested.blocks = vec![make_block_def("inner", vec![])];
+        let block_defs = vec![make_block_def("outer", vec![nested])];
+        let result = walk_block_fields(&["nested"], &block_defs, "table");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("must end on a scalar"));
+    }
+
+    #[test]
+    fn walk_block_block_type_not_last_error() {
+        let block_defs = vec![
+            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
+        ];
+        let result = walk_block_fields(&["_block_type", "extra"], &block_defs, "table");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("_block_type must be the last segment"));
+    }
+
+    #[test]
+    fn walk_block_top_level_block_type_without_joins() {
+        let block_defs = vec![
+            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
+        ];
+        let (joins, expr) = walk_block_fields(&["_block_type"], &block_defs, "posts_content").unwrap();
+        assert!(joins.is_empty());
+        assert_eq!(expr, "json_extract(data, '$._block_type')");
+    }
+
+    #[test]
+    fn walk_block_array_in_block() {
+        let mut arr = make_field("items", FieldType::Array, false);
+        arr.fields = vec![make_field("name", FieldType::Text, false)];
+        let block_defs = vec![make_block_def("list", vec![arr])];
+
+        let (joins, expr) = walk_block_fields(&["items", "name"], &block_defs, "posts_content").unwrap();
+        assert_eq!(joins.len(), 1);
+        assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.items')");
+        assert_eq!(expr, "json_extract(j0.value, '$.name')");
+    }
+
+    #[test]
+    fn walk_block_nested_block_type_with_group_path() {
+        // group "meta" → nested blocks → _block_type
+        let inner_blocks = vec![
+            make_block_def("quote", vec![make_field("text", FieldType::Text, false)]),
+        ];
+        let mut nested = make_field("nested", FieldType::Blocks, false);
+        nested.blocks = inner_blocks;
+        let mut meta = make_field("meta", FieldType::Group, false);
+        meta.fields = vec![nested];
+        let block_defs = vec![make_block_def("rich", vec![meta])];
+
+        let (joins, expr) = walk_block_fields(
+            &["meta", "nested", "_block_type"], &block_defs, "posts_content"
+        ).unwrap();
+        assert_eq!(joins.len(), 1);
+        assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.meta.nested')");
+        assert_eq!(expr, "json_extract(j0.value, '$._block_type')");
+    }
+
+    // ── resolve_filter_column with default mode ──────────────────────────
+
+    #[test]
+    fn resolve_column_localized_default_mode() {
+        let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_config_en_de(),
+        };
+        let result = resolve_filter_column("title", &def, Some(&ctx));
+        assert_eq!(result, "title__en");
+    }
+
+    #[test]
+    fn resolve_column_group_localized_default_mode() {
+        let mut group = make_field("meta", FieldType::Group, true);
+        group.fields = vec![make_field("title", FieldType::Text, false)];
+        let def = make_collection(vec![group]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_config_en_de(),
+        };
+        let result = resolve_filter_column("meta__title", &def, Some(&ctx));
+        assert_eq!(result, "meta__title__en");
+    }
+
+    #[test]
+    fn resolve_column_no_locale_ctx() {
+        let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
+        let result = resolve_filter_column("title", &def, None);
+        assert_eq!(result, "title");
+    }
+
+    // ── where clause with single-item OR ────────────────────────────────
+
+    #[test]
+    fn where_clause_or_single_item_group() {
+        let filters = vec![
+            FilterClause::Or(vec![
+                vec![Filter { field: "a".into(), op: FilterOp::Equals("1".into()) }],
+            ]),
+        ];
+        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
+        // Single-item OR should simplify to just the condition
+        assert_eq!(sql, " WHERE a = ?");
+    }
+
+    // ── resolve_filters with OR ──────────────────────────────────────────
+
+    #[test]
+    fn resolve_filters_or_groups() {
+        let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        };
+        let filters = vec![
+            FilterClause::Or(vec![
+                vec![Filter { field: "title".into(), op: FilterOp::Equals("A".into()) }],
+                vec![Filter { field: "title".into(), op: FilterOp::Equals("B".into()) }],
+            ]),
+        ];
+        let resolved = resolve_filters(&filters, &def, Some(&ctx));
+        match &resolved[0] {
+            FilterClause::Or(groups) => {
+                assert_eq!(groups[0][0].field, "title__de");
+                assert_eq!(groups[1][0].field, "title__de");
+            }
+            other => panic!("Expected Or, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn resolve_filters_applies_locale() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
         let ctx = LocaleContext {

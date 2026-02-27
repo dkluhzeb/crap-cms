@@ -191,3 +191,181 @@ fn field_def_to_lua_table(lua: &Lua, f: &crate::core::field::FieldDefinition) ->
 
     Ok(tbl)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mlua::Lua;
+    use std::sync::{Arc, RwLock};
+
+    fn make_registry_with_collection() -> crate::core::SharedRegistry {
+        let mut reg = crate::core::Registry::new();
+        reg.register_collection(crate::core::CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: crate::core::collection::CollectionLabels {
+                singular: Some(crate::core::field::LocalizedString::Plain("Post".to_string())),
+                plural: Some(crate::core::field::LocalizedString::Plain("Posts".to_string())),
+            },
+            timestamps: true,
+            fields: vec![
+                crate::core::field::FieldDefinition {
+                    name: "title".to_string(),
+                    field_type: crate::core::field::FieldType::Text,
+                    required: true,
+                    ..Default::default()
+                },
+                crate::core::field::FieldDefinition {
+                    name: "tags".to_string(),
+                    field_type: crate::core::field::FieldType::Relationship,
+                    relationship: Some(crate::core::field::RelationshipConfig {
+                        collection: "tags".to_string(),
+                        has_many: true,
+                        max_depth: Some(1),
+                    }),
+                    ..Default::default()
+                },
+            ],
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        });
+        reg.register_global(crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: crate::core::collection::CollectionLabels {
+                singular: Some(crate::core::field::LocalizedString::Plain("Setting".to_string())),
+                plural: None,
+            },
+            fields: vec![
+                crate::core::field::FieldDefinition {
+                    name: "site_name".to_string(),
+                    ..Default::default()
+                },
+            ],
+            hooks: crate::core::collection::CollectionHooks::default(),
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: None,
+        });
+        Arc::new(RwLock::new(reg))
+    }
+
+    #[test]
+    fn collection_def_to_lua_table_basic() {
+        let lua = Lua::new();
+        let reg = make_registry_with_collection();
+        let r = reg.read().unwrap();
+        let def = r.get_collection("posts").unwrap();
+        let tbl = collection_def_to_lua_table(&lua, def).unwrap();
+
+        let slug: String = tbl.get("slug").unwrap();
+        assert_eq!(slug, "posts");
+        let timestamps: bool = tbl.get("timestamps").unwrap();
+        assert!(timestamps);
+        let has_auth: bool = tbl.get("has_auth").unwrap();
+        assert!(!has_auth);
+
+        let labels: Table = tbl.get("labels").unwrap();
+        let singular: String = labels.get("singular").unwrap();
+        assert_eq!(singular, "Post");
+
+        let fields: Table = tbl.get("fields").unwrap();
+        let f1: Table = fields.get(1).unwrap();
+        let name: String = f1.get("name").unwrap();
+        assert_eq!(name, "title");
+        let required: bool = f1.get("required").unwrap();
+        assert!(required);
+    }
+
+    #[test]
+    fn field_def_to_lua_table_with_relationship() {
+        let lua = Lua::new();
+        let reg = make_registry_with_collection();
+        let r = reg.read().unwrap();
+        let def = r.get_collection("posts").unwrap();
+        let tags_field = &def.fields[1];
+        let tbl = field_def_to_lua_table(&lua, tags_field).unwrap();
+
+        let name: String = tbl.get("name").unwrap();
+        assert_eq!(name, "tags");
+        let ft: String = tbl.get("type").unwrap();
+        assert_eq!(ft, "relationship");
+        let rel: Table = tbl.get("relationship").unwrap();
+        let col: String = rel.get("collection").unwrap();
+        assert_eq!(col, "tags");
+        let hm: bool = rel.get("has_many").unwrap();
+        assert!(hm);
+        let md: i32 = rel.get("max_depth").unwrap();
+        assert_eq!(md, 1);
+    }
+
+    #[test]
+    fn register_schema_get_collection() {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        let reg = make_registry_with_collection();
+        register_schema(&lua, &crap, reg).unwrap();
+
+        let schema: Table = crap.get("schema").unwrap();
+        let get_coll: mlua::Function = schema.get("get_collection").unwrap();
+        let result: Value = get_coll.call("posts".to_string()).unwrap();
+        assert!(matches!(result, Value::Table(_)));
+
+        let not_found: Value = get_coll.call("nonexistent".to_string()).unwrap();
+        assert!(matches!(not_found, Value::Nil));
+    }
+
+    #[test]
+    fn register_schema_get_global() {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        let reg = make_registry_with_collection();
+        register_schema(&lua, &crap, reg).unwrap();
+
+        let schema: Table = crap.get("schema").unwrap();
+        let get_global: mlua::Function = schema.get("get_global").unwrap();
+        let result: Value = get_global.call("settings".to_string()).unwrap();
+        if let Value::Table(tbl) = result {
+            let slug: String = tbl.get("slug").unwrap();
+            assert_eq!(slug, "settings");
+        } else {
+            panic!("Expected Table for global");
+        }
+
+        let not_found: Value = get_global.call("nonexistent".to_string()).unwrap();
+        assert!(matches!(not_found, Value::Nil));
+    }
+
+    #[test]
+    fn register_schema_list_collections() {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        let reg = make_registry_with_collection();
+        register_schema(&lua, &crap, reg).unwrap();
+
+        let schema: Table = crap.get("schema").unwrap();
+        let list: mlua::Function = schema.get("list_collections").unwrap();
+        let result: Table = list.call(()).unwrap();
+        let first: Table = result.get(1).unwrap();
+        let slug: String = first.get("slug").unwrap();
+        assert_eq!(slug, "posts");
+    }
+
+    #[test]
+    fn register_schema_list_globals() {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        let reg = make_registry_with_collection();
+        register_schema(&lua, &crap, reg).unwrap();
+
+        let schema: Table = crap.get("schema").unwrap();
+        let list: mlua::Function = schema.get("list_globals").unwrap();
+        let result: Table = list.call(()).unwrap();
+        let first: Table = result.get(1).unwrap();
+        let slug: String = first.get("slug").unwrap();
+        assert_eq!(slug, "settings");
+    }
+}

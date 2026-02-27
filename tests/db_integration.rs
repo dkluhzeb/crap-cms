@@ -878,13 +878,15 @@ fn set_and_find_verification_token() {
     let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
         .expect("Query failed").expect("User not found");
 
-    query::set_verification_token(&conn, "users", &user.id, "verify-abc")
+    query::set_verification_token(&conn, "users", &user.id, "verify-abc", 9999999999)
         .expect("Set verification token failed");
 
     let found = query::find_by_verification_token(&conn, "users", &def, "verify-abc")
         .expect("Find failed");
     assert!(found.is_some());
-    assert_eq!(found.unwrap().id, user.id);
+    let (doc, exp) = found.unwrap();
+    assert_eq!(doc.id, user.id);
+    assert_eq!(exp, 9999999999);
 }
 
 #[test]
@@ -2061,7 +2063,7 @@ fn sync_creates_auth_columns() {
     // These should not error — columns must exist
     query::update_password(&tx, "users", &doc.id, "password123").expect("update_password");
     query::set_reset_token(&tx, "users", &doc.id, "token", 9999999).expect("set_reset_token");
-    query::set_verification_token(&tx, "users", &doc.id, "vtoken").expect("set_verification_token");
+    query::set_verification_token(&tx, "users", &doc.id, "vtoken", 9999999999).expect("set_verification_token");
     tx.commit().expect("Commit");
 }
 
@@ -2165,7 +2167,7 @@ fn alter_adds_auth_columns_on_upgrade() {
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "members", &def, &data, None).expect("Create");
     query::update_password(&tx, "members", &doc.id, "pass").expect("update_password");
-    query::set_verification_token(&tx, "members", &doc.id, "tok").expect("set_verification_token");
+    query::set_verification_token(&tx, "members", &doc.id, "tok", 9999999999).expect("set_verification_token");
     tx.commit().expect("Commit");
 }
 

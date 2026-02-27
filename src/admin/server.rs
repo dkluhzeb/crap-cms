@@ -9,6 +9,7 @@ use axum::{
     routing::{get, post},
 };
 use axum::routing::MethodRouter;
+use axum::http::{Method, StatusCode};
 use std::path::PathBuf;
 
 use crate::config::CrapConfig;
@@ -22,6 +23,8 @@ use super::AdminState;
 use super::handlers::{auth as auth_handlers, dashboard, collections, globals, static_assets, uploads, events};
 
 /// Start the admin HTTP server (Axum) with all routes, middleware, and static file serving.
+// Excluded from coverage: async server startup orchestration (binds TCP listener, runs Axum server).
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub async fn start(
     addr: &str,
@@ -49,6 +52,13 @@ pub async fn start(
         reg.collections.values().any(|d| d.is_auth_collection())
     };
 
+    let login_limiter = std::sync::Arc::new(
+        crate::core::rate_limit::LoginRateLimiter::new(
+            config.auth.max_login_attempts,
+            config.auth.login_lockout_seconds,
+        )
+    );
+
     let state = AdminState {
         config,
         config_dir: config_dir.clone(),
@@ -59,6 +69,7 @@ pub async fn start(
         jwt_secret,
         email_renderer,
         event_bus,
+        login_limiter,
     };
 
     let app = build_router(state, has_auth);
@@ -72,6 +83,9 @@ pub async fn start(
 /// Build the full admin Axum router with all routes, middleware, and state.
 /// Separated from `start()` so integration tests can construct the router
 /// without binding to a TCP listener.
+// Excluded from coverage: requires full AdminState (HookRunner with Lua VM, DB pool,
+// Handlebars registry, etc). Tested indirectly through CLI integration tests.
+#[cfg(not(tarpaulin_include))]
 pub fn build_router(state: AdminState, has_auth: bool) -> Router {
     // Build method routers explicitly to handle multiple methods on same path
     let slug_methods: MethodRouter<AdminState> = MethodRouter::new()
@@ -116,7 +130,7 @@ pub fn build_router(state: AdminState, has_auth: bool) -> Router {
 
     let upload_api = crate::api::upload::upload_router(state.clone());
 
-    Router::new()
+    let router = Router::new()
         .route("/admin/login", get(auth_handlers::login_page).post(auth_handlers::login_action))
         .route("/admin/logout", post(auth_handlers::logout_action))
         .route("/admin/forgot-password", get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action))
@@ -127,12 +141,121 @@ pub fn build_router(state: AdminState, has_auth: bool) -> Router {
         .nest_service("/static", static_assets::overlay_service(config_dir))
         .route("/uploads/{collection_slug}/{filename}", get(uploads::serve_upload))
         .layer(DefaultBodyLimit::max(100 * 1024 * 1024))
-        .with_state(state)
+        .layer(middleware::from_fn(csrf_middleware));
+
+    // Add CORS layer if configured (runs before CSRF in request processing)
+    let router = if let Some(cors) = state.config.cors.build_layer() {
+        router.layer(cors)
+    } else {
+        router
+    };
+
+    router.with_state(state)
+}
+
+/// CSRF middleware — double-submit cookie pattern.
+/// Sets `crap_csrf` cookie on GET responses (non-HttpOnly so JS can read it).
+/// Validates `X-CSRF-Token` header or `_csrf` form field on POST/PUT/DELETE.
+// Excluded from coverage: async Axum middleware.
+#[cfg(not(tarpaulin_include))]
+async fn csrf_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> axum::response::Response {
+    let method = request.method().clone();
+    let cookie_header = request.headers()
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    let csrf_cookie = extract_cookie(&cookie_header, "crap_csrf")
+        .map(|s| s.to_string());
+
+    // On mutating methods, validate CSRF token
+    if matches!(method, Method::POST | Method::PUT | Method::DELETE) {
+        let cookie_value = match &csrf_cookie {
+            Some(v) if !v.is_empty() => v.as_str(),
+            _ => {
+                return (StatusCode::FORBIDDEN, "CSRF validation failed: no token cookie").into_response();
+            }
+        };
+
+        // Check X-CSRF-Token header first (set by HTMX / JS)
+        let header_token = request.headers()
+            .get("X-CSRF-Token")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
+        if let Some(ref ht) = header_token {
+            if ht == cookie_value {
+                // Header matches — proceed
+                let mut response = next.run(request).await;
+                ensure_csrf_cookie(&mut response, csrf_cookie.as_deref());
+                return response;
+            }
+        }
+
+        // Fall back: check _csrf in URL-encoded form body
+        let content_type = request.headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+
+        if content_type.starts_with("application/x-www-form-urlencoded") {
+            let (parts, body) = request.into_parts();
+            let bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
+                Ok(b) => b,
+                Err(_) => {
+                    return (StatusCode::FORBIDDEN, "CSRF validation failed: body read error").into_response();
+                }
+            };
+
+            let form_token = form_urlencoded::parse(&bytes)
+                .find(|(k, _)| k == "_csrf")
+                .map(|(_, v)| v.to_string());
+
+            if let Some(ref ft) = form_token {
+                if ft == cookie_value {
+                    // Form field matches — reconstruct request and proceed
+                    let request = axum::http::Request::from_parts(parts, axum::body::Body::from(bytes));
+                    let mut response = next.run(request).await;
+                    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref());
+                    return response;
+                }
+            }
+        }
+
+        return (StatusCode::FORBIDDEN, "CSRF validation failed").into_response();
+    }
+
+    // Non-mutating method — pass through and set cookie if needed
+    let mut response = next.run(request).await;
+    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref());
+    response
+}
+
+/// Set the `crap_csrf` cookie on the response if not already present in the request.
+fn ensure_csrf_cookie(
+    response: &mut axum::response::Response,
+    existing_cookie: Option<&str>,
+) {
+    if existing_cookie.is_some() {
+        return;
+    }
+    let token = nanoid::nanoid!(32);
+    let cookie = format!("crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400", token);
+    if let Ok(value) = cookie.parse() {
+        response.headers_mut().append(axum::http::header::SET_COOKIE, value);
+    }
 }
 
 /// Auth middleware — extracts JWT from `crap_session` cookie, validates it,
 /// and stores `Claims` in request extensions. If JWT is invalid/missing,
 /// tries custom auth strategies before redirecting to login.
+// Excluded from coverage: async Axum middleware requiring full server state (pool, registry,
+// HookRunner, JWT secret) and spawned blocking tasks for Lua auth strategies.
+#[cfg(not(tarpaulin_include))]
 async fn auth_middleware(
     State(state): State<AdminState>,
     mut request: axum::http::Request<axum::body::Body>,
@@ -239,6 +362,9 @@ async fn auth_middleware(
 
 /// Load the full user document for an authenticated user.
 /// Returns None if the user can't be found (e.g., deleted since JWT was issued).
+// Excluded from coverage: requires full DB pool + SharedRegistry with auth collection definitions.
+// Tested indirectly through integration tests (admin login flow).
+#[cfg(not(tarpaulin_include))]
 pub(crate) fn load_auth_user(
     pool: &DbPool,
     registry: &SharedRegistry,

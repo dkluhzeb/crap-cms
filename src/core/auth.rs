@@ -1,11 +1,26 @@
 //! Authentication primitives: Argon2id password hashing and JWT token management.
 
+use std::sync::LazyLock;
+
 use anyhow::{Context, Result};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
 };
 use serde::{Deserialize, Serialize};
+
+/// Pre-computed Argon2 hash used to burn CPU time on user-not-found paths,
+/// preventing timing oracles that leak whether an email exists.
+static DUMMY_HASH: LazyLock<String> = LazyLock::new(|| {
+    hash_password("__crap_dummy_timing__").expect("dummy hash")
+});
+
+/// Perform a dummy password verification to equalize timing with real verifications.
+/// Call this on login paths where user-not-found or hash-missing would otherwise
+/// return fast, enabling email enumeration via response timing.
+pub fn dummy_verify() {
+    let _ = verify_password("x", &DUMMY_HASH);
+}
 
 /// Hash a password using Argon2id.
 pub fn hash_password(password: &str) -> Result<String> {
@@ -101,6 +116,16 @@ mod tests {
         };
         let token = create_token(&claims, "test-secret").unwrap();
         assert!(validate_token(&token, "test-secret").is_err());
+    }
+
+    #[test]
+    fn dummy_hash_is_valid_argon2() {
+        assert!(DUMMY_HASH.starts_with("$argon2"));
+    }
+
+    #[test]
+    fn dummy_verify_does_not_panic() {
+        dummy_verify();
     }
 
     #[test]

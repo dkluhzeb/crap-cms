@@ -2,7 +2,13 @@
 crap.collections.define("articles", {
     labels = { singular = "Article", plural = "Articles" },
     fields = {
-        { name = "title", type = "text", required = true, unique = true },
+        { name = "title", type = "text", required = true, unique = true,
+            hooks = {
+                before_validate = { "hooks.field_hooks.trim_value" },
+                after_read = { "hooks.field_hooks.uppercase_value" },
+                after_change = { "hooks.field_hooks.after_change_marker" },
+            },
+        },
         { name = "body", type = "textarea" },
         { name = "status", type = "select", options = {
             { label = "Draft", value = "draft" },

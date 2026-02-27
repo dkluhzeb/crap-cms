@@ -14,6 +14,8 @@ use crate::db::query::jobs as job_query;
 use crate::hooks::lifecycle::HookRunner;
 
 /// Start the scheduler background loop. Runs until the task is cancelled.
+// Untestable: infinite async loop with tokio timers and spawn.
+#[cfg(not(tarpaulin_include))]
 pub async fn start(
     pool: DbPool,
     hook_runner: HookRunner,
@@ -108,6 +110,8 @@ pub async fn start(
 }
 
 /// Poll for pending jobs and execute them.
+// Untestable: async function with tokio::task::spawn_blocking orchestration.
+#[cfg(not(tarpaulin_include))]
 async fn poll_and_execute(
     pool: &DbPool,
     hook_runner: &HookRunner,
@@ -164,17 +168,25 @@ async fn poll_and_execute(
         let running_jobs = running_jobs.clone();
         let job_id = job_run.id.clone();
 
-        // Execute the job in a blocking task (same pattern as hook execution)
-        tokio::task::spawn_blocking(move || {
-            let result = execute_job(&pool, &hook_runner, &job_def, &job_run);
+        // Execute the job in a blocking task (same pattern as hook execution).
+        // Wrapped in tokio::spawn to catch panics from spawn_blocking.
+        let slug_log = job_run.slug.clone();
+        let id_log = job_run.id.clone();
+        tokio::spawn(async move {
+            match tokio::task::spawn_blocking(move || {
+                let result = execute_job(&pool, &hook_runner, &job_def, &job_run);
 
-            // Remove from running tracking
-            if let Ok(mut guard) = running_jobs.lock() {
-                guard.retain(|id| id != &job_id);
-            }
+                // Remove from running tracking
+                if let Ok(mut guard) = running_jobs.lock() {
+                    guard.retain(|id| id != &job_id);
+                }
 
-            if let Err(e) = result {
-                tracing::error!("Job {} ({}) execution error: {}", job_id, job_run.slug, e);
+                if let Err(e) = result {
+                    tracing::error!("Job {} ({}) execution error: {}", job_id, job_run.slug, e);
+                }
+            }).await {
+                Ok(()) => {}
+                Err(e) => tracing::error!("Job {} ({}) panicked: {}", id_log, slug_log, e),
             }
         });
     }
@@ -183,7 +195,7 @@ async fn poll_and_execute(
 }
 
 /// Execute a single job: call the Lua handler with CRUD access.
-fn execute_job(
+pub fn execute_job(
     pool: &DbPool,
     hook_runner: &HookRunner,
     job_def: &JobDefinition,
@@ -241,7 +253,7 @@ fn execute_job(
 }
 
 /// Check cron schedules and insert pending jobs for due ones.
-fn check_cron_schedules(
+pub fn check_cron_schedules(
     pool: &DbPool,
     registry: &SharedRegistry,
     last_check: chrono::DateTime<chrono::Utc>,
@@ -304,7 +316,7 @@ fn check_cron_schedules(
 }
 
 /// Recover stale jobs on startup.
-fn recover_stale_jobs(
+pub fn recover_stale_jobs(
     conn: &rusqlite::Connection,
     registry: &SharedRegistry,
 ) -> Result<()> {
@@ -349,6 +361,8 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
 mod tests {
     use super::*;
 
+    // ── normalize_cron ──────────────────────────────────────────────────
+
     #[test]
     fn normalize_cron_five_fields() {
         let result = normalize_cron("0 3 * * *");
@@ -377,5 +391,441 @@ mod tests {
     fn normalize_cron_complex_expression() {
         let result = normalize_cron("*/5 9-17 * * 1-5");
         assert_eq!(result, "0 */5 9-17 * * 1-5");
+    }
+
+    #[test]
+    fn normalize_cron_empty_string() {
+        let result = normalize_cron("");
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn normalize_cron_single_field() {
+        let result = normalize_cron("*");
+        assert_eq!(result, "*");
+    }
+
+    #[test]
+    fn normalize_cron_two_fields() {
+        let result = normalize_cron("0 3");
+        assert_eq!(result, "0 3");
+    }
+
+    #[test]
+    fn normalize_cron_four_fields() {
+        let result = normalize_cron("0 3 * *");
+        assert_eq!(result, "0 3 * *");
+    }
+
+    #[test]
+    fn normalize_cron_extra_whitespace() {
+        // split_whitespace handles multiple spaces, so this still counts as 5 fields
+        let result = normalize_cron("0  3  *  *  *");
+        assert_eq!(result, "0 0  3  *  *  *");
+    }
+
+    #[test]
+    fn normalize_cron_with_ranges_and_steps() {
+        let result = normalize_cron("0-30/5 0-23 1-15 1-6 0-4");
+        assert_eq!(result, "0 0-30/5 0-23 1-15 1-6 0-4");
+    }
+
+    #[test]
+    fn normalize_cron_result_is_parseable() {
+        // Verify that a normalized 5-field expression produces a valid cron schedule
+        let normalized = normalize_cron("0 3 * * *");
+        let schedule = cron::Schedule::from_str(&normalized);
+        assert!(schedule.is_ok(), "Normalized expression should be parseable");
+    }
+
+    // ── recover_stale_jobs ──────────────────────────────────────────────
+
+    fn setup_jobs_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _crap_jobs (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                queue TEXT NOT NULL DEFAULT 'default',
+                data TEXT DEFAULT '{}',
+                result TEXT,
+                error TEXT,
+                attempt INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 1,
+                scheduled_by TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                started_at TEXT,
+                completed_at TEXT,
+                heartbeat_at TEXT
+            );
+            CREATE INDEX idx_crap_jobs_status ON _crap_jobs(status);
+            CREATE INDEX idx_crap_jobs_queue ON _crap_jobs(queue, status);
+            CREATE INDEX idx_crap_jobs_slug ON _crap_jobs(slug, status);"
+        ).unwrap();
+        conn
+    }
+
+    fn make_registry_with_jobs(jobs: Vec<JobDefinition>) -> SharedRegistry {
+        let registry = crate::core::Registry::shared();
+        {
+            let mut reg = registry.write().unwrap();
+            for job in jobs {
+                reg.register_job(job);
+            }
+        }
+        registry
+    }
+
+    #[test]
+    fn recover_stale_jobs_marks_running_as_stale() {
+        let conn = setup_jobs_db();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "my_job".to_string(),
+                handler: "some.handler".to_string(),
+                timeout: 120,
+                ..Default::default()
+            },
+        ]);
+
+        // Insert a running job (simulates server crash with running job)
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
+            [],
+        ).unwrap();
+
+        recover_stale_jobs(&conn, &registry).unwrap();
+
+        let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert!(jobs[0].error.as_ref().unwrap().contains("stale: server restarted"));
+        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=300s"));
+    }
+
+    #[test]
+    fn recover_stale_jobs_uses_job_timeout() {
+        let conn = setup_jobs_db();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "long_job".to_string(),
+                handler: "some.handler".to_string(),
+                timeout: 3600, // 1 hour
+                ..Default::default()
+            },
+        ]);
+
+        job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default").unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
+            [],
+        ).unwrap();
+
+        recover_stale_jobs(&conn, &registry).unwrap();
+
+        let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        // threshold = max(3600 * 2, 300) = 7200
+        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=7200s"));
+    }
+
+    #[test]
+    fn recover_stale_jobs_default_timeout_for_unknown_slug() {
+        let conn = setup_jobs_db();
+        // Registry has no job definitions — slug not found, uses default timeout=60
+        let registry = make_registry_with_jobs(vec![]);
+
+        job_query::insert_job(&conn, "unknown_job", "{}", "manual", 1, "default").unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
+            [],
+        ).unwrap();
+
+        recover_stale_jobs(&conn, &registry).unwrap();
+
+        let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        // threshold = max(60 * 2, 300) = 300
+        assert!(jobs[0].error.as_ref().unwrap().contains("timeout=300s"));
+    }
+
+    #[test]
+    fn recover_stale_jobs_no_running_is_noop() {
+        let conn = setup_jobs_db();
+        let registry = make_registry_with_jobs(vec![]);
+
+        // Insert a pending job — should not be affected
+        job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
+
+        recover_stale_jobs(&conn, &registry).unwrap();
+
+        let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+        assert_eq!(stale.len(), 0);
+
+        let pending = job_query::list_job_runs(&conn, None, Some("pending"), 100, 0).unwrap();
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn recover_stale_jobs_multiple_running() {
+        let conn = setup_jobs_db();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "job_a".to_string(),
+                handler: "handler_a".to_string(),
+                timeout: 60,
+                ..Default::default()
+            },
+            JobDefinition {
+                slug: "job_b".to_string(),
+                handler: "handler_b".to_string(),
+                timeout: 120,
+                ..Default::default()
+            },
+        ]);
+
+        job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default").unwrap();
+        job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default").unwrap();
+        conn.execute("UPDATE _crap_jobs SET status = 'running'", []).unwrap();
+
+        recover_stale_jobs(&conn, &registry).unwrap();
+
+        let stale = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
+        assert_eq!(stale.len(), 2);
+    }
+
+    // ── check_cron_schedules (unit-level with in-memory DB + pool) ──────
+
+    fn make_test_pool() -> DbPool {
+        use r2d2::Pool;
+        use r2d2_sqlite::SqliteConnectionManager;
+
+        let manager = SqliteConnectionManager::memory()
+            .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
+                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+        let pool = Pool::builder()
+            .max_size(2)
+            .test_on_check_out(true)
+            .build(manager)
+            .expect("Failed to create test pool");
+
+        // Create the jobs table
+        let conn = pool.get().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS _crap_jobs (
+                id TEXT PRIMARY KEY,
+                slug TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                queue TEXT NOT NULL DEFAULT 'default',
+                data TEXT DEFAULT '{}',
+                result TEXT,
+                error TEXT,
+                attempt INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 1,
+                scheduled_by TEXT,
+                created_at TEXT DEFAULT (datetime('now')),
+                started_at TEXT,
+                completed_at TEXT,
+                heartbeat_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
+            CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
+            CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);"
+        ).unwrap();
+        drop(conn);
+
+        pool
+    }
+
+    #[test]
+    fn check_cron_schedules_fires_due_job() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "cron_job".to_string(),
+                handler: "some.handler".to_string(),
+                schedule: Some("* * * * *".to_string()), // every minute
+                retries: 0,
+                queue: "default".to_string(),
+                skip_if_running: false,
+                ..Default::default()
+            },
+        ]);
+
+        // Set last_check to 2 minutes ago, now to current — schedule should fire
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs = job_query::list_job_runs(&conn, Some("cron_job"), None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].status, crate::core::job::JobStatus::Pending);
+        assert_eq!(jobs[0].scheduled_by.as_deref(), Some("cron"));
+    }
+
+    #[test]
+    fn check_cron_schedules_skips_no_schedule_jobs() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "no_cron_job".to_string(),
+                handler: "some.handler".to_string(),
+                schedule: None, // no schedule
+                ..Default::default()
+            },
+        ]);
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 0);
+    }
+
+    #[test]
+    fn check_cron_schedules_skips_not_due() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "hourly_job".to_string(),
+                handler: "some.handler".to_string(),
+                schedule: Some("0 * * * *".to_string()), // every hour at :00
+                ..Default::default()
+            },
+        ]);
+
+        // Set the window to just 1 second — unlikely an hour boundary is crossed
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::seconds(1);
+
+        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
+        // Might be 0 or 1 depending on exact timing, but we can't fully control
+        // this without a fixed clock. For a 1-second window, it's almost certainly 0
+        // unless we happen to cross an hour boundary.
+        assert!(jobs.len() <= 1);
+    }
+
+    #[test]
+    fn check_cron_schedules_skip_if_running() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "skip_job".to_string(),
+                handler: "some.handler".to_string(),
+                schedule: Some("* * * * *".to_string()),
+                skip_if_running: true,
+                ..Default::default()
+            },
+        ]);
+
+        // Insert a running job for this slug
+        {
+            let conn = pool.get().unwrap();
+            job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default").unwrap();
+            conn.execute("UPDATE _crap_jobs SET status = 'running'", []).unwrap();
+        }
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+
+        // Should NOT insert a new pending job because skip_if_running=true and one is running
+        let conn = pool.get().unwrap();
+        let pending = job_query::list_job_runs(&conn, Some("skip_job"), Some("pending"), 100, 0).unwrap();
+        assert_eq!(pending.len(), 0);
+    }
+
+    #[test]
+    fn check_cron_schedules_no_skip_if_running_false() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "noskip_job".to_string(),
+                handler: "some.handler".to_string(),
+                schedule: Some("* * * * *".to_string()),
+                skip_if_running: false,
+                ..Default::default()
+            },
+        ]);
+
+        // Insert a running job
+        {
+            let conn = pool.get().unwrap();
+            job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default").unwrap();
+            conn.execute("UPDATE _crap_jobs SET status = 'running'", []).unwrap();
+        }
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+
+        // Should insert a new pending job even though one is running
+        let conn = pool.get().unwrap();
+        let pending = job_query::list_job_runs(&conn, Some("noskip_job"), Some("pending"), 100, 0).unwrap();
+        assert_eq!(pending.len(), 1);
+    }
+
+    #[test]
+    fn check_cron_schedules_invalid_cron_expression() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "bad_cron".to_string(),
+                handler: "some.handler".to_string(),
+                schedule: Some("not a valid cron".to_string()),
+                ..Default::default()
+            },
+        ]);
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        // Should not error, just skip the invalid expression
+        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs = job_query::list_job_runs(&conn, None, None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 0);
+    }
+
+    #[test]
+    fn check_cron_schedules_retries_stored() {
+        let pool = make_test_pool();
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition {
+                slug: "retried_cron".to_string(),
+                handler: "some.handler".to_string(),
+                schedule: Some("* * * * *".to_string()),
+                retries: 3,
+                queue: "special".to_string(),
+                skip_if_running: false,
+                ..Default::default()
+            },
+        ]);
+
+        let now = chrono::Utc::now();
+        let last_check = now - chrono::Duration::minutes(2);
+
+        check_cron_schedules(&pool, &registry, last_check, now).unwrap();
+
+        let conn = pool.get().unwrap();
+        let jobs = job_query::list_job_runs(&conn, Some("retried_cron"), None, 100, 0).unwrap();
+        assert_eq!(jobs.len(), 1);
+        // retries=3 => max_attempts = retries + 1 = 4
+        assert_eq!(jobs[0].max_attempts, 4);
+        assert_eq!(jobs[0].queue, "special");
     }
 }

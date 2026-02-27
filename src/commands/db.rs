@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// Handle the `migrate` subcommand.
+/// Untestable as unit: requires full Lua VM + DB setup. Covered by CLI integration tests.
+#[cfg(not(tarpaulin_include))]
 pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
     let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
 
@@ -133,6 +135,8 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
 }
 
 /// Open an interactive SQLite console.
+/// Untestable: spawns interactive sqlite3 process.
+#[cfg(not(tarpaulin_include))]
 pub fn console(config_dir: &Path) -> Result<()> {
     let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
 
@@ -159,6 +163,9 @@ pub fn console(config_dir: &Path) -> Result<()> {
 }
 
 /// Handle the `backup` subcommand.
+/// Untestable: spawns tar process for uploads, opens raw SQLite connection, writes timestamped files.
+/// Covered by CLI integration tests.
+#[cfg(not(tarpaulin_include))]
 pub fn backup(
     config_dir: &Path,
     output: Option<PathBuf>,

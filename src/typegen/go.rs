@@ -136,6 +136,7 @@ mod tests {
     use crate::core::collection::{
         CollectionAccess, CollectionAdmin, CollectionHooks, CollectionLabels,
     };
+    use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition {
@@ -145,16 +146,25 @@ mod tests {
         }
     }
 
+    fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
+        CollectionDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields,
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
     #[test]
     fn go_collection_output() {
-        let col = CollectionDefinition {
-            slug: "posts".to_string(), labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![text_field("title", true), text_field("content", false)],
-            admin: CollectionAdmin::default(), hooks: CollectionHooks::default(),
-            auth: None, upload: None, access: CollectionAccess::default(),
-            live: None, versions: None,
-        };
+        let col = make_col("posts", vec![text_field("title", true), text_field("content", false)]);
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -164,5 +174,285 @@ mod tests {
         assert!(out.contains("Title     string `json:\"title\"`"));
         assert!(out.contains("Content   *string `json:\"content,omitempty\"`"));
         assert!(out.contains("CreatedAt *string `json:\"created_at,omitempty\"`"));
+    }
+
+    #[test]
+    fn go_relationship_field_has_one() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "author".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "users".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Author    string `json:\"author\"`"));
+    }
+
+    #[test]
+    fn go_relationship_field_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "tags".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("[]string"));
+    }
+
+    #[test]
+    fn go_number_field() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "price".to_string(),
+                field_type: FieldType::Number,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "discount".to_string(),
+                field_type: FieldType::Number,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Price     float64 `json:\"price\"`"));
+        assert!(out.contains("*float64"));
+    }
+
+    #[test]
+    fn go_checkbox_field() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "active".to_string(),
+                field_type: FieldType::Checkbox,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("bool"));
+    }
+
+    #[test]
+    fn go_json_field() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "metadata".to_string(),
+                field_type: FieldType::Json,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("interface{}"));
+    }
+
+    #[test]
+    fn go_array_field_with_subfields() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![
+                    text_field("label", true),
+                    text_field("value", false),
+                ],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Sub-type should be generated
+        assert!(out.contains("type PostsItems struct {"));
+        assert!(out.contains("Label     string `json:\"label\"`"));
+        // Main field should reference sub-type
+        assert!(out.contains("[]PostsItems"));
+    }
+
+    #[test]
+    fn go_array_field_without_subfields() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "data".to_string(),
+                field_type: FieldType::Array,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("[]map[string]interface{}"));
+    }
+
+    #[test]
+    fn go_group_field() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("map[string]interface{}"));
+    }
+
+    #[test]
+    fn go_blocks_field() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                blocks: vec![BlockDefinition {
+                    block_type: "text".to_string(),
+                    fields: vec![text_field("body", true)],
+                    label: Some(LocalizedString::Plain("Text".to_string())),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("[]map[string]interface{}"));
+    }
+
+    #[test]
+    fn go_upload_field() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "image".to_string(),
+                field_type: FieldType::Upload,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "thumb".to_string(),
+                field_type: FieldType::Upload,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Image     string `json:\"image\"`"));
+        assert!(out.contains("*string"));
+    }
+
+    #[test]
+    fn go_select_field() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "status".to_string(),
+                field_type: FieldType::Select,
+                required: true,
+                options: vec![
+                    SelectOption { label: LocalizedString::Plain("Draft".into()), value: "draft".into() },
+                    SelectOption { label: LocalizedString::Plain("Published".into()), value: "published".into() },
+                ],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Select in Go is just string
+        assert!(out.contains("Status    string `json:\"status\"`"));
+    }
+
+    #[test]
+    fn go_global_output() {
+        let global = crate::core::collection::GlobalDefinition {
+            slug: "site_settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![text_field("site_name", true)],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(out.contains("type SiteSettings struct {"));
+        assert!(out.contains("ID        string  `json:\"id\"`"));
+        assert!(out.contains("SiteName  string `json:\"site_name\"`"));
+        assert!(out.contains("CreatedAt *string `json:\"created_at,omitempty\"`"));
+        assert!(out.contains("UpdatedAt *string `json:\"updated_at,omitempty\"`"));
+    }
+
+    #[test]
+    fn go_full_render_with_globals() {
+        let mut registry = Registry::new();
+        registry.register_collection(make_col("posts", vec![text_field("title", true)]));
+        registry.register_global(crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![text_field("name", true)],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        });
+        let out = render(&registry);
+        assert!(out.contains("package types"));
+        assert!(out.contains("type Posts struct {"));
+        assert!(out.contains("type Settings struct {"));
+    }
+
+    #[test]
+    fn go_no_timestamps_collection() {
+        let mut col = make_col("tags", vec![text_field("name", true)]);
+        col.timestamps = false;
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("type Tags struct {"));
+        assert!(!out.contains("CreatedAt"));
+        assert!(!out.contains("UpdatedAt"));
+    }
+
+    #[test]
+    fn go_email_date_richtext_textarea_fields() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "contact".to_string(), field_type: FieldType::Email, required: true, ..Default::default() },
+            FieldDefinition { name: "published_at".to_string(), field_type: FieldType::Date, ..Default::default() },
+            FieldDefinition { name: "body".to_string(), field_type: FieldType::Richtext, required: true, ..Default::default() },
+            FieldDefinition { name: "notes".to_string(), field_type: FieldType::Textarea, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Contact   string `json:\"contact\"`"));
+        assert!(out.contains("*string `json:\"published_at,omitempty\"`"));
+        assert!(out.contains("Body      string `json:\"body\"`"));
+        assert!(out.contains("*string `json:\"notes,omitempty\"`"));
+    }
+
+    #[test]
+    fn go_relationship_no_config_optional() {
+        // Relationship field without RelationshipConfig and not required
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "ref".to_string(),
+                field_type: FieldType::Relationship,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("*string"));
     }
 }

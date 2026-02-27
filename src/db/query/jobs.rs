@@ -461,4 +461,86 @@ mod tests {
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].id, "new1");
     }
+
+    #[test]
+    fn test_mark_stale() {
+        let conn = setup_db();
+        let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
+        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE id = ?1", [&job.id]).unwrap();
+
+        mark_stale(&conn, &job.id, "heartbeat timeout").unwrap();
+        let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert_eq!(fetched.status, JobStatus::Stale);
+        assert_eq!(fetched.error.as_deref(), Some("heartbeat timeout"));
+    }
+
+    #[test]
+    fn test_update_heartbeat() {
+        let conn = setup_db();
+        let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
+        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE id = ?1", [&job.id]).unwrap();
+
+        // Update heartbeat should succeed
+        update_heartbeat(&conn, &job.id).unwrap();
+
+        let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert!(fetched.heartbeat_at.is_some(), "heartbeat should be set after update");
+    }
+
+    #[test]
+    fn test_count_running_per_slug() {
+        let conn = setup_db();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
+        insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
+
+        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'", []).unwrap();
+        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_b'", []).unwrap();
+
+        let counts = count_running_per_slug(&conn).unwrap();
+        assert_eq!(counts.get("job_a").copied(), Some(2));
+        assert_eq!(counts.get("job_b").copied(), Some(1));
+    }
+
+    #[test]
+    fn test_get_job_run_not_found() {
+        let conn = setup_db();
+        let result = get_job_run(&conn, "nonexistent").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_list_job_runs_with_status_filter() {
+        let conn = setup_db();
+        insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
+        insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
+        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'", []).unwrap();
+
+        let running = list_job_runs(&conn, None, Some("running"), 100, 0).unwrap();
+        assert_eq!(running.len(), 1);
+        assert_eq!(running[0].slug, "job_a");
+
+        let pending = list_job_runs(&conn, None, Some("pending"), 100, 0).unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].slug, "job_b");
+    }
+
+    #[test]
+    fn test_find_stale_jobs() {
+        let conn = setup_db();
+        let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
+        // Set job as running with a stale heartbeat
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-3600 seconds') WHERE id = ?1",
+            [&job.id],
+        ).unwrap();
+
+        let stale = find_stale_jobs(&conn, 60).unwrap();
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].id, job.id);
+
+        // With a very long threshold, nothing should be stale
+        let stale = find_stale_jobs(&conn, 99999).unwrap();
+        assert!(stale.is_empty());
+    }
 }

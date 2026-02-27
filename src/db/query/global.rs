@@ -319,4 +319,115 @@ mod tests {
         );
         assert!(after.updated_at.is_some(), "updated_at should be present");
     }
+
+    #[test]
+    fn update_global_checkbox_defaults_to_zero() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _global_prefs (
+                id TEXT PRIMARY KEY,
+                newsletter INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO _global_prefs (id, newsletter, created_at, updated_at)
+            VALUES ('default', 1, '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let def = GlobalDefinition {
+            slug: "prefs".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![
+                FieldDefinition {
+                    name: "newsletter".to_string(),
+                    field_type: FieldType::Checkbox,
+                    ..Default::default()
+                },
+            ],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        // Update without providing the checkbox field -- should default to 0
+        let data = HashMap::new();
+        let doc = update_global(&conn, "prefs", &def, &data, None).unwrap();
+        assert_eq!(doc.get("newsletter"), Some(&serde_json::json!(0)));
+    }
+
+    #[test]
+    fn update_global_group_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _global_branding (
+                id TEXT PRIMARY KEY,
+                colors__primary TEXT,
+                colors__secondary TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO _global_branding (id, created_at, updated_at)
+            VALUES ('default', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let def = GlobalDefinition {
+            slug: "branding".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![
+                FieldDefinition {
+                    name: "colors".to_string(),
+                    field_type: FieldType::Group,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "primary".to_string(),
+                            ..Default::default()
+                        },
+                        FieldDefinition {
+                            name: "secondary".to_string(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut data = HashMap::new();
+        data.insert("colors__primary".to_string(), "#ff0000".to_string());
+        data.insert("colors__secondary".to_string(), "#00ff00".to_string());
+
+        let doc = update_global(&conn, "branding", &def, &data, None).unwrap();
+        // Group fields should be reconstructed as nested object by hydrate_document
+        let colors = doc.fields.get("colors").expect("colors should exist");
+        assert_eq!(colors.get("primary").and_then(|v| v.as_str()), Some("#ff0000"));
+        assert_eq!(colors.get("secondary").and_then(|v| v.as_str()), Some("#00ff00"));
+    }
+
+    #[test]
+    fn get_global_column_names_with_drafts() {
+        let def = GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![
+                FieldDefinition {
+                    name: "site_name".to_string(),
+                    ..Default::default()
+                },
+            ],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: Some(crate::core::collection::VersionsConfig { drafts: true, max_versions: 10 }),
+        };
+
+        let names = get_global_column_names(&def);
+        assert!(names.contains(&"_status".to_string()), "should include _status for drafts-enabled global");
+        assert!(names.contains(&"created_at".to_string()));
+        assert!(names.contains(&"updated_at".to_string()));
+    }
 }

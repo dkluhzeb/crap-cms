@@ -120,6 +120,7 @@ mod tests {
     use crate::core::collection::{
         CollectionAccess, CollectionAdmin, CollectionHooks, CollectionLabels,
     };
+    use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition {
@@ -129,16 +130,25 @@ mod tests {
         }
     }
 
+    fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
+        CollectionDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields,
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
     #[test]
     fn rust_collection_output() {
-        let col = CollectionDefinition {
-            slug: "posts".to_string(), labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![text_field("title", true), text_field("content", false)],
-            admin: CollectionAdmin::default(), hooks: CollectionHooks::default(),
-            auth: None, upload: None, access: CollectionAccess::default(),
-            live: None, versions: None,
-        };
+        let col = make_col("posts", vec![text_field("title", true), text_field("content", false)]);
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -149,5 +159,193 @@ mod tests {
         assert!(out.contains("    pub title: String,"));
         assert!(out.contains("    pub content: Option<String>,"));
         assert!(out.contains("    pub created_at: Option<String>,"));
+    }
+
+    #[test]
+    fn rust_relationship_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "tags".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Option<Vec<String>>"));
+    }
+
+    #[test]
+    fn rust_relationship_has_one_required() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "author".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "users".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub author: String,"));
+    }
+
+    #[test]
+    fn rust_number_checkbox_json_fields() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "price".to_string(), field_type: FieldType::Number, required: true, ..Default::default() },
+            FieldDefinition { name: "active".to_string(), field_type: FieldType::Checkbox, ..Default::default() },
+            FieldDefinition { name: "meta".to_string(), field_type: FieldType::Json, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub price: f64,"));
+        assert!(out.contains("Option<bool>"));
+        assert!(out.contains("Option<serde_json::Value>"));
+    }
+
+    #[test]
+    fn rust_array_with_subfields() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![text_field("label", true)],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub struct PostsItems {"));
+        assert!(out.contains("Option<Vec<PostsItems>>"));
+    }
+
+    #[test]
+    fn rust_array_without_subfields() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "data".to_string(),
+                field_type: FieldType::Array,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Option<Vec<serde_json::Value>>"));
+    }
+
+    #[test]
+    fn rust_group_and_blocks_fields() {
+        let col = make_col("pages", vec![
+            FieldDefinition { name: "seo".to_string(), field_type: FieldType::Group, ..Default::default() },
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                blocks: vec![BlockDefinition {
+                    block_type: "text".to_string(),
+                    fields: vec![text_field("body", true)],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Option<serde_json::Value>"), "group should be serde_json::Value");
+        assert!(out.contains("Option<Vec<serde_json::Value>>"), "blocks should be Vec<serde_json::Value>");
+    }
+
+    #[test]
+    fn rust_upload_and_select_fields() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "image".to_string(), field_type: FieldType::Upload, required: true, ..Default::default() },
+            FieldDefinition {
+                name: "status".to_string(),
+                field_type: FieldType::Select,
+                required: true,
+                options: vec![
+                    SelectOption { label: LocalizedString::Plain("Draft".into()), value: "draft".into() },
+                ],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub image: String,"));
+        assert!(out.contains("pub status: String,"));
+    }
+
+    #[test]
+    fn rust_global_output() {
+        let global = crate::core::collection::GlobalDefinition {
+            slug: "site_settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![text_field("site_name", true)],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(out.contains("pub struct SiteSettings {"));
+        assert!(out.contains("pub id: String,"));
+        assert!(out.contains("pub site_name: String,"));
+        assert!(out.contains("pub created_at: Option<String>,"));
+    }
+
+    #[test]
+    fn rust_full_render() {
+        let mut registry = Registry::new();
+        registry.register_collection(make_col("posts", vec![text_field("title", true)]));
+        registry.register_global(crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![text_field("name", true)],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        });
+        let out = render(&registry);
+        assert!(out.contains("use serde::{Deserialize, Serialize};"));
+        assert!(out.contains("pub struct Posts {"));
+        assert!(out.contains("pub struct Settings {"));
+    }
+
+    #[test]
+    fn rust_no_timestamps() {
+        let mut col = make_col("tags", vec![text_field("name", true)]);
+        col.timestamps = false;
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(!out.contains("created_at"));
+    }
+
+    #[test]
+    fn rust_email_date_richtext_textarea() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "email".to_string(), field_type: FieldType::Email, required: true, ..Default::default() },
+            FieldDefinition { name: "date".to_string(), field_type: FieldType::Date, required: true, ..Default::default() },
+            FieldDefinition { name: "body".to_string(), field_type: FieldType::Richtext, required: true, ..Default::default() },
+            FieldDefinition { name: "notes".to_string(), field_type: FieldType::Textarea, required: true, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // All string types
+        assert!(out.contains("pub email: String,"));
+        assert!(out.contains("pub date: String,"));
+        assert!(out.contains("pub body: String,"));
+        assert!(out.contains("pub notes: String,"));
     }
 }

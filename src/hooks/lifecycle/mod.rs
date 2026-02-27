@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use mlua::{Lua, Value};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use crate::config::CrapConfig;
 use crate::core::collection::{CollectionHooks, LiveSetting};
@@ -111,67 +111,137 @@ pub(super) struct HookDepth(pub(super) u32);
 /// Max allowed hook depth, read from config and stored in Lua `app_data`.
 pub(super) struct MaxHookDepth(pub(super) u32);
 
-/// Thread-safe hook runner wrapping a Lua VM.
+/// Pool of Lua VMs for concurrent hook execution.
+struct VmPool {
+    vms: Mutex<Vec<Lua>>,
+    available: Condvar,
+}
+
+impl VmPool {
+    fn new(vms: Vec<Lua>) -> Self {
+        VmPool {
+            vms: Mutex::new(vms),
+            available: Condvar::new(),
+        }
+    }
+
+    /// Acquire a VM from the pool, blocking until one is available.
+    fn acquire(&self) -> std::result::Result<VmGuard<'_>, String> {
+        let mut pool = self.vms.lock()
+            .map_err(|e| format!("VM pool lock poisoned: {}", e))?;
+        loop {
+            if let Some(vm) = pool.pop() {
+                return Ok(VmGuard { pool: self, vm: Some(vm) });
+            }
+            pool = self.available.wait(pool)
+                .map_err(|e| format!("VM pool condvar wait failed: {}", e))?;
+        }
+    }
+}
+
+/// RAII guard that returns a VM to the pool on drop.
+struct VmGuard<'a> {
+    pool: &'a VmPool,
+    vm: Option<Lua>,
+}
+
+impl std::ops::Deref for VmGuard<'_> {
+    type Target = Lua;
+    fn deref(&self) -> &Lua {
+        self.vm.as_ref().unwrap()
+    }
+}
+
+impl Drop for VmGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(vm) = self.vm.take() {
+            if let Ok(mut pool) = self.pool.vms.lock() {
+                pool.push(vm);
+                self.pool.available.notify_one();
+            }
+        }
+    }
+}
+
+/// Thread-safe hook runner with a pool of Lua VMs for concurrent execution.
 #[derive(Clone)]
 pub struct HookRunner {
-    lua: Arc<Mutex<Lua>>,
+    pool: Arc<VmPool>,
+}
+
+/// Create and fully initialize a single Lua VM with package paths, API, CRUD functions,
+/// collection/global/job loading, and init.lua execution.
+fn create_lua_vm(
+    config_dir: &Path,
+    registry: SharedRegistry,
+    config: &CrapConfig,
+) -> Result<Lua> {
+    let lua = Lua::new();
+
+    // Set up package paths
+    let config_str = config_dir.to_string_lossy();
+    let code = format!(
+        r#"
+        package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path
+        package.cpath = "{0}/?.so;{0}/?.dll;" .. package.cpath
+        "#,
+        config_str
+    );
+    lua.load(&code).exec().context("Failed to set package paths")?;
+
+    // Register crap.log, crap.util, crap.collections.define, etc.
+    crate::hooks::api::register_api(&lua, registry.clone(), config_dir, config)?;
+
+    // Register CRUD functions on crap.collections (find, find_by_id, create, update, delete).
+    // These read the active transaction from Lua app_data when called inside hooks.
+    register_crud_functions(&lua, registry, &config.locale, config.hooks.max_depth)?;
+
+    // Initialize hook depth tracking
+    lua.set_app_data(HookDepth(0));
+    lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
+
+    // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
+    let collections_dir = config_dir.join("collections");
+    if collections_dir.exists() {
+        crate::hooks::load_lua_dir(&lua, &collections_dir, "collection")?;
+    }
+    let globals_dir = config_dir.join("globals");
+    if globals_dir.exists() {
+        crate::hooks::load_lua_dir(&lua, &globals_dir, "global")?;
+    }
+    let jobs_dir = config_dir.join("jobs");
+    if jobs_dir.exists() {
+        crate::hooks::load_lua_dir(&lua, &jobs_dir, "job")?;
+    }
+
+    // Execute init.lua so crap.hooks.register() calls take effect in this VM
+    let init_path = config_dir.join("init.lua");
+    if init_path.exists() {
+        let code = std::fs::read_to_string(&init_path)
+            .with_context(|| format!("Failed to read {}", init_path.display()))?;
+        lua.load(&code)
+            .set_name(init_path.to_string_lossy())
+            .exec()
+            .with_context(|| "HookRunner: failed to execute init.lua")?;
+    }
+
+    Ok(lua)
 }
 
 impl HookRunner {
-    /// Create a new HookRunner with its own Lua VM, registering CRUD functions and loading init.lua.
+    /// Create a new HookRunner with a pool of Lua VMs.
+    /// Each VM is fully initialized with CRUD functions, hooks, and init.lua.
     pub fn new(config_dir: &Path, registry: SharedRegistry, config: &CrapConfig) -> Result<Self> {
-        let lua = Lua::new();
+        let pool_size = config.hooks.vm_pool_size.max(1);
+        tracing::info!("HookRunner: creating pool of {} Lua VMs", pool_size);
 
-        // Set up package paths
-        let config_str = config_dir.to_string_lossy();
-        let code = format!(
-            r#"
-            package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path
-            package.cpath = "{0}/?.so;{0}/?.dll;" .. package.cpath
-            "#,
-            config_str
-        );
-        lua.load(&code).exec().context("Failed to set package paths")?;
-
-        // Register crap.log, crap.util, crap.collections.define, etc.
-        crate::hooks::api::register_api(&lua, registry.clone(), config_dir, config)?;
-
-        // Register CRUD functions on crap.collections (find, find_by_id, create, update, delete).
-        // These read the active transaction from Lua app_data when called inside hooks.
-        register_crud_functions(&lua, registry, &config.locale, config.hooks.max_depth)?;
-
-        // Initialize hook depth tracking
-        lua.set_app_data(HookDepth(0));
-        lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
-
-        // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
-        let collections_dir = config_dir.join("collections");
-        if collections_dir.exists() {
-            crate::hooks::load_lua_dir(&lua, &collections_dir, "collection")?;
-        }
-        let globals_dir = config_dir.join("globals");
-        if globals_dir.exists() {
-            crate::hooks::load_lua_dir(&lua, &globals_dir, "global")?;
-        }
-        let jobs_dir = config_dir.join("jobs");
-        if jobs_dir.exists() {
-            crate::hooks::load_lua_dir(&lua, &jobs_dir, "job")?;
-        }
-
-        // Execute init.lua so crap.hooks.register() calls take effect in this VM
-        let init_path = config_dir.join("init.lua");
-        if init_path.exists() {
-            tracing::info!("HookRunner: executing init.lua");
-            let code = std::fs::read_to_string(&init_path)
-                .with_context(|| format!("Failed to read {}", init_path.display()))?;
-            lua.load(&code)
-                .set_name(init_path.to_string_lossy())
-                .exec()
-                .with_context(|| "HookRunner: failed to execute init.lua")?;
+        let mut vms = Vec::with_capacity(pool_size);
+        for _ in 0..pool_size {
+            vms.push(create_lua_vm(config_dir, registry.clone(), config)?);
         }
 
         Ok(Self {
-            lua: Arc::new(Mutex::new(lua)),
+            pool: Arc::new(VmPool::new(vms)),
         })
     }
 
@@ -186,8 +256,8 @@ impl HookRunner {
     ) -> Result<HookContext> {
         let hook_refs = get_hook_refs(hooks, &event);
 
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         for hook_ref in hook_refs {
             tracing::debug!("Running hook: {} for {}", hook_ref, context.collection);
@@ -216,8 +286,8 @@ impl HookRunner {
     ) -> Result<HookContext> {
         let hook_refs = get_hook_refs(hooks, &event);
 
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         // Inject the connection pointer so CRUD functions can use it.
         // Safety: conn is valid for the duration of this method, and we hold
@@ -253,8 +323,8 @@ impl HookRunner {
             return Ok(());
         }
 
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(None));
@@ -292,8 +362,8 @@ impl HookRunner {
         collection: &str,
         operation: &str,
     ) -> Result<()> {
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         run_field_hooks_inner(&lua, fields, &event, data, collection, operation)
     }
@@ -312,8 +382,8 @@ impl HookRunner {
         conn: &rusqlite::Connection,
         user: Option<&Document>,
     ) -> Result<()> {
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         // Inject the connection pointer so CRUD functions can use it.
         lua.set_app_data(TxContext(conn as *const _));
@@ -361,10 +431,10 @@ impl HookRunner {
         operation: &str,
         doc: Document,
     ) -> Document {
-        let lua = match self.lua.lock() {
+        let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(e) => {
-                tracing::warn!("Lua VM lock poisoned in apply_after_read: {}", e);
+                tracing::warn!("VM pool error in apply_after_read: {}", e);
                 return doc;
             }
         };
@@ -475,8 +545,8 @@ impl HookRunner {
 
         // If no collection-level or registered hooks, pass through
         let has_registered = {
-            let lua = self.lua.lock()
-                .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+            let lua = self.pool.acquire()
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
             has_registered_hooks(&lua, "before_broadcast")
         };
 
@@ -495,8 +565,8 @@ impl HookRunner {
 
         // run_hooks handles both collection-level hook refs and global registered hooks.
         // We need to check if any hook returns false/nil to suppress.
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         let mut context = ctx;
 
@@ -530,8 +600,8 @@ impl HookRunner {
             None => Ok(true), // absent = broadcast all
             Some(LiveSetting::Disabled) => Ok(false),
             Some(LiveSetting::Function(func_ref)) => {
-                let lua = self.lua.lock()
-                    .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+                let lua = self.pool.acquire()
+                    .map_err(|e| anyhow::anyhow!("{}", e))?;
 
                 let func = resolve_hook_function(&lua, func_ref)?;
 
@@ -556,7 +626,9 @@ impl HookRunner {
 
     /// Publish a mutation event: check live setting → run before_broadcast hooks → EventBus.publish().
     /// Spawns into a background task (non-blocking, like fire_after_event).
+    /// Untestable: spawns tokio::task::spawn_blocking for async event dispatch.
     #[allow(clippy::too_many_arguments)]
+    #[cfg(not(tarpaulin_include))]
     pub fn publish_event(
         &self,
         event_bus: &Option<EventBus>,
@@ -619,8 +691,8 @@ impl HookRunner {
         headers: &HashMap<String, String>,
         conn: &rusqlite::Connection,
     ) -> Result<Option<Document>> {
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         // Inject connection for CRUD access
         lua.set_app_data(TxContext(conn as *const _));
@@ -675,7 +747,7 @@ impl HookRunner {
     /// Returns None if the function errors or returns nil.
     /// No CRUD access — pure formatting function.
     pub fn call_row_label(&self, func_ref: &str, row_data: &serde_json::Value) -> Option<String> {
-        let lua = self.lua.lock().ok()?;
+        let lua = self.pool.acquire().ok()?;
         let func = resolve_hook_function(&lua, func_ref).ok()?;
         let row_lua = crate::hooks::api::json_to_lua(&lua, row_data).ok()?;
         match func.call::<Value>(row_lua) {
@@ -693,7 +765,7 @@ impl HookRunner {
         func_ref: &str,
         form_data: &serde_json::Value,
     ) -> Option<DisplayConditionResult> {
-        let lua = self.lua.lock().ok()?;
+        let lua = self.pool.acquire().ok()?;
         let func = resolve_hook_function(&lua, func_ref).ok()?;
         let data_lua = crate::hooks::api::json_to_lua(&lua, form_data).ok()?;
         match func.call::<Value>(data_lua) {
@@ -712,10 +784,10 @@ impl HookRunner {
     /// Lua table and return the (potentially modified) context. No CRUD access.
     /// On error: logs warning, returns original context unmodified.
     pub fn run_before_render(&self, mut context: serde_json::Value) -> serde_json::Value {
-        let lua = match self.lua.lock() {
+        let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(e) => {
-                tracing::warn!("Lua VM lock poisoned in run_before_render: {}", e);
+                tracing::warn!("VM pool error in run_before_render: {}", e);
                 return context;
             }
         };
@@ -791,8 +863,8 @@ impl HookRunner {
             return Ok(AccessResult::Allowed);
         }
 
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         // Inject connection for CRUD access in access functions
         lua.set_app_data(TxContext(conn as *const _));
@@ -813,7 +885,7 @@ impl HookRunner {
         user: Option<&Document>,
         conn: &rusqlite::Connection,
     ) -> Vec<String> {
-        let lua = match self.lua.lock() {
+        let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(_) => return Vec::new(),
         };
@@ -836,7 +908,7 @@ impl HookRunner {
         operation: &str,
         conn: &rusqlite::Connection,
     ) -> Vec<String> {
-        let lua = match self.lua.lock() {
+        let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(_) => return Vec::new(),
         };
@@ -861,8 +933,8 @@ impl HookRunner {
         let code = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read migration {}", path.display()))?;
 
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         // Inject connection for CRUD access
         lua.set_app_data(TxContext(conn as *const _));
@@ -908,8 +980,8 @@ impl HookRunner {
         max_attempts: u32,
         conn: &rusqlite::Connection,
     ) -> Result<Option<String>> {
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(None));
@@ -962,8 +1034,8 @@ impl HookRunner {
         conn: &rusqlite::Connection,
         user: Option<&Document>,
     ) -> Result<String> {
-        let lua = self.lua.lock()
-            .map_err(|e| anyhow::anyhow!("Lua VM lock poisoned: {}", e))?;
+        let lua = self.pool.acquire()
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
 
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(user.cloned()));
@@ -988,10 +1060,10 @@ impl HookRunner {
         exclude_id: Option<&str>,
         is_draft: bool,
     ) -> Result<(), ValidationError> {
-        let lua = self.lua.lock()
+        let lua = self.pool.acquire()
             .map_err(|_| ValidationError { errors: vec![FieldError {
                 field: "_system".into(),
-                message: "Lua VM lock poisoned".into(),
+                message: "VM pool error".into(),
             }] })?;
         validate_fields_inner(&lua, fields, data, conn, table, exclude_id, is_draft)
     }
@@ -1932,5 +2004,1081 @@ fn call_hook_ref(lua: &Lua, hook_ref: &str, context: HookContext) -> Result<Hook
             Ok(new_ctx)
         }
         _ => Ok(context),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // --- is_valid_date_format tests ---
+
+    #[test]
+    fn test_valid_date_format_date_only() {
+        assert!(is_valid_date_format("2024-01-15"));
+        assert!(is_valid_date_format("2000-12-31"));
+        assert!(is_valid_date_format("1999-06-01"));
+    }
+
+    #[test]
+    fn test_valid_date_format_datetime_local() {
+        assert!(is_valid_date_format("2024-01-15T10:30"));
+        assert!(is_valid_date_format("2024-12-31T23:59"));
+    }
+
+    #[test]
+    fn test_valid_date_format_datetime_seconds() {
+        assert!(is_valid_date_format("2024-01-15T10:30:45"));
+        assert!(is_valid_date_format("2024-12-31T23:59:59"));
+    }
+
+    #[test]
+    fn test_valid_date_format_rfc3339() {
+        assert!(is_valid_date_format("2024-01-15T10:30:00+00:00"));
+        assert!(is_valid_date_format("2024-01-15T10:30:00Z"));
+        assert!(is_valid_date_format("2024-01-15T10:30:00-05:00"));
+    }
+
+    #[test]
+    fn test_valid_date_format_time_only() {
+        assert!(is_valid_date_format("10:30"));
+        assert!(is_valid_date_format("23:59"));
+        assert!(is_valid_date_format("00:00"));
+        assert!(is_valid_date_format("10:30:45"));
+    }
+
+    #[test]
+    fn test_valid_date_format_month_only() {
+        assert!(is_valid_date_format("2024-01"));
+        assert!(is_valid_date_format("2024-12"));
+        assert!(is_valid_date_format("1999-06"));
+    }
+
+    #[test]
+    fn test_invalid_date_format() {
+        assert!(!is_valid_date_format(""));
+        assert!(!is_valid_date_format("not-a-date"));
+        assert!(!is_valid_date_format("2024"));
+        assert!(!is_valid_date_format("2024-1-1"));
+        assert!(!is_valid_date_format("01/15/2024"));
+        assert!(!is_valid_date_format("2024-13-01")); // invalid month
+        assert!(!is_valid_date_format("2024-01-32")); // invalid day
+    }
+
+    // --- condition_is_truthy tests ---
+
+    #[test]
+    fn test_condition_is_truthy_null() {
+        assert!(!condition_is_truthy(&json!(null)));
+    }
+
+    #[test]
+    fn test_condition_is_truthy_bool() {
+        assert!(condition_is_truthy(&json!(true)));
+        assert!(!condition_is_truthy(&json!(false)));
+    }
+
+    #[test]
+    fn test_condition_is_truthy_string() {
+        assert!(condition_is_truthy(&json!("hello")));
+        assert!(!condition_is_truthy(&json!("")));
+    }
+
+    #[test]
+    fn test_condition_is_truthy_number() {
+        assert!(condition_is_truthy(&json!(0)));
+        assert!(condition_is_truthy(&json!(42)));
+        assert!(condition_is_truthy(&json!(-1)));
+    }
+
+    #[test]
+    fn test_condition_is_truthy_array() {
+        assert!(condition_is_truthy(&json!([1, 2])));
+        assert!(!condition_is_truthy(&json!([])));
+    }
+
+    #[test]
+    fn test_condition_is_truthy_object() {
+        assert!(condition_is_truthy(&json!({"key": "value"})));
+        assert!(!condition_is_truthy(&json!({})));
+    }
+
+    // --- evaluate_condition_table tests ---
+
+    #[test]
+    fn test_condition_equals() {
+        let data = json!({"status": "published"});
+        let cond = json!({"field": "status", "equals": "published"});
+        assert!(evaluate_condition_table(&cond, &data));
+
+        let cond_miss = json!({"field": "status", "equals": "draft"});
+        assert!(!evaluate_condition_table(&cond_miss, &data));
+    }
+
+    #[test]
+    fn test_condition_not_equals() {
+        let data = json!({"status": "published"});
+        let cond = json!({"field": "status", "not_equals": "draft"});
+        assert!(evaluate_condition_table(&cond, &data));
+
+        let cond_miss = json!({"field": "status", "not_equals": "published"});
+        assert!(!evaluate_condition_table(&cond_miss, &data));
+    }
+
+    #[test]
+    fn test_condition_in() {
+        let data = json!({"category": "tech"});
+        let cond = json!({"field": "category", "in": ["tech", "science"]});
+        assert!(evaluate_condition_table(&cond, &data));
+
+        let cond_miss = json!({"field": "category", "in": ["art", "music"]});
+        assert!(!evaluate_condition_table(&cond_miss, &data));
+    }
+
+    #[test]
+    fn test_condition_not_in() {
+        let data = json!({"category": "tech"});
+        let cond = json!({"field": "category", "not_in": ["art", "music"]});
+        assert!(evaluate_condition_table(&cond, &data));
+
+        let cond_miss = json!({"field": "category", "not_in": ["tech", "science"]});
+        assert!(!evaluate_condition_table(&cond_miss, &data));
+    }
+
+    #[test]
+    fn test_condition_is_truthy_op() {
+        let data = json!({"featured": true});
+        let cond = json!({"field": "featured", "is_truthy": true});
+        assert!(evaluate_condition_table(&cond, &data));
+
+        let data_false = json!({"featured": false});
+        assert!(!evaluate_condition_table(&cond, &data_false));
+    }
+
+    #[test]
+    fn test_condition_is_falsy_op() {
+        let data = json!({"featured": false});
+        let cond = json!({"field": "featured", "is_falsy": true});
+        assert!(evaluate_condition_table(&cond, &data));
+
+        let data_true = json!({"featured": true});
+        assert!(!evaluate_condition_table(&cond, &data_true));
+    }
+
+    #[test]
+    fn test_condition_array_and() {
+        let data = json!({"status": "published", "featured": true});
+        let cond = json!([
+            {"field": "status", "equals": "published"},
+            {"field": "featured", "is_truthy": true}
+        ]);
+        assert!(evaluate_condition_table(&cond, &data));
+
+        let data_fail = json!({"status": "draft", "featured": true});
+        assert!(!evaluate_condition_table(&cond, &data_fail));
+    }
+
+    #[test]
+    fn test_condition_missing_field() {
+        let data = json!({"status": "published"});
+        let cond = json!({"field": "nonexistent", "equals": "something"});
+        assert!(!evaluate_condition_table(&cond, &data));
+    }
+
+    #[test]
+    fn test_condition_unknown_operator_shows() {
+        let data = json!({"status": "published"});
+        let cond = json!({"field": "status"});
+        // Unknown operator → show (returns true)
+        assert!(evaluate_condition_table(&cond, &data));
+    }
+
+    #[test]
+    fn test_condition_non_object_non_array_shows() {
+        let data = json!({"status": "published"});
+        // Non-object, non-array → true
+        assert!(evaluate_condition_table(&json!("string"), &data));
+        assert!(evaluate_condition_table(&json!(42), &data));
+        assert!(evaluate_condition_table(&json!(null), &data));
+    }
+
+    // --- validate_fields_inner tests ---
+
+    #[test]
+    fn test_validate_required_field_empty_string() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            required: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.errors.len(), 1);
+        assert!(err.errors[0].message.contains("required"));
+    }
+
+    #[test]
+    fn test_validate_required_field_null() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            required: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!(null));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_required_skipped_for_drafts() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            required: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true);
+        assert!(result.is_ok(), "Drafts should skip required checks");
+    }
+
+    #[test]
+    fn test_validate_required_join_field_empty_array() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Relationship,
+            required: true,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "tags".to_string(),
+                has_many: true,
+                max_depth: None,
+            }),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!([]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("required"));
+    }
+
+    #[test]
+    fn test_validate_required_join_field_non_empty_array() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Relationship,
+            required: true,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "tags".to_string(),
+                has_many: true,
+                max_depth: None,
+            }),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(["t1", "t2"]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_group_subfield_required() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "seo".to_string(),
+            field_type: FieldType::Group,
+            fields: vec![FieldDefinition {
+                name: "title".to_string(),
+                required: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("seo__title".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.errors[0].field, "seo__title");
+    }
+
+    #[test]
+    fn test_validate_min_rows() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            min_rows: Some(2),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), json!([{"label": "one"}]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at least 2"));
+    }
+
+    #[test]
+    fn test_validate_max_rows() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            max_rows: Some(1),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), json!([{"a": 1}, {"a": 2}]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at most 1"));
+    }
+
+    #[test]
+    fn test_validate_array_sub_field_required() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![FieldDefinition {
+                name: "label".to_string(),
+                required: true,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), json!([{"label": ""}]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.errors[0].field.contains("items[0][label]"));
+    }
+
+    #[test]
+    fn test_validate_blocks_sub_field_required() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            blocks: vec![crate::core::field::BlockDefinition {
+                block_type: "text".to_string(),
+                fields: vec![FieldDefinition {
+                    name: "body".to_string(),
+                    required: true,
+                    ..Default::default()
+                }],
+                label: None,
+                label_field: None,
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("content".to_string(), json!([{"_block_type": "text", "body": ""}]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].field.contains("content[0][body]"));
+    }
+
+    #[test]
+    fn test_validate_date_format_invalid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "d".to_string(),
+            field_type: FieldType::Date,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("d".to_string(), json!("not-a-date"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("valid date"));
+    }
+
+    #[test]
+    fn test_validate_date_format_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "d".to_string(),
+            field_type: FieldType::Date,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("d".to_string(), json!("2024-01-15"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_custom_validate_function_returns_error() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"
+            package.loaded["validators"] = {
+                validate_test = function(value, ctx)
+                    if value == "bad" then
+                        return "value cannot be bad"
+                    end
+                    return true
+                end
+            }
+        "#).exec().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            validate: Some("validators.validate_test".to_string()),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("bad"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("cannot be bad"));
+    }
+
+    #[test]
+    fn test_validate_custom_validate_function_returns_false() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"
+            package.loaded["validators"] = package.loaded["validators"] or {}
+            package.loaded["validators"].validate_fail = function(value, ctx)
+                return false
+            end
+        "#).exec().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            validate: Some("validators.validate_fail".to_string()),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("anything"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().errors[0].message, "validation failed");
+    }
+
+    #[test]
+    fn test_validate_custom_validate_function_returns_true() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"
+            package.loaded["validators"] = package.loaded["validators"] or {}
+            package.loaded["validators"].validate_ok = function(value, ctx)
+                return true
+            end
+        "#).exec().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            validate: Some("validators.validate_ok".to_string()),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("good"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_unique_check() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT);
+             INSERT INTO test (id, email) VALUES ('existing', 'taken@test.com');"
+        ).unwrap();
+        let fields = vec![FieldDefinition {
+            name: "email".to_string(),
+            unique: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!("taken@test.com"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("unique"));
+    }
+
+    #[test]
+    fn test_validate_unique_check_excludes_self() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT);
+             INSERT INTO test (id, email) VALUES ('self', 'me@test.com');"
+        ).unwrap();
+        let fields = vec![FieldDefinition {
+            name: "email".to_string(),
+            unique: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!("me@test.com"));
+        // exclude_id = "self" means we're updating ourselves, so this is fine
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", Some("self"), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_required_skipped_on_update_absent_field() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            required: true,
+            ..Default::default()
+        }];
+        // On update (exclude_id set), absent field = partial update, should not fail
+        let data = HashMap::new();
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", Some("p1"), false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_checkbox_not_required() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, active INTEGER)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "active".to_string(),
+            field_type: FieldType::Checkbox,
+            required: true,
+            ..Default::default()
+        }];
+        // Checkbox absent = false, which is valid even when required
+        let data = HashMap::new();
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    // --- apply_after_read_inner tests ---
+
+    #[test]
+    fn test_apply_after_read_no_hooks_returns_unchanged() {
+        let lua = mlua::Lua::new();
+        // Initialize the _crap_event_hooks table
+        lua.load("_crap_event_hooks = {}").exec().unwrap();
+        let hooks = CollectionHooks::default();
+        let fields = vec![FieldDefinition {
+            name: "title".to_string(),
+            ..Default::default()
+        }];
+        let mut doc = crate::core::Document::new("doc1".to_string());
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.created_at = Some("2024-01-01".to_string());
+        doc.updated_at = Some("2024-01-02".to_string());
+
+        let result = apply_after_read_inner(&lua, &hooks, &fields, "posts", "find", doc.clone());
+        assert_eq!(result.id, "doc1");
+        assert_eq!(result.get_str("title"), Some("Hello"));
+    }
+
+    // --- run_validate_function_inner tests ---
+
+    #[test]
+    fn test_run_validate_function_nil_means_valid() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"
+            package.loaded["validators"] = {
+                validate_nil = function(value, ctx)
+                    return nil
+                end
+            }
+        "#).exec().unwrap();
+        let data = HashMap::new();
+        let result = run_validate_function_inner(&lua, "validators.validate_nil", &json!("test"), &data, "test", "name").unwrap();
+        assert!(result.is_none());
+    }
+
+    // --- context_to_lua_table tests ---
+
+    #[test]
+    fn test_context_to_lua_table_with_locale_and_draft() {
+        let lua = mlua::Lua::new();
+        lua.set_app_data(HookDepth(3));
+        let mut ctx_map = HashMap::new();
+        ctx_map.insert("request_id".to_string(), json!("abc-123"));
+        let ctx = HookContext {
+            collection: "posts".to_string(),
+            operation: "create".to_string(),
+            data: {
+                let mut d = HashMap::new();
+                d.insert("title".to_string(), json!("Hello"));
+                d
+            },
+            locale: Some("en".to_string()),
+            draft: Some(true),
+            context: ctx_map,
+        };
+        let tbl = context_to_lua_table(&lua, &ctx).unwrap();
+        let collection: String = tbl.get("collection").unwrap();
+        assert_eq!(collection, "posts");
+        let locale: String = tbl.get("locale").unwrap();
+        assert_eq!(locale, "en");
+        let draft: bool = tbl.get("draft").unwrap();
+        assert!(draft);
+        let depth: u32 = tbl.get("hook_depth").unwrap();
+        assert_eq!(depth, 3);
+        let context_tbl: mlua::Table = tbl.get("context").unwrap();
+        let req_id: String = context_tbl.get("request_id").unwrap();
+        assert_eq!(req_id, "abc-123");
+    }
+
+    // --- read_context_back tests ---
+
+    #[test]
+    fn test_read_context_back() {
+        let lua = mlua::Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let context_tbl = lua.create_table().unwrap();
+        context_tbl.set("key1", "value1").unwrap();
+        context_tbl.set("key2", 42).unwrap();
+        tbl.set("context", context_tbl).unwrap();
+
+        let mut existing = HashMap::new();
+        existing.insert("old_key".to_string(), json!("old_value"));
+        read_context_back(&lua, &tbl, &mut existing);
+
+        assert!(!existing.contains_key("old_key"), "old entries should be cleared");
+        assert_eq!(existing.get("key1"), Some(&json!("value1")));
+        assert_eq!(existing.get("key2"), Some(&json!(42)));
+    }
+
+    #[test]
+    fn test_read_context_back_no_context_table() {
+        let lua = mlua::Lua::new();
+        let tbl = lua.create_table().unwrap();
+        // No "context" key in the table
+
+        let mut existing = HashMap::new();
+        existing.insert("old_key".to_string(), json!("old_value"));
+        read_context_back(&lua, &tbl, &mut existing);
+
+        // Should not change existing since there is no context table
+        assert!(existing.contains_key("old_key"));
+    }
+
+    // --- has_registered_hooks tests ---
+
+    #[test]
+    fn test_has_registered_hooks_empty() {
+        let lua = mlua::Lua::new();
+        lua.load("_crap_event_hooks = {}").exec().unwrap();
+        assert!(!has_registered_hooks(&lua, "after_read"));
+    }
+
+    #[test]
+    fn test_has_registered_hooks_with_hooks() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"
+            _crap_event_hooks = {
+                after_read = { function() end }
+            }
+        "#).exec().unwrap();
+        assert!(has_registered_hooks(&lua, "after_read"));
+        assert!(!has_registered_hooks(&lua, "before_change"));
+    }
+
+    #[test]
+    fn test_has_registered_hooks_no_global() {
+        let lua = mlua::Lua::new();
+        // _crap_event_hooks is not set at all
+        assert!(!has_registered_hooks(&lua, "after_read"));
+    }
+
+    // --- nested validation in sub-fields ---
+
+    #[test]
+    fn test_validate_nested_array_in_array() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "outer".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![FieldDefinition {
+                name: "inner".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![FieldDefinition {
+                    name: "value".to_string(),
+                    required: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("outer".to_string(), json!([
+            {"inner": [{"value": ""}]}
+        ]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.errors[0].field.contains("outer[0][inner][0][value]"));
+    }
+
+    #[test]
+    fn test_validate_group_inside_array() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![FieldDefinition {
+                name: "meta".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![FieldDefinition {
+                    name: "title".to_string(),
+                    required: true,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), json!([
+            {"meta__title": ""}
+        ]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.errors[0].field.contains("items[0][meta__title]"));
+    }
+
+    #[test]
+    fn test_validate_date_inside_array_subfield() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "events".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![FieldDefinition {
+                name: "date".to_string(),
+                field_type: FieldType::Date,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("events".to_string(), json!([
+            {"date": "not-a-date"}
+        ]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("valid date"));
+    }
+
+    #[test]
+    fn test_validate_custom_validate_in_array_subfield() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"
+            package.loaded["validators"] = package.loaded["validators"] or {}
+            package.loaded["validators"].validate_sub = function(value, ctx)
+                if value == "invalid" then
+                    return "sub-field invalid"
+                end
+                return true
+            end
+        "#).exec().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![FieldDefinition {
+                name: "val".to_string(),
+                validate: Some("validators.validate_sub".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), json!([
+            {"val": "invalid"}
+        ]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("sub-field invalid"));
+    }
+
+    #[test]
+    fn test_validate_date_in_group_inside_array() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![FieldDefinition {
+                name: "meta".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![FieldDefinition {
+                    name: "publish_date".to_string(),
+                    field_type: FieldType::Date,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), json!([
+            {"meta__publish_date": "bad-date"}
+        ]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("valid date"));
+    }
+
+    #[test]
+    fn test_validate_custom_function_in_group_inside_array() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"
+            package.loaded["validators"] = package.loaded["validators"] or {}
+            package.loaded["validators"].validate_group_sub = function(value, ctx)
+                return "group validation error"
+            end
+        "#).exec().unwrap();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![FieldDefinition {
+                name: "meta".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![FieldDefinition {
+                    name: "slug".to_string(),
+                    validate: Some("validators.validate_group_sub".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), json!([
+            {"meta__slug": "test-slug"}
+        ]));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("group validation error"));
+    }
+
+    // --- hook_ctx_to_string_map tests ---
+
+    #[test]
+    fn test_hook_ctx_to_string_map_simple() {
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), json!("Hello World"));
+        data.insert("count".to_string(), json!(42));
+        data.insert("active".to_string(), json!(true));
+
+        let ctx = HookContext {
+            collection: "posts".to_string(),
+            operation: "create".to_string(),
+            data,
+            locale: None,
+            draft: None,
+            context: HashMap::new(),
+        };
+
+        let fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: FieldType::Text,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "count".to_string(),
+                field_type: FieldType::Number,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "active".to_string(),
+                field_type: FieldType::Checkbox,
+                ..Default::default()
+            },
+        ];
+
+        let map = hook_ctx_to_string_map(&ctx, &fields);
+        assert_eq!(map.get("title").unwrap(), "Hello World");
+        assert_eq!(map.get("count").unwrap(), "42");
+        assert_eq!(map.get("active").unwrap(), "true");
+    }
+
+    #[test]
+    fn test_hook_ctx_to_string_map_group_flattening() {
+        let mut data = HashMap::new();
+        data.insert("seo".to_string(), json!({
+            "meta_title": "My Title",
+            "meta_description": "My Description"
+        }));
+        data.insert("title".to_string(), json!("Hello"));
+
+        let ctx = HookContext {
+            collection: "posts".to_string(),
+            operation: "create".to_string(),
+            data,
+            locale: None,
+            draft: None,
+            context: HashMap::new(),
+        };
+
+        let fields = vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: FieldType::Text,
+                ..Default::default()
+            },
+        ];
+
+        let map = hook_ctx_to_string_map(&ctx, &fields);
+        assert_eq!(map.get("seo__meta_title").unwrap(), "My Title");
+        assert_eq!(map.get("seo__meta_description").unwrap(), "My Description");
+        assert_eq!(map.get("title").unwrap(), "Hello");
+        // The group key itself should not be present
+        assert!(!map.contains_key("seo"));
+    }
+
+    #[test]
+    fn test_hook_ctx_to_string_map_group_non_object_value() {
+        // If a group field has a string value (e.g. from form data), fall through
+        let mut data = HashMap::new();
+        data.insert("seo".to_string(), json!("plain-string"));
+
+        let ctx = HookContext {
+            collection: "posts".to_string(),
+            operation: "create".to_string(),
+            data,
+            locale: None,
+            draft: None,
+            context: HashMap::new(),
+        };
+
+        let fields = vec![FieldDefinition {
+            name: "seo".to_string(),
+            field_type: FieldType::Group,
+            ..Default::default()
+        }];
+
+        let map = hook_ctx_to_string_map(&ctx, &fields);
+        // Falls through to the string conversion
+        assert_eq!(map.get("seo").unwrap(), "plain-string");
+    }
+
+    #[test]
+    fn test_hook_ctx_to_string_map_group_with_numeric_subfields() {
+        let mut data = HashMap::new();
+        data.insert("metrics".to_string(), json!({
+            "views": 100,
+            "likes": 42
+        }));
+
+        let ctx = HookContext {
+            collection: "posts".to_string(),
+            operation: "create".to_string(),
+            data,
+            locale: None,
+            draft: None,
+            context: HashMap::new(),
+        };
+
+        let fields = vec![FieldDefinition {
+            name: "metrics".to_string(),
+            field_type: FieldType::Group,
+            ..Default::default()
+        }];
+
+        let map = hook_ctx_to_string_map(&ctx, &fields);
+        assert_eq!(map.get("metrics__views").unwrap(), "100");
+        assert_eq!(map.get("metrics__likes").unwrap(), "42");
+    }
+
+    // --- HookEvent tests ---
+
+    #[test]
+    fn test_hook_event_names() {
+        assert_eq!(HookEvent::BeforeValidate.as_str(), "before_validate");
+        assert_eq!(HookEvent::BeforeChange.as_str(), "before_change");
+        assert_eq!(HookEvent::AfterChange.as_str(), "after_change");
+        assert_eq!(HookEvent::BeforeRead.as_str(), "before_read");
+        assert_eq!(HookEvent::AfterRead.as_str(), "after_read");
+        assert_eq!(HookEvent::BeforeDelete.as_str(), "before_delete");
+        assert_eq!(HookEvent::AfterDelete.as_str(), "after_delete");
+        assert_eq!(HookEvent::BeforeBroadcast.as_str(), "before_broadcast");
+        assert_eq!(HookEvent::BeforeRender.as_str(), "before_render");
+    }
+
+    // --- get_hook_refs tests ---
+
+    #[test]
+    fn test_get_hook_refs() {
+        let hooks = CollectionHooks {
+            before_validate: vec!["hooks.validate".to_string()],
+            before_change: vec!["hooks.change".to_string()],
+            after_change: vec!["hooks.after".to_string()],
+            before_read: vec![],
+            after_read: vec!["hooks.read".to_string()],
+            before_delete: vec![],
+            after_delete: vec![],
+            before_broadcast: vec!["hooks.broadcast".to_string()],
+        };
+
+        assert_eq!(get_hook_refs(&hooks, &HookEvent::BeforeValidate), &["hooks.validate"]);
+        assert_eq!(get_hook_refs(&hooks, &HookEvent::BeforeChange), &["hooks.change"]);
+        assert_eq!(get_hook_refs(&hooks, &HookEvent::AfterChange), &["hooks.after"]);
+        assert!(get_hook_refs(&hooks, &HookEvent::BeforeRead).is_empty());
+        assert_eq!(get_hook_refs(&hooks, &HookEvent::AfterRead), &["hooks.read"]);
+        assert!(get_hook_refs(&hooks, &HookEvent::BeforeDelete).is_empty());
+        assert!(get_hook_refs(&hooks, &HookEvent::AfterDelete).is_empty());
+        assert_eq!(get_hook_refs(&hooks, &HookEvent::BeforeBroadcast), &["hooks.broadcast"]);
+        assert!(get_hook_refs(&hooks, &HookEvent::BeforeRender).is_empty());
     }
 }

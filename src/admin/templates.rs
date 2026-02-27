@@ -572,4 +572,559 @@ mod tests {
         assert_eq!(as_f64(&serde_json::json!(null)), None);
         assert_eq!(as_f64(&serde_json::json!(true)), None);
     }
+
+    // --- Template overlay loading ---
+
+    #[test]
+    fn overlay_templates_override_compiled_defaults() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let templates_dir = tmp.path().join("templates").join("auth");
+        std::fs::create_dir_all(&templates_dir).unwrap();
+        // Override auth/login with custom content
+        std::fs::write(templates_dir.join("login.hbs"), "CUSTOM_LOGIN_PAGE").unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        let result = hbs.render("auth/login", &serde_json::json!({})).unwrap();
+        assert_eq!(result, "CUSTOM_LOGIN_PAGE");
+    }
+
+    #[test]
+    fn overlay_templates_nested_subdirectory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let nested_dir = tmp.path().join("templates").join("custom").join("deep");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+        std::fs::write(nested_dir.join("page.hbs"), "DEEP_NESTED").unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        let result = hbs.render("custom/deep/page", &serde_json::json!({})).unwrap();
+        assert_eq!(result, "DEEP_NESTED");
+    }
+
+    #[test]
+    fn non_hbs_files_are_ignored_in_overlay() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let templates_dir = tmp.path().join("templates");
+        std::fs::create_dir_all(&templates_dir).unwrap();
+        // A .txt file should not be registered
+        std::fs::write(templates_dir.join("notes.txt"), "not a template").unwrap();
+        // A .hbs file should be registered
+        std::fs::write(templates_dir.join("custom.hbs"), "IS_TEMPLATE").unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        assert!(hbs.render("custom", &serde_json::json!({})).is_ok());
+        // "notes" should not be registered as a template
+        assert!(hbs.render("notes", &serde_json::json!({})).is_err());
+    }
+
+    #[test]
+    fn dev_mode_enables_dev_mode() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), true, translations).expect("create_handlebars");
+        assert!(hbs.dev_mode());
+    }
+
+    #[test]
+    fn non_dev_mode_disables_dev_mode() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        assert!(!hbs.dev_mode());
+    }
+
+    // --- render_field helper ---
+
+    #[test]
+    fn render_field_helper_renders_text_field() {
+        let mut hbs = test_hbs();
+        // Register a minimal text field template
+        hbs.register_template_string("fields/text", "TEXT:{{name}}").unwrap();
+        hbs.register_template_string("t", "{{{render_field ctx}}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({
+            "ctx": {"field_type": "text", "name": "title"}
+        })).unwrap();
+        assert_eq!(result, "TEXT:title");
+    }
+
+    #[test]
+    fn render_field_helper_fallback_to_text_on_unknown_type() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("fields/text", "FALLBACK:{{name}}").unwrap();
+        hbs.register_template_string("t", "{{{render_field ctx}}}").unwrap();
+        // "unknown_type" has no template registered, should fall back to fields/text
+        let result = hbs.render("t", &serde_json::json!({
+            "ctx": {"field_type": "unknown_type", "name": "my_field"}
+        })).unwrap();
+        assert_eq!(result, "FALLBACK:my_field");
+    }
+
+    #[test]
+    fn render_field_helper_default_type_is_text() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("fields/text", "DEFAULT_TEXT:{{name}}").unwrap();
+        hbs.register_template_string("t", "{{{render_field ctx}}}").unwrap();
+        // No field_type in context — should default to "text"
+        let result = hbs.render("t", &serde_json::json!({
+            "ctx": {"name": "untitled"}
+        })).unwrap();
+        assert_eq!(result, "DEFAULT_TEXT:untitled");
+    }
+
+    #[test]
+    fn render_field_helper_renders_select_field() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("fields/select", "SELECT:{{name}}").unwrap();
+        hbs.register_template_string("t", "{{{render_field ctx}}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({
+            "ctx": {"field_type": "select", "name": "status"}
+        })).unwrap();
+        assert_eq!(result, "SELECT:status");
+    }
+
+    #[test]
+    fn render_field_helper_renders_checkbox_field() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("fields/checkbox", "CHECKBOX:{{name}}").unwrap();
+        hbs.register_template_string("t", "{{{render_field ctx}}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({
+            "ctx": {"field_type": "checkbox", "name": "active"}
+        })).unwrap();
+        assert_eq!(result, "CHECKBOX:active");
+    }
+
+    // --- Translation helper ---
+
+    #[test]
+    fn translation_helper_simple_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations_dir = tmp.path().join("translations");
+        std::fs::create_dir_all(&translations_dir).unwrap();
+        std::fs::write(
+            translations_dir.join("en.json"),
+            r#"{"hello": "Hello World"}"#,
+        ).unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let mut hbs = (*hbs).clone();
+        hbs.register_template_string("t", "{{t \"hello\"}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        assert_eq!(result, "Hello World");
+    }
+
+    #[test]
+    fn translation_helper_with_interpolation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations_dir = tmp.path().join("translations");
+        std::fs::create_dir_all(&translations_dir).unwrap();
+        std::fs::write(
+            translations_dir.join("en.json"),
+            r#"{"greeting": "Hello {{name}}, you have {{count}} items"}"#,
+        ).unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let mut hbs = (*hbs).clone();
+        hbs.register_template_string("t", "{{t \"greeting\" name=\"Alice\" count=5}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        assert_eq!(result, "Hello Alice, you have 5 items");
+    }
+
+    #[test]
+    fn translation_helper_interpolation_with_bool() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations_dir = tmp.path().join("translations");
+        std::fs::create_dir_all(&translations_dir).unwrap();
+        std::fs::write(
+            translations_dir.join("en.json"),
+            r#"{"status": "Active: {{active}}"}"#,
+        ).unwrap();
+
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let mut hbs = (*hbs).clone();
+        hbs.register_template_string("t", "{{t \"status\" active=true}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        assert_eq!(result, "Active: true");
+    }
+
+    #[test]
+    fn translation_helper_missing_key_returns_key() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        let mut hbs = (*hbs).clone();
+        hbs.register_template_string("t", "{{t \"nonexistent.key\"}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        // Missing keys should return the key itself as fallback
+        assert_eq!(result, "nonexistent.key");
+    }
+
+    // --- contains helper edge cases ---
+
+    #[test]
+    fn contains_helper_non_string_non_array_returns_false() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (contains haystack needle)}}YES{{else}}NO{{/if}}").unwrap();
+        // Number haystack
+        assert_eq!(hbs.render("t", &serde_json::json!({"haystack": 42, "needle": "4"})).unwrap(), "NO");
+        // Bool haystack
+        assert_eq!(hbs.render("t", &serde_json::json!({"haystack": true, "needle": "t"})).unwrap(), "NO");
+        // Null haystack
+        assert_eq!(hbs.render("t", &serde_json::json!({"haystack": null, "needle": "x"})).unwrap(), "NO");
+        // Object haystack
+        assert_eq!(hbs.render("t", &serde_json::json!({"haystack": {"a": 1}, "needle": "a"})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn contains_helper_string_with_non_string_needle() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (contains haystack needle)}}YES{{else}}NO{{/if}}").unwrap();
+        // Needle is a number — needle.as_str() returns None, so should be false
+        assert_eq!(hbs.render("t", &serde_json::json!({"haystack": "hello 42 world", "needle": 42})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn contains_helper_array_with_number_needle() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (contains arr val)}}YES{{else}}NO{{/if}}").unwrap();
+        // Array contains checks with JSON value equality
+        assert_eq!(hbs.render("t", &serde_json::json!({"arr": [1, 2, 3], "val": 2})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"arr": [1, 2, 3], "val": 4})).unwrap(), "NO");
+    }
+
+    // --- concat helper edge cases ---
+
+    #[test]
+    fn concat_helper_with_bools() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{concat a b}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "is:", "b": true})).unwrap(), "is:true");
+    }
+
+    #[test]
+    fn concat_helper_with_null() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{concat a b c}}").unwrap();
+        // Null values should produce nothing (empty)
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "hello", "b": null, "c": "world"})).unwrap(), "helloworld");
+    }
+
+    #[test]
+    fn concat_helper_with_array_value() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{concat a b}}").unwrap();
+        // Array gets serialized via other.to_string()
+        let result = hbs.render("t", &serde_json::json!({"a": "data:", "b": [1, 2]})).unwrap();
+        assert!(result.starts_with("data:"));
+        assert!(result.contains("[1,2]"));
+    }
+
+    #[test]
+    fn concat_helper_no_params() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{concat}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({})).unwrap(), "");
+    }
+
+    #[test]
+    fn concat_helper_single_param() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{concat a}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "only"})).unwrap(), "only");
+    }
+
+    // --- default helper edge cases ---
+
+    #[test]
+    fn default_helper_with_false_uses_fallback() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{default val fallback}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": false, "fallback": "fallback_val"})).unwrap(), "fallback_val");
+    }
+
+    #[test]
+    fn default_helper_with_zero_uses_fallback() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{default val fallback}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": 0, "fallback": "fallback_val"})).unwrap(), "fallback_val");
+    }
+
+    #[test]
+    fn default_helper_with_empty_array_uses_fallback() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{default val fallback}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": [], "fallback": "none"})).unwrap(), "none");
+    }
+
+    #[test]
+    fn default_helper_with_truthy_number() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{default val fallback}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": 42, "fallback": "nope"})).unwrap(), "42");
+    }
+
+    #[test]
+    fn default_helper_with_object_is_truthy() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (not (not val))}}TRUTHY{{else}}FALSY{{/if}}").unwrap();
+        // Empty object is truthy
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": {}})).unwrap(), "TRUTHY");
+    }
+
+    // --- comparison helpers with string numbers ---
+
+    #[test]
+    fn gt_helper_with_string_numbers() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (gt a b)}}YES{{else}}NO{{/if}}").unwrap();
+        // Strings should be parsed as f64 via as_f64
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "10", "b": "5"})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "3", "b": "7"})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn lt_helper_with_string_numbers() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (lt a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "2.5", "b": "3.5"})).unwrap(), "YES");
+    }
+
+    #[test]
+    fn gte_helper_with_equal_values() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (gte a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "5.0", "b": 5})).unwrap(), "YES");
+    }
+
+    #[test]
+    fn lte_helper_with_equal_values() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (lte a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 5, "b": "5.0"})).unwrap(), "YES");
+    }
+
+    #[test]
+    fn comparison_helpers_with_non_numeric_defaults_to_zero() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (gt a b)}}YES{{else}}NO{{/if}}").unwrap();
+        // Non-numeric values default to 0.0, so gt(null, null) is 0.0 > 0.0 = false
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": null, "b": null})).unwrap(), "NO");
+        // gt(1, null) is 1.0 > 0.0 = true
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 1, "b": null})).unwrap(), "YES");
+    }
+
+    // --- eq helper edge cases ---
+
+    #[test]
+    fn eq_helper_with_numbers() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (eq a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 42, "b": 42})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 42, "b": 43})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn eq_helper_with_null() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (eq a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": null, "b": null})).unwrap(), "YES");
+    }
+
+    #[test]
+    fn eq_helper_with_bool() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (eq a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": true, "b": true})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": true, "b": false})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn eq_helper_type_mismatch() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (eq a b)}}YES{{else}}NO{{/if}}").unwrap();
+        // String "42" vs number 42 should be NOT equal (different JSON types)
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "42", "b": 42})).unwrap(), "NO");
+    }
+
+    // --- not helper with more types ---
+
+    #[test]
+    fn not_helper_with_number() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": 0})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": 1})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": -1})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn not_helper_with_array() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": []})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": [1]})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn not_helper_with_object() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}").unwrap();
+        // Empty object is truthy
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": {}})).unwrap(), "NO");
+    }
+
+    // --- and/or with non-bool values ---
+
+    #[test]
+    fn and_helper_with_strings() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (and a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "hello", "b": "world"})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "hello", "b": ""})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn and_helper_with_numbers() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (and a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 1, "b": 2})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 1, "b": 0})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn or_helper_with_strings() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (or a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "", "b": ""})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "", "b": "x"})).unwrap(), "YES");
+    }
+
+    #[test]
+    fn or_helper_with_null_and_value() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (or a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": null, "b": null})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": null, "b": 1})).unwrap(), "YES");
+    }
+
+    // --- json helper edge cases ---
+
+    #[test]
+    fn json_helper_with_null() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{json val}}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({"val": null})).unwrap();
+        assert_eq!(result, "null");
+    }
+
+    #[test]
+    fn json_helper_with_array() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{json val}}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({"val": [1, "two", true]})).unwrap();
+        assert_eq!(result, r#"[1,"two",true]"#);
+    }
+
+    #[test]
+    fn json_helper_with_string() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{json val}}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({"val": "hello"})).unwrap();
+        assert_eq!(result, "\"hello\"");
+    }
+
+    #[test]
+    fn json_helper_with_no_param() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{json}}}").unwrap();
+        // No param -> defaults to null
+        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        assert_eq!(result, "null");
+    }
+
+    // --- is_truthy additional coverage ---
+
+    #[test]
+    fn is_truthy_float_zero() {
+        assert!(!is_truthy(&serde_json::json!(0.0)));
+        assert!(is_truthy(&serde_json::json!(0.1)));
+    }
+
+    // --- as_f64 additional coverage ---
+
+    #[test]
+    fn as_f64_with_array_returns_none() {
+        assert_eq!(as_f64(&serde_json::json!([1, 2, 3])), None);
+    }
+
+    #[test]
+    fn as_f64_with_object_returns_none() {
+        assert_eq!(as_f64(&serde_json::json!({"a": 1})), None);
+    }
+
+    #[test]
+    fn as_f64_with_negative_string() {
+        assert_eq!(as_f64(&serde_json::json!("-3.5")), Some(-3.5));
+    }
+
+    // --- register_embedded_templates coverage ---
+
+    #[test]
+    fn embedded_templates_include_dashboard() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        // The compiled-in templates should include dashboard/index
+        let result = hbs.render("dashboard/index", &serde_json::json!({
+            "title": "Dashboard",
+            "collections": [],
+            "globals": [],
+        }));
+        assert!(result.is_ok(), "dashboard/index should be registered: {:?}", result.err());
+    }
+
+    #[test]
+    fn embedded_templates_include_field_partials() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
+        // Field partials should be registered
+        let result = hbs.render("fields/text", &serde_json::json!({
+            "name": "test",
+            "label": "Test",
+            "value": "hello",
+        }));
+        assert!(result.is_ok(), "fields/text should be registered: {:?}", result.err());
+    }
+
+    // --- Combined helper tests ---
+
+    #[test]
+    fn nested_helpers_work() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (and (not a) (or b c))}}YES{{else}}NO{{/if}}").unwrap();
+        // not(false) = true, or(true, false) = true, and(true, true) = true
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": false, "b": true, "c": false})).unwrap(), "YES");
+        // not(true) = false, and(false, anything) = false
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": true, "b": true, "c": true})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn eq_with_contains_composition() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (and (eq status \"active\") (contains tags \"vip\"))}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({
+            "status": "active", "tags": ["vip", "premium"]
+        })).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({
+            "status": "inactive", "tags": ["vip", "premium"]
+        })).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({
+            "status": "active", "tags": ["basic"]
+        })).unwrap(), "NO");
+    }
 }

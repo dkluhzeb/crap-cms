@@ -11,6 +11,9 @@ use crate::db::query;
 use super::convert::document_to_proto;
 use super::ContentService;
 
+/// Untestable as unit: async methods require full ContentService with pool, registry,
+/// hook_runner, and JWT secret. Covered by integration tests in tests/grpc_integration.rs.
+#[cfg(not(tarpaulin_include))]
 impl ContentService {
     /// Authenticate with email/password and return a JWT token.
     pub(super) async fn login_impl(
@@ -18,6 +21,14 @@ impl ContentService {
         request: Request<content::LoginRequest>,
     ) -> Result<Response<content::LoginResponse>, Status> {
         let req = request.into_inner();
+
+        // Check rate limit before doing any work
+        if self.login_limiter.is_blocked(&req.email) {
+            return Err(Status::resource_exhausted(
+                "Too many login attempts. Please try again later."
+            ));
+        }
+
         let def = self.get_collection_def(&req.collection)?;
 
         if !def.is_auth_collection() {
@@ -37,12 +48,12 @@ impl ContentService {
             let doc = query::find_by_email(&conn, &slug, &def_owned, &email)?;
             let doc = match doc {
                 Some(d) => d,
-                None => return Ok(None),
+                None => { auth::dummy_verify(); return Ok(None); }
             };
             let hash = query::get_password_hash(&conn, &slug, &doc.id)?;
             let hash = match hash {
                 Some(h) => h,
-                None => return Ok(None),
+                None => { auth::dummy_verify(); return Ok(None); }
             };
             if !auth::verify_password(&password, &hash)? {
                 return Ok(None);
@@ -52,7 +63,13 @@ impl ContentService {
             .map_err(|e| Status::internal(format!("Task error: {}", e)))?
             .map_err(|e| Status::internal(format!("Login error: {}", e)))?;
 
-        let user = user.ok_or_else(|| Status::unauthenticated("Invalid email or password"))?;
+        let user = match user {
+            Some(u) => u,
+            None => {
+                self.login_limiter.record_failure(&req.email);
+                return Err(Status::unauthenticated("Invalid email or password"));
+            }
+        };
 
         // Check if account is locked
         {
@@ -108,6 +125,9 @@ impl ContentService {
 
         let token = auth::create_token(&claims, &self.jwt_secret)
             .map_err(|e| Status::internal(format!("Token error: {}", e)))?;
+
+        // Successful login — clear rate limit state
+        self.login_limiter.clear(&req.email);
 
         Ok(Response::new(content::LoginResponse {
             token,
@@ -286,7 +306,10 @@ impl ContentService {
         let found = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             match query::find_by_verification_token(&conn, &slug, &def_owned, &token)? {
-                Some(user) => {
+                Some((user, exp)) => {
+                    if chrono::Utc::now().timestamp() >= exp {
+                        return Ok(false); // Token expired
+                    }
                     query::mark_verified(&conn, &slug, &user.id)?;
                     Ok(true)
                 }

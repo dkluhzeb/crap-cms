@@ -18,6 +18,22 @@ crap.jobs.define("test_echo_job", {
     timeout = 30,
 })
 
+-- Test job with cron schedule (every minute)
+crap.jobs.define("test_cron_job", {
+    handler = "jobs.test_job.echo",
+    schedule = "* * * * *",
+    timeout = 30,
+    skip_if_running = true,
+})
+
+-- Test job with cron schedule and skip_if_running disabled
+crap.jobs.define("test_cron_nonskip", {
+    handler = "jobs.test_job.echo",
+    schedule = "* * * * *",
+    timeout = 30,
+    skip_if_running = false,
+})
+
 local M = {}
 
 function M.create_post(ctx)

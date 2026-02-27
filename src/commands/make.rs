@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Dispatch the `make` subcommand.
+#[cfg(not(tarpaulin_include))] // interactive dispatcher — uses dialoguer prompts
 pub fn run(action: super::MakeAction) -> Result<()> {
     match action {
         super::MakeAction::Collection { config, slug, fields, no_timestamps, auth, upload, versions, no_input, force } => {
@@ -48,6 +49,7 @@ pub fn run(action: super::MakeAction) -> Result<()> {
 }
 
 /// Handle the `make collection` subcommand — resolve missing args via interactive survey.
+#[cfg(not(tarpaulin_include))] // uses dialoguer prompts throughout
 pub(crate) fn make_collection_command(
     config_dir: &Path,
     slug: Option<String>,
@@ -204,6 +206,7 @@ pub(crate) fn make_collection_command(
 }
 
 /// Handle the `make hook` subcommand — resolve missing flags via interactive survey.
+#[cfg(not(tarpaulin_include))] // uses dialoguer prompts throughout
 fn make_hook_command(
     config_dir: &Path,
     name: Option<String>,
@@ -387,7 +390,7 @@ fn make_hook_command(
 }
 
 /// Check if localization is enabled in the config dir's crap.toml.
-fn has_locales_enabled(config_dir: &Path) -> bool {
+pub fn has_locales_enabled(config_dir: &Path) -> bool {
     let toml_path = config_dir.join("crap.toml");
     let content = std::fs::read_to_string(&toml_path).unwrap_or_default();
     let table: toml::Table = content.parse().unwrap_or_default();
@@ -399,7 +402,7 @@ fn has_locales_enabled(config_dir: &Path) -> bool {
 }
 
 /// Try to load collection slugs from the config dir for interactive selection.
-fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
+pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
     let config_dir = config_dir.canonicalize().ok()?;
     let cfg = crate::config::CrapConfig::load(&config_dir).ok()?;
     let registry = crate::hooks::init_lua(&config_dir, &cfg).ok()?;
@@ -410,7 +413,7 @@ fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
 }
 
 /// Try to load field names for a collection from the config dir.
-fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<String>> {
+pub fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<String>> {
     let config_dir = config_dir.canonicalize().ok()?;
     let cfg = crate::config::CrapConfig::load(&config_dir).ok()?;
     let registry = crate::hooks::init_lua(&config_dir, &cfg).ok()?;
@@ -420,7 +423,7 @@ fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<Strin
 }
 
 /// Try to load field definitions (name + type + options) for condition hook scaffolding.
-fn try_load_field_infos(config_dir: &Path, collection: &str) -> Option<Vec<crate::scaffold::ConditionFieldInfo>> {
+pub fn try_load_field_infos(config_dir: &Path, collection: &str) -> Option<Vec<crate::scaffold::ConditionFieldInfo>> {
     let config_dir = config_dir.canonicalize().ok()?;
     let cfg = crate::config::CrapConfig::load(&config_dir).ok()?;
     let registry = crate::hooks::init_lua(&config_dir, &cfg).ok()?;

@@ -143,3 +143,541 @@ pub(crate) fn check_field_write_access_with_lua(
     }
     denied
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::{FieldAccess, FieldType};
+    use mlua::Lua;
+
+    /// Set up a Lua VM with test access functions available via require/package.loaded.
+    fn setup_lua() -> Lua {
+        let lua = Lua::new();
+        lua.load(r#"
+            local access = {}
+
+            function access.allow(ctx)
+                return true
+            end
+
+            function access.deny(ctx)
+                return false
+            end
+
+            function access.return_nil(ctx)
+                return nil
+            end
+
+            function access.return_number(ctx)
+                return 42
+            end
+
+            function access.constrained_string(ctx)
+                return { status = "published" }
+            end
+
+            function access.constrained_integer(ctx)
+                return { priority = 1 }
+            end
+
+            function access.constrained_number(ctx)
+                return { score = 3.14 }
+            end
+
+            function access.constrained_ops(ctx)
+                return { score = { greater_than = "50" } }
+            end
+
+            function access.constrained_multi_ops(ctx)
+                return { score = { greater_than = "10", less_than = "100" } }
+            end
+
+            function access.constrained_ignore_bool(ctx)
+                return { active = true }
+            end
+
+            function access.check_user(ctx)
+                if ctx.user and ctx.user.role == "admin" then
+                    return true
+                end
+                return false
+            end
+
+            function access.check_id(ctx)
+                if ctx.id == "doc-123" then
+                    return true
+                end
+                return false
+            end
+
+            function access.check_data(ctx)
+                if ctx.data and ctx.data.title == "test" then
+                    return true
+                end
+                return false
+            end
+
+            function access.throw_error(ctx)
+                error("access check failed!")
+            end
+
+            package.loaded["test_access"] = access
+        "#).exec().unwrap();
+        lua
+    }
+
+    fn make_field(name: &str, access: FieldAccess) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Text,
+            access,
+            ..Default::default()
+        }
+    }
+
+    fn make_user_doc(role: &str) -> Document {
+        let mut fields = HashMap::new();
+        fields.insert("role".to_string(), serde_json::json!(role));
+        fields.insert("email".to_string(), serde_json::json!("user@test.com"));
+        Document {
+            id: "user-1".to_string(),
+            fields,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    // ── check_access_with_lua ───────────────────────────────────────────
+
+    #[test]
+    fn access_none_ref_returns_allowed() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, None, None, None, None).unwrap();
+        assert!(matches!(result, AccessResult::Allowed));
+    }
+
+    #[test]
+    fn access_returns_true_is_allowed() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.allow"), None, None, None).unwrap();
+        assert!(matches!(result, AccessResult::Allowed));
+    }
+
+    #[test]
+    fn access_returns_false_is_denied() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.deny"), None, None, None).unwrap();
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
+    #[test]
+    fn access_returns_nil_is_denied() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.return_nil"), None, None, None).unwrap();
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
+    #[test]
+    fn access_returns_unexpected_type_is_denied() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.return_number"), None, None, None).unwrap();
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
+    #[test]
+    fn access_constrained_string_value() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.constrained_string"), None, None, None).unwrap();
+        match result {
+            AccessResult::Constrained(clauses) => {
+                assert_eq!(clauses.len(), 1);
+                match &clauses[0] {
+                    FilterClause::Single(f) => {
+                        assert_eq!(f.field, "status");
+                        assert!(matches!(&f.op, FilterOp::Equals(v) if v == "published"));
+                    }
+                    _ => panic!("expected Single clause"),
+                }
+            }
+            _ => panic!("expected Constrained"),
+        }
+    }
+
+    #[test]
+    fn access_constrained_integer_value() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.constrained_integer"), None, None, None).unwrap();
+        match result {
+            AccessResult::Constrained(clauses) => {
+                assert_eq!(clauses.len(), 1);
+                match &clauses[0] {
+                    FilterClause::Single(f) => {
+                        assert_eq!(f.field, "priority");
+                        assert!(matches!(&f.op, FilterOp::Equals(v) if v == "1"));
+                    }
+                    _ => panic!("expected Single clause"),
+                }
+            }
+            _ => panic!("expected Constrained"),
+        }
+    }
+
+    #[test]
+    fn access_constrained_number_value() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.constrained_number"), None, None, None).unwrap();
+        match result {
+            AccessResult::Constrained(clauses) => {
+                assert_eq!(clauses.len(), 1);
+                match &clauses[0] {
+                    FilterClause::Single(f) => {
+                        assert_eq!(f.field, "score");
+                        assert!(matches!(&f.op, FilterOp::Equals(v) if v == "3.14"));
+                    }
+                    _ => panic!("expected Single clause"),
+                }
+            }
+            _ => panic!("expected Constrained"),
+        }
+    }
+
+    #[test]
+    fn access_constrained_with_operator_table() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.constrained_ops"), None, None, None).unwrap();
+        match result {
+            AccessResult::Constrained(clauses) => {
+                assert_eq!(clauses.len(), 1);
+                match &clauses[0] {
+                    FilterClause::Single(f) => {
+                        assert_eq!(f.field, "score");
+                        assert!(matches!(&f.op, FilterOp::GreaterThan(v) if v == "50"));
+                    }
+                    _ => panic!("expected Single clause"),
+                }
+            }
+            _ => panic!("expected Constrained"),
+        }
+    }
+
+    #[test]
+    fn access_constrained_multi_ops() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.constrained_multi_ops"), None, None, None).unwrap();
+        match result {
+            AccessResult::Constrained(clauses) => {
+                assert_eq!(clauses.len(), 2);
+                // Both should be Single clauses for "score"
+                for clause in &clauses {
+                    match clause {
+                        FilterClause::Single(f) => assert_eq!(f.field, "score"),
+                        _ => panic!("expected Single clause"),
+                    }
+                }
+            }
+            _ => panic!("expected Constrained"),
+        }
+    }
+
+    #[test]
+    fn access_constrained_ignores_bool_values() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.constrained_ignore_bool"), None, None, None).unwrap();
+        // Boolean values in the constraint table hit the _ => {} branch — no clauses added
+        match result {
+            AccessResult::Constrained(clauses) => {
+                assert!(clauses.is_empty());
+            }
+            _ => panic!("expected Constrained (empty)"),
+        }
+    }
+
+    #[test]
+    fn access_passes_user_context() {
+        let lua = setup_lua();
+        let admin = make_user_doc("admin");
+        let result = check_access_with_lua(&lua, Some("test_access.check_user"), Some(&admin), None, None).unwrap();
+        assert!(matches!(result, AccessResult::Allowed));
+
+        let viewer = make_user_doc("viewer");
+        let result = check_access_with_lua(&lua, Some("test_access.check_user"), Some(&viewer), None, None).unwrap();
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
+    #[test]
+    fn access_passes_no_user() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.check_user"), None, None, None).unwrap();
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
+    #[test]
+    fn access_passes_id_context() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.check_id"), None, Some("doc-123"), None).unwrap();
+        assert!(matches!(result, AccessResult::Allowed));
+
+        let result = check_access_with_lua(&lua, Some("test_access.check_id"), None, Some("doc-other"), None).unwrap();
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
+    #[test]
+    fn access_passes_data_context() {
+        let lua = setup_lua();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), serde_json::json!("test"));
+        let result = check_access_with_lua(&lua, Some("test_access.check_data"), None, None, Some(&data)).unwrap();
+        assert!(matches!(result, AccessResult::Allowed));
+
+        let mut bad_data = HashMap::new();
+        bad_data.insert("title".to_string(), serde_json::json!("other"));
+        let result = check_access_with_lua(&lua, Some("test_access.check_data"), None, None, Some(&bad_data)).unwrap();
+        assert!(matches!(result, AccessResult::Denied));
+    }
+
+    #[test]
+    fn access_error_propagates() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("test_access.throw_error"), None, None, None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn access_invalid_ref_errors() {
+        let lua = setup_lua();
+        let result = check_access_with_lua(&lua, Some("nonexistent_module.func"), None, None, None);
+        assert!(result.is_err());
+    }
+
+    // ── check_field_read_access_with_lua ────────────────────────────────
+
+    #[test]
+    fn field_read_no_access_config_allows_all() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("title", FieldAccess::default()),
+            make_field("body", FieldAccess::default()),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn field_read_allowed_not_in_denied() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("title", FieldAccess {
+                read: Some("test_access.allow".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn field_read_denied_in_list() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("secret", FieldAccess {
+                read: Some("test_access.deny".to_string()),
+                ..Default::default()
+            }),
+            make_field("title", FieldAccess::default()),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert_eq!(denied, vec!["secret"]);
+    }
+
+    #[test]
+    fn field_read_constrained_counts_as_allowed() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("status", FieldAccess {
+                read: Some("test_access.constrained_string".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn field_read_error_counts_as_denied() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("broken", FieldAccess {
+                read: Some("test_access.throw_error".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert_eq!(denied, vec!["broken"]);
+    }
+
+    #[test]
+    fn field_read_mixed_access() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("public", FieldAccess {
+                read: Some("test_access.allow".to_string()),
+                ..Default::default()
+            }),
+            make_field("secret", FieldAccess {
+                read: Some("test_access.deny".to_string()),
+                ..Default::default()
+            }),
+            make_field("plain", FieldAccess::default()),
+        ];
+        let denied = check_field_read_access_with_lua(&lua, &fields, None);
+        assert_eq!(denied, vec!["secret"]);
+    }
+
+    #[test]
+    fn field_read_with_user_context() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("admin_only", FieldAccess {
+                read: Some("test_access.check_user".to_string()),
+                ..Default::default()
+            }),
+        ];
+
+        let admin = make_user_doc("admin");
+        let denied = check_field_read_access_with_lua(&lua, &fields, Some(&admin));
+        assert!(denied.is_empty());
+
+        let viewer = make_user_doc("viewer");
+        let denied = check_field_read_access_with_lua(&lua, &fields, Some(&viewer));
+        assert_eq!(denied, vec!["admin_only"]);
+    }
+
+    // ── check_field_write_access_with_lua ───────────────────────────────
+
+    #[test]
+    fn field_write_no_access_config_allows_all() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("title", FieldAccess::default()),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert!(denied.is_empty());
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "update");
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn field_write_create_denied() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("locked", FieldAccess {
+                create: Some("test_access.deny".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert_eq!(denied, vec!["locked"]);
+    }
+
+    #[test]
+    fn field_write_update_denied() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("immutable", FieldAccess {
+                update: Some("test_access.deny".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "update");
+        assert_eq!(denied, vec!["immutable"]);
+    }
+
+    #[test]
+    fn field_write_create_allowed() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("title", FieldAccess {
+                create: Some("test_access.allow".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn field_write_unknown_operation_allows() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("title", FieldAccess {
+                create: Some("test_access.deny".to_string()),
+                update: Some("test_access.deny".to_string()),
+                ..Default::default()
+            }),
+        ];
+        // Unknown operation = None access_ref = allowed (no restriction)
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "delete");
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn field_write_error_counts_as_denied() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("broken", FieldAccess {
+                create: Some("test_access.throw_error".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert_eq!(denied, vec!["broken"]);
+    }
+
+    #[test]
+    fn field_write_create_vs_update_different_access() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("role", FieldAccess {
+                create: Some("test_access.allow".to_string()),
+                update: Some("test_access.deny".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert!(denied.is_empty());
+
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "update");
+        assert_eq!(denied, vec!["role"]);
+    }
+
+    #[test]
+    fn field_write_constrained_counts_as_allowed() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("status", FieldAccess {
+                create: Some("test_access.constrained_string".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let denied = check_field_write_access_with_lua(&lua, &fields, None, "create");
+        assert!(denied.is_empty());
+    }
+
+    #[test]
+    fn field_write_with_user_context() {
+        let lua = setup_lua();
+        let fields = vec![
+            make_field("admin_only", FieldAccess {
+                update: Some("test_access.check_user".to_string()),
+                ..Default::default()
+            }),
+        ];
+        let admin = make_user_doc("admin");
+        let denied = check_field_write_access_with_lua(&lua, &fields, Some(&admin), "update");
+        assert!(denied.is_empty());
+
+        let viewer = make_user_doc("viewer");
+        let denied = check_field_write_access_with_lua(&lua, &fields, Some(&viewer), "update");
+        assert_eq!(denied, vec!["admin_only"]);
+    }
+}

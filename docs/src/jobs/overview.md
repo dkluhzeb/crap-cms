@@ -97,6 +97,10 @@ job result (JSON). If it errors, the job is marked failed (and retried if attemp
 - **Timeout**: Jobs running longer than `timeout` are marked failed
 - **Skip-if-running**: Cron-triggered jobs skip if a previous run is still active
 
+## Error Handling
+
+Job execution is fully isolated. If a job handler panics, the panic is caught and logged — it does not crash the server or affect other jobs. The job is marked as failed and retried if attempts remain.
+
 ## Crash Recovery
 
 On startup, the scheduler marks any previously-running jobs as stale (the server was

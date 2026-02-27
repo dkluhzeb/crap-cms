@@ -344,4 +344,258 @@ mod tests {
         let result = delete(&conn, "posts", "does-not-exist");
         assert!(result.is_ok(), "Deleting non-existent ID should not error");
     }
+
+    #[test]
+    fn create_with_group_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                meta__color TEXT,
+                meta__size TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )"
+        ).unwrap();
+
+        let def = CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                FieldDefinition {
+                    name: "title".to_string(),
+                    ..Default::default()
+                },
+                FieldDefinition {
+                    name: "meta".to_string(),
+                    field_type: FieldType::Group,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "color".to_string(),
+                            ..Default::default()
+                        },
+                        FieldDefinition {
+                            name: "size".to_string(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Post1".to_string());
+        data.insert("meta__color".to_string(), "red".to_string());
+        data.insert("meta__size".to_string(), "large".to_string());
+
+        let doc = create(&conn, "posts", &def, &data, None).unwrap();
+        assert_eq!(doc.get_str("title"), Some("Post1"));
+        // Group sub-fields stored as prefixed columns
+        assert_eq!(doc.get_str("meta__color"), Some("red"));
+        assert_eq!(doc.get_str("meta__size"), Some("large"));
+    }
+
+    #[test]
+    fn create_without_timestamps() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                name TEXT
+            )"
+        ).unwrap();
+
+        let def = CollectionDefinition {
+            slug: "events".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: false,
+            fields: vec![
+                FieldDefinition {
+                    name: "name".to_string(),
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), "Event1".to_string());
+
+        let doc = create(&conn, "events", &def, &data, None).unwrap();
+        assert_eq!(doc.get_str("name"), Some("Event1"));
+        assert!(doc.created_at.is_none(), "no timestamps collection should have no created_at");
+        assert!(doc.updated_at.is_none(), "no timestamps collection should have no updated_at");
+    }
+
+    #[test]
+    fn update_with_group_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                meta__color TEXT,
+                meta__size TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts (id, meta__color, meta__size, created_at, updated_at)
+            VALUES ('p1', 'blue', 'small', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let def = CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                FieldDefinition {
+                    name: "meta".to_string(),
+                    field_type: FieldType::Group,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "color".to_string(),
+                            ..Default::default()
+                        },
+                        FieldDefinition {
+                            name: "size".to_string(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut data = HashMap::new();
+        data.insert("meta__color".to_string(), "green".to_string());
+
+        let doc = update(&conn, "posts", &def, "p1", &data, None).unwrap();
+        assert_eq!(doc.get_str("meta__color"), Some("green"));
+        // Unset sub-field should be preserved
+        assert_eq!(doc.get_str("meta__size"), Some("small"));
+    }
+
+    #[test]
+    fn update_without_timestamps() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                name TEXT
+            );
+            INSERT INTO events (id, name) VALUES ('e1', 'Original');"
+        ).unwrap();
+
+        let def = CollectionDefinition {
+            slug: "events".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: false,
+            fields: vec![
+                FieldDefinition {
+                    name: "name".to_string(),
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), "Updated".to_string());
+
+        let doc = update(&conn, "events", &def, "e1", &data, None).unwrap();
+        assert_eq!(doc.get_str("name"), Some("Updated"));
+    }
+
+    #[test]
+    fn update_empty_data_returns_existing() {
+        let conn = setup_db();
+        let def = test_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "MyTitle".to_string());
+        let doc = create(&conn, "posts", &def, &data, None).unwrap();
+        let id = doc.id.clone();
+
+        // Update with no data and timestamps disabled — should return existing doc
+        let no_ts_def = CollectionDefinition {
+            timestamps: false,
+            ..test_def()
+        };
+        let empty_data = HashMap::new();
+        let result = update(&conn, "posts", &no_ts_def, &id, &empty_data, None).unwrap();
+        assert_eq!(result.get_str("title"), Some("MyTitle"));
+    }
+
+    #[test]
+    fn create_group_with_checkbox_sub_field_default() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                settings__featured INTEGER DEFAULT 0,
+                created_at TEXT,
+                updated_at TEXT
+            )"
+        ).unwrap();
+
+        let def = CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                FieldDefinition {
+                    name: "settings".to_string(),
+                    field_type: FieldType::Group,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "featured".to_string(),
+                            field_type: FieldType::Checkbox,
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        // Create without providing the checkbox group sub-field — should default to 0
+        let data = HashMap::new();
+        let doc = create(&conn, "posts", &def, &data, None).unwrap();
+        let val = doc.get("settings__featured").unwrap();
+        assert_eq!(val, &serde_json::json!(0));
+    }
 }

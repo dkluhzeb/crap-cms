@@ -8,6 +8,11 @@ Default: [http://localhost:3000/admin](http://localhost:3000/admin)
 
 When auth collections are configured, the admin UI requires login. Without auth collections, it's fully open.
 
+**Security features:**
+- CSRF protection on all forms and HTMX requests (double-submit cookie pattern)
+- `Secure` flag on session cookies in production (`dev_mode = false`)
+- Rate limiting on login (configurable max attempts and lockout duration)
+
 ## Technology
 
 - **Axum** web framework for routing and middleware

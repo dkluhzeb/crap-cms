@@ -37,21 +37,37 @@ pub async fn start_server(
     let email_renderer = std::sync::Arc::new(
         crate::core::email::EmailRenderer::new(config_dir)?
     );
+    let login_limiter = std::sync::Arc::new(
+        crate::core::rate_limit::LoginRateLimiter::new(
+            config.auth.max_login_attempts,
+            config.auth.login_lockout_seconds,
+        )
+    );
     let content_service = service::ContentService::new(
         pool, registry, hook_runner, jwt_secret, depth_config,
         config.email.clone(), email_renderer, config.server.clone(),
         event_bus, config.locale.clone(), config_dir.to_path_buf(),
+        login_limiter,
     );
 
     let reflection_service = tonic_reflection::server::Builder::configure()
         .register_encoded_file_descriptor_set(content::FILE_DESCRIPTOR_SET)
         .build_v1()?;
 
-    Server::builder()
-        .add_service(reflection_service)
-        .add_service(content::content_api_server::ContentApiServer::new(content_service))
-        .serve(addr)
-        .await?;
+    if let Some(cors) = config.cors.build_layer() {
+        Server::builder()
+            .layer(cors)
+            .add_service(reflection_service)
+            .add_service(content::content_api_server::ContentApiServer::new(content_service))
+            .serve(addr)
+            .await?;
+    } else {
+        Server::builder()
+            .add_service(reflection_service)
+            .add_service(content::content_api_server::ContentApiServer::new(content_service))
+            .serve(addr)
+            .await?;
+    }
 
     Ok(())
 }

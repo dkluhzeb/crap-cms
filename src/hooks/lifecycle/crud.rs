@@ -29,6 +29,9 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const rusqlite::Connection
 
 /// Register the CRUD functions on `crap.collections` and `crap.globals`.
 /// They read the active connection from Lua app_data (set by `run_hooks_with_conn`).
+/// Untestable as unit: registers Lua closures that require TxContext + full DB.
+/// Covered by integration tests (hook CRUD operations in tests/).
+#[cfg(not(tarpaulin_include))]
 pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &LocaleConfig, _max_depth: u32) -> Result<()> {
     let crap: mlua::Table = lua.globals().get("crap")?;
     let collections: mlua::Table = crap.get("collections")?;
@@ -1490,4 +1493,464 @@ pub(crate) fn find_result_to_lua(lua: &Lua, docs: &[crate::core::Document], tota
     tbl.set("documents", docs_tbl)?;
     tbl.set("total", total)?;
     Ok(tbl)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mlua::Lua;
+    use crate::core::field::{FieldDefinition, FieldType};
+
+    // --- lua_parse_filter_op tests ---
+
+    #[test]
+    fn test_filter_op_equals() {
+        let lua = Lua::new();
+        let s = lua.create_string("hello").unwrap();
+        let op = lua_parse_filter_op("equals", &Value::String(s)).unwrap();
+        assert!(matches!(op, FilterOp::Equals(ref v) if v == "hello"));
+    }
+
+    #[test]
+    fn test_filter_op_not_equals() {
+        let lua = Lua::new();
+        let s = lua.create_string("world").unwrap();
+        let op = lua_parse_filter_op("not_equals", &Value::String(s)).unwrap();
+        assert!(matches!(op, FilterOp::NotEquals(ref v) if v == "world"));
+    }
+
+    #[test]
+    fn test_filter_op_contains() {
+        let lua = Lua::new();
+        let s = lua.create_string("search").unwrap();
+        let op = lua_parse_filter_op("contains", &Value::String(s)).unwrap();
+        assert!(matches!(op, FilterOp::Contains(ref v) if v == "search"));
+    }
+
+    #[test]
+    fn test_filter_op_like() {
+        let lua = Lua::new();
+        let s = lua.create_string("%pattern%").unwrap();
+        let op = lua_parse_filter_op("like", &Value::String(s)).unwrap();
+        assert!(matches!(op, FilterOp::Like(ref v) if v == "%pattern%"));
+    }
+
+    #[test]
+    fn test_filter_op_greater_than() {
+        let op = lua_parse_filter_op("greater_than", &Value::Integer(10)).unwrap();
+        assert!(matches!(op, FilterOp::GreaterThan(ref v) if v == "10"));
+    }
+
+    #[test]
+    fn test_filter_op_less_than() {
+        let op = lua_parse_filter_op("less_than", &Value::Integer(5)).unwrap();
+        assert!(matches!(op, FilterOp::LessThan(ref v) if v == "5"));
+    }
+
+    #[test]
+    fn test_filter_op_greater_than_or_equal() {
+        let op = lua_parse_filter_op("greater_than_or_equal", &Value::Number(3.14)).unwrap();
+        assert!(matches!(op, FilterOp::GreaterThanOrEqual(ref v) if v == "3.14"));
+    }
+
+    #[test]
+    fn test_filter_op_less_than_or_equal() {
+        let op = lua_parse_filter_op("less_than_or_equal", &Value::Boolean(true)).unwrap();
+        assert!(matches!(op, FilterOp::LessThanOrEqual(ref v) if v == "true"));
+    }
+
+    #[test]
+    fn test_filter_op_in() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set(1, "a").unwrap();
+        tbl.set(2, "b").unwrap();
+        tbl.set(3, "c").unwrap();
+        let op = lua_parse_filter_op("in", &Value::Table(tbl)).unwrap();
+        match op {
+            FilterOp::In(vals) => assert_eq!(vals, vec!["a", "b", "c"]),
+            _ => panic!("Expected In"),
+        }
+    }
+
+    #[test]
+    fn test_filter_op_not_in() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set(1, "x").unwrap();
+        tbl.set(2, "y").unwrap();
+        let op = lua_parse_filter_op("not_in", &Value::Table(tbl)).unwrap();
+        match op {
+            FilterOp::NotIn(vals) => assert_eq!(vals, vec!["x", "y"]),
+            _ => panic!("Expected NotIn"),
+        }
+    }
+
+    #[test]
+    fn test_filter_op_in_requires_table() {
+        let result = lua_parse_filter_op("in", &Value::Integer(42));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_filter_op_not_in_requires_table() {
+        let result = lua_parse_filter_op("not_in", &Value::Integer(42));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_filter_op_exists() {
+        let op = lua_parse_filter_op("exists", &Value::Nil).unwrap();
+        assert!(matches!(op, FilterOp::Exists));
+    }
+
+    #[test]
+    fn test_filter_op_not_exists() {
+        let op = lua_parse_filter_op("not_exists", &Value::Nil).unwrap();
+        assert!(matches!(op, FilterOp::NotExists));
+    }
+
+    #[test]
+    fn test_filter_op_unknown() {
+        let result = lua_parse_filter_op("bogus", &Value::Nil);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unknown filter operator"));
+    }
+
+    // --- lua_table_to_hashmap tests ---
+
+    #[test]
+    fn test_hashmap_from_strings() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("title", "Hello").unwrap();
+        tbl.set("slug", "hello").unwrap();
+        let map = lua_table_to_hashmap(&tbl).unwrap();
+        assert_eq!(map.get("title").unwrap(), "Hello");
+        assert_eq!(map.get("slug").unwrap(), "hello");
+    }
+
+    #[test]
+    fn test_hashmap_from_mixed_types() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("title", "Hello").unwrap();
+        tbl.set("count", 42).unwrap();
+        tbl.set("ratio", 3.14).unwrap();
+        tbl.set("active", true).unwrap();
+        let map = lua_table_to_hashmap(&tbl).unwrap();
+        assert_eq!(map.get("title").unwrap(), "Hello");
+        assert_eq!(map.get("count").unwrap(), "42");
+        assert_eq!(map.get("ratio").unwrap(), "3.14");
+        assert_eq!(map.get("active").unwrap(), "true");
+    }
+
+    #[test]
+    fn test_hashmap_skips_nil() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("title", "Hello").unwrap();
+        // Nil values are skipped
+        let map = lua_table_to_hashmap(&tbl).unwrap();
+        assert_eq!(map.len(), 1);
+    }
+
+    // --- flatten_lua_groups tests ---
+
+    #[test]
+    fn test_flatten_groups_basic() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let seo = lua.create_table().unwrap();
+        seo.set("meta_title", "My Title").unwrap();
+        seo.set("meta_description", "My Desc").unwrap();
+        tbl.set("seo", seo).unwrap();
+        tbl.set("title", "Hello").unwrap();
+
+        let fields = vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition {
+                        name: "meta_title".to_string(),
+                        field_type: FieldType::Text,
+                        ..Default::default()
+                    },
+                    FieldDefinition {
+                        name: "meta_description".to_string(),
+                        field_type: FieldType::Textarea,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: FieldType::Text,
+                ..Default::default()
+            },
+        ];
+
+        let mut data = HashMap::new();
+        flatten_lua_groups(&tbl, &fields, &mut data).unwrap();
+        assert_eq!(data.get("seo__meta_title").unwrap(), "My Title");
+        assert_eq!(data.get("seo__meta_description").unwrap(), "My Desc");
+        // Non-group fields are not touched
+        assert!(!data.contains_key("title"));
+    }
+
+    #[test]
+    fn test_flatten_groups_missing_subtable() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        // No "seo" key at all
+
+        let fields = vec![FieldDefinition {
+            name: "seo".to_string(),
+            field_type: FieldType::Group,
+            fields: vec![FieldDefinition {
+                name: "meta_title".to_string(),
+                field_type: FieldType::Text,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+
+        let mut data = HashMap::new();
+        flatten_lua_groups(&tbl, &fields, &mut data).unwrap();
+        assert!(data.is_empty());
+    }
+
+    #[test]
+    fn test_flatten_groups_numeric_values() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let metrics = lua.create_table().unwrap();
+        metrics.set("views", 100).unwrap();
+        metrics.set("rating", 4.5).unwrap();
+        tbl.set("metrics", metrics).unwrap();
+
+        let fields = vec![FieldDefinition {
+            name: "metrics".to_string(),
+            field_type: FieldType::Group,
+            fields: vec![
+                FieldDefinition {
+                    name: "views".to_string(),
+                    field_type: FieldType::Number,
+                    ..Default::default()
+                },
+                FieldDefinition {
+                    name: "rating".to_string(),
+                    field_type: FieldType::Number,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }];
+
+        let mut data = HashMap::new();
+        flatten_lua_groups(&tbl, &fields, &mut data).unwrap();
+        assert_eq!(data.get("metrics__views").unwrap(), "100");
+        assert_eq!(data.get("metrics__rating").unwrap(), "4.5");
+    }
+
+    // --- document_to_lua_table tests ---
+
+    #[test]
+    fn test_document_to_lua_basic() {
+        let lua = Lua::new();
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), serde_json::json!("Hello"));
+        fields.insert("count".to_string(), serde_json::json!(42));
+
+        let doc = crate::core::Document {
+            id: "abc123".to_string(),
+            fields,
+            created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2024-01-02T00:00:00Z".to_string()),
+        };
+
+        let tbl = document_to_lua_table(&lua, &doc).unwrap();
+        let id: String = tbl.get("id").unwrap();
+        let title: String = tbl.get("title").unwrap();
+        let count: i64 = tbl.get("count").unwrap();
+        let created: String = tbl.get("created_at").unwrap();
+        let updated: String = tbl.get("updated_at").unwrap();
+        assert_eq!(id, "abc123");
+        assert_eq!(title, "Hello");
+        assert_eq!(count, 42);
+        assert_eq!(created, "2024-01-01T00:00:00Z");
+        assert_eq!(updated, "2024-01-02T00:00:00Z");
+    }
+
+    #[test]
+    fn test_document_to_lua_no_timestamps() {
+        let lua = Lua::new();
+        let doc = crate::core::Document {
+            id: "xyz".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        };
+
+        let tbl = document_to_lua_table(&lua, &doc).unwrap();
+        let id: String = tbl.get("id").unwrap();
+        assert_eq!(id, "xyz");
+        // No timestamps set
+        let created: Value = tbl.get("created_at").unwrap();
+        assert!(matches!(created, Value::Nil));
+    }
+
+    // --- find_result_to_lua tests ---
+
+    #[test]
+    fn test_find_result_to_lua_basic() {
+        let lua = Lua::new();
+        let docs = vec![
+            crate::core::Document {
+                id: "a".to_string(),
+                fields: HashMap::new(),
+                created_at: None,
+                updated_at: None,
+            },
+            crate::core::Document {
+                id: "b".to_string(),
+                fields: HashMap::new(),
+                created_at: None,
+                updated_at: None,
+            },
+        ];
+
+        let tbl = find_result_to_lua(&lua, &docs, 10).unwrap();
+        let total: i64 = tbl.get("total").unwrap();
+        assert_eq!(total, 10);
+        let docs_tbl: mlua::Table = tbl.get("documents").unwrap();
+        assert_eq!(docs_tbl.raw_len(), 2);
+        let first: mlua::Table = docs_tbl.get(1).unwrap();
+        let id: String = first.get("id").unwrap();
+        assert_eq!(id, "a");
+    }
+
+    #[test]
+    fn test_find_result_to_lua_empty() {
+        let lua = Lua::new();
+        let tbl = find_result_to_lua(&lua, &[], 0).unwrap();
+        let total: i64 = tbl.get("total").unwrap();
+        assert_eq!(total, 0);
+        let docs_tbl: mlua::Table = tbl.get("documents").unwrap();
+        assert_eq!(docs_tbl.raw_len(), 0);
+    }
+
+    // --- lua_table_to_find_query tests ---
+
+    #[test]
+    fn test_find_query_empty() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let query = lua_table_to_find_query(&tbl).unwrap();
+        assert!(query.filters.is_empty());
+        assert!(query.order_by.is_none());
+        assert!(query.limit.is_none());
+        assert!(query.offset.is_none());
+        assert!(query.select.is_none());
+    }
+
+    #[test]
+    fn test_find_query_with_pagination() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("limit", 10i64).unwrap();
+        tbl.set("offset", 20i64).unwrap();
+        tbl.set("order_by", "-created_at").unwrap();
+        let query = lua_table_to_find_query(&tbl).unwrap();
+        assert_eq!(query.limit, Some(10));
+        assert_eq!(query.offset, Some(20));
+        assert_eq!(query.order_by.as_deref(), Some("-created_at"));
+    }
+
+    #[test]
+    fn test_find_query_with_select() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let select = lua.create_table().unwrap();
+        select.set(1, "title").unwrap();
+        select.set(2, "slug").unwrap();
+        tbl.set("select", select).unwrap();
+        let query = lua_table_to_find_query(&tbl).unwrap();
+        assert_eq!(query.select.as_ref().unwrap(), &["title", "slug"]);
+    }
+
+    #[test]
+    fn test_find_query_with_simple_filter() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let filters = lua.create_table().unwrap();
+        filters.set("status", "published").unwrap();
+        tbl.set("filters", filters).unwrap();
+        let query = lua_table_to_find_query(&tbl).unwrap();
+        assert_eq!(query.filters.len(), 1);
+        match &query.filters[0] {
+            FilterClause::Single(f) => {
+                assert_eq!(f.field, "status");
+                assert!(matches!(&f.op, FilterOp::Equals(v) if v == "published"));
+            }
+            _ => panic!("Expected Single filter"),
+        }
+    }
+
+    #[test]
+    fn test_find_query_with_operator_filter() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let filters = lua.create_table().unwrap();
+        let op = lua.create_table().unwrap();
+        op.set("contains", "hello").unwrap();
+        filters.set("title", op).unwrap();
+        tbl.set("filters", filters).unwrap();
+        let query = lua_table_to_find_query(&tbl).unwrap();
+        assert_eq!(query.filters.len(), 1);
+        match &query.filters[0] {
+            FilterClause::Single(f) => {
+                assert_eq!(f.field, "title");
+                assert!(matches!(&f.op, FilterOp::Contains(v) if v == "hello"));
+            }
+            _ => panic!("Expected Single filter"),
+        }
+    }
+
+    // --- lua_table_to_json_map tests ---
+
+    #[test]
+    fn test_json_map_basic() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("title", "Hello").unwrap();
+        tbl.set("count", 42).unwrap();
+        tbl.set("active", true).unwrap();
+        let map = lua_table_to_json_map(&lua, &tbl).unwrap();
+        assert_eq!(map.get("title").unwrap(), &serde_json::json!("Hello"));
+        assert_eq!(map.get("count").unwrap(), &serde_json::json!(42));
+        assert_eq!(map.get("active").unwrap(), &serde_json::json!(true));
+    }
+
+    #[test]
+    fn test_json_map_skips_nil() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("title", "Hello").unwrap();
+        // Setting a key to nil removes it from Lua table iteration
+        let map = lua_table_to_json_map(&lua, &tbl).unwrap();
+        assert_eq!(map.len(), 1);
+    }
+
+    // --- get_tx_conn tests ---
+
+    #[test]
+    fn test_get_tx_conn_without_context() {
+        let lua = Lua::new();
+        let result = get_tx_conn(&lua);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("only available inside hooks"));
+    }
 }

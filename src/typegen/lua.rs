@@ -449,4 +449,146 @@ mod tests {
         let output = render(&registry);
         assert!(!output.contains("crap.collections.find"));
     }
+
+    #[test]
+    fn lua_relationship_has_many() {
+        let f = FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Relationship,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "tags".to_string(),
+                has_many: true,
+                max_depth: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string[]");
+    }
+
+    #[test]
+    fn lua_relationship_has_one() {
+        let f = FieldDefinition {
+            name: "author".to_string(),
+            field_type: FieldType::Relationship,
+            required: true,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "users".to_string(),
+                has_many: false,
+                max_depth: None,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string");
+    }
+
+    #[test]
+    fn lua_array_type() {
+        let f = FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![text_field("label", true)],
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "crap.array_row.Items[]");
+    }
+
+    #[test]
+    fn lua_group_type() {
+        let f = FieldDefinition {
+            name: "seo".to_string(),
+            field_type: FieldType::Group,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "table");
+    }
+
+    #[test]
+    fn lua_upload_type() {
+        let f = FieldDefinition {
+            name: "image".to_string(),
+            field_type: FieldType::Upload,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string");
+    }
+
+    #[test]
+    fn lua_blocks_type() {
+        let f = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "table[]");
+    }
+
+    #[test]
+    fn lua_email_type() {
+        let f = FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string");
+    }
+
+    #[test]
+    fn lua_date_type() {
+        let f = FieldDefinition {
+            name: "at".to_string(),
+            field_type: FieldType::Date,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string");
+    }
+
+    #[test]
+    fn lua_richtext_type() {
+        let f = FieldDefinition {
+            name: "body".to_string(),
+            field_type: FieldType::Richtext,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string");
+    }
+
+    #[test]
+    fn lua_textarea_type() {
+        let f = FieldDefinition {
+            name: "notes".to_string(),
+            field_type: FieldType::Textarea,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string");
+    }
+
+    #[test]
+    fn render_collection_with_array_subtype() {
+        let col = CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: false,
+            fields: vec![
+                FieldDefinition {
+                    name: "items".to_string(),
+                    field_type: FieldType::Array,
+                    fields: vec![
+                        text_field("label", true),
+                        text_field("desc", false),
+                    ],
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None, upload: None,
+            access: CollectionAccess::default(),
+            live: None, versions: None,
+        };
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("---@class crap.array_row.Items"));
+        assert!(out.contains("---@field label string"));
+        assert!(out.contains("---@field desc? string"));
+    }
 }

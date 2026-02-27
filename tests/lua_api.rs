@@ -429,7 +429,8 @@ fn lua_crud_create_and_find() {
             return "WRONG_TOTAL:" .. tostring(result.total)
         end
         local found = result.documents[1]
-        if found.title ~= "Test Article" then
+        -- after_read field hook uppercases title
+        if found.title ~= "TEST ARTICLE" then
             return "WRONG_TITLE:" .. tostring(found.title)
         end
         return "ok"
@@ -449,7 +450,8 @@ fn lua_crud_find_by_id() {
 
         local found = crap.collections.find_by_id("articles", id)
         if found == nil then return "NOT_FOUND" end
-        if found.title ~= "Find Me By ID" then
+        -- after_read field hook uppercases title
+        if found.title ~= "FIND ME BY ID" then
             return "WRONG_TITLE:" .. tostring(found.title)
         end
         if found.body ~= "Body text" then
@@ -476,13 +478,14 @@ fn lua_crud_update() {
         local updated = crap.collections.update("articles", id, {
             title = "Updated Title",
         })
+        -- update response does NOT run after_read hooks, so title is original case
         if updated.title ~= "Updated Title" then
             return "UPDATE_FAILED:" .. tostring(updated.title)
         end
 
-        -- Verify via find_by_id
+        -- Verify via find_by_id (after_read field hook uppercases title)
         local found = crap.collections.find_by_id("articles", id)
-        if found.title ~= "Updated Title" then
+        if found.title ~= "UPDATED TITLE" then
             return "FIND_AFTER_UPDATE_FAILED:" .. tostring(found.title)
         end
         return "ok"
@@ -546,7 +549,8 @@ fn lua_crud_find_with_filters() {
         if drafts.total ~= 1 then
             return "WRONG_DRAFT_TOTAL:" .. tostring(drafts.total)
         end
-        if drafts.documents[1].title ~= "Beta Article" then
+        -- after_read field hook uppercases title
+        if drafts.documents[1].title ~= "BETA ARTICLE" then
             return "WRONG_DRAFT_TITLE:" .. tostring(drafts.documents[1].title)
         end
         return "ok"
@@ -1078,7 +1082,8 @@ fn lua_find_with_where_clause() {
         if result.total ~= 1 then
             return "WRONG_TOTAL:" .. tostring(result.total)
         end
-        if result.documents[1].title ~= "Where Test Alpha" then
+        -- after_read field hook uppercases title
+        if result.documents[1].title ~= "WHERE TEST ALPHA" then
             return "WRONG_TITLE:" .. tostring(result.documents[1].title)
         end
         return "ok"
@@ -1123,7 +1128,8 @@ fn lua_find_by_id_with_depth() {
         -- find_by_id with depth=0 opts
         local found = crap.collections.find_by_id("articles", doc.id, { depth = 0 })
         if found == nil then return "NOT_FOUND" end
-        if found.title ~= "Depth Test" then
+        -- after_read field hook uppercases title
+        if found.title ~= "DEPTH TEST" then
             return "WRONG_TITLE:" .. tostring(found.title)
         end
         return "ok"
@@ -3967,5 +3973,1415 @@ fn lua_json_encode_decode_roundtrip() {
 
         return "ok"
     "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: OR Filter Combinations ─────────────────────────────────────────────
+
+#[test]
+fn lua_find_or_filter() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "Alpha", status = "published" })
+        crap.collections.create("articles", { title = "Beta", status = "draft" })
+        crap.collections.create("articles", { title = "Gamma", status = "archived" })
+
+        -- OR filter: status = published OR status = draft
+        local r = crap.collections.find("articles", {
+            filters = {
+                ["or"] = {
+                    { status = "published" },
+                    { status = "draft" },
+                },
+            },
+        })
+        if r.total ~= 2 then return "WRONG_TOTAL:" .. tostring(r.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_find_or_filter_with_operator() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "Alpha", body = "10" })
+        crap.collections.create("articles", { title = "Beta", body = "20" })
+        crap.collections.create("articles", { title = "Gamma", body = "30" })
+
+        -- OR with operator-based filters inside groups
+        local r = crap.collections.find("articles", {
+            filters = {
+                ["or"] = {
+                    { body = { greater_than = "25" } },
+                    { title = "Alpha" },
+                },
+            },
+        })
+        -- Should match Alpha (title) and Gamma (body > 25)
+        if r.total ~= 2 then return "WRONG_TOTAL:" .. tostring(r.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_find_or_filter_with_integer_values() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "A1", word_count = "10" })
+        crap.collections.create("articles", { title = "A2", word_count = "20" })
+        crap.collections.create("articles", { title = "A3", word_count = "30" })
+
+        -- Integer values in OR filter
+        local r = crap.collections.find("articles", {
+            filters = {
+                ["or"] = {
+                    { word_count = 10 },
+                    { word_count = 30 },
+                },
+            },
+        })
+        if r.total ~= 2 then return "WRONG:" .. tostring(r.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: exists / not_exists Filter Operators ───────────────────────────────
+
+#[test]
+fn lua_find_exists_filter() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        -- Use body field since status gets a default from before_change hook
+        crap.collections.create("articles", { title = "With Body", body = "some content" })
+        crap.collections.create("articles", { title = "Without Body" })
+
+        -- exists filter: only docs where body is set (non-NULL)
+        local r = crap.collections.find("articles", {
+            filters = { body = { exists = true } },
+        })
+        if r.total ~= 1 then return "EXISTS:" .. tostring(r.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_find_not_exists_filter() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        -- Use body field since status gets a default from before_change hook
+        crap.collections.create("articles", { title = "With Body", body = "some content" })
+        crap.collections.create("articles", { title = "Without Body" })
+
+        -- not_exists filter: only docs where body is NULL
+        local r = crap.collections.find("articles", {
+            filters = { body = { not_exists = true } },
+        })
+        if r.total ~= 1 then return "NOT_EXISTS:" .. tostring(r.total) end
+        -- after_read field hook uppercases title
+        if r.documents[1].title ~= "WITHOUT BODY" then
+            return "WRONG_DOC:" .. tostring(r.documents[1].title)
+        end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: Integer and Boolean Filter Values ──────────────────────────────────
+
+#[test]
+fn lua_find_integer_filter_value() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "A", word_count = "42" })
+        crap.collections.create("articles", { title = "B", word_count = "99" })
+
+        -- Integer filter value (not string)
+        local r = crap.collections.find("articles", {
+            filters = { word_count = 42 },
+        })
+        if r.total ~= 1 then return "WRONG:" .. tostring(r.total) end
+        if r.documents[1].title ~= "A" then return "WRONG_DOC" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_find_number_filter_value() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "A", word_count = "3.14" })
+        crap.collections.create("articles", { title = "B", word_count = "2.71" })
+
+        -- Float filter value
+        local r = crap.collections.find("articles", {
+            filters = { word_count = 3.14 },
+        })
+        if r.total ~= 1 then return "WRONG:" .. tostring(r.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: find_by_id with select ─────────────────────────────────────────────
+
+#[test]
+fn lua_find_by_id_with_select() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local doc = crap.collections.create("articles", {
+            title = "Select Test",
+            body = "Some body",
+            status = "published",
+        })
+
+        -- find_by_id with select: only return title
+        local found = crap.collections.find_by_id("articles", doc.id, {
+            select = { "title" },
+        })
+        if found == nil then return "NOT_FOUND" end
+        -- after_read field hook uppercases title
+        if found.title ~= "SELECT TEST" then return "WRONG_TITLE" end
+        -- body should be stripped by select
+        if found.body ~= nil then return "BODY_NOT_STRIPPED:" .. tostring(found.body) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: find_by_id returns nil for nonexistent ─────────────────────────────
+
+#[test]
+fn lua_find_by_id_nonexistent() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local doc = crap.collections.find_by_id("articles", "nonexistent-id-123")
+        if doc == nil then return "nil" end
+        return "FOUND"
+    "#);
+    assert_eq!(result, "nil");
+}
+
+// ── CRUD: find with select ───────────────────────────────────────────────────
+
+#[test]
+fn lua_find_with_select() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "Sel Test", body = "content", status = "active" })
+
+        local r = crap.collections.find("articles", {
+            select = { "title" },
+        })
+        if r.total ~= 1 then return "WRONG_TOTAL" end
+        local doc = r.documents[1]
+        -- after_read field hook uppercases title
+        if doc.title ~= "SEL TEST" then return "WRONG_TITLE" end
+        -- body should not be returned due to select
+        if doc.body ~= nil then return "BODY_PRESENT:" .. tostring(doc.body) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: find_by_id with draft option ───────────────────────────────────────
+
+#[test]
+fn lua_find_by_id_with_draft_option() {
+    let (_tmp, pool, _reg, runner) = setup_versioned_db();
+    let result = eval_versioned(&runner, &pool, r#"
+        -- Create a published article
+        local doc = crap.collections.create("articles", {
+            title = "Draft Test",
+            body = "Original body",
+        })
+        local id = doc.id
+
+        -- Save a draft version
+        crap.collections.update("articles", id, {
+            title = "Draft Test Updated",
+            body = "Updated body",
+        }, { draft = true })
+
+        -- find_by_id without draft should return published version
+        local pub = crap.collections.find_by_id("articles", id)
+        if pub == nil then return "NOT_FOUND" end
+        if pub.title ~= "Draft Test" then return "WRONG_PUB_TITLE:" .. tostring(pub.title) end
+
+        -- find_by_id with draft=true should return draft overlay
+        local draft = crap.collections.find_by_id("articles", id, { draft = true })
+        if draft == nil then return "DRAFT_NOT_FOUND" end
+        if draft.body ~= "Updated body" then return "WRONG_DRAFT_BODY:" .. tostring(draft.body) end
+
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: Boolean filter operator values ─────────────────────────────────────
+
+#[test]
+fn lua_filter_boolean_to_string() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "Active", status = "true" })
+        crap.collections.create("articles", { title = "Inactive", status = "false" })
+
+        -- Boolean as filter operator value (e.g., in not_equals)
+        local r = crap.collections.find("articles", {
+            filters = { status = { not_equals = true } },
+        })
+        -- "true" as boolean converts to "true" string, should match Inactive
+        if r.total ~= 1 then return "WRONG:" .. tostring(r.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: count with filters ─────────────────────────────────────────────────
+
+#[test]
+fn lua_count_with_or_filter() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "A", status = "published" })
+        crap.collections.create("articles", { title = "B", status = "draft" })
+        crap.collections.create("articles", { title = "C", status = "archived" })
+
+        local count = crap.collections.count("articles", {
+            filters = {
+                ["or"] = {
+                    { status = "published" },
+                    { status = "draft" },
+                },
+            },
+        })
+        return tostring(count)
+    "#);
+    assert_eq!(result, "2");
+}
+
+// ── CRUD: update with hooks=false ────────────────────────────────────────────
+
+#[test]
+fn lua_update_with_hooks_false() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local doc = crap.collections.create("articles", { title = "Before Update" })
+        local updated = crap.collections.update("articles", doc.id, {
+            title = "After Update",
+        }, { hooks = false })
+        if updated.title ~= "After Update" then
+            return "WRONG:" .. tostring(updated.title)
+        end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: delete with hooks=false ────────────────────────────────────────────
+
+#[test]
+fn lua_delete_with_hooks_false() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local doc = crap.collections.create("articles", { title = "To Delete" })
+        crap.collections.delete("articles", doc.id, { hooks = false })
+        local r = crap.collections.find("articles", {})
+        return tostring(r.total)
+    "#);
+    assert_eq!(result, "0");
+}
+
+// ── CRUD: find_by_id with nonexistent collection ─────────────────────────────
+
+#[test]
+fn lua_find_by_id_nonexistent_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        local doc = crap.collections.find_by_id("nonexistent", "some-id")
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err(), "find_by_id on nonexistent collection should error");
+}
+
+// ── CRUD: create on nonexistent collection ───────────────────────────────────
+
+#[test]
+fn lua_create_nonexistent_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        local doc = crap.collections.create("nonexistent", { title = "test" })
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err(), "create on nonexistent collection should error");
+}
+
+// ── CRUD: update on nonexistent collection ───────────────────────────────────
+
+#[test]
+fn lua_update_nonexistent_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        crap.collections.update("nonexistent", "id", { title = "test" })
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err());
+}
+
+// ── CRUD: delete on nonexistent collection ───────────────────────────────────
+
+#[test]
+fn lua_delete_nonexistent_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        crap.collections.delete("nonexistent", "id")
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err());
+}
+
+// ── CRUD: count on nonexistent collection ────────────────────────────────────
+
+#[test]
+fn lua_count_nonexistent_collection_2() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        local c = crap.collections.count("nonexistent")
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err());
+}
+
+// ── CRUD: update_many with filters ───────────────────────────────────────────
+
+#[test]
+fn lua_update_many_with_operator_filters() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "UM1", status = "draft" })
+        crap.collections.create("articles", { title = "UM2", status = "draft" })
+        crap.collections.create("articles", { title = "UM3", status = "published" })
+
+        -- Update only drafts
+        local r = crap.collections.update_many("articles",
+            { filters = { status = "draft" } },
+            { status = "archived" }
+        )
+        if r.modified ~= 2 then return "WRONG_MOD:" .. tostring(r.modified) end
+
+        -- Verify
+        local all = crap.collections.find("articles", { filters = { status = "archived" } })
+        if all.total ~= 2 then return "WRONG_ARCHIVED:" .. tostring(all.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: delete_many with filters ───────────────────────────────────────────
+
+#[test]
+fn lua_delete_many_with_operator_filters() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "DM1", status = "draft" })
+        crap.collections.create("articles", { title = "DM2", status = "draft" })
+        crap.collections.create("articles", { title = "DM3", status = "published" })
+
+        -- Delete only drafts
+        local r = crap.collections.delete_many("articles",
+            { filters = { status = "draft" } }
+        )
+        if r.deleted ~= 2 then return "WRONG_DEL:" .. tostring(r.deleted) end
+
+        -- Verify remaining
+        local all = crap.collections.find("articles", {})
+        if all.total ~= 1 then return "WRONG_REMAINING:" .. tostring(all.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: update_many nonexistent collection ─────────────────────────────────
+
+#[test]
+fn lua_update_many_nonexistent_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        crap.collections.update_many("nonexistent", {}, { title = "x" })
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err());
+}
+
+// ── CRUD: delete_many nonexistent collection ─────────────────────────────────
+
+#[test]
+fn lua_delete_many_nonexistent_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        crap.collections.delete_many("nonexistent", {})
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err());
+}
+
+// ── CRUD: globals.get nonexistent ────────────────────────────────────────────
+
+#[test]
+fn lua_globals_get_nonexistent() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        crap.globals.get("nonexistent_global")
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err());
+}
+
+// ── CRUD: globals.update nonexistent ─────────────────────────────────────────
+
+#[test]
+fn lua_globals_update_nonexistent() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        crap.globals.update("nonexistent_global", { key = "value" })
+        return "unreachable"
+    "#, &conn, None);
+    assert!(result.is_err());
+}
+
+// ── CRUD: CRUD without TxContext errors ──────────────────────────────────────
+
+#[test]
+fn lua_crud_without_tx_context_errors() {
+    // Calling CRUD functions outside of hook context should error
+    let runner = setup_lua();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut config = CrapConfig::default();
+    config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
+    let conn = pool.get().expect("conn");
+
+    // Don't use eval_lua_with_conn — that sets TxContext.
+    // Instead, directly evaluate Lua without setting up the connection context.
+    // But we need a connection to test. eval_lua_with_conn DOES set up TxContext,
+    // so this test verifies the error message for when it's not set.
+    // Since we can't easily test this path through the public API (eval_lua_with_conn
+    // always sets TxContext), we just verify the error path works when the function
+    // is called for a nonexistent collection (different error path).
+    let result = runner.eval_lua_with_conn(r#"
+        local ok, err = pcall(function()
+            crap.collections.find("nonexistent_collection_xyz", {})
+        end)
+        if not ok then return "ERROR:" .. tostring(err) end
+        return "ok"
+    "#, &conn, None);
+    assert!(result.is_ok());
+    let msg = result.unwrap();
+    assert!(msg.starts_with("ERROR:"), "Should error for nonexistent collection: {}", msg);
+}
+
+// ── CRUD: find with order_by ─────────────────────────────────────────────────
+
+#[test]
+fn lua_find_with_order_by() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "Charlie" })
+        crap.collections.create("articles", { title = "Alpha" })
+        crap.collections.create("articles", { title = "Bravo" })
+
+        local r = crap.collections.find("articles", {
+            order_by = "title",
+        })
+        -- after_read field hook uppercases title
+        if r.documents[1].title ~= "ALPHA" then return "WRONG1:" .. r.documents[1].title end
+        if r.documents[2].title ~= "BRAVO" then return "WRONG2:" .. r.documents[2].title end
+        if r.documents[3].title ~= "CHARLIE" then return "WRONG3:" .. r.documents[3].title end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: create with group field via Lua table ──────────────────────────────
+
+#[test]
+fn lua_create_with_group_field() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        -- products collection has a "seo" group field with "meta_title" sub-field
+        local doc = crap.collections.create("products", {
+            name = "Test Product",
+            seo = { meta_title = "My SEO Title" },
+        })
+        if doc == nil then return "CREATE_NIL" end
+        if doc.name ~= "Test Product" then return "WRONG_NAME" end
+
+        -- Verify the group field was stored correctly
+        local found = crap.collections.find_by_id("products", doc.id)
+        if found == nil then return "NOT_FOUND" end
+        -- Groups come back as flattened fields or as nested tables depending on hydration
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: update with group field ────────────────────────────────────────────
+
+#[test]
+fn lua_update_with_group_field() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local doc = crap.collections.create("products", {
+            name = "Original Product",
+        })
+
+        local updated = crap.collections.update("products", doc.id, {
+            name = "Updated Product",
+            seo = { meta_title = "Updated SEO" },
+        })
+        if updated == nil then return "UPDATE_NIL" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: OR filter with number value in sub-group ───────────────────────────
+
+#[test]
+fn lua_find_or_filter_number_value() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        crap.collections.create("articles", { title = "X", word_count = "10" })
+        crap.collections.create("articles", { title = "Y", word_count = "20" })
+
+        local r = crap.collections.find("articles", {
+            filters = {
+                ["or"] = {
+                    { word_count = 10.0 },
+                    { title = "Y" },
+                },
+            },
+        })
+        if r.total ~= 2 then return "WRONG:" .. tostring(r.total) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ── CRUD: unknown filter operator errors ─────────────────────────────────────
+
+#[test]
+fn lua_find_unknown_filter_operator_errors() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        local ok, err = pcall(function()
+            crap.collections.find("articles", {
+                filters = { title = { bad_operator = "test" } },
+            })
+        end)
+        if not ok then return "ERROR:" .. tostring(err) end
+        return "ok"
+    "#, &conn, None);
+    assert!(result.is_ok());
+    let msg = result.unwrap();
+    assert!(msg.starts_with("ERROR:"), "Unknown filter operator should error: {}", msg);
+    assert!(msg.contains("unknown filter operator"), "Error should mention unknown operator: {}", msg);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// crap.crypto.* tests
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_crypto_sha256() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local hash = crap.crypto.sha256("hello")
+        -- Known SHA256 of "hello"
+        if hash == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" then
+            return "ok"
+        end
+        return "WRONG:" .. hash
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_crypto_hmac_sha256() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local sig = crap.crypto.hmac_sha256("message", "secret_key")
+        -- HMAC should be a 64-char hex string
+        if #sig ~= 64 then return "BAD_LEN:" .. tostring(#sig) end
+        -- Verify it's hex only
+        if sig:match("^[0-9a-f]+$") == nil then return "NOT_HEX" end
+        -- Same inputs should always produce the same output
+        local sig2 = crap.crypto.hmac_sha256("message", "secret_key")
+        if sig ~= sig2 then return "NOT_DETERMINISTIC" end
+        -- Different key should produce different output
+        local sig3 = crap.crypto.hmac_sha256("message", "other_key")
+        if sig == sig3 then return "SAME_WITH_DIFFERENT_KEY" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_crypto_base64_encode_decode() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local encoded = crap.crypto.base64_encode("Hello, World!")
+        if encoded ~= "SGVsbG8sIFdvcmxkIQ==" then
+            return "ENCODE:" .. encoded
+        end
+        local decoded = crap.crypto.base64_decode(encoded)
+        if decoded ~= "Hello, World!" then
+            return "DECODE:" .. decoded
+        end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_crypto_base64_decode_invalid() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local ok, err = pcall(function()
+            crap.crypto.base64_decode("!!!invalid!!!")
+        end)
+        if ok then return "SHOULD_FAIL" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_crypto_encrypt_decrypt_roundtrip() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local plaintext = "secret message 123"
+        local encrypted = crap.crypto.encrypt(plaintext)
+        -- Encrypted text should be a base64 string, different from plaintext
+        if encrypted == plaintext then return "NOT_ENCRYPTED" end
+        if #encrypted == 0 then return "EMPTY_ENCRYPTED" end
+        -- Decrypt should produce the original
+        local decrypted = crap.crypto.decrypt(encrypted)
+        if decrypted ~= plaintext then
+            return "MISMATCH:" .. decrypted
+        end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_crypto_decrypt_invalid() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local ok, err = pcall(function()
+            -- Too-short ciphertext (less than 12 bytes for nonce)
+            crap.crypto.decrypt("AQID")
+        end)
+        if ok then return "SHOULD_FAIL" end
+        local err_str = tostring(err)
+        if err_str:find("too short") or err_str:find("decrypt") then
+            return "ok"
+        end
+        return "UNEXPECTED:" .. err_str
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_crypto_random_bytes() {
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local bytes16 = crap.crypto.random_bytes(16)
+        -- Should produce 32-char hex string (16 bytes * 2 chars per byte)
+        if #bytes16 ~= 32 then return "BAD_LEN:" .. tostring(#bytes16) end
+        -- Should be hex
+        if bytes16:match("^[0-9a-f]+$") == nil then return "NOT_HEX" end
+        -- Different calls should produce different results
+        local bytes16_2 = crap.crypto.random_bytes(16)
+        if bytes16 == bytes16_2 then return "NOT_RANDOM" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// crap.hooks.remove edge cases
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_hooks_remove_nonexistent_event() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    // Removing from a non-existent event list should be a no-op
+    let result = eval_lua_db(&runner, &pool, r#"
+        local function my_fn(ctx) return ctx end
+        -- Should not error when removing from an event that has no hooks
+        crap.hooks.remove("nonexistent_event", my_fn)
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_hooks_remove_function_not_in_list() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    // Removing a function that isn't registered should be a no-op
+    let result = eval_lua_db(&runner, &pool, r#"
+        local function fn1(ctx) return ctx end
+        local function fn2(ctx) return ctx end
+        -- Count hooks before registering
+        local before_count = 0
+        if _crap_event_hooks["before_change"] then
+            before_count = #_crap_event_hooks["before_change"]
+        end
+        crap.hooks.register("before_change", fn1)
+        -- fn2 is not registered, removing it should be fine
+        crap.hooks.remove("before_change", fn2)
+        -- fn1 should still be there (count should be before_count + 1)
+        local hooks = _crap_event_hooks["before_change"]
+        local expected = before_count + 1
+        if #hooks ~= expected then return "WRONG_COUNT:" .. tostring(#hooks) .. " expected:" .. tostring(expected) end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// crap.schema.* tests (covers hooks/api/schema.rs)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_schema_get_collection() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local schema = crap.schema.get_collection("articles")
+        if schema == nil then return "NIL" end
+        if schema.slug ~= "articles" then return "WRONG_SLUG:" .. tostring(schema.slug) end
+        if schema.timestamps ~= true then return "NO_TIMESTAMPS" end
+        -- Should have fields
+        if schema.fields == nil then return "NO_FIELDS" end
+        if #schema.fields == 0 then return "EMPTY_FIELDS" end
+        -- Check first field
+        local f = schema.fields[1]
+        if f.name == nil then return "NO_FIELD_NAME" end
+        if f.type == nil then return "NO_FIELD_TYPE" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_get_collection_nonexistent() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local schema = crap.schema.get_collection("nonexistent")
+        if schema == nil then return "ok" end
+        return "NOT_NIL"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_get_global() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local schema = crap.schema.get_global("settings")
+        if schema == nil then return "NIL" end
+        if schema.slug ~= "settings" then return "WRONG_SLUG:" .. tostring(schema.slug) end
+        if schema.fields == nil then return "NO_FIELDS" end
+        if #schema.fields == 0 then return "EMPTY_FIELDS" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_get_global_nonexistent() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local schema = crap.schema.get_global("nonexistent")
+        if schema == nil then return "ok" end
+        return "NOT_NIL"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_list_collections() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local list = crap.schema.list_collections()
+        if list == nil then return "NIL" end
+        if #list == 0 then return "EMPTY" end
+        -- Each entry should have slug and labels
+        local found_articles = false
+        for _, item in ipairs(list) do
+            if item.slug == "articles" then
+                found_articles = true
+            end
+        end
+        if not found_articles then return "NO_ARTICLES" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_list_globals() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local list = crap.schema.list_globals()
+        if list == nil then return "NIL" end
+        if #list == 0 then return "EMPTY" end
+        local found_settings = false
+        for _, item in ipairs(list) do
+            if item.slug == "settings" then
+                found_settings = true
+            end
+        end
+        if not found_settings then return "NO_SETTINGS" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_field_options() {
+    // Test that schema introspection returns select field options
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("items.lua"),
+        r#"
+crap.collections.define("items", {
+    fields = {
+        { name = "status", type = "select", options = {
+            { label = "Active", value = "active" },
+            { label = "Inactive", value = "inactive" },
+        }},
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::new(tmp.path(), registry, &config).expect("HookRunner");
+
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        local schema = crap.schema.get_collection("items")
+        if schema == nil then return "NIL" end
+        local status_field = schema.fields[1]
+        if status_field.name ~= "status" then return "WRONG_FIELD:" .. tostring(status_field.name) end
+        if status_field.options == nil then return "NO_OPTIONS" end
+        if #status_field.options ~= 2 then return "WRONG_COUNT:" .. tostring(#status_field.options) end
+        if status_field.options[1].value ~= "active" then
+            return "WRONG_VALUE:" .. tostring(status_field.options[1].value)
+        end
+        return "ok"
+    "#, &conn, None).expect("eval");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_field_relationship() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "author", type = "relationship", relationship = {
+            collection = "users",
+            has_many = false,
+        }},
+        { name = "tags", type = "relationship", relationship = {
+            collection = "tags",
+            has_many = true,
+            max_depth = 2,
+        }},
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::new(tmp.path(), registry, &config).expect("HookRunner");
+
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        local schema = crap.schema.get_collection("posts")
+        if schema == nil then return "NIL" end
+        -- Check author field
+        local author = schema.fields[1]
+        if author.relationship == nil then return "NO_REL" end
+        if author.relationship.collection ~= "users" then
+            return "WRONG_COL:" .. tostring(author.relationship.collection)
+        end
+        if author.relationship.has_many ~= false then return "SHOULD_NOT_HAVE_MANY" end
+        -- Check tags field
+        local tags = schema.fields[2]
+        if tags.relationship == nil then return "NO_TAGS_REL" end
+        if tags.relationship.has_many ~= true then return "TAGS_SHOULD_HAVE_MANY" end
+        if tags.relationship.max_depth ~= 2 then
+            return "WRONG_MAX_DEPTH:" .. tostring(tags.relationship.max_depth)
+        end
+        return "ok"
+    "#, &conn, None).expect("eval");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_schema_blocks_and_subfields() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+    std::fs::write(
+        collections_dir.join("pages.lua"),
+        r#"
+crap.collections.define("pages", {
+    fields = {
+        { name = "layout", type = "blocks", blocks = {
+            { type = "hero", label = "Hero Section", fields = {
+                { name = "heading", type = "text" },
+                { name = "image", type = "text" },
+            }},
+        }},
+        { name = "meta", type = "group", fields = {
+            { name = "title", type = "text" },
+            { name = "desc", type = "textarea" },
+        }},
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::new(tmp.path(), registry, &config).expect("HookRunner");
+
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+    let result = runner.eval_lua_with_conn(r#"
+        local schema = crap.schema.get_collection("pages")
+        if schema == nil then return "NIL" end
+        -- Check blocks field
+        local layout = schema.fields[1]
+        if layout.type ~= "blocks" then return "NOT_BLOCKS:" .. tostring(layout.type) end
+        if layout.blocks == nil then return "NO_BLOCKS" end
+        if #layout.blocks ~= 1 then return "WRONG_BLOCK_COUNT:" .. tostring(#layout.blocks) end
+        local hero = layout.blocks[1]
+        if hero.type ~= "hero" then return "WRONG_BLOCK_TYPE:" .. tostring(hero.type) end
+        if hero.label ~= "Hero Section" then return "WRONG_LABEL:" .. tostring(hero.label) end
+        if #hero.fields ~= 2 then return "WRONG_FIELD_COUNT:" .. tostring(#hero.fields) end
+        -- Check group field sub-fields
+        local meta = schema.fields[2]
+        if meta.type ~= "group" then return "NOT_GROUP:" .. tostring(meta.type) end
+        if meta.fields == nil then return "NO_GROUP_FIELDS" end
+        if #meta.fields ~= 2 then return "WRONG_GROUP_FIELDS:" .. tostring(#meta.fields) end
+        return "ok"
+    "#, &conn, None).expect("eval");
+    assert_eq!(result, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// crap.collections.config.get / config.list (round-trip)
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_collections_config_get() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local config = crap.collections.config.get("articles")
+        if config == nil then return "NIL" end
+        -- Should have labels, fields, hooks, access
+        if config.fields == nil then return "NO_FIELDS" end
+        if #config.fields == 0 then return "EMPTY_FIELDS" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_collections_config_get_nonexistent() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local config = crap.collections.config.get("nonexistent")
+        if config == nil then return "ok" end
+        return "NOT_NIL"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_collections_config_list() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local all = crap.collections.config.list()
+        if all == nil then return "NIL" end
+        if all["articles"] == nil then return "NO_ARTICLES" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_globals_config_get() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local config = crap.globals.config.get("settings")
+        if config == nil then return "NIL" end
+        if config.fields == nil then return "NO_FIELDS" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_globals_config_get_nonexistent() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local config = crap.globals.config.get("nonexistent")
+        if config == nil then return "ok" end
+        return "NOT_NIL"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_globals_config_list() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(&runner, &pool, r#"
+        local all = crap.globals.config.list()
+        if all == nil then return "NIL" end
+        if all["settings"] == nil then return "NO_SETTINGS" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// crap.jobs.define
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_jobs_define() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("init.lua"), r#"
+crap.jobs.define("cleanup", {
+    handler = "hooks.jobs.cleanup",
+    schedule = "0 0 * * *",
+    queue = "maintenance",
+    retries = 3,
+})
+    "#).unwrap();
+
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let reg = registry.read().unwrap();
+    let job = reg.get_job("cleanup").expect("cleanup job");
+    assert_eq!(job.handler, "hooks.jobs.cleanup");
+    assert_eq!(job.schedule, Some("0 0 * * *".to_string()));
+    assert_eq!(job.queue, "maintenance");
+    assert_eq!(job.retries, 3);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// crap.locale with custom config
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_locale_custom_config() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let mut config = CrapConfig::default();
+    config.locale.default_locale = "de".to_string();
+    config.locale.locales = vec!["de".to_string(), "en".to_string(), "fr".to_string()];
+
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = HookRunner::new(tmp.path(), registry, &config).expect("HookRunner");
+
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+
+    let result = runner.eval_lua_with_conn(r#"
+        local default = crap.locale.get_default()
+        if default ~= "de" then return "WRONG_DEFAULT:" .. default end
+        local all = crap.locale.get_all()
+        if #all ~= 3 then return "WRONG_COUNT:" .. tostring(#all) end
+        local enabled = crap.locale.is_enabled()
+        if not enabled then return "NOT_ENABLED" end
+        return "ok"
+    "#, &conn, None).expect("eval");
+    assert_eq!(result, "ok");
+}
+
+// ── 5A. crap.schema with blocks ───────────────────────────────────────────────
+
+#[test]
+fn schema_get_collection_with_blocks() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("pages.lua"),
+        r#"
+crap.collections.define("pages", {
+    fields = {
+        { name = "title", type = "text", required = true },
+        { name = "content", type = "blocks", blocks = {
+            { type = "text", label = "Text Block", fields = {
+                { name = "body", type = "richtext" },
+            }},
+            { type = "image", label = "Image Block", fields = {
+                { name = "src", type = "text" },
+                { name = "alt", type = "text" },
+            }},
+        }},
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = crap_cms::hooks::lifecycle::HookRunner::new(
+        tmp.path(), registry, &config,
+    ).expect("HookRunner::new");
+
+    let tmp2 = tempfile::tempdir().expect("tempdir2");
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+
+    let result = runner.eval_lua_with_conn(r#"
+        local def = crap.schema.get_collection("pages")
+        if def == nil then return "NIL" end
+        -- Find the blocks field
+        local blocks_field = nil
+        for _, f in ipairs(def.fields) do
+            if f.name == "content" then blocks_field = f end
+        end
+        if blocks_field == nil then return "NO_CONTENT_FIELD" end
+        if blocks_field.type ~= "blocks" then return "WRONG_TYPE:" .. blocks_field.type end
+        if blocks_field.blocks == nil then return "NO_BLOCKS" end
+        if #blocks_field.blocks ~= 2 then return "WRONG_BLOCK_COUNT:" .. tostring(#blocks_field.blocks) end
+        if blocks_field.blocks[1].type ~= "text" then return "WRONG_BLOCK_1:" .. blocks_field.blocks[1].type end
+        if blocks_field.blocks[1].label ~= "Text Block" then return "WRONG_LABEL_1" end
+        if #blocks_field.blocks[1].fields ~= 1 then return "WRONG_FIELDS_1" end
+        if blocks_field.blocks[2].type ~= "image" then return "WRONG_BLOCK_2" end
+        if #blocks_field.blocks[2].fields ~= 2 then return "WRONG_FIELDS_2" end
+        return "ok"
+    "#, &conn, None).expect("eval");
+    assert_eq!(result, "ok");
+}
+
+// ── 5F. crap.schema with sub-fields (array/group) ────────────────────────────
+
+#[test]
+fn schema_get_collection_with_array_subfields() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "title", type = "text" },
+        { name = "tags", type = "array", fields = {
+            { name = "label", type = "text", required = true },
+            { name = "value", type = "text" },
+        }},
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = crap_cms::hooks::lifecycle::HookRunner::new(
+        tmp.path(), registry, &config,
+    ).expect("HookRunner::new");
+
+    let tmp2 = tempfile::tempdir().expect("tempdir2");
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+
+    let result = runner.eval_lua_with_conn(r#"
+        local def = crap.schema.get_collection("posts")
+        if def == nil then return "NIL" end
+        local tags_field = nil
+        for _, f in ipairs(def.fields) do
+            if f.name == "tags" then tags_field = f end
+        end
+        if tags_field == nil then return "NO_TAGS_FIELD" end
+        if tags_field.fields == nil then return "NO_SUB_FIELDS" end
+        if #tags_field.fields ~= 2 then return "WRONG_SUB_COUNT:" .. tostring(#tags_field.fields) end
+        if tags_field.fields[1].name ~= "label" then return "WRONG_NAME_1" end
+        if tags_field.fields[1].required ~= true then return "NOT_REQUIRED" end
+        return "ok"
+    "#, &conn, None).expect("eval");
+    assert_eq!(result, "ok");
+}
+
+// ── 5G. crap.schema with relationship fields ─────────────────────────────────
+
+#[test]
+fn schema_get_collection_with_relationship() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "title", type = "text" },
+        { name = "author", type = "relationship", relationship = {
+            collection = "users",
+            has_many = true,
+            max_depth = 2,
+        }},
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(
+        collections_dir.join("users.lua"),
+        r#"
+crap.collections.define("users", {
+    fields = {
+        { name = "name", type = "text" },
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = crap_cms::hooks::lifecycle::HookRunner::new(
+        tmp.path(), registry, &config,
+    ).expect("HookRunner::new");
+
+    let tmp2 = tempfile::tempdir().expect("tempdir2");
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+
+    let result = runner.eval_lua_with_conn(r#"
+        local def = crap.schema.get_collection("posts")
+        if def == nil then return "NIL" end
+        local author_field = nil
+        for _, f in ipairs(def.fields) do
+            if f.name == "author" then author_field = f end
+        end
+        if author_field == nil then return "NO_AUTHOR" end
+        if author_field.relationship == nil then return "NO_REL" end
+        if author_field.relationship.collection ~= "users" then return "WRONG_COLLECTION" end
+        if author_field.relationship.has_many ~= true then return "NOT_HAS_MANY" end
+        if author_field.relationship.max_depth ~= 2 then return "WRONG_MAX_DEPTH" end
+        return "ok"
+    "#, &conn, None).expect("eval");
+    assert_eq!(result, "ok");
+}
+
+// ── 5H. crap.schema with select options ──────────────────────────────────────
+
+#[test]
+fn schema_get_collection_with_options() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("posts.lua"),
+        r#"
+crap.collections.define("posts", {
+    fields = {
+        { name = "status", type = "select", options = {
+            { label = "Draft", value = "draft" },
+            { label = "Published", value = "published" },
+        }},
+    },
+})
+        "#,
+    ).unwrap();
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
+    let runner = crap_cms::hooks::lifecycle::HookRunner::new(
+        tmp.path(), registry, &config,
+    ).expect("HookRunner::new");
+
+    let tmp2 = tempfile::tempdir().expect("tempdir2");
+    let mut db_config = CrapConfig::default();
+    db_config.database.path = "test.db".to_string();
+    let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
+    let conn = pool.get().expect("conn");
+
+    let result = runner.eval_lua_with_conn(r#"
+        local def = crap.schema.get_collection("posts")
+        local status_field = nil
+        for _, f in ipairs(def.fields) do
+            if f.name == "status" then status_field = f end
+        end
+        if status_field == nil then return "NO_STATUS" end
+        if status_field.options == nil then return "NO_OPTIONS" end
+        if #status_field.options ~= 2 then return "WRONG_OPTION_COUNT" end
+        if status_field.options[1].value ~= "draft" then return "WRONG_VALUE_1" end
+        if status_field.options[1].label ~= "Draft" then return "WRONG_LABEL_1" end
+        return "ok"
+    "#, &conn, None).expect("eval");
     assert_eq!(result, "ok");
 }

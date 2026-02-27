@@ -577,6 +577,7 @@ dependencies = [
  "cron",
  "dialoguer",
  "dirs",
+ "form_urlencoded",
  "handlebars",
  "http-body-util",
  "image",

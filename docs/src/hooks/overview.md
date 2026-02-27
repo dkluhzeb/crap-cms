@@ -53,3 +53,14 @@ Before-event hooks (`before_validate`, `before_change`, `before_delete`) have fu
 After-event hooks (`after_change`, `after_read`, `after_delete`) do NOT have CRUD access. They fire in the background after the transaction commits.
 
 See [Transaction Access](transaction-access.md) for details.
+
+## Concurrency
+
+Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across requests. The pool size is configurable:
+
+```toml
+[hooks]
+vm_pool_size = 4  # default: min(available_parallelism, 8)
+```
+
+Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.

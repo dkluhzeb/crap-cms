@@ -7,6 +7,7 @@ pub mod field;
 pub mod collection;
 pub mod document;
 pub mod job;
+pub mod rate_limit;
 pub mod registry;
 pub mod upload;
 pub mod validate;

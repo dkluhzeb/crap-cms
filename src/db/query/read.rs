@@ -494,6 +494,103 @@ mod tests {
     }
 
     #[test]
+    fn count_where_field_eq_basic() {
+        let conn = setup_db();
+        let def = test_def();
+        let mut d1 = HashMap::new();
+        d1.insert("title".to_string(), "AAA".to_string());
+        d1.insert("status".to_string(), "draft".to_string());
+        create(&conn, "posts", &def, &d1, None).unwrap();
+
+        let mut d2 = HashMap::new();
+        d2.insert("title".to_string(), "BBB".to_string());
+        d2.insert("status".to_string(), "draft".to_string());
+        let doc2 = create(&conn, "posts", &def, &d2, None).unwrap();
+
+        let c = count_where_field_eq(&conn, "posts", "status", "draft", None).unwrap();
+        assert_eq!(c, 2);
+
+        // Exclude one
+        let c_excl = count_where_field_eq(&conn, "posts", "status", "draft", Some(&doc2.id)).unwrap();
+        assert_eq!(c_excl, 1);
+    }
+
+    #[test]
+    fn count_where_field_eq_invalid_field_name() {
+        let conn = setup_db();
+        let result = count_where_field_eq(&conn, "posts", "bad field!", "val", None);
+        assert!(result.is_err(), "Invalid field name should error");
+        assert!(result.unwrap_err().to_string().contains("Invalid field name"));
+    }
+
+    #[test]
+    fn apply_select_filter_with_group() {
+        let def = CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                FieldDefinition { name: "title".to_string(), ..Default::default() },
+                FieldDefinition {
+                    name: "seo".to_string(),
+                    field_type: FieldType::Group,
+                    fields: vec![
+                        FieldDefinition { name: "meta_title".to_string(), ..Default::default() },
+                        FieldDefinition { name: "meta_desc".to_string(), ..Default::default() },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let select_exprs = vec![
+            "id".to_string(), "title".to_string(),
+            "seo__meta_title".to_string(), "seo__meta_desc".to_string(),
+            "created_at".to_string(), "updated_at".to_string(),
+        ];
+        let result_names = select_exprs.clone();
+
+        // Select only "seo" — should include all seo__* sub-columns
+        let select = vec!["seo".to_string()];
+        let (exprs, names) = apply_select_filter(select_exprs, result_names, Some(&select), &def);
+
+        assert!(names.contains(&"id".to_string()));
+        assert!(names.contains(&"seo__meta_title".to_string()));
+        assert!(names.contains(&"seo__meta_desc".to_string()));
+        assert!(names.contains(&"created_at".to_string()));
+        assert!(!names.contains(&"title".to_string()));
+        assert_eq!(exprs.len(), names.len());
+    }
+
+    #[test]
+    fn apply_select_filter_none_returns_all() {
+        let def = test_def();
+        let exprs = vec!["id".to_string(), "title".to_string(), "status".to_string()];
+        let names = exprs.clone();
+        let (out_exprs, out_names) = apply_select_filter(exprs.clone(), names.clone(), None, &def);
+        assert_eq!(out_exprs, exprs);
+        assert_eq!(out_names, names);
+    }
+
+    #[test]
+    fn apply_select_filter_empty_returns_all() {
+        let def = test_def();
+        let exprs = vec!["id".to_string(), "title".to_string()];
+        let names = exprs.clone();
+        let empty: Vec<String> = Vec::new();
+        let (out_exprs, out_names) = apply_select_filter(exprs.clone(), names.clone(), Some(&empty), &def);
+        assert_eq!(out_exprs, exprs);
+        assert_eq!(out_names, names);
+    }
+
+    #[test]
     fn apply_select_to_document_keeps_selected() {
         let mut doc = Document {
             id: "abc".to_string(),

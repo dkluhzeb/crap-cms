@@ -129,54 +129,58 @@ pub fn clear_reset_token(
 
 // ── Email verification functions ──────────────────────────────────────────
 
-/// Store a verification token for a user.
+/// Store a verification token and expiry for a user.
 pub fn set_verification_token(
     conn: &rusqlite::Connection,
     slug: &str,
     user_id: &str,
     token: &str,
+    exp: i64,
 ) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verification_token = ?1 WHERE id = ?2",
+        "UPDATE {} SET _verification_token = ?1, _verification_token_exp = ?2 WHERE id = ?3",
         slug
     );
-    conn.execute(&sql, rusqlite::params![token, user_id])
+    conn.execute(&sql, rusqlite::params![token, exp, user_id])
         .with_context(|| format!("Failed to set verification token for {} in {}", user_id, slug))?;
     Ok(())
 }
 
-/// Find a user by their verification token.
+/// Find a user by their verification token. Returns the document and token expiry.
 pub fn find_by_verification_token(
     conn: &rusqlite::Connection,
     slug: &str,
     def: &CollectionDefinition,
     token: &str,
-) -> Result<Option<Document>> {
+) -> Result<Option<(Document, i64)>> {
     let column_names = get_column_names(def);
+    let cols = column_names.join(", ");
     let sql = format!(
-        "SELECT {} FROM {} WHERE _verification_token = ?1",
-        column_names.join(", "), slug
+        "SELECT {}, _verification_token_exp FROM {} WHERE _verification_token = ?1",
+        cols, slug
     );
 
     let result = conn.query_row(&sql, [token], |row| {
-        row_to_document(row, &column_names)
+        let doc = row_to_document(row, &column_names)?;
+        let exp: i64 = row.get(column_names.len()).unwrap_or(0);
+        Ok((doc, exp))
     });
 
     match result {
-        Ok(doc) => Ok(Some(doc)),
+        Ok(pair) => Ok(Some(pair)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e).context(format!("Failed to find user by verification token in {}", slug)),
     }
 }
 
-/// Mark a user as verified (set _verified = 1, clear token).
+/// Mark a user as verified (set _verified = 1, clear token and expiry).
 pub fn mark_verified(
     conn: &rusqlite::Connection,
     slug: &str,
     user_id: &str,
 ) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verified = 1, _verification_token = NULL WHERE id = ?1",
+        "UPDATE {} SET _verified = 1, _verification_token = NULL, _verification_token_exp = NULL WHERE id = ?1",
         slug
     );
     conn.execute(&sql, [user_id])
@@ -293,6 +297,7 @@ mod tests {
                 _reset_token_exp INTEGER,
                 _locked INTEGER DEFAULT 0,
                 _verification_token TEXT,
+                _verification_token_exp INTEGER,
                 _verified INTEGER DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT
@@ -400,20 +405,35 @@ mod tests {
     fn set_and_find_verification_token() {
         let conn = setup_auth_db();
         let def = auth_def();
-        set_verification_token(&conn, "users", "user1", "verify-abc").unwrap();
+        let exp = 9999999999i64;
+        set_verification_token(&conn, "users", "user1", "verify-abc", exp).unwrap();
         let result = find_by_verification_token(&conn, "users", &def, "verify-abc").unwrap();
         assert!(result.is_some(), "Should find user by verification token");
-        let doc = result.unwrap();
+        let (doc, returned_exp) = result.unwrap();
         assert_eq!(doc.id, "user1");
+        assert_eq!(returned_exp, exp);
     }
 
     #[test]
     fn find_by_verification_token_wrong() {
         let conn = setup_auth_db();
         let def = auth_def();
-        set_verification_token(&conn, "users", "user1", "verify-abc").unwrap();
+        set_verification_token(&conn, "users", "user1", "verify-abc", 9999999999).unwrap();
         let result = find_by_verification_token(&conn, "users", &def, "wrong-token").unwrap();
         assert!(result.is_none(), "Should return None for wrong verification token");
+    }
+
+    #[test]
+    fn find_by_verification_token_expired() {
+        let conn = setup_auth_db();
+        let def = auth_def();
+        let past_exp = 1000i64;
+        set_verification_token(&conn, "users", "user1", "verify-expired", past_exp).unwrap();
+        let result = find_by_verification_token(&conn, "users", &def, "verify-expired").unwrap();
+        assert!(result.is_some(), "DB function should return expired tokens (caller checks expiry)");
+        let (doc, returned_exp) = result.unwrap();
+        assert_eq!(doc.id, "user1");
+        assert_eq!(returned_exp, past_exp);
     }
 
     // ── mark_verified + is_verified tests ───────────────────────────────────
@@ -464,5 +484,55 @@ mod tests {
         let conn = setup_auth_db();
         let result = is_locked(&conn, "users", "nonexistent").unwrap();
         assert!(!result, "Non-existent user should return false");
+    }
+
+    #[test]
+    fn is_verified_nonexistent_user() {
+        let conn = setup_auth_db();
+        let result = is_verified(&conn, "users", "nonexistent").unwrap();
+        assert!(!result, "Non-existent user should return false");
+    }
+
+    #[test]
+    fn mark_verified_clears_token() {
+        let conn = setup_auth_db();
+        let def = auth_def();
+        set_verification_token(&conn, "users", "user1", "verify-abc", 9999999999).unwrap();
+
+        // Verify token is set
+        let found = find_by_verification_token(&conn, "users", &def, "verify-abc").unwrap();
+        assert!(found.is_some());
+
+        // Mark as verified -- should clear the token and expiry
+        mark_verified(&conn, "users", "user1").unwrap();
+
+        let found_after = find_by_verification_token(&conn, "users", &def, "verify-abc").unwrap();
+        assert!(found_after.is_none(), "verification token should be cleared after mark_verified");
+
+        assert!(is_verified(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
+    fn get_password_hash_nonexistent_user() {
+        let conn = setup_auth_db();
+        let result = get_password_hash(&conn, "users", "nonexistent").unwrap();
+        assert!(result.is_none(), "Non-existent user should return None");
+    }
+
+    #[test]
+    fn is_locked_null_value_treated_as_false() {
+        let conn = setup_auth_db();
+        // user1 has _locked DEFAULT 0 which is an integer, but let's test NULL directly
+        conn.execute("UPDATE users SET _locked = NULL WHERE id = 'user1'", []).unwrap();
+        let result = is_locked(&conn, "users", "user1").unwrap();
+        assert!(!result, "NULL _locked should be treated as false");
+    }
+
+    #[test]
+    fn is_verified_null_value_treated_as_false() {
+        let conn = setup_auth_db();
+        conn.execute("UPDATE users SET _verified = NULL WHERE id = 'user1'", []).unwrap();
+        let result = is_verified(&conn, "users", "user1").unwrap();
+        assert!(!result, "NULL _verified should be treated as false");
     }
 }

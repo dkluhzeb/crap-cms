@@ -419,4 +419,307 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn populate_has_many_relationship() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts__tags (
+                parent_id TEXT,
+                related_id TEXT,
+                position INTEGER
+            );
+            INSERT INTO categories (id, name, created_at, updated_at)
+                VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');
+            INSERT INTO categories (id, name, created_at, updated_at)
+                VALUES ('c2', 'Science', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, created_at, updated_at)
+                VALUES ('p1', 'Hello', '2024-01-01', '2024-01-01');
+            INSERT INTO posts__tags (parent_id, related_id, position)
+                VALUES ('p1', 'c1', 0);
+            INSERT INTO posts__tags (parent_id, related_id, position)
+                VALUES ('p1', 'c2', 1);"
+        ).unwrap();
+
+        let cats_def = make_collection_def("categories", vec![
+            make_field("name", FieldType::Text),
+        ]);
+
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig {
+            collection: "categories".to_string(),
+            has_many: true,
+            max_depth: None,
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            tags_field,
+        ]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Hello"));
+        doc.fields.insert("tags".to_string(), serde_json::json!(["c1", "c2"]));
+        doc.created_at = Some("2024-01-01".to_string());
+        doc.updated_at = Some("2024-01-01".to_string());
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "posts", &posts_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        let tags = doc.fields.get("tags").expect("tags field should exist");
+        let arr = tags.as_array().expect("tags should be an array");
+        assert_eq!(arr.len(), 2);
+        assert!(arr[0].is_object(), "first tag should be populated as object");
+        assert_eq!(arr[0].get("name").and_then(|v| v.as_str()), Some("Tech"));
+        assert!(arr[1].is_object(), "second tag should be populated as object");
+        assert_eq!(arr[1].get("name").and_then(|v| v.as_str()), Some("Science"));
+    }
+
+    #[test]
+    fn populate_has_many_missing_related_keeps_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO posts (id, title, created_at, updated_at)
+                VALUES ('p1', 'Hello', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let cats_def = make_collection_def("categories", vec![
+            make_field("name", FieldType::Text),
+        ]);
+
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig {
+            collection: "categories".to_string(),
+            has_many: true,
+            max_depth: None,
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            tags_field,
+        ]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Hello"));
+        // Reference IDs that don't exist in categories table
+        doc.fields.insert("tags".to_string(), serde_json::json!(["nonexistent1", "nonexistent2"]));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "posts", &posts_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        let tags = doc.fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be an array");
+        assert_eq!(arr.len(), 2);
+        // Missing related docs should remain as string IDs
+        assert_eq!(arr[0].as_str(), Some("nonexistent1"));
+        assert_eq!(arr[1].as_str(), Some("nonexistent2"));
+    }
+
+    #[test]
+    fn populate_field_level_max_depth_caps() {
+        let conn = setup_populate_db();
+
+        // Create a field with max_depth = 0 — should not populate even at depth=1
+        let mut author_field = make_field("author", FieldType::Relationship);
+        author_field.relationship = Some(RelationshipConfig {
+            collection: "authors".to_string(),
+            has_many: false,
+            max_depth: Some(0),
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            author_field,
+        ]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(make_authors_def());
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Hello"));
+        doc.fields.insert("author".to_string(), serde_json::json!("a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "posts", &posts_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        // author should remain a string ID because max_depth=0 caps effective_depth to 0
+        assert_eq!(
+            doc.fields.get("author").and_then(|v| v.as_str()),
+            Some("a1"),
+            "field-level max_depth=0 should prevent population"
+        );
+    }
+
+    #[test]
+    fn populate_select_filters_fields() {
+        let conn = setup_populate_db();
+
+        // Add a second relationship field
+        let mut author_field = make_field("author", FieldType::Relationship);
+        author_field.relationship = Some(RelationshipConfig {
+            collection: "authors".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+        let mut editor_field = make_field("editor", FieldType::Relationship);
+        editor_field.relationship = Some(RelationshipConfig {
+            collection: "authors".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            author_field,
+            editor_field,
+        ]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(make_authors_def());
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Hello"));
+        doc.fields.insert("author".to_string(), serde_json::json!("a1"));
+        doc.fields.insert("editor".to_string(), serde_json::json!("a1"));
+
+        let mut visited = HashSet::new();
+        let select = vec!["author".to_string()]; // Only populate author, not editor
+        populate_relationships(
+            &conn, &registry, "posts", &posts_def,
+            &mut doc, 1, &mut visited, Some(&select),
+        ).unwrap();
+
+        // author should be populated
+        let author = doc.fields.get("author").expect("author should exist");
+        assert!(author.is_object(), "author should be populated");
+
+        // editor should remain a string ID (not in select)
+        assert_eq!(
+            doc.fields.get("editor").and_then(|v| v.as_str()),
+            Some("a1"),
+            "editor should not be populated when not in select"
+        );
+    }
+
+    #[test]
+    fn populate_has_one_empty_string_skipped() {
+        let conn = setup_populate_db();
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Hello"));
+        doc.fields.insert("author".to_string(), serde_json::json!(""));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "posts", &posts_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        // Empty string ID should be skipped (the `_ => continue` branch)
+        assert_eq!(
+            doc.fields.get("author").and_then(|v| v.as_str()),
+            Some(""),
+            "empty string author should not be populated"
+        );
+    }
+
+    #[test]
+    fn populate_has_many_visited_keeps_as_id() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO categories (id, name, created_at, updated_at)
+                VALUES ('c1', 'Tech', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, created_at, updated_at)
+                VALUES ('p1', 'Hello', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let cats_def = make_collection_def("categories", vec![
+            make_field("name", FieldType::Text),
+        ]);
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig {
+            collection: "categories".to_string(),
+            has_many: true,
+            max_depth: None,
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            tags_field,
+        ]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("tags".to_string(), serde_json::json!(["c1"]));
+
+        // Pre-mark c1 as visited — should keep it as ID string
+        let mut visited = HashSet::new();
+        visited.insert(("categories".to_string(), "c1".to_string()));
+
+        populate_relationships(
+            &conn, &registry, "posts", &posts_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        let tags = doc.fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be array");
+        assert_eq!(arr.len(), 1);
+        // Already visited — should remain as string ID
+        assert_eq!(arr[0].as_str(), Some("c1"));
+    }
 }

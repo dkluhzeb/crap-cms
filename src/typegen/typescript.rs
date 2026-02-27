@@ -142,7 +142,7 @@ mod tests {
     use crate::core::collection::{
         CollectionAccess, CollectionAdmin, CollectionHooks, CollectionLabels,
     };
-    use crate::core::field::{LocalizedString, SelectOption};
+    use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition {
@@ -164,20 +164,29 @@ mod tests {
         }
     }
 
+    fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
+        CollectionDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields,
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
     #[test]
     fn typescript_collection_output() {
-        let col = CollectionDefinition {
-            slug: "posts".to_string(), labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![
-                text_field("title", true),
-                text_field("content", false),
-                select_field("status", &["draft", "published"]),
-            ],
-            admin: CollectionAdmin::default(), hooks: CollectionHooks::default(),
-            auth: None, upload: None, access: CollectionAccess::default(),
-            live: None, versions: None,
-        };
+        let col = make_col("posts", vec![
+            text_field("title", true),
+            text_field("content", false),
+            select_field("status", &["draft", "published"]),
+        ]);
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -207,5 +216,203 @@ mod tests {
 
         assert!(out.contains("export interface SiteSettingsData {"));
         assert!(out.contains("export interface SiteSettingsDocument extends SiteSettingsData {"));
+    }
+
+    #[test]
+    fn typescript_relationship_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "tags".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("tags?: string[];"));
+    }
+
+    #[test]
+    fn typescript_relationship_has_one() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "author".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "users".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  author: string;"));
+    }
+
+    #[test]
+    fn typescript_number_checkbox_json_fields() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "price".to_string(), field_type: FieldType::Number, required: true, ..Default::default() },
+            FieldDefinition { name: "active".to_string(), field_type: FieldType::Checkbox, ..Default::default() },
+            FieldDefinition { name: "meta".to_string(), field_type: FieldType::Json, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  price: number;"));
+        assert!(out.contains("  active?: boolean;"));
+        assert!(out.contains("  meta?: unknown;"));
+    }
+
+    #[test]
+    fn typescript_array_with_subfields() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![text_field("label", true), text_field("value", false)],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("export interface PostsItems {"));
+        assert!(out.contains("  label: string;"));
+        assert!(out.contains("  value?: string;"));
+        assert!(out.contains("PostsItems[]"));
+    }
+
+    #[test]
+    fn typescript_array_without_subfields() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "data".to_string(),
+                field_type: FieldType::Array,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Record<string, unknown>[]"));
+    }
+
+    #[test]
+    fn typescript_group_field() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "seo".to_string(), field_type: FieldType::Group, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Record<string, unknown>"));
+    }
+
+    #[test]
+    fn typescript_blocks_field() {
+        let col = make_col("pages", vec![
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                blocks: vec![BlockDefinition {
+                    block_type: "text".to_string(),
+                    fields: vec![text_field("body", true)],
+                    label: Some(LocalizedString::Plain("Text".to_string())),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Record<string, unknown>[]"));
+    }
+
+    #[test]
+    fn typescript_upload_field() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "image".to_string(), field_type: FieldType::Upload, required: true, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  image: string;"));
+    }
+
+    #[test]
+    fn typescript_select_without_options() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "category".to_string(), field_type: FieldType::Select, required: true, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  category: string;"));
+    }
+
+    #[test]
+    fn typescript_collection_slug_type() {
+        let mut registry = Registry::new();
+        registry.register_collection(make_col("posts", vec![text_field("title", true)]));
+        registry.register_collection(make_col("pages", vec![text_field("body", true)]));
+        let out = render(&registry);
+        assert!(out.contains("export type CollectionSlug = \"pages\" | \"posts\";"));
+    }
+
+    #[test]
+    fn typescript_collection_slug_type_empty() {
+        let registry = Registry::new();
+        let out = render(&registry);
+        assert!(!out.contains("CollectionSlug"));
+    }
+
+    #[test]
+    fn typescript_no_timestamps() {
+        let mut col = make_col("tags", vec![text_field("name", true)]);
+        col.timestamps = false;
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(!out.contains("created_at"));
+        assert!(!out.contains("updated_at"));
+    }
+
+    #[test]
+    fn typescript_email_date_richtext_textarea() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "contact".to_string(), field_type: FieldType::Email, required: true, ..Default::default() },
+            FieldDefinition { name: "at".to_string(), field_type: FieldType::Date, required: true, ..Default::default() },
+            FieldDefinition { name: "body".to_string(), field_type: FieldType::Richtext, required: true, ..Default::default() },
+            FieldDefinition { name: "notes".to_string(), field_type: FieldType::Textarea, required: true, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  contact: string;"));
+        assert!(out.contains("  at: string;"));
+        assert!(out.contains("  body: string;"));
+        assert!(out.contains("  notes: string;"));
+    }
+
+    #[test]
+    fn typescript_full_render_with_globals() {
+        let mut registry = Registry::new();
+        registry.register_collection(make_col("posts", vec![text_field("title", true)]));
+        registry.register_global(GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![text_field("name", true)],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        });
+        let out = render(&registry);
+        assert!(out.contains("Auto-generated"));
+        assert!(out.contains("export interface PostsData {"));
+        assert!(out.contains("export interface SettingsData {"));
+        assert!(out.contains("export interface SettingsDocument extends SettingsData {"));
+        assert!(out.contains("export type CollectionSlug = \"posts\";"));
     }
 }

@@ -23,6 +23,7 @@ use crate::core::upload::{self, inject_upload_metadata};
 use crate::db::query::{self, AccessResult};
 
 /// Build the upload API router with all routes.
+#[cfg(not(tarpaulin_include))]
 pub fn upload_router(state: AdminState) -> Router<AdminState> {
     Router::new()
         .route("/upload/{slug}", post(create_upload))
@@ -32,6 +33,7 @@ pub fn upload_router(state: AdminState) -> Router<AdminState> {
 }
 
 /// Extract an authenticated user from the `Authorization: Bearer <jwt>` header.
+#[cfg(not(tarpaulin_include))]
 fn extract_bearer_user(state: &AdminState, headers: &HeaderMap) -> Option<AuthUser> {
     let auth_header = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let token = auth_header.strip_prefix("Bearer ")?;
@@ -40,17 +42,20 @@ fn extract_bearer_user(state: &AdminState, headers: &HeaderMap) -> Option<AuthUs
 }
 
 /// Return a JSON error response.
+#[cfg(not(tarpaulin_include))]
 fn json_error(status: StatusCode, message: &str) -> Response {
     let body = serde_json::json!({ "error": message });
     (status, [(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
 }
 
 /// Return a JSON success response with the given status and body.
+#[cfg(not(tarpaulin_include))]
 fn json_ok(status: StatusCode, body: &serde_json::Value) -> Response {
     (status, [(header::CONTENT_TYPE, "application/json")], body.to_string()).into_response()
 }
 
 /// POST /api/upload/{slug} — upload a file and create a document.
+#[cfg(not(tarpaulin_include))]
 async fn create_upload(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
@@ -179,6 +184,7 @@ async fn create_upload(
 }
 
 /// PATCH /api/upload/{slug}/{id} — replace file on an existing document.
+#[cfg(not(tarpaulin_include))]
 async fn update_upload(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
@@ -314,6 +320,7 @@ async fn update_upload(
 }
 
 /// DELETE /api/upload/{slug}/{id} — delete an upload document and its files.
+#[cfg(not(tarpaulin_include))]
 async fn delete_upload(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,

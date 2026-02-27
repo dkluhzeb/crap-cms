@@ -14,6 +14,11 @@ use super::super::AdminState;
 
 /// SSE handler — streams mutation events to authenticated admin users.
 /// Auth user is injected by the admin middleware.
+///
+/// Excluded from tarpaulin: SSE streaming requires a persistent async connection
+/// that cannot be tested via tower::oneshot (which completes immediately).
+#[cfg_attr(not(tarpaulin_include), allow(dead_code))]
+#[cfg(not(tarpaulin_include))]
 pub async fn sse_handler(
     State(state): State<AdminState>,
     auth_user: Option<axum::Extension<AuthUser>>,

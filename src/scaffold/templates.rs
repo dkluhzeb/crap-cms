@@ -381,6 +381,129 @@ mod tests {
     }
 
     #[test]
+    fn test_format_size() {
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(100), "100 B");
+        assert_eq!(format_size(1023), "1023 B");
+        assert_eq!(format_size(1024), "1.0 KB");
+        assert_eq!(format_size(1024 * 100), "100.0 KB");
+        assert_eq!(format_size(1024 * 1024), "1.0 MB");
+        assert_eq!(format_size(1024 * 1024 * 5), "5.0 MB");
+    }
+
+    #[test]
+    fn test_templates_extract_all_both() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        templates_extract(tmp.path(), &[], true, None, false).unwrap();
+
+        // Should have created both template and static files
+        assert!(tmp.path().join("templates/layout/base.hbs").exists());
+        assert!(tmp.path().join("static/styles.css").exists());
+    }
+
+    #[test]
+    fn test_templates_extract_all_with_existing_skipped() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // First extraction
+        templates_extract(tmp.path(), &[], true, Some("templates"), false).unwrap();
+        // Write marker
+        fs::write(tmp.path().join("templates/layout/base.hbs"), "CUSTOM").unwrap();
+        // Second extraction without force — should skip existing
+        templates_extract(tmp.path(), &[], true, Some("templates"), false).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
+        assert_eq!(content, "CUSTOM", "Should skip existing files without --force");
+    }
+
+    #[test]
+    fn test_templates_extract_all_static_with_existing_skipped() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // First extraction
+        templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
+        // Write marker
+        fs::write(tmp.path().join("static/styles.css"), "CUSTOM").unwrap();
+        // Second extraction without force — should skip
+        templates_extract(tmp.path(), &[], true, Some("static"), false).unwrap();
+        let content = fs::read_to_string(tmp.path().join("static/styles.css")).unwrap();
+        assert_eq!(content, "CUSTOM");
+    }
+
+    #[test]
+    fn test_templates_extract_invalid_type() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = templates_extract(tmp.path(), &[], true, Some("invalid"), false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("--type"));
+    }
+
+    #[test]
+    fn test_proto_export_to_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file_path = tmp.path().join("output.proto");
+        proto_export(Some(&file_path)).unwrap();
+        assert!(file_path.exists());
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(content.contains("syntax"));
+    }
+
+    #[test]
+    fn test_proto_export_to_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = tmp.path().join("output_dir");
+        fs::create_dir_all(&dir).unwrap();
+        proto_export(Some(&dir)).unwrap();
+        assert!(dir.join("content.proto").exists());
+    }
+
+    #[test]
+    fn test_proto_export_to_stdout() {
+        // Just verify it doesn't error
+        proto_export(None).unwrap();
+    }
+
+    #[test]
+    fn test_proto_export_to_nested_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file_path = tmp.path().join("nested/dir/output.proto");
+        proto_export(Some(&file_path)).unwrap();
+        assert!(file_path.exists());
+    }
+
+    #[test]
+    fn test_templates_extract_specific_with_type_filter() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Extract only static files (styles.css should be found in static)
+        templates_extract(
+            tmp.path(),
+            &["styles.css".to_string()],
+            false, Some("static"), false,
+        ).unwrap();
+
+        assert!(tmp.path().join("static/styles.css").exists());
+    }
+
+    #[test]
+    fn test_templates_extract_specific_skips_existing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // First extract
+        templates_extract(
+            tmp.path(),
+            &["styles.css".to_string()],
+            false, None, false,
+        ).unwrap();
+        // Write marker
+        fs::write(tmp.path().join("static/styles.css"), "CUSTOM").unwrap();
+        // Extract again without force — should skip
+        templates_extract(
+            tmp.path(),
+            &["styles.css".to_string()],
+            false, None, false,
+        ).unwrap();
+        let content = fs::read_to_string(tmp.path().join("static/styles.css")).unwrap();
+        assert_eq!(content, "CUSTOM");
+    }
+
+    #[test]
     fn test_templates_extract_not_found() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // Should not error, just print "Not found"
