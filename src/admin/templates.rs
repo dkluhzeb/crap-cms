@@ -419,7 +419,6 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations = Arc::new(Translations::load(tmp.path(), "en"));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
-        // Register a test template using the eq helper
         let mut hbs_mut = (*hbs).clone();
         hbs_mut.register_template_string("test_eq", "{{#if (eq a b)}}EQUAL{{else}}NOT_EQUAL{{/if}}")
             .expect("register");
@@ -427,5 +426,150 @@ mod tests {
         assert_eq!(result, "EQUAL");
         let result = hbs_mut.render("test_eq", &serde_json::json!({"a": "foo", "b": "bar"})).unwrap();
         assert_eq!(result, "NOT_EQUAL");
+    }
+
+    /// Helper to create a Handlebars instance with all helpers registered for testing.
+    fn test_hbs() -> Handlebars<'static> {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
+        (*hbs).clone()
+    }
+
+    #[test]
+    fn not_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": false})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": true})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": null})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": "hello"})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": ""})).unwrap(), "YES");
+    }
+
+    #[test]
+    fn and_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (and a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": true, "b": true})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": true, "b": false})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": false, "b": true})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn or_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (or a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": true, "b": false})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": false, "b": true})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": false, "b": false})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn gt_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (gt a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 10, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 5, "b": 10})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 5, "b": 5})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn lt_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (lt a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 3, "b": 7})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 7, "b": 3})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn gte_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (gte a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 5, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 6, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 4, "b": 5})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn lte_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (lte a b)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 5, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 4, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": 6, "b": 5})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn contains_helper_string() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (contains haystack needle)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"haystack": "hello world", "needle": "world"})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"haystack": "hello world", "needle": "xyz"})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn contains_helper_array() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{#if (contains arr val)}}YES{{else}}NO{{/if}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"arr": ["a", "b", "c"], "val": "b"})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &serde_json::json!({"arr": ["a", "b", "c"], "val": "d"})).unwrap(), "NO");
+    }
+
+    #[test]
+    fn json_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{{json val}}}").unwrap();
+        let result = hbs.render("t", &serde_json::json!({"val": {"key": "value"}})).unwrap();
+        assert!(result.contains("\"key\""));
+        assert!(result.contains("\"value\""));
+    }
+
+    #[test]
+    fn default_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{default val fallback}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": "hello", "fallback": "bye"})).unwrap(), "hello");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": null, "fallback": "bye"})).unwrap(), "bye");
+        assert_eq!(hbs.render("t", &serde_json::json!({"val": "", "fallback": "bye"})).unwrap(), "bye");
+    }
+
+    #[test]
+    fn concat_helper() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{concat a b c}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "hello", "b": " ", "c": "world"})).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn concat_helper_numbers() {
+        let mut hbs = test_hbs();
+        hbs.register_template_string("t", "{{concat a b}}").unwrap();
+        assert_eq!(hbs.render("t", &serde_json::json!({"a": "count:", "b": 42})).unwrap(), "count:42");
+    }
+
+    #[test]
+    fn is_truthy_edge_cases() {
+        assert!(!is_truthy(&serde_json::Value::Null));
+        assert!(!is_truthy(&serde_json::json!(false)));
+        assert!(is_truthy(&serde_json::json!(true)));
+        assert!(!is_truthy(&serde_json::json!(0)));
+        assert!(is_truthy(&serde_json::json!(1)));
+        assert!(is_truthy(&serde_json::json!(-1)));
+        assert!(!is_truthy(&serde_json::json!("")));
+        assert!(is_truthy(&serde_json::json!("hello")));
+        assert!(!is_truthy(&serde_json::json!([])));
+        assert!(is_truthy(&serde_json::json!([1])));
+        assert!(is_truthy(&serde_json::json!({})));
+    }
+
+    #[test]
+    fn as_f64_extracts_numbers() {
+        assert_eq!(as_f64(&serde_json::json!(42)), Some(42.0));
+        assert_eq!(as_f64(&serde_json::json!(3.14)), Some(3.14));
+        assert_eq!(as_f64(&serde_json::json!("2.5")), Some(2.5));
+        assert_eq!(as_f64(&serde_json::json!("not_a_number")), None);
+        assert_eq!(as_f64(&serde_json::json!(null)), None);
+        assert_eq!(as_f64(&serde_json::json!(true)), None);
     }
 }

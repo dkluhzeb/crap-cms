@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 /// Handle the `init` subcommand — scaffold directory, then optionally create collections
 /// and a first admin user via interactive survey.
+#[cfg(not(tarpaulin_include))]
 pub fn run(dir: Option<PathBuf>) -> Result<()> {
     use dialoguer::{Confirm, Input};
 

@@ -141,3 +141,151 @@ pub(crate) fn sorted_global_slugs(registry: &Registry) -> Vec<&String> {
     slugs.sort();
     slugs
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::FieldDefinition;
+
+    #[test]
+    fn to_pascal_case_single_word() {
+        assert_eq!(to_pascal_case("posts"), "Posts");
+    }
+
+    #[test]
+    fn to_pascal_case_multi_word() {
+        assert_eq!(to_pascal_case("site_settings"), "SiteSettings");
+    }
+
+    #[test]
+    fn to_pascal_case_already_pascal() {
+        assert_eq!(to_pascal_case("Posts"), "Posts");
+    }
+
+    #[test]
+    fn to_pascal_case_empty() {
+        assert_eq!(to_pascal_case(""), "");
+    }
+
+    #[test]
+    fn to_pascal_case_three_words() {
+        assert_eq!(to_pascal_case("my_cool_thing"), "MyCoolThing");
+    }
+
+    #[test]
+    fn is_optional_required_field() {
+        let f = FieldDefinition { required: true, ..Default::default() };
+        assert!(!is_optional(&f));
+    }
+
+    #[test]
+    fn is_optional_non_required_field() {
+        let f = FieldDefinition { required: false, ..Default::default() };
+        assert!(is_optional(&f));
+    }
+
+    #[test]
+    fn is_optional_checkbox_always_optional() {
+        let f = FieldDefinition {
+            required: true,
+            field_type: FieldType::Checkbox,
+            ..Default::default()
+        };
+        assert!(is_optional(&f), "checkbox should always be optional");
+    }
+
+    #[test]
+    fn language_from_str_all_variants() {
+        assert_eq!(Language::from_str("lua"), Some(Language::Lua));
+        assert_eq!(Language::from_str("ts"), Some(Language::Typescript));
+        assert_eq!(Language::from_str("typescript"), Some(Language::Typescript));
+        assert_eq!(Language::from_str("go"), Some(Language::Go));
+        assert_eq!(Language::from_str("golang"), Some(Language::Go));
+        assert_eq!(Language::from_str("py"), Some(Language::Python));
+        assert_eq!(Language::from_str("python"), Some(Language::Python));
+        assert_eq!(Language::from_str("rs"), Some(Language::Rust));
+        assert_eq!(Language::from_str("rust"), Some(Language::Rust));
+    }
+
+    #[test]
+    fn language_from_str_case_insensitive() {
+        assert_eq!(Language::from_str("LUA"), Some(Language::Lua));
+        assert_eq!(Language::from_str("TypeScript"), Some(Language::Typescript));
+    }
+
+    #[test]
+    fn language_from_str_invalid() {
+        assert_eq!(Language::from_str("java"), None);
+        assert_eq!(Language::from_str(""), None);
+    }
+
+    #[test]
+    fn language_file_extension() {
+        assert_eq!(Language::Lua.file_extension(), "lua");
+        assert_eq!(Language::Typescript.file_extension(), "ts");
+        assert_eq!(Language::Go.file_extension(), "go");
+        assert_eq!(Language::Python.file_extension(), "py");
+        assert_eq!(Language::Rust.file_extension(), "rs");
+    }
+
+    #[test]
+    fn language_label() {
+        assert_eq!(Language::Lua.label(), "lua");
+        assert_eq!(Language::Typescript.label(), "ts");
+        assert_eq!(Language::Go.label(), "go");
+        assert_eq!(Language::Python.label(), "py");
+        assert_eq!(Language::Rust.label(), "rs");
+    }
+
+    #[test]
+    fn language_all_contains_five() {
+        assert_eq!(Language::all().len(), 5);
+    }
+
+    fn make_collection(slug: &str) -> crate::core::CollectionDefinition {
+        crate::core::CollectionDefinition {
+            slug: slug.to_string(),
+            labels: Default::default(),
+            timestamps: true,
+            fields: vec![],
+            admin: Default::default(),
+            hooks: Default::default(),
+            auth: None,
+            upload: None,
+            access: Default::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
+    fn make_global(slug: &str) -> crate::core::collection::GlobalDefinition {
+        crate::core::collection::GlobalDefinition {
+            slug: slug.to_string(),
+            labels: Default::default(),
+            fields: vec![],
+            hooks: Default::default(),
+            access: Default::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
+    #[test]
+    fn sorted_collection_slugs_sorted() {
+        let mut registry = Registry::default();
+        registry.collections.insert("zebra".into(), make_collection("zebra"));
+        registry.collections.insert("alpha".into(), make_collection("alpha"));
+        registry.collections.insert("middle".into(), make_collection("middle"));
+        let slugs = sorted_collection_slugs(&registry);
+        assert_eq!(slugs, vec![&"alpha".to_string(), &"middle".to_string(), &"zebra".to_string()]);
+    }
+
+    #[test]
+    fn sorted_global_slugs_sorted() {
+        let mut registry = Registry::default();
+        registry.globals.insert("settings".into(), make_global("settings"));
+        registry.globals.insert("about".into(), make_global("about"));
+        let slugs = sorted_global_slugs(&registry);
+        assert_eq!(slugs, vec![&"about".to_string(), &"settings".to_string()]);
+    }
+}

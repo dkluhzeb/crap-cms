@@ -5,6 +5,7 @@ use std::path::Path;
 use tracing::{info, warn, error};
 
 /// Re-exec the current binary as a detached background process.
+#[cfg(not(tarpaulin_include))]
 pub fn detach(config_dir: &Path) -> Result<()> {
     let exe = std::env::current_exe().context("Failed to determine executable path")?;
 
@@ -22,6 +23,7 @@ pub fn detach(config_dir: &Path) -> Result<()> {
 }
 
 /// Start the admin UI and gRPC servers.
+#[cfg(not(tarpaulin_include))]
 pub async fn run(config_dir: &Path) -> Result<()> {
     let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
 

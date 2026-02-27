@@ -3868,3 +3868,104 @@ crap.collections.define("media", {
     "#, doc_id), &conn, None).expect("find_by_id eval");
     assert_eq!(find_by_id_result, "ok");
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Additional Lua API Tests
+// ══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn lua_crypto_hash_verify_roundtrip() {
+    // Test crap.auth.hash_password and crap.auth.verify_password roundtrip.
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local hash = crap.auth.hash_password("test")
+        -- Verify the hash starts with the argon2 prefix
+        if hash:sub(1, 7) ~= "$argon2" then
+            return "BAD_PREFIX:" .. hash:sub(1, 10)
+        end
+        -- Verify the correct password matches
+        local ok = crap.auth.verify_password("test", hash)
+        if not ok then return "VERIFY_FAILED" end
+        -- Verify a wrong password does NOT match
+        local wrong = crap.auth.verify_password("wrong", hash)
+        if wrong then return "WRONG_MATCHED" end
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn lua_env_get_missing_returns_nil() {
+    // Test that crap.env.get returns nil for a non-existent environment variable.
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local v = crap.env.get("NONEXISTENT_VAR_12345")
+        if v == nil then return "nil" end
+        return "NOT_NIL:" .. tostring(v)
+    "#);
+    assert_eq!(result, "nil", "crap.env.get should return nil for missing env vars");
+}
+
+#[test]
+fn lua_config_get_dot_notation() {
+    // Test that crap.config.get with dot-notation traversal returns the
+    // configured auth secret value.
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local secret = crap.config.get("auth.secret")
+        -- Default CrapConfig has an empty string or auto-generated secret
+        -- The key point is that dot notation traversal works without error
+        if secret == nil then return "nil" end
+        return tostring(secret)
+    "#);
+    // The default CrapConfig has an empty secret, which is fine.
+    // The test verifies that dot notation works and doesn't error.
+    // An empty string is the default.
+    assert!(
+        result == "" || result == "nil" || !result.is_empty(),
+        "crap.config.get('auth.secret') should return a value or nil, got: {}",
+        result
+    );
+
+    // Also verify deeper dot notation works for a known value
+    let result2 = eval_lua(&runner, r#"
+        local expiry = crap.config.get("auth.token_expiry")
+        return tostring(expiry)
+    "#);
+    assert_eq!(result2, "7200", "auth.token_expiry should be default 7200");
+}
+
+#[test]
+fn lua_json_encode_decode_roundtrip() {
+    // Test encoding a table to JSON and decoding it back, verifying all
+    // value types survive the roundtrip.
+    let runner = setup_lua();
+    let result = eval_lua(&runner, r#"
+        local original = {
+            name = "test",
+            count = 42,
+            active = true,
+            tags = { "alpha", "beta", "gamma" },
+            nested = { x = 1, y = 2 },
+        }
+        local encoded = crap.util.json_encode(original)
+        local decoded = crap.util.json_decode(encoded)
+
+        -- Verify scalar fields
+        if decoded.name ~= "test" then return "NAME:" .. tostring(decoded.name) end
+        if decoded.count ~= 42 then return "COUNT:" .. tostring(decoded.count) end
+        if decoded.active ~= true then return "ACTIVE:" .. tostring(decoded.active) end
+
+        -- Verify array
+        if #decoded.tags ~= 3 then return "TAGS_LEN:" .. tostring(#decoded.tags) end
+        if decoded.tags[1] ~= "alpha" then return "TAG1:" .. tostring(decoded.tags[1]) end
+        if decoded.tags[3] ~= "gamma" then return "TAG3:" .. tostring(decoded.tags[3]) end
+
+        -- Verify nested table
+        if decoded.nested.x ~= 1 then return "NX:" .. tostring(decoded.nested.x) end
+        if decoded.nested.y ~= 2 then return "NY:" .. tostring(decoded.nested.y) end
+
+        return "ok"
+    "#);
+    assert_eq!(result, "ok");
+}

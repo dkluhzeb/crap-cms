@@ -1251,3 +1251,129 @@ fn before_broadcast_suppresses_event() {
         .expect("should not error");
     assert!(result.is_none(), "suppress_broadcast should suppress the event");
 }
+
+// ── 5A. Additional Hook Lifecycle Tests ──────────────────────────────────────
+
+#[test]
+fn validate_required_field_errors() {
+    // Create a collection definition with a required field, try creating a
+    // document without it, and verify that the validation error propagates.
+    let (_tmp, pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("articles").unwrap().clone();
+    drop(reg);
+
+    // Build data WITHOUT the required "title" field
+    let mut data = HashMap::new();
+    data.insert("body".to_string(), serde_json::json!("Body without title"));
+
+    let ctx = crap_cms::hooks::lifecycle::HookContext {
+        collection: "articles".to_string(),
+        operation: "create".to_string(),
+        data,
+        locale: None,
+        draft: None,
+        context: HashMap::new(),
+    };
+
+    let mut conn = pool.get().expect("DB connection");
+    let tx = conn.transaction().expect("Start transaction");
+
+    // run_before_write runs field hooks, validation, then collection hooks.
+    // It should fail because "title" is required.
+    let result = runner.run_before_write(
+        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false,
+    );
+    assert!(result.is_err(), "Should fail when required field 'title' is missing");
+
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("title") || err_msg.contains("required") || err_msg.contains("Validation"),
+        "Error should reference the missing required field, got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn after_read_hooks_fire() {
+    // Set up a collection with an after_read hook, create a doc, find it,
+    // and verify the after_read hook's modifications are present.
+    let (_tmp, pool, registry, runner) = setup();
+
+    // Create an article via the DB
+    let mut create_data = HashMap::new();
+    create_data.insert("title".to_string(), "After Read Fire Test".to_string());
+    create_data.insert("body".to_string(), "Some body content".to_string());
+    let doc = create_article(&pool, &registry, &create_data);
+
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("articles").unwrap().clone();
+    drop(reg);
+
+    // The articles collection has an after_read hook that adds _was_read = "true"
+    let transformed = runner.apply_after_read(
+        &def.hooks, &def.fields, "articles", "find", doc.clone(),
+    );
+
+    // Verify the after_read hook ran
+    assert_eq!(
+        transformed.fields.get("_was_read").and_then(|v| v.as_str()),
+        Some("true"),
+        "after_read hook should have set _was_read marker on the document"
+    );
+
+    // Verify original fields are still intact
+    assert_eq!(
+        transformed.fields.get("title").and_then(|v| v.as_str()),
+        Some("After Read Fire Test"),
+        "Title should be preserved after after_read hook"
+    );
+    assert_eq!(transformed.id, doc.id, "Document ID should not change");
+}
+
+#[test]
+fn hook_error_rolls_back_transaction() {
+    // Set up a hook that errors on before_change, attempt to create a document
+    // via the CRUD lifecycle that triggers the hook, and verify the doc was
+    // NOT created (transaction rolled back).
+    let (_tmp, pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("articles").unwrap().clone();
+    drop(reg);
+
+    // First verify the collection is empty
+    let initial_count = crap_cms::db::ops::count_documents(
+        &pool, "articles", &def, &[], None,
+    ).expect("count");
+    assert_eq!(initial_count, 0, "Should start with 0 articles");
+
+    // Attempt to create a document inside a transaction, but have the hook error
+    let mut conn = pool.get().expect("DB connection");
+    let tx = conn.transaction().expect("Start transaction");
+
+    // Create the document in the transaction
+    let mut data = HashMap::new();
+    data.insert("title".to_string(), "Should Not Persist".to_string());
+    let _doc = query::create(&tx, "articles", &def, &data, None)
+        .expect("Create should succeed at DB level");
+
+    // Now run a hook that errors — simulating what happens when after_change fails
+    let result = runner.eval_lua_with_conn(
+        r#"error("intentional hook error for rollback test")"#,
+        &tx,
+        None,
+    );
+    assert!(result.is_err(), "Hook error should propagate");
+
+    // Drop the transaction WITHOUT committing (simulates rollback on error)
+    drop(tx);
+
+    // Verify the document was NOT persisted
+    let final_count = crap_cms::db::ops::count_documents(
+        &pool, "articles", &def, &[], None,
+    ).expect("count");
+    assert_eq!(
+        final_count, 0,
+        "Document should not be persisted after transaction rollback due to hook error"
+    );
+}

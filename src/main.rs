@@ -8,24 +8,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod config;
-mod core;
-mod db;
-mod hooks;
-mod admin;
-mod api;
-mod scheduler;
-mod scaffold;
-mod service;
-mod typegen;
-mod commands;
-
-/// Parse a key=value pair for --field arguments.
-fn parse_key_val(s: &str) -> Result<(String, String), String> {
-    let pos = s.find('=')
-        .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
-    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
-}
+use crap_cms::commands::{
+    self, BlueprintAction, DbAction, JobsAction, MakeAction, MigrateAction,
+    TemplatesAction, UserAction,
+};
 
 #[derive(Parser)]
 #[command(name = "crap-cms", about = "Crap CMS - Headless CMS with Lua hooks", version)]
@@ -164,367 +150,6 @@ enum Command {
     },
 }
 
-#[derive(Subcommand)]
-enum MakeAction {
-    /// Generate a collection Lua file
-    Collection {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Collection slug (e.g., "posts"). Prompted if omitted.
-        slug: Option<String>,
-
-        /// Inline field shorthand (e.g., "title:text:required,status:select,body:textarea")
-        #[arg(short = 'F', long)]
-        fields: Option<String>,
-
-        /// Set timestamps = false
-        #[arg(short = 'T', long)]
-        no_timestamps: bool,
-
-        /// Enable auth (email/password login)
-        #[arg(long)]
-        auth: bool,
-
-        /// Enable uploads (file upload collection)
-        #[arg(long)]
-        upload: bool,
-
-        /// Enable versioning (draft/publish workflow)
-        #[arg(long)]
-        versions: bool,
-
-        /// Non-interactive mode — skip all prompts, use flags and defaults only
-        #[arg(long)]
-        no_input: bool,
-
-        /// Overwrite existing file
-        #[arg(short, long)]
-        force: bool,
-    },
-
-    /// Generate a global Lua file
-    Global {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Global slug (e.g., "site_settings"). Prompted if omitted.
-        slug: Option<String>,
-
-        /// Overwrite existing file
-        #[arg(short, long)]
-        force: bool,
-    },
-
-    /// Generate a hook file (file-per-hook pattern)
-    Hook {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Hook function name (e.g., "auto_slug"). Prompted if omitted.
-        name: Option<String>,
-
-        /// Hook type: collection, field, or access
-        #[arg(short = 't', long = "type")]
-        hook_type: Option<String>,
-
-        /// Target collection slug
-        #[arg(short, long)]
-        collection: Option<String>,
-
-        /// Lifecycle position (e.g., before_change, after_read)
-        #[arg(short = 'l', long)]
-        position: Option<String>,
-
-        /// Target field name (field hooks only)
-        #[arg(short = 'F', long)]
-        field: Option<String>,
-
-        /// Overwrite existing file
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Generate a job Lua file
-    Job {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Job slug (e.g., "cleanup_expired"). Prompted if omitted.
-        slug: Option<String>,
-
-        /// Cron schedule expression (e.g., "0 3 * * *")
-        #[arg(short, long)]
-        schedule: Option<String>,
-
-        /// Queue name (default: "default")
-        #[arg(short, long)]
-        queue: Option<String>,
-
-        /// Max retry attempts (default: 0)
-        #[arg(short, long)]
-        retries: Option<u32>,
-
-        /// Timeout in seconds (default: 60)
-        #[arg(short, long)]
-        timeout: Option<u64>,
-
-        /// Overwrite existing file
-        #[arg(short, long)]
-        force: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum BlueprintAction {
-    /// Save a config directory as a reusable blueprint
-    Save {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Blueprint name (e.g., "blog", "saas-starter")
-        name: String,
-
-        /// Overwrite existing blueprint
-        #[arg(short, long)]
-        force: bool,
-    },
-
-    /// Create a new project from a saved blueprint
-    Use {
-        /// Blueprint name to use. Prompted if omitted.
-        name: Option<String>,
-
-        /// Directory to create (default: ./crap-cms)
-        dir: Option<PathBuf>,
-    },
-
-    /// List all saved blueprints
-    List,
-
-    /// Remove a saved blueprint
-    Remove {
-        /// Blueprint name to remove. Prompted if omitted.
-        name: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum UserAction {
-    /// Create a new user in an auth collection
-    Create {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Auth collection slug
-        #[arg(short, long, default_value = "users")]
-        collection: String,
-
-        /// User email
-        #[arg(short, long)]
-        email: Option<String>,
-
-        /// User password (omit for interactive prompt)
-        #[arg(short, long)]
-        password: Option<String>,
-
-        /// Extra fields as key=value pairs (repeatable)
-        #[arg(short, long = "field", value_parser = parse_key_val)]
-        fields: Vec<(String, String)>,
-    },
-
-    /// List users in an auth collection
-    List {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Auth collection slug
-        #[arg(short, long, default_value = "users")]
-        collection: String,
-    },
-
-    /// Delete a user from an auth collection
-    Delete {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Auth collection slug
-        #[arg(short, long, default_value = "users")]
-        collection: String,
-
-        /// User email
-        #[arg(short, long)]
-        email: Option<String>,
-
-        /// User ID
-        #[arg(long)]
-        id: Option<String>,
-
-        /// Skip confirmation prompt
-        #[arg(short = 'y', long)]
-        confirm: bool,
-    },
-
-    /// Lock a user account (prevent login)
-    Lock {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Auth collection slug
-        #[arg(short, long, default_value = "users")]
-        collection: String,
-
-        /// User email
-        #[arg(short, long)]
-        email: Option<String>,
-
-        /// User ID
-        #[arg(long)]
-        id: Option<String>,
-    },
-
-    /// Unlock a user account (allow login)
-    Unlock {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Auth collection slug
-        #[arg(short, long, default_value = "users")]
-        collection: String,
-
-        /// User email
-        #[arg(short, long)]
-        email: Option<String>,
-
-        /// User ID
-        #[arg(long)]
-        id: Option<String>,
-    },
-
-    /// Change a user's password
-    ChangePassword {
-        /// Path to the config directory
-        config: PathBuf,
-
-        /// Auth collection slug
-        #[arg(short, long, default_value = "users")]
-        collection: String,
-
-        /// User email
-        #[arg(short, long)]
-        email: Option<String>,
-
-        /// User ID
-        #[arg(long)]
-        id: Option<String>,
-
-        /// New password (omit for interactive prompt)
-        #[arg(short, long)]
-        password: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
-enum MigrateAction {
-    /// Create a new migration file
-    Create {
-        /// Migration name (e.g., "add_categories")
-        name: String,
-    },
-    /// Schema sync + run pending Lua data migrations
-    Up,
-    /// Rollback last N data migrations
-    Down {
-        /// Number of migrations to roll back
-        #[arg(short, long, default_value = "1")]
-        steps: usize,
-    },
-    /// Show all migration files with applied/pending status
-    List,
-    /// Drop all tables, recreate from Lua definitions, run all migrations
-    Fresh {
-        /// Required confirmation flag (destructive operation)
-        #[arg(short = 'y', long)]
-        confirm: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum DbAction {
-    /// Open an interactive SQLite console
-    Console {
-        /// Path to the config directory
-        config: PathBuf,
-    },
-}
-
-#[derive(Subcommand)]
-enum TemplatesAction {
-    /// List all available default templates and static files
-    List {
-        /// Filter: "templates" or "static" (default: both)
-        #[arg(short, long)]
-        r#type: Option<String>,
-    },
-    /// Extract default files into the config directory for customization
-    Extract {
-        /// Path to the config directory
-        config: PathBuf,
-        /// File paths to extract (e.g., "layout/base.hbs" "styles.css")
-        paths: Vec<String>,
-        /// Extract all files
-        #[arg(short, long)]
-        all: bool,
-        /// Filter: "templates" or "static" (default: both, only with --all)
-        #[arg(short, long)]
-        r#type: Option<String>,
-        /// Overwrite existing files
-        #[arg(short, long)]
-        force: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum JobsAction {
-    /// List defined jobs and recent runs
-    List {
-        /// Path to the config directory
-        config: PathBuf,
-    },
-    /// Trigger a job manually
-    Trigger {
-        /// Path to the config directory
-        config: PathBuf,
-        /// Job slug to trigger
-        slug: String,
-        /// JSON data to pass to the job (default: "{}")
-        #[arg(short, long)]
-        data: Option<String>,
-    },
-    /// Show job run history
-    Status {
-        /// Path to the config directory
-        config: PathBuf,
-        /// Show a single job run by ID
-        #[arg(long)]
-        id: Option<String>,
-        /// Filter by job slug
-        #[arg(short, long)]
-        slug: Option<String>,
-        /// Max results to show
-        #[arg(short, long, default_value = "20")]
-        limit: i64,
-    },
-    /// Clean up old completed/failed job runs
-    Purge {
-        /// Path to the config directory
-        config: PathBuf,
-        /// Delete runs older than this (e.g., "7d", "24h", "30m")
-        #[arg(long, default_value = "7d")]
-        older_than: String,
-    },
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -555,14 +180,14 @@ async fn main() -> Result<()> {
         Command::Make { action } => commands::make::run(action),
         Command::Blueprint { action } => match action {
             BlueprintAction::Save { config, name, force } => {
-                scaffold::blueprint_save(&config, &name, force)
+                crap_cms::scaffold::blueprint_save(&config, &name, force)
             }
             BlueprintAction::Use { name, dir } => {
                 let name = match name {
                     Some(n) => n,
                     None => {
                         use dialoguer::Select;
-                        let names = scaffold::list_blueprint_names()?;
+                        let names = crap_cms::scaffold::list_blueprint_names()?;
                         if names.is_empty() {
                             anyhow::bail!("No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>");
                         }
@@ -574,15 +199,15 @@ async fn main() -> Result<()> {
                         names[selection].clone()
                     }
                 };
-                scaffold::blueprint_use(&name, dir)
+                crap_cms::scaffold::blueprint_use(&name, dir)
             }
-            BlueprintAction::List => scaffold::blueprint_list(),
+            BlueprintAction::List => crap_cms::scaffold::blueprint_list(),
             BlueprintAction::Remove { name } => {
                 let name = match name {
                     Some(n) => n,
                     None => {
                         use dialoguer::Select;
-                        let names = scaffold::list_blueprint_names()?;
+                        let names = crap_cms::scaffold::list_blueprint_names()?;
                         if names.is_empty() {
                             anyhow::bail!("No blueprints saved yet.");
                         }
@@ -594,11 +219,11 @@ async fn main() -> Result<()> {
                         names[selection].clone()
                     }
                 };
-                scaffold::blueprint_remove(&name)
+                crap_cms::scaffold::blueprint_remove(&name)
             }
         },
         Command::Typegen { config, lang } => commands::typegen::run(&config, &lang),
-        Command::Proto { output } => scaffold::proto_export(output.as_deref()),
+        Command::Proto { output } => crap_cms::scaffold::proto_export(output.as_deref()),
         Command::Migrate { config, action } => commands::db::migrate(&config, action),
         Command::Backup { config, output, include_uploads } => {
             commands::db::backup(&config, output, include_uploads)

@@ -5,29 +5,29 @@ use std::collections::HashMap;
 
 
 /// Dispatch user management subcommands.
-pub fn run(action: crate::UserAction) -> Result<()> {
+pub fn run(action: super::UserAction) -> Result<()> {
     match action {
-        crate::UserAction::Create { config, collection, email, password, fields } => {
+        super::UserAction::Create { config, collection, email, password, fields } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_create(&pool, &registry, &collection, email, password, fields)
         }
-        crate::UserAction::List { config, collection } => {
+        super::UserAction::List { config, collection } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_list(&pool, &registry, &collection)
         }
-        crate::UserAction::Delete { config, collection, email, id, confirm } => {
+        super::UserAction::Delete { config, collection, email, id, confirm } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_delete(&pool, &registry, &collection, email, id, confirm)
         }
-        crate::UserAction::Lock { config, collection, email, id } => {
+        super::UserAction::Lock { config, collection, email, id } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_lock(&pool, &registry, &collection, email, id)
         }
-        crate::UserAction::Unlock { config, collection, email, id } => {
+        super::UserAction::Unlock { config, collection, email, id } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_unlock(&pool, &registry, &collection, email, id)
         }
-        crate::UserAction::ChangePassword { config, collection, email, id, password } => {
+        super::UserAction::ChangePassword { config, collection, email, id, password } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_change_password(&pool, &registry, &collection, email, id, password)
         }
@@ -98,7 +98,7 @@ fn resolve_user(
 }
 
 /// Create a new user in an auth collection.
-pub(crate) fn user_create(
+pub fn user_create(
     pool: &crate::db::DbPool,
     registry: &crate::core::SharedRegistry,
     collection: &str,

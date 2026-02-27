@@ -385,4 +385,111 @@ dev_mode = false
         assert_eq!(email.from_address, "noreply@example.com");
         assert_eq!(email.from_name, "Crap CMS");
     }
+
+    #[test]
+    fn auto_purge_seconds_days() {
+        let mut cfg = JobsConfig::default();
+        cfg.auto_purge = "7d".to_string();
+        assert_eq!(cfg.auto_purge_seconds(), Some(7 * 86400));
+    }
+
+    #[test]
+    fn auto_purge_seconds_hours() {
+        let mut cfg = JobsConfig::default();
+        cfg.auto_purge = "24h".to_string();
+        assert_eq!(cfg.auto_purge_seconds(), Some(24 * 3600));
+    }
+
+    #[test]
+    fn auto_purge_seconds_minutes() {
+        let mut cfg = JobsConfig::default();
+        cfg.auto_purge = "30m".to_string();
+        assert_eq!(cfg.auto_purge_seconds(), Some(30 * 60));
+    }
+
+    #[test]
+    fn auto_purge_seconds_empty() {
+        let mut cfg = JobsConfig::default();
+        cfg.auto_purge = "".to_string();
+        assert_eq!(cfg.auto_purge_seconds(), None);
+    }
+
+    #[test]
+    fn auto_purge_seconds_invalid() {
+        let mut cfg = JobsConfig::default();
+        cfg.auto_purge = "7s".to_string();
+        assert_eq!(cfg.auto_purge_seconds(), None);
+    }
+
+    #[test]
+    fn auto_purge_seconds_default_config() {
+        let cfg = JobsConfig::default();
+        assert_eq!(cfg.auto_purge, "7d");
+        assert_eq!(cfg.auto_purge_seconds(), Some(7 * 86400));
+    }
+
+    #[test]
+    fn jobs_config_defaults() {
+        let cfg = JobsConfig::default();
+        assert_eq!(cfg.max_concurrent, 10);
+        assert_eq!(cfg.poll_interval, 1);
+        assert_eq!(cfg.cron_interval, 60);
+        assert_eq!(cfg.heartbeat_interval, 10);
+    }
+
+    #[test]
+    fn depth_config_defaults() {
+        let depth = DepthConfig::default();
+        assert_eq!(depth.default_depth, 1);
+        assert_eq!(depth.max_depth, 10);
+    }
+
+    #[test]
+    fn auth_config_defaults() {
+        let auth = AuthConfig::default();
+        assert!(auth.secret.is_empty());
+        assert_eq!(auth.token_expiry, 7200);
+    }
+
+    #[test]
+    fn hooks_config_defaults() {
+        let hooks = HooksConfig::default();
+        assert!(hooks.on_init.is_empty());
+        assert_eq!(hooks.max_depth, 3);
+    }
+
+    #[test]
+    fn upload_config_defaults() {
+        let upload = UploadConfig::default();
+        assert_eq!(upload.max_file_size, 52_428_800);
+    }
+
+    #[test]
+    fn live_config_defaults() {
+        let live = LiveConfig::default();
+        assert!(live.enabled);
+        assert_eq!(live.channel_capacity, 1024);
+    }
+
+    #[test]
+    fn load_invalid_toml_returns_error() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "invalid { toml").unwrap();
+        let result = CrapConfig::load(tmp.path());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_partial_toml_uses_defaults_for_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 5000\n",
+        ).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.server.admin_port, 5000);
+        // Other fields should be defaults
+        assert_eq!(config.server.grpc_port, 50051);
+        assert_eq!(config.database.path, "data/crap.db");
+    }
 }

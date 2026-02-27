@@ -4,11 +4,11 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// Handle the `migrate` subcommand.
-pub fn migrate(config_dir: &Path, action: crate::MigrateAction) -> Result<()> {
+pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
     let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
 
     // Create only writes a file — no Lua/DB needed
-    if let crate::MigrateAction::Create { ref name } = action {
+    if let super::MigrateAction::Create { ref name } = action {
         return crate::scaffold::make_migration(&config_dir, name);
     }
 
@@ -20,8 +20,8 @@ pub fn migrate(config_dir: &Path, action: crate::MigrateAction) -> Result<()> {
         .context("Failed to create database pool")?;
 
     match action {
-        crate::MigrateAction::Create { .. } => unreachable!(),
-        crate::MigrateAction::Up => {
+        super::MigrateAction::Create { .. } => unreachable!(),
+        super::MigrateAction::Up => {
             // Schema sync from Lua definitions
             println!("Syncing schema from Lua definitions...");
             crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
@@ -49,7 +49,7 @@ pub fn migrate(config_dir: &Path, action: crate::MigrateAction) -> Result<()> {
                 println!("{} migration(s) applied.", pending.len());
             }
         }
-        crate::MigrateAction::Down { steps } => {
+        super::MigrateAction::Down { steps } => {
             let applied = crate::db::migrate::get_applied_migrations_desc(&pool)?;
             let to_rollback: Vec<_> = applied.into_iter().take(steps).collect();
 
@@ -74,7 +74,7 @@ pub fn migrate(config_dir: &Path, action: crate::MigrateAction) -> Result<()> {
                 println!("{} migration(s) rolled back.", to_rollback.len());
             }
         }
-        crate::MigrateAction::List => {
+        super::MigrateAction::List => {
             let migrations_dir = config_dir.join("migrations");
             let all_files = crate::db::migrate::list_migration_files(&migrations_dir)?;
             let applied = crate::db::migrate::get_applied_migrations(&pool)?;
@@ -90,7 +90,7 @@ pub fn migrate(config_dir: &Path, action: crate::MigrateAction) -> Result<()> {
                 }
             }
         }
-        crate::MigrateAction::Fresh { confirm } => {
+        super::MigrateAction::Fresh { confirm } => {
             if !confirm {
                 anyhow::bail!(
                     "migrate fresh is destructive — it drops ALL tables and recreates them.\n\

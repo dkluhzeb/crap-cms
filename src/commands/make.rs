@@ -4,12 +4,12 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Dispatch the `make` subcommand.
-pub fn run(action: crate::MakeAction) -> Result<()> {
+pub fn run(action: super::MakeAction) -> Result<()> {
     match action {
-        crate::MakeAction::Collection { config, slug, fields, no_timestamps, auth, upload, versions, no_input, force } => {
+        super::MakeAction::Collection { config, slug, fields, no_timestamps, auth, upload, versions, no_input, force } => {
             make_collection_command(&config, slug, fields, no_timestamps, auth, upload, versions, !no_input, force)
         }
-        crate::MakeAction::Global { config, slug, force } => {
+        super::MakeAction::Global { config, slug, force } => {
             let slug = match slug {
                 Some(s) => s,
                 None => {
@@ -25,10 +25,10 @@ pub fn run(action: crate::MakeAction) -> Result<()> {
             };
             crate::scaffold::make_global(&config, &slug, force)
         }
-        crate::MakeAction::Hook { config, name, hook_type, collection, position, field, force } => {
+        super::MakeAction::Hook { config, name, hook_type, collection, position, field, force } => {
             make_hook_command(&config, name, hook_type, collection, position, field, force)
         }
-        crate::MakeAction::Job { config, slug, schedule, queue, retries, timeout, force } => {
+        super::MakeAction::Job { config, slug, schedule, queue, retries, timeout, force } => {
             let slug = match slug {
                 Some(s) => s,
                 None => {

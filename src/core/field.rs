@@ -410,4 +410,110 @@ mod tests {
         assert_eq!(ls.resolve("en", "en"), "");
         assert_eq!(ls.resolve_default(), "");
     }
+
+    // ── has_parent_column tests ─────────────────────────────────────────────
+
+    #[test]
+    fn has_parent_column_scalar_types() {
+        for ft in [FieldType::Text, FieldType::Number, FieldType::Textarea,
+                    FieldType::Select, FieldType::Checkbox, FieldType::Date,
+                    FieldType::Email, FieldType::Json, FieldType::Richtext,
+                    FieldType::Upload] {
+            let f = FieldDefinition { field_type: ft.clone(), ..Default::default() };
+            assert!(f.has_parent_column(), "{:?} should have parent column", ft);
+        }
+    }
+
+    #[test]
+    fn has_parent_column_array_false() {
+        let f = FieldDefinition { field_type: FieldType::Array, ..Default::default() };
+        assert!(!f.has_parent_column());
+    }
+
+    #[test]
+    fn has_parent_column_group_false() {
+        let f = FieldDefinition { field_type: FieldType::Group, ..Default::default() };
+        assert!(!f.has_parent_column());
+    }
+
+    #[test]
+    fn has_parent_column_blocks_false() {
+        let f = FieldDefinition { field_type: FieldType::Blocks, ..Default::default() };
+        assert!(!f.has_parent_column());
+    }
+
+    #[test]
+    fn has_parent_column_relationship_has_one() {
+        let f = FieldDefinition {
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig {
+                collection: "posts".to_string(),
+                has_many: false,
+                max_depth: None,
+            }),
+            ..Default::default()
+        };
+        assert!(f.has_parent_column(), "has-one relationship should have parent column");
+    }
+
+    #[test]
+    fn has_parent_column_relationship_has_many() {
+        let f = FieldDefinition {
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig {
+                collection: "tags".to_string(),
+                has_many: true,
+                max_depth: None,
+            }),
+            ..Default::default()
+        };
+        assert!(!f.has_parent_column(), "has-many relationship should not have parent column");
+    }
+
+    #[test]
+    fn has_parent_column_relationship_no_config() {
+        let f = FieldDefinition {
+            field_type: FieldType::Relationship,
+            relationship: None,
+            ..Default::default()
+        };
+        assert!(f.has_parent_column(), "relationship with no config defaults to has-one");
+    }
+
+    // ── FieldHooks tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn field_hooks_is_empty_default() {
+        let hooks = FieldHooks::default();
+        assert!(hooks.is_empty());
+    }
+
+    #[test]
+    fn field_hooks_is_empty_with_hooks() {
+        let hooks = FieldHooks {
+            before_validate: vec!["validate_slug".to_string()],
+            ..Default::default()
+        };
+        assert!(!hooks.is_empty());
+    }
+
+    // ── FieldDefinition default tests ─────────────────────────────────────
+
+    #[test]
+    fn field_definition_default() {
+        let f = FieldDefinition::default();
+        assert_eq!(f.name, "");
+        assert_eq!(f.field_type, FieldType::Text);
+        assert!(!f.required);
+        assert!(!f.unique);
+        assert!(!f.localized);
+        assert!(f.validate.is_none());
+        assert!(f.default_value.is_none());
+        assert!(f.options.is_empty());
+        assert!(f.relationship.is_none());
+        assert!(f.fields.is_empty());
+        assert!(f.blocks.is_empty());
+        assert!(f.min_rows.is_none());
+        assert!(f.max_rows.is_none());
+    }
 }

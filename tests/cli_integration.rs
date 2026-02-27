@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crap_cms::commands;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
 use crap_cms::db::{migrate, ops, pool, query, DbPool};
@@ -1551,6 +1552,515 @@ fn blueprint_refuses_overwrite() {
         let _ = scaffold::blueprint_remove("test-bp-overwrite-check");
     }
     // If first save fails (e.g., no config dir permissions), that's also acceptable for this test
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 17. Make Job
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn make_job_creates_lua_file() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "cleanup", None, None, None, None, false).unwrap();
+
+    let path = tmp.path().join("jobs/cleanup.lua");
+    assert!(path.exists());
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.contains("crap.jobs.define(\"cleanup\""));
+    assert!(content.contains("jobs.cleanup.run"));
+    assert!(content.contains("function M.run(ctx)"));
+}
+
+#[test]
+fn make_job_with_schedule() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "nightly", Some("0 3 * * *"), None, None, None, false).unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("jobs/nightly.lua")).unwrap();
+    assert!(content.contains("schedule = \"0 3 * * *\""));
+}
+
+#[test]
+fn make_job_with_options() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "heavy", None, Some("background"), Some(3), Some(300), false).unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("jobs/heavy.lua")).unwrap();
+    assert!(content.contains("queue = \"background\""));
+    assert!(content.contains("retries = 3"));
+    assert!(content.contains("timeout = 300"));
+}
+
+#[test]
+fn make_job_existing_errors() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "test_job", None, None, None, None, false).unwrap();
+    let result = scaffold::make_job(tmp.path(), "test_job", None, None, None, None, false);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("--force"));
+}
+
+#[test]
+fn make_job_force_overwrites() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "test_job", None, None, None, None, false).unwrap();
+    assert!(scaffold::make_job(tmp.path(), "test_job", None, None, None, None, true).is_ok());
+}
+
+#[test]
+fn make_job_default_queue_omitted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "simple", None, Some("default"), None, None, false).unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("jobs/simple.lua")).unwrap();
+    // "default" queue should not generate an explicit config line
+    assert!(!content.contains("queue ="));
+}
+
+#[test]
+fn make_job_default_timeout_omitted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "basic", None, None, None, Some(60), false).unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("jobs/basic.lua")).unwrap();
+    // default timeout=60 should not generate an explicit config line
+    assert!(!content.contains("timeout ="));
+}
+
+#[test]
+fn make_job_zero_retries_omitted() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_job(tmp.path(), "noretry", None, None, Some(0), None, false).unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("jobs/noretry.lua")).unwrap();
+    assert!(!content.contains("retries ="));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 18. Command Export/Import Functions
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cmd_export_all() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    // Seed some posts
+    {
+        let reg = registry.read().unwrap();
+        let def = reg.get_collection("posts").unwrap();
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0..3 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Export Post {}", i));
+            query::create(&tx, "posts", def, &data, None).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
+    let output_path = tmp.path().join("export.json");
+    commands::export::export(&config_dir, None, Some(output_path.clone())).unwrap();
+
+    // Verify the JSON file structure
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let collections = parsed.get("collections").expect("should have 'collections' key");
+    let posts = collections.get("posts").expect("should have 'posts' collection");
+    let posts_arr = posts.as_array().unwrap();
+    assert_eq!(posts_arr.len(), 3, "should have 3 posts");
+
+    // Each post should have a title
+    for post in posts_arr {
+        assert!(post.get("title").is_some(), "each post should have a title");
+        assert!(post.get("id").is_some(), "each post should have an id");
+    }
+}
+
+#[test]
+fn cmd_export_collection_filter() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    // Seed posts and a user
+    {
+        let reg = registry.read().unwrap();
+        let posts_def = reg.get_collection("posts").unwrap();
+        let users_def = reg.get_collection("users").unwrap();
+
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Filtered Post".to_string());
+        query::create(&tx, "posts", posts_def, &data, None).unwrap();
+
+        let mut udata = HashMap::new();
+        udata.insert("email".to_string(), "filter@example.com".to_string());
+        udata.insert("name".to_string(), "Filter User".to_string());
+        query::create(&tx, "users", users_def, &udata, None).unwrap();
+
+        tx.commit().unwrap();
+    }
+
+    let output_path = tmp.path().join("export_filtered.json");
+    commands::export::export(
+        &config_dir,
+        Some("posts".to_string()),
+        Some(output_path.clone()),
+    ).unwrap();
+
+    let content = std::fs::read_to_string(&output_path).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let collections = parsed.get("collections").unwrap().as_object().unwrap();
+    assert!(collections.contains_key("posts"), "should contain posts");
+    assert!(!collections.contains_key("users"), "should NOT contain users");
+    assert_eq!(collections["posts"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn cmd_export_nonexistent_errors() {
+    let (tmp, _pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    let output_path = tmp.path().join("export_bad.json");
+    let result = commands::export::export(
+        &config_dir,
+        Some("nonexistent_collection".to_string()),
+        Some(output_path),
+    );
+    assert!(result.is_err(), "exporting nonexistent collection should fail");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("not found"), "error should mention 'not found', got: {}", err_msg);
+}
+
+#[test]
+fn cmd_import_roundtrip() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    // Seed data
+    let mut original_ids = Vec::new();
+    {
+        let reg = registry.read().unwrap();
+        let def = reg.get_collection("posts").unwrap();
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for i in 0..3 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Roundtrip {}", i));
+            data.insert("status".to_string(), "published".to_string());
+            let doc = query::create(&tx, "posts", def, &data, None).unwrap();
+            original_ids.push(doc.id.clone());
+        }
+        tx.commit().unwrap();
+    }
+
+    // Export to file
+    let export_path = tmp.path().join("roundtrip.json");
+    commands::export::export(&config_dir, None, Some(export_path.clone())).unwrap();
+
+    // Delete all posts
+    {
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        for id in &original_ids {
+            query::delete(&tx, "posts", id).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+
+    // Verify empty
+    {
+        let reg = registry.read().unwrap();
+        let def = reg.get_collection("posts").unwrap();
+        let conn = pool.get().unwrap();
+        let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
+        assert_eq!(docs.len(), 0, "posts should be empty after delete");
+    }
+
+    // Import from the exported file
+    commands::export::import(&config_dir, &export_path, Some("posts".to_string())).unwrap();
+
+    // Verify data restored
+    {
+        let reg = registry.read().unwrap();
+        let def = reg.get_collection("posts").unwrap();
+        let conn = pool.get().unwrap();
+        let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
+        assert_eq!(docs.len(), 3, "should have 3 posts after import");
+        for doc in &docs {
+            assert!(original_ids.contains(&doc.id), "restored doc should have original ID");
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 19. Command User Functions
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cmd_user_create_via_library() {
+    let (_tmp, pool, registry) = full_setup();
+
+    commands::user::user_create(
+        &pool,
+        &registry,
+        "users",
+        Some("lib_create@example.com".to_string()),
+        Some("password123".to_string()),
+        vec![("name".to_string(), "Lib User".to_string())],
+    ).unwrap();
+
+    // Verify user was created in DB
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("users").unwrap();
+    let conn = pool.get().unwrap();
+    let found = query::find_by_email(&conn, "users", def, "lib_create@example.com")
+        .unwrap()
+        .expect("user should exist after create");
+    assert_eq!(found.get_str("email"), Some("lib_create@example.com"));
+    assert_eq!(found.get_str("name"), Some("Lib User"));
+
+    // Verify password was set
+    let hash = query::get_password_hash(&conn, "users", &found.id)
+        .unwrap()
+        .expect("password hash should exist");
+    assert!(auth::verify_password("password123", &hash).unwrap());
+}
+
+#[test]
+fn cmd_user_create_extra_fields() {
+    let (_tmp, pool, registry) = full_setup();
+
+    commands::user::user_create(
+        &pool,
+        &registry,
+        "users",
+        Some("extra@example.com".to_string()),
+        Some("secret456".to_string()),
+        vec![
+            ("name".to_string(), "Admin User".to_string()),
+            ("role".to_string(), "admin".to_string()),
+        ],
+    ).unwrap();
+
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("users").unwrap();
+    let conn = pool.get().unwrap();
+    let found = query::find_by_email(&conn, "users", def, "extra@example.com")
+        .unwrap()
+        .expect("user should exist");
+    assert_eq!(found.get_str("name"), Some("Admin User"));
+    assert_eq!(found.get_str("role"), Some("admin"));
+}
+
+#[test]
+fn cmd_user_create_non_auth_errors() {
+    let (_tmp, pool, registry) = full_setup();
+
+    let result = commands::user::user_create(
+        &pool,
+        &registry,
+        "posts",
+        Some("fail@example.com".to_string()),
+        Some("password".to_string()),
+        vec![],
+    );
+    assert!(result.is_err(), "creating user in non-auth collection should fail");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("not an auth collection"),
+        "error should mention 'not an auth collection', got: {}",
+        err_msg
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 20. Command Status/Typegen/Templates
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cmd_typegen_via_library() {
+    let (tmp, _pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    let result = commands::typegen::run(&config_dir, "lua");
+    assert!(result.is_ok(), "typegen lua should succeed: {:?}", result.err());
+}
+
+#[test]
+fn cmd_typegen_all_via_library() {
+    let (tmp, _pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    let result = commands::typegen::run(&config_dir, "all");
+    assert!(result.is_ok(), "typegen all should succeed: {:?}", result.err());
+}
+
+#[test]
+fn cmd_typegen_invalid_lang_errors() {
+    let (tmp, _pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    let result = commands::typegen::run(&config_dir, "invalid_lang");
+    assert!(result.is_err(), "typegen with invalid language should fail");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("Unknown language"),
+        "error should mention 'Unknown language', got: {}",
+        err_msg
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 21. Command DB Functions
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cmd_migrate_create() {
+    let (tmp, _pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    commands::db::migrate(
+        &config_dir,
+        commands::MigrateAction::Create { name: "test_migration".into() },
+    ).unwrap();
+
+    let migrations_dir = config_dir.join("migrations");
+    let files: Vec<_> = std::fs::read_dir(&migrations_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .collect();
+    assert_eq!(files.len(), 1, "should have created one migration file");
+    let filename = files[0].file_name().to_string_lossy().to_string();
+    assert!(
+        filename.ends_with("_test_migration.lua"),
+        "migration file should end with '_test_migration.lua', got: {}",
+        filename
+    );
+
+    let content = std::fs::read_to_string(files[0].path()).unwrap();
+    assert!(content.contains("function M.up()"), "should have M.up()");
+    assert!(content.contains("function M.down()"), "should have M.down()");
+}
+
+#[test]
+fn cmd_migrate_fresh_needs_confirm() {
+    let (tmp, _pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    let result = commands::db::migrate(
+        &config_dir,
+        commands::MigrateAction::Fresh { confirm: false },
+    );
+    assert!(result.is_err(), "migrate fresh without confirm should fail");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("--confirm"),
+        "error should mention '--confirm', got: {}",
+        err_msg
+    );
+}
+
+#[test]
+fn cmd_backup_creates_snapshot() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    // Create some data so the DB has content
+    {
+        let reg = registry.read().unwrap();
+        let def = reg.get_collection("posts").unwrap();
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Backup Test Post".to_string());
+        query::create(&tx, "posts", def, &data, None).unwrap();
+        tx.commit().unwrap();
+    }
+
+    // Drop pool before backup to release DB connections
+    drop(pool);
+
+    let backup_output = tmp.path().join("backups");
+    commands::db::backup(&config_dir, Some(backup_output.clone()), false).unwrap();
+
+    // The backup command creates a timestamped subdirectory
+    assert!(backup_output.exists(), "backup output directory should exist");
+    let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    assert_eq!(backup_dirs.len(), 1, "should have one backup directory");
+
+    let backup_dir = backup_dirs[0].path();
+    assert!(backup_dir.join("crap.db").exists(), "backup should contain crap.db");
+    assert!(backup_dir.join("manifest.json").exists(), "backup should contain manifest.json");
+
+    // Verify manifest
+    let manifest_content = std::fs::read_to_string(backup_dir.join("manifest.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
+    assert!(manifest.get("timestamp").is_some(), "manifest should have timestamp");
+    assert!(manifest.get("db_size").is_some(), "manifest should have db_size");
+    assert!(manifest["db_size"].as_u64().unwrap() > 0, "db_size should be > 0");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 22. Command Jobs Functions
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cmd_jobs_trigger() {
+    // Set up a project with a job definition
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    copy_dir(&fixture_dir(), &config_dir);
+
+    // Create a job Lua file
+    let jobs_dir = config_dir.join("jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::write(
+        jobs_dir.join("cleanup.lua"),
+        r#"
+crap.jobs.define("cleanup", {
+    handler = "jobs.cleanup.run",
+    queue = "default",
+})
+
+local M = {}
+function M.run(ctx)
+    return { cleaned = true }
+end
+return M
+"#,
+    ).unwrap();
+
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema");
+
+    // Verify the job is registered
+    {
+        let reg = registry.read().unwrap();
+        assert!(reg.get_job("cleanup").is_some(), "cleanup job should be registered");
+    }
+
+    // Use the jobs command to trigger it
+    commands::jobs::run(commands::JobsAction::Trigger {
+        config: config_dir.clone(),
+        slug: "cleanup".to_string(),
+        data: None,
+    }).unwrap();
+
+    // Verify a job run was created in the DB
+    let conn = db_pool.get().unwrap();
+    let runs = crap_cms::db::query::jobs::list_job_runs(&conn, Some("cleanup"), None, 10, 0).unwrap();
+    assert_eq!(runs.len(), 1, "should have one job run");
+    assert_eq!(runs[0].slug, "cleanup");
+    assert_eq!(runs[0].status, crap_cms::core::job::JobStatus::Pending);
 }
 
 // ── Blueprint helper ─────────────────────────────────────────────────────

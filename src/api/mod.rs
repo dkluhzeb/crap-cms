@@ -19,6 +19,7 @@ pub mod content {
 }
 
 /// Start the gRPC server with reflection enabled.
+#[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub async fn start_server(
     addr: &str,

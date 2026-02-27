@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 
 /// Handle the `jobs` subcommand.
-pub fn run(action: crate::JobsAction) -> Result<()> {
+pub fn run(action: super::JobsAction) -> Result<()> {
     match action {
-        crate::JobsAction::List { config } => {
+        super::JobsAction::List { config } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = crate::config::CrapConfig::load(&config_dir)?;
             let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
@@ -53,7 +53,7 @@ pub fn run(action: crate::JobsAction) -> Result<()> {
 
             Ok(())
         }
-        crate::JobsAction::Trigger { config, slug, data } => {
+        super::JobsAction::Trigger { config, slug, data } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = crate::config::CrapConfig::load(&config_dir)?;
             let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
@@ -87,7 +87,7 @@ pub fn run(action: crate::JobsAction) -> Result<()> {
 
             Ok(())
         }
-        crate::JobsAction::Status { config, id, slug, limit } => {
+        super::JobsAction::Status { config, id, slug, limit } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = crate::config::CrapConfig::load(&config_dir)?;
             let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
@@ -141,7 +141,7 @@ pub fn run(action: crate::JobsAction) -> Result<()> {
 
             Ok(())
         }
-        crate::JobsAction::Purge { config, older_than } => {
+        super::JobsAction::Purge { config, older_than } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = crate::config::CrapConfig::load(&config_dir)?;
             let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
@@ -163,7 +163,7 @@ pub fn run(action: crate::JobsAction) -> Result<()> {
 }
 
 /// Parse a duration string like "7d", "24h", "30m" into seconds.
-fn parse_duration_string(s: &str) -> Option<u64> {
+pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
@@ -175,5 +175,42 @@ fn parse_duration_string(s: &str) -> Option<u64> {
         "h" => Some(num * 3600),
         "m" => Some(num * 60),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_duration_days() {
+        assert_eq!(parse_duration_string("7d"), Some(7 * 86400));
+        assert_eq!(parse_duration_string("1d"), Some(86400));
+        assert_eq!(parse_duration_string("30d"), Some(30 * 86400));
+    }
+
+    #[test]
+    fn parse_duration_hours() {
+        assert_eq!(parse_duration_string("24h"), Some(24 * 3600));
+        assert_eq!(parse_duration_string("1h"), Some(3600));
+    }
+
+    #[test]
+    fn parse_duration_minutes() {
+        assert_eq!(parse_duration_string("30m"), Some(30 * 60));
+        assert_eq!(parse_duration_string("1m"), Some(60));
+    }
+
+    #[test]
+    fn parse_duration_invalid() {
+        assert_eq!(parse_duration_string(""), None);
+        assert_eq!(parse_duration_string("abc"), None);
+        assert_eq!(parse_duration_string("7s"), None);
+        assert_eq!(parse_duration_string("d"), None);
+    }
+
+    #[test]
+    fn parse_duration_whitespace() {
+        assert_eq!(parse_duration_string("  7d  "), Some(7 * 86400));
     }
 }

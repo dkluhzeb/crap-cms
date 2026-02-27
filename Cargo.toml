@@ -91,6 +91,9 @@ opt-level = 2
 [build-dependencies]
 tonic-prost-build = "0.14"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)', 'cfg(tarpaulin_include)'] }
+
 [profile.release]
 lto = true
 codegen-units = 1

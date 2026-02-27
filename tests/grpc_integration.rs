@@ -17,7 +17,7 @@ use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::Registry;
-use crap_cms::db::{migrate, pool};
+use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -131,6 +131,7 @@ fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
 struct TestSetup {
     _tmp: tempfile::TempDir,
     service: ContentService,
+    pool: crap_cms::db::DbPool,
 }
 
 fn setup_service(
@@ -164,7 +165,7 @@ fn setup_service(
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
-        db_pool,
+        db_pool.clone(),
         registry,
         hook_runner,
         config.auth.secret.clone(),
@@ -177,7 +178,7 @@ fn setup_service(
         tmp.path().to_path_buf(),
     );
 
-    TestSetup { _tmp: tmp, service }
+    TestSetup { _tmp: tmp, service, pool: db_pool }
 }
 
 // ── CRUD Tests ────────────────────────────────────────────────────────────
@@ -1223,9 +1224,8 @@ async fn full_password_reset_flow() {
         .into_inner();
     assert!(resp.success);
 
-    // Since we can't directly access the pool from TestSetup, we verify
-    // the flow conceptually: forgot_password stores the token, reset_password
-    // uses it. We can test reset_password with an invalid token.
+    // Verify reset_password rejects an invalid token (the real token was
+    // stored by forgot_password but we don't extract it here).
     let err = ts
         .service
         .reset_password(Request::new(content::ResetPasswordRequest {
@@ -2038,7 +2038,7 @@ fn setup_service_with_hook(
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
-        db_pool,
+        db_pool.clone(),
         registry,
         hook_runner,
         config.auth.secret.clone(),
@@ -2051,7 +2051,7 @@ fn setup_service_with_hook(
         tmp.path().to_path_buf(),
     );
 
-    TestSetup { _tmp: tmp, service }
+    TestSetup { _tmp: tmp, service, pool: db_pool }
 }
 
 #[tokio::test]
@@ -2475,11 +2475,11 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool, registry, hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
     );
-    let ts = TestSetup { _tmp: tmp, service };
+    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
     // Valid score passes
     let resp = ts
@@ -2586,11 +2586,11 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool, registry, hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
     );
-    let ts = TestSetup { _tmp: tmp, service };
+    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
     // Create without providing slug — hook should auto-generate
     let doc = ts
@@ -2676,11 +2676,11 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool, registry, hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
     );
-    let ts = TestSetup { _tmp: tmp, service };
+    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
     ts.service
         .create(Request::new(content::CreateRequest {
@@ -2781,11 +2781,11 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool, registry, hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
     );
-    let ts = TestSetup { _tmp: tmp, service };
+    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
     ts.service
         .create(Request::new(content::CreateRequest {
@@ -2877,11 +2877,11 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool, registry, hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), registry, hook_runner, config.auth.secret.clone(), &config.depth,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
     );
-    let ts = TestSetup { _tmp: tmp, service };
+    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
     // Valid title succeeds
     let resp = ts
@@ -2981,7 +2981,7 @@ fn setup_service_with_locale(
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
-        db_pool,
+        db_pool.clone(),
         registry,
         hook_runner,
         config.auth.secret.clone(),
@@ -2994,7 +2994,7 @@ fn setup_service_with_locale(
         tmp.path().to_path_buf(),
     );
 
-    TestSetup { _tmp: tmp, service }
+    TestSetup { _tmp: tmp, service, pool: db_pool }
 }
 
 #[tokio::test]
@@ -3830,4 +3830,255 @@ async fn list_and_restore_versions() {
         Some("Version 3"),
         "Restored should not be version 3 anymore"
     );
+}
+
+// ── Auth RPC Gaps ─────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn login_locked_account_grpc() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    // Create a user with password
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "locked@example.com"),
+                ("name", "Locked User"),
+                ("password", "secret123"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Lock the user via direct DB access
+    {
+        let conn = ts.pool.get().unwrap();
+        query::lock_user(&conn, "users", &doc.id).unwrap();
+    }
+
+    // Try to login — should fail because the account is locked
+    let err = ts
+        .service
+        .login(Request::new(content::LoginRequest {
+            collection: "users".to_string(),
+            email: "locked@example.com".to_string(),
+            password: "secret123".to_string(),
+        }))
+        .await
+        .unwrap_err();
+
+    assert!(
+        err.code() == tonic::Code::Unauthenticated
+            || err.code() == tonic::Code::PermissionDenied,
+        "Locked account login should return Unauthenticated or PermissionDenied, got {:?}: {}",
+        err.code(),
+        err.message()
+    );
+}
+
+#[tokio::test]
+async fn forgot_password_nonexistent_still_succeeds() {
+    let ts = setup_service(vec![make_users_def()], vec![]);
+
+    // Call ForgotPassword with a completely non-existent email
+    let resp = ts
+        .service
+        .forgot_password(Request::new(content::ForgotPasswordRequest {
+            collection: "users".to_string(),
+            email: "does-not-exist@example.com".to_string(),
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Should always return success to avoid leaking user existence
+    assert!(
+        resp.success,
+        "ForgotPassword should always return success, even for non-existent emails"
+    );
+}
+
+// ── Access Control / CRUD Gaps ────────────────────────────────────────────
+
+#[tokio::test]
+async fn create_returns_document_with_fields() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    // Create a document
+    let doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[("title", "Field Check"), ("status", "draft")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Verify the create response has all fields
+    assert!(!doc.id.is_empty(), "Document should have an ID");
+    assert_eq!(doc.collection, "posts");
+    assert_eq!(get_proto_field(&doc, "title").as_deref(), Some("Field Check"));
+    assert_eq!(get_proto_field(&doc, "status").as_deref(), Some("draft"));
+
+    // Also fetch via FindByID with depth=0 to verify persistence
+    let found = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: doc.id.clone(),
+            depth: Some(0),
+            locale: None,
+            select: vec![],
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .expect("Document should be found");
+
+    assert_eq!(found.id, doc.id);
+    assert_eq!(get_proto_field(&found, "title").as_deref(), Some("Field Check"));
+    assert_eq!(get_proto_field(&found, "status").as_deref(), Some("draft"));
+}
+
+#[tokio::test]
+async fn find_with_pagination() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    // Create 5 documents with ordered titles
+    for i in 0..5 {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", &format!("Page {}", i))])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Find with limit=2, offset=2 — should return the 3rd and 4th documents
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            limit: Some(2),
+            offset: Some(2),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.documents.len(), 2, "Should return exactly 2 documents");
+    assert_eq!(resp.total, 5, "Total count should still be 5 regardless of pagination");
+
+    // Verify we can get the remaining page
+    let resp2 = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            limit: Some(2),
+            offset: Some(4),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp2.documents.len(), 1, "Last page should have 1 document");
+    assert_eq!(resp2.total, 5, "Total count should still be 5");
+}
+
+// ── Relationship Gaps ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn find_depth_0_returns_id_only() {
+    let ts = setup_service(
+        vec![make_categories_def(), make_posts_with_relationship()],
+        vec![],
+    );
+
+    // Create a category
+    let cat_doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "categories".to_string(),
+            data: Some(make_struct(&[("name", "Art")])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Create a post with the category relationship
+    let post_doc = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "posts".to_string(),
+            data: Some(make_struct(&[
+                ("title", "Depth Zero Test"),
+                ("category", &cat_doc.id),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .unwrap();
+
+    // Find with depth=0 — category should be a string ID, not a populated object
+    let found = ts
+        .service
+        .find_by_id(Request::new(content::FindByIdRequest {
+            collection: "posts".to_string(),
+            id: post_doc.id.clone(),
+            depth: Some(0),
+            locale: None,
+            select: vec![],
+            draft: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner()
+        .document
+        .expect("Document should be found");
+
+    let fields = found.fields.as_ref().unwrap();
+    let cat_field = fields.fields.get("category");
+    assert!(cat_field.is_some(), "category field should be present");
+
+    match &cat_field.unwrap().kind {
+        Some(Kind::StringValue(s)) => {
+            assert_eq!(
+                s, &cat_doc.id,
+                "At depth=0, category should be the raw ID string"
+            );
+        }
+        other => {
+            panic!(
+                "At depth=0, category should be a StringValue (ID), got: {:?}",
+                other
+            );
+        }
+    }
 }

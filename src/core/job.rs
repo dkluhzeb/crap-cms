@@ -90,6 +90,60 @@ pub struct JobRun {
     pub heartbeat_at: Option<String>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn job_status_as_str_all_variants() {
+        assert_eq!(JobStatus::Pending.as_str(), "pending");
+        assert_eq!(JobStatus::Running.as_str(), "running");
+        assert_eq!(JobStatus::Completed.as_str(), "completed");
+        assert_eq!(JobStatus::Failed.as_str(), "failed");
+        assert_eq!(JobStatus::Stale.as_str(), "stale");
+    }
+
+    #[test]
+    fn job_status_from_str_valid() {
+        assert_eq!(JobStatus::from_str("pending"), Some(JobStatus::Pending));
+        assert_eq!(JobStatus::from_str("running"), Some(JobStatus::Running));
+        assert_eq!(JobStatus::from_str("completed"), Some(JobStatus::Completed));
+        assert_eq!(JobStatus::from_str("failed"), Some(JobStatus::Failed));
+        assert_eq!(JobStatus::from_str("stale"), Some(JobStatus::Stale));
+    }
+
+    #[test]
+    fn job_status_from_str_invalid() {
+        assert_eq!(JobStatus::from_str("unknown"), None);
+        assert_eq!(JobStatus::from_str(""), None);
+        assert_eq!(JobStatus::from_str("PENDING"), None);
+    }
+
+    #[test]
+    fn job_status_roundtrip() {
+        for status in &[
+            JobStatus::Pending, JobStatus::Running, JobStatus::Completed,
+            JobStatus::Failed, JobStatus::Stale,
+        ] {
+            let s = status.as_str();
+            let parsed = JobStatus::from_str(s).expect("should roundtrip");
+            assert_eq!(&parsed, status);
+        }
+    }
+
+    #[test]
+    fn job_definition_default() {
+        let def = JobDefinition::default();
+        assert_eq!(def.queue, "default");
+        assert_eq!(def.retries, 0);
+        assert_eq!(def.timeout, 60);
+        assert_eq!(def.concurrency, 1);
+        assert!(def.skip_if_running);
+        assert!(def.schedule.is_none());
+        assert!(def.access.is_none());
+    }
+}
+
 impl Default for JobDefinition {
     fn default() -> Self {
         Self {

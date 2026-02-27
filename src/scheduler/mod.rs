@@ -336,11 +336,46 @@ fn recover_stale_jobs(
 /// Normalize a cron expression: the `cron` crate expects 6 or 7 fields (with a
 /// leading seconds field), but users write standard 5-field cron (`0 3 * * *`).
 /// If the expression has exactly 5 fields, prepend "0" for seconds.
-fn normalize_cron(expr: &str) -> String {
+pub(crate) fn normalize_cron(expr: &str) -> String {
     let fields: Vec<&str> = expr.split_whitespace().collect();
     if fields.len() == 5 {
         format!("0 {}", expr)
     } else {
         expr.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_cron_five_fields() {
+        let result = normalize_cron("0 3 * * *");
+        assert_eq!(result, "0 0 3 * * *");
+    }
+
+    #[test]
+    fn normalize_cron_six_fields_unchanged() {
+        let result = normalize_cron("0 0 3 * * *");
+        assert_eq!(result, "0 0 3 * * *");
+    }
+
+    #[test]
+    fn normalize_cron_seven_fields_unchanged() {
+        let result = normalize_cron("0 0 3 * * * 2024");
+        assert_eq!(result, "0 0 3 * * * 2024");
+    }
+
+    #[test]
+    fn normalize_cron_every_minute() {
+        let result = normalize_cron("* * * * *");
+        assert_eq!(result, "0 * * * * *");
+    }
+
+    #[test]
+    fn normalize_cron_complex_expression() {
+        let result = normalize_cron("*/5 9-17 * * 1-5");
+        assert_eq!(result, "0 */5 9-17 * * 1-5");
     }
 }

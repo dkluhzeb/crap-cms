@@ -826,3 +826,462 @@ pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::LocaleConfig;
+    use crate::core::collection::*;
+    use crate::core::field::{FieldDefinition, FieldType, RelationshipConfig};
+
+    fn in_memory_pool() -> DbPool {
+        let manager = r2d2_sqlite::SqliteConnectionManager::memory()
+            .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+                | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
+                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+        r2d2::Pool::builder()
+            .max_size(2)
+            .build(manager)
+            .expect("in-memory pool")
+    }
+
+    fn no_locale() -> LocaleConfig {
+        LocaleConfig::default()
+    }
+
+    fn locale_en_de() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        }
+    }
+
+    fn simple_collection(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
+        CollectionDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields,
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
+    fn simple_global(slug: &str, fields: Vec<FieldDefinition>) -> GlobalDefinition {
+        GlobalDefinition {
+            slug: slug.to_string(),
+            labels: CollectionLabels::default(),
+            fields,
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        }
+    }
+
+    fn text_field(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Text,
+            ..Default::default()
+        }
+    }
+
+    fn localized_field(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Text,
+            localized: true,
+            ..Default::default()
+        }
+    }
+
+    // ── table_exists ──────────────────────────────────────────────────────
+
+    #[test]
+    fn table_exists_false_initially() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        assert!(!table_exists(&conn, "nonexistent").unwrap());
+    }
+
+    #[test]
+    fn table_exists_true_after_create() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE test_table (id TEXT PRIMARY KEY)", []).unwrap();
+        assert!(table_exists(&conn, "test_table").unwrap());
+    }
+
+    // ── get_table_columns ─────────────────────────────────────────────────
+
+    #[test]
+    fn get_table_columns_returns_column_names() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE t (id TEXT, name TEXT, age INTEGER)", []).unwrap();
+        let cols = get_table_columns(&conn, "t").unwrap();
+        assert!(cols.contains("id"));
+        assert!(cols.contains("name"));
+        assert!(cols.contains("age"));
+        assert_eq!(cols.len(), 3);
+    }
+
+    // ── create_collection_table ──────────────────────────────────────────
+
+    #[test]
+    fn create_simple_collection_table() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            text_field("title"),
+            text_field("body"),
+        ]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        assert!(table_exists(&conn, "posts").unwrap());
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("id"));
+        assert!(cols.contains("title"));
+        assert!(cols.contains("body"));
+        assert!(cols.contains("created_at"));
+        assert!(cols.contains("updated_at"));
+    }
+
+    // ── alter adds new column ─────────────────────────────────────────────
+
+    #[test]
+    fn alter_adds_new_column() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        let def2 = simple_collection("posts", vec![
+            text_field("title"),
+            text_field("summary"),
+        ]);
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("summary"), "new column should be added");
+    }
+
+    // ── localized columns ─────────────────────────────────────────────────
+
+    #[test]
+    fn create_with_localized_fields() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![localized_field("title")]);
+        create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("title__en"), "should have en locale column");
+        assert!(cols.contains("title__de"), "should have de locale column");
+        assert!(!cols.contains("title"), "should NOT have bare title column");
+    }
+
+    // ── auth collection columns ───────────────────────────────────────────
+
+    #[test]
+    fn create_auth_collection_has_system_columns() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection("users", vec![text_field("email")]);
+        def.auth = Some(CollectionAuth {
+            enabled: true,
+            verify_email: true,
+            ..Default::default()
+        });
+        create_collection_table(&conn, "users", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "users").unwrap();
+        assert!(cols.contains("_password_hash"));
+        assert!(cols.contains("_reset_token"));
+        assert!(cols.contains("_reset_token_exp"));
+        assert!(cols.contains("_locked"));
+        assert!(cols.contains("_verified"));
+        assert!(cols.contains("_verification_token"));
+    }
+
+    // ── versioned collection ──────────────────────────────────────────────
+
+    #[test]
+    fn versioned_collection_creates_versions_table() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection("posts", vec![text_field("title")]);
+        def.versions = Some(VersionsConfig { drafts: true, max_versions: 10 });
+        sync_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "_versions_posts").unwrap());
+        let cols = get_table_columns(&conn, "_versions_posts").unwrap();
+        assert!(cols.contains("_parent"));
+        assert!(cols.contains("_version"));
+        assert!(cols.contains("_status"));
+        assert!(cols.contains("_latest"));
+        assert!(cols.contains("snapshot"));
+    }
+
+    // ── drafts adds _status column ────────────────────────────────────────
+
+    #[test]
+    fn drafts_collection_has_status_column() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection("posts", vec![text_field("title")]);
+        def.versions = Some(VersionsConfig { drafts: true, max_versions: 0 });
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("_status"));
+    }
+
+    // ── join tables ───────────────────────────────────────────────────────
+
+    #[test]
+    fn has_many_relationship_creates_junction_table() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "tags".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                }),
+                ..Default::default()
+            },
+        ]);
+        // Need parent table first for FK
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "posts_tags").unwrap());
+        let cols = get_table_columns(&conn, "posts_tags").unwrap();
+        assert!(cols.contains("parent_id"));
+        assert!(cols.contains("related_id"));
+        assert!(cols.contains("_order"));
+    }
+
+    #[test]
+    fn array_field_creates_join_table() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![text_field("name")],
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "posts_items").unwrap());
+        let cols = get_table_columns(&conn, "posts_items").unwrap();
+        assert!(cols.contains("id"));
+        assert!(cols.contains("parent_id"));
+        assert!(cols.contains("_order"));
+        assert!(cols.contains("name"));
+    }
+
+    #[test]
+    fn blocks_field_creates_join_table() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Blocks,
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "posts_content").unwrap());
+        let cols = get_table_columns(&conn, "posts_content").unwrap();
+        assert!(cols.contains("id"));
+        assert!(cols.contains("parent_id"));
+        assert!(cols.contains("_block_type"));
+        assert!(cols.contains("data"));
+    }
+
+    // ── group fields ──────────────────────────────────────────────────────
+
+    #[test]
+    fn group_field_creates_prefixed_columns() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![
+            FieldDefinition {
+                name: "seo".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![text_field("meta_title"), text_field("meta_desc")],
+                ..Default::default()
+            },
+        ]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("seo__meta_title"));
+        assert!(cols.contains("seo__meta_desc"));
+        assert!(!cols.contains("seo"), "group field itself should not be a column");
+    }
+
+    // ── global table ──────────────────────────────────────────────────────
+
+    #[test]
+    fn global_table_created_with_default_row() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_global("settings", vec![text_field("site_name")]);
+        sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "_global_settings").unwrap());
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM _global_settings", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(count, 1, "should have exactly one default row");
+    }
+
+    // ── append_default_value ──────────────────────────────────────────────
+
+    #[test]
+    fn append_default_string() {
+        let mut col = "name TEXT".to_string();
+        append_default_value(&mut col, &Some(serde_json::json!("hello")), &FieldType::Text);
+        assert!(col.contains("DEFAULT 'hello'"));
+    }
+
+    #[test]
+    fn append_default_number() {
+        let mut col = "count REAL".to_string();
+        append_default_value(&mut col, &Some(serde_json::json!(42)), &FieldType::Number);
+        assert!(col.contains("DEFAULT 42"));
+    }
+
+    #[test]
+    fn append_default_bool() {
+        let mut col = "active INTEGER".to_string();
+        append_default_value(&mut col, &Some(serde_json::json!(true)), &FieldType::Checkbox);
+        assert!(col.contains("DEFAULT 1"));
+    }
+
+    #[test]
+    fn append_default_checkbox_none() {
+        let mut col = "active INTEGER".to_string();
+        append_default_value(&mut col, &None, &FieldType::Checkbox);
+        assert!(col.contains("DEFAULT 0"));
+    }
+
+    #[test]
+    fn append_default_none_non_checkbox() {
+        let mut col = "name TEXT".to_string();
+        append_default_value(&mut col, &None, &FieldType::Text);
+        assert!(!col.contains("DEFAULT"));
+    }
+
+    // ── migration tracking ────────────────────────────────────────────────
+
+    #[test]
+    fn migration_tracking_roundtrip() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
+        ).unwrap();
+
+        record_migration(&conn, "001_init.lua").unwrap();
+        record_migration(&conn, "002_add_field.lua").unwrap();
+
+        let applied = get_applied_migrations(&pool).unwrap();
+        assert!(applied.contains("001_init.lua"));
+        assert!(applied.contains("002_add_field.lua"));
+        assert_eq!(applied.len(), 2);
+    }
+
+    #[test]
+    fn remove_migration_works() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
+        ).unwrap();
+
+        record_migration(&conn, "001_init.lua").unwrap();
+        remove_migration(&conn, "001_init.lua").unwrap();
+
+        let applied = get_applied_migrations(&pool).unwrap();
+        assert!(applied.is_empty());
+    }
+
+    #[test]
+    fn get_applied_migrations_no_table() {
+        let pool = in_memory_pool();
+        let applied = get_applied_migrations(&pool).unwrap();
+        assert!(applied.is_empty());
+    }
+
+    #[test]
+    fn get_pending_migrations_filters_applied() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
+        ).unwrap();
+        record_migration(&conn, "001_init.lua").unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("001_init.lua"), "-- already applied").unwrap();
+        std::fs::write(tmp.path().join("002_new.lua"), "-- pending").unwrap();
+
+        let pending = get_pending_migrations(&pool, tmp.path()).unwrap();
+        assert_eq!(pending, vec!["002_new.lua"]);
+    }
+
+    #[test]
+    fn list_migration_files_sorted() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("003_z.lua"), "").unwrap();
+        std::fs::write(tmp.path().join("001_a.lua"), "").unwrap();
+        std::fs::write(tmp.path().join("002_b.lua"), "").unwrap();
+        std::fs::write(tmp.path().join("readme.txt"), "").unwrap(); // non-lua
+
+        let files = list_migration_files(tmp.path()).unwrap();
+        assert_eq!(files, vec!["001_a.lua", "002_b.lua", "003_z.lua"]);
+    }
+
+    #[test]
+    fn list_migration_files_missing_dir() {
+        let files = list_migration_files(std::path::Path::new("/nonexistent/dir")).unwrap();
+        assert!(files.is_empty());
+    }
+
+    // ── drop_all_tables ───────────────────────────────────────────────────
+
+    #[test]
+    fn drop_all_tables_cleans_everything() {
+        let pool = in_memory_pool();
+        {
+            let conn = pool.get().unwrap();
+            conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+            conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY)", []).unwrap();
+        }
+        drop_all_tables(&pool).unwrap();
+        let conn = pool.get().unwrap();
+        assert!(!table_exists(&conn, "posts").unwrap());
+        assert!(!table_exists(&conn, "users").unwrap());
+    }
+}

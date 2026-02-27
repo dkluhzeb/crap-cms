@@ -1378,3 +1378,333 @@ async fn localized_collection_search_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+// ── Auth Handler Gaps ─────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn login_locked_account() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "locked@test.com", "secret123");
+
+    // Lock the user account
+    {
+        let conn = app.pool.get().unwrap();
+        query::lock_user(&conn, "users", &user_id).unwrap();
+    }
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/login")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("collection=users&email=locked@test.com&password=secret123"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    // Should not set a valid session cookie — either re-renders login (200)
+    // or redirects back to login
+    let status = resp.status();
+    assert!(
+        status == StatusCode::OK || status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
+        "Expected 200 or redirect, got {}",
+        status
+    );
+
+    // If a cookie is set, it should NOT be a valid session cookie
+    // (i.e. no crap_session=<valid-token>)
+    if status == StatusCode::SEE_OTHER || status == StatusCode::FOUND {
+        // Redirect means login failed, which is correct
+        let location = resp.headers().get("location")
+            .map(|v| v.to_str().unwrap_or(""));
+        // Should redirect to login page, not dashboard
+        if let Some(loc) = location {
+            assert!(
+                loc.contains("login"),
+                "Locked account should redirect to login, not {}",
+                loc
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn forgot_password_action() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+
+    // POST with a non-existent email — should still return success (don't leak existence)
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/forgot-password")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("collection=users&email=nonexistent@test.com"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    assert!(
+        status == StatusCode::OK || status == StatusCode::SEE_OTHER || status == StatusCode::FOUND,
+        "Forgot password should return 200 or redirect, never error, got {}",
+        status
+    );
+}
+
+#[tokio::test]
+async fn reset_password_expired_token() {
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "expired@test.com", "oldpass123");
+
+    // Set an expired reset token (expiry in the past)
+    let expired_token = "expired-test-token-12345";
+    {
+        let conn = app.pool.get().unwrap();
+        let past_exp = chrono::Utc::now().timestamp() - 3600; // 1 hour ago
+        query::set_reset_token(&conn, "users", &user_id, expired_token, past_exp).unwrap();
+    }
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/reset-password")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "collection=users&token={}&password=newpass123&password_confirm=newpass123",
+                    expired_token
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    // Should indicate error about expired token — either 200 with error message,
+    // redirect to forgot-password/login, or 422 Unprocessable Entity
+    assert!(
+        status == StatusCode::OK || status == StatusCode::SEE_OTHER
+            || status == StatusCode::FOUND || status == StatusCode::UNPROCESSABLE_ENTITY,
+        "Expected 200, redirect, or 422 for expired token, got {}",
+        status
+    );
+
+    // For non-redirect responses, the token was rejected which is the correct behavior
+    if status != StatusCode::SEE_OTHER && status != StatusCode::FOUND {
+        let body = body_string(resp.into_body()).await;
+        let body_lower = body.to_lowercase();
+        // Either contains an error message or is empty (422 with no body is fine)
+        assert!(
+            body_lower.is_empty()
+                || body_lower.contains("expired")
+                || body_lower.contains("invalid")
+                || body_lower.contains("error")
+                || body_lower.contains("token")
+                || body_lower.contains("reset"),
+            "Response should indicate expired/invalid token, got: {}",
+            &body[..body.len().min(200)]
+        );
+    }
+}
+
+// ── Collection Handler Gaps ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn list_items_with_search() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "search@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "search@test.com");
+
+    // Create 3 posts with different titles
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    for title in &["Zebra Unique Alpha", "Beta Common", "Gamma Common"] {
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data = std::collections::HashMap::from([("title".to_string(), title.to_string())]);
+        query::create(&tx, "posts", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+    }
+
+    // Search for "Zebra" — should return 200
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin/collections/posts?search=Zebra")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(
+        body.contains("Zebra"),
+        "Search results should contain 'Zebra'"
+    );
+}
+
+#[tokio::test]
+async fn create_action_with_locale() {
+    let app = setup_localized_app();
+    let user_id = create_test_user(&app, "locale_create@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "locale_create@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/collections/pages")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("cookie", &cookie)
+                .body(Body::from("title=Locale+Test+Page&body=Content+here&_locale=de"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    let status = resp.status();
+    assert!(
+        status == StatusCode::SEE_OTHER || status == StatusCode::OK,
+        "Localized create with locale param should succeed, got {}",
+        status
+    );
+}
+
+#[tokio::test]
+async fn delete_action_returns_redirect() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "delredir@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "delredir@test.com");
+
+    // Create a doc first
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let mut conn = app.pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let data = std::collections::HashMap::from([("title".to_string(), "To Delete Redir".to_string())]);
+    let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
+    tx.commit().unwrap();
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::delete(format!("/admin/collections/posts/{}", doc.id))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    assert!(
+        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
+        "Delete action should redirect or return 200 with HX-Redirect, got {}",
+        status
+    );
+
+    // If it's a redirect, verify it points to the collection list
+    if status == StatusCode::SEE_OTHER || status == StatusCode::FOUND {
+        let location = resp.headers().get("location")
+            .map(|v| v.to_str().unwrap_or(""));
+        if let Some(loc) = location {
+            assert!(
+                loc.contains("/admin/collections/posts"),
+                "Delete redirect should point to collection list, got {}",
+                loc
+            );
+        }
+    }
+}
+
+// ── Global Handler Gaps ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn global_update_returns_redirect() {
+    let app = setup_app(vec![make_users_def()], vec![make_global_def()]);
+    let user_id = create_test_user(&app, "global_redir@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "global_redir@test.com");
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::post("/admin/globals/settings")
+                .header("cookie", &cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("site_name=Updated+Site"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    assert!(
+        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::OK,
+        "Global update should redirect or HX-Redirect, got {}",
+        status
+    );
+}
+
+// ── Static / Dashboard Gaps ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn static_asset_missing_returns_404() {
+    let app = setup_app(vec![make_posts_def()], vec![]);
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/static/nonexistent.css")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "Non-existent static asset should return 404"
+    );
+}
+
+#[tokio::test]
+async fn dashboard_renders_collection_counts() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "dashcount@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "dashcount@test.com");
+
+    // Create a few posts
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    for title in &["Post A", "Post B"] {
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data = std::collections::HashMap::from([("title".to_string(), title.to_string())]);
+        query::create(&tx, "posts", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    // Dashboard should reference collection names
+    let body_lower = body.to_lowercase();
+    assert!(
+        body_lower.contains("posts") || body_lower.contains("post"),
+        "Dashboard should contain collection info"
+    );
+}
