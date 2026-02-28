@@ -12,6 +12,16 @@ if (typeof EventSource !== 'undefined') {
   /** @type {EventSource | null} */
   let source = null;
 
+  /** Timestamp of last form save in this tab (to distinguish own saves from other tabs). */
+  let lastSaveTime = 0;
+  const SAVE_GRACE_MS = 5000;
+
+  document.addEventListener('htmx:beforeRequest', /** @param {CustomEvent} e */ (e) => {
+    if (e.detail.requestConfig.verb !== 'get') {
+      lastSaveTime = Date.now();
+    }
+  });
+
   /**
    * Show or update a stale content warning banner on the edit form.
    * @param {'updated' | 'deleted'} action
@@ -87,7 +97,11 @@ if (typeof EventSource !== 'undefined') {
             (docId && event.document_id === docId && event.collection === collectionSlug) ||
             (globalSlug && event.target === 'global' && event.collection === globalSlug);
 
-          if (isCurrentDoc && (op === 'delete' || op === 'update')) {
+          // Skip if this is our own save from this tab (within grace window).
+          // Same user editing in another tab will still trigger the warning.
+          const isSelf = currentUserId && event.edited_by && event.edited_by.id === currentUserId;
+          const isOwnSave = isSelf && (Date.now() - lastSaveTime < SAVE_GRACE_MS);
+          if (isCurrentDoc && (op === 'delete' || op === 'update') && !isOwnSave) {
             showStaleWarning(op === 'delete' ? 'deleted' : 'updated', event.edited_by || null);
             return;
           }
