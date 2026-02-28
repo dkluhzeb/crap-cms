@@ -988,6 +988,14 @@ pub(super) fn enrich_field_contexts(
                 };
                 ctx["row_count"] = serde_json::json!(rows.len());
                 ctx["rows"] = serde_json::json!(rows);
+                // Enrich Upload/Relationship sub-fields within each row
+                if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
+                    for row_ctx in rows_arr.iter_mut() {
+                        if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                            enrich_nested_fields(sub_arr, &field_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                        }
+                    }
+                }
             }
             FieldType::Upload => {
                 // Upload is a has-one relationship to an upload collection
@@ -1121,6 +1129,198 @@ pub(super) fn enrich_field_contexts(
                 };
                 ctx["row_count"] = serde_json::json!(rows.len());
                 ctx["rows"] = serde_json::json!(rows);
+                // Enrich Upload/Relationship sub-fields within each block row
+                if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
+                    for row_ctx in rows_arr.iter_mut() {
+                        let block_type = row_ctx.get("_block_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if let Some(block_def) = field_def.blocks.iter().find(|bd| bd.block_type == block_type) {
+                            if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                                enrich_nested_fields(sub_arr, &block_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                            }
+                        }
+                    }
+                }
+            }
+            FieldType::Row | FieldType::Collapsible | FieldType::Group => {
+                // Recurse into layout/group sub-fields to enrich nested Upload/Relationship fields
+                if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                    enrich_nested_fields(sub_arr, &field_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                }
+            }
+            FieldType::Tabs => {
+                // Recurse into each tab's sub-fields
+                if let Some(tabs_arr) = ctx.get_mut("tabs").and_then(|v| v.as_array_mut()) {
+                    for (tab_ctx, tab_def) in tabs_arr.iter_mut().zip(field_def.tabs.iter()) {
+                        if let Some(sub_arr) = tab_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                            enrich_nested_fields(sub_arr, &tab_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Recursively enrich Upload and Relationship sub-field contexts with options from the database.
+/// Called for sub-fields inside layout containers (Row, Collapsible, Tabs, Group) and
+/// composite fields (Array, Blocks) that can't be enriched during initial context building.
+fn enrich_nested_fields(
+    sub_fields: &mut Vec<serde_json::Value>,
+    field_defs: &[crate::core::field::FieldDefinition],
+    conn: &rusqlite::Connection,
+    reg: &crate::core::Registry,
+    rel_locale_ctx: Option<&crate::db::query::LocaleContext>,
+) {
+    use crate::core::field::FieldType;
+    use crate::core::upload;
+    use crate::db::query;
+
+    for (ctx, field_def) in sub_fields.iter_mut().zip(field_defs.iter()) {
+        match field_def.field_type {
+            FieldType::Relationship => {
+                if let Some(ref rc) = field_def.relationship {
+                    if let Some(related_def) = reg.get_collection(&rc.collection) {
+                        let title_field = related_def.title_field().map(|s| s.to_string());
+                        let find_query = query::FindQuery::default();
+                        if let Ok(docs) = query::find(conn, &rc.collection, related_def, &find_query, rel_locale_ctx) {
+                            let current_value = ctx.get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let options: Vec<_> = docs.iter().map(|doc| {
+                                let label = title_field.as_ref()
+                                    .and_then(|f| doc.get_str(f))
+                                    .unwrap_or(&doc.id);
+                                serde_json::json!({
+                                    "value": doc.id,
+                                    "label": label,
+                                    "selected": doc.id == current_value,
+                                })
+                            }).collect();
+                            ctx["relationship_options"] = serde_json::json!(options);
+                        }
+                    }
+                }
+            }
+            FieldType::Upload => {
+                if let Some(ref rc) = field_def.relationship {
+                    if let Some(related_def) = reg.get_collection(&rc.collection) {
+                        let title_field = related_def.title_field().map(|s| s.to_string());
+                        let admin_thumbnail = related_def.upload.as_ref()
+                            .and_then(|u| u.admin_thumbnail.as_ref().cloned());
+                        let find_query = query::FindQuery::default();
+                        if let Ok(mut docs) = query::find(conn, &rc.collection, related_def, &find_query, rel_locale_ctx) {
+                            if let Some(ref upload_config) = related_def.upload {
+                                if upload_config.enabled {
+                                    for doc in &mut docs {
+                                        upload::assemble_sizes_object(doc, upload_config);
+                                    }
+                                }
+                            }
+
+                            let current_value = ctx.get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            let mut selected_preview_url = None;
+                            let mut selected_filename = None;
+
+                            let options: Vec<_> = docs.iter().map(|doc| {
+                                let label = doc.get_str("filename")
+                                    .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+                                    .unwrap_or(&doc.id);
+                                let mime = doc.get_str("mime_type").unwrap_or("");
+                                let is_image = mime.starts_with("image/");
+
+                                let thumb_url = if is_image {
+                                    admin_thumbnail.as_ref()
+                                        .and_then(|thumb_name| {
+                                            doc.fields.get("sizes")
+                                                .and_then(|v| v.get(thumb_name))
+                                                .and_then(|v| v.get("url"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string())
+                                        })
+                                        .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                                } else {
+                                    None
+                                };
+
+                                let is_selected = doc.id == current_value;
+                                if is_selected {
+                                    selected_preview_url = thumb_url.clone();
+                                    selected_filename = Some(label.to_string());
+                                }
+
+                                let mut opt = serde_json::json!({
+                                    "value": doc.id,
+                                    "label": label,
+                                    "selected": is_selected,
+                                });
+                                if let Some(ref url) = thumb_url {
+                                    opt["thumbnail_url"] = serde_json::json!(url);
+                                }
+                                if is_image {
+                                    opt["is_image"] = serde_json::json!(true);
+                                }
+                                opt["filename"] = serde_json::json!(label);
+                                opt
+                            }).collect();
+                            ctx["relationship_options"] = serde_json::json!(options);
+                            ctx["relationship_collection"] = serde_json::json!(rc.collection);
+
+                            if let Some(url) = selected_preview_url {
+                                ctx["selected_preview_url"] = serde_json::json!(url);
+                            }
+                            if let Some(fname) = selected_filename {
+                                ctx["selected_filename"] = serde_json::json!(fname);
+                            }
+                        }
+                    }
+                }
+            }
+            FieldType::Row | FieldType::Collapsible | FieldType::Group => {
+                if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                    enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
+                }
+            }
+            FieldType::Tabs => {
+                if let Some(tabs_arr) = ctx.get_mut("tabs").and_then(|v| v.as_array_mut()) {
+                    for (tab_ctx, tab_def) in tabs_arr.iter_mut().zip(field_def.tabs.iter()) {
+                        if let Some(sub_arr) = tab_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                            enrich_nested_fields(sub_arr, &tab_def.fields, conn, reg, rel_locale_ctx);
+                        }
+                    }
+                }
+            }
+            FieldType::Array => {
+                // Recurse into array rows' sub-fields
+                if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
+                    for row_ctx in rows_arr.iter_mut() {
+                        if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                            enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
+                        }
+                    }
+                }
+            }
+            FieldType::Blocks => {
+                // Recurse into block rows' sub-fields, matching each row's block type
+                if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
+                    for row_ctx in rows_arr.iter_mut() {
+                        let block_type = row_ctx.get("_block_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+                        if let Some(block_def) = field_def.blocks.iter().find(|bd| bd.block_type == block_type) {
+                            if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                                enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
+                            }
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -2496,5 +2696,220 @@ mod tests {
         // sub_fields should be empty since block_def is not found
         let sub_fields = rows[0]["sub_fields"].as_array().unwrap();
         assert!(sub_fields.is_empty());
+    }
+
+    // --- enrich_nested_fields tests ---
+
+    #[test]
+    fn enrich_nested_fields_upload_gets_options() {
+        use crate::core::collection::*;
+        use crate::core::field::RelationshipConfig;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                alt TEXT,
+                caption TEXT,
+                filename TEXT,
+                mime_type TEXT,
+                url TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO media (id, alt, filename, mime_type, url, created_at, updated_at)
+            VALUES ('img1', 'Logo', 'logo.png', 'image/png', '/uploads/media/logo.png', '2024-01-01', '2024-01-01');
+            INSERT INTO media (id, alt, filename, mime_type, url, created_at, updated_at)
+            VALUES ('img2', 'Banner', 'banner.jpg', 'image/jpeg', '/uploads/media/banner.jpg', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let media_def = CollectionDefinition {
+            slug: "media".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                make_field("alt", FieldType::Text),
+                make_field("caption", FieldType::Text),
+                make_field("filename", FieldType::Text),
+                make_field("mime_type", FieldType::Text),
+                make_field("url", FieldType::Text),
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: Some(crate::core::upload::CollectionUpload {
+                enabled: true,
+                mime_types: vec!["image/*".to_string()],
+                max_file_size: None,
+                image_sizes: vec![],
+                admin_thumbnail: None,
+                format_options: Default::default(),
+            }),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut registry = crate::core::Registry::new();
+        registry.register_collection(media_def);
+
+        let mut upload_field = make_field("image", FieldType::Upload);
+        upload_field.relationship = Some(RelationshipConfig {
+            collection: "media".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+
+        let field_defs = vec![upload_field];
+        let mut sub_fields = vec![serde_json::json!({
+            "name": "content[0][image]",
+            "field_type": "upload",
+            "value": "",
+            "relationship_collection": "media",
+        })];
+
+        enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let options = sub_fields[0]["relationship_options"].as_array()
+            .expect("relationship_options should be populated");
+        assert_eq!(options.len(), 2, "Should have 2 media options");
+        assert!(options.iter().any(|o| o["value"] == "img1"), "Should contain img1");
+        assert!(options.iter().any(|o| o["value"] == "img2"), "Should contain img2");
+    }
+
+    #[test]
+    fn enrich_nested_fields_relationship_gets_options() {
+        use crate::core::collection::*;
+        use crate::core::field::RelationshipConfig;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE users (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO users (id, name, created_at, updated_at)
+            VALUES ('u1', 'Alice', '2024-01-01', '2024-01-01');
+            INSERT INTO users (id, name, created_at, updated_at)
+            VALUES ('u2', 'Bob', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let users_def = CollectionDefinition {
+            slug: "users".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![make_field("name", FieldType::Text)],
+            admin: CollectionAdmin {
+                use_as_title: Some("name".to_string()),
+                ..Default::default()
+            },
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut registry = crate::core::Registry::new();
+        registry.register_collection(users_def);
+
+        let mut rel_field = make_field("author", FieldType::Relationship);
+        rel_field.relationship = Some(RelationshipConfig {
+            collection: "users".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+
+        let field_defs = vec![rel_field];
+        let mut sub_fields = vec![serde_json::json!({
+            "name": "items[0][author]",
+            "field_type": "relationship",
+            "value": "u1",
+            "relationship_collection": "users",
+        })];
+
+        enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let options = sub_fields[0]["relationship_options"].as_array()
+            .expect("relationship_options should be populated");
+        assert_eq!(options.len(), 2, "Should have 2 user options");
+        let alice = options.iter().find(|o| o["value"] == "u1").unwrap();
+        assert_eq!(alice["label"], "Alice");
+        assert_eq!(alice["selected"], true, "u1 should be selected");
+    }
+
+    #[test]
+    fn enrich_nested_fields_recurses_into_layout() {
+        use crate::core::collection::*;
+        use crate::core::field::RelationshipConfig;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE tags (
+                id TEXT PRIMARY KEY,
+                label TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO tags (id, label, created_at, updated_at)
+            VALUES ('t1', 'Rust', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let tags_def = CollectionDefinition {
+            slug: "tags".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![make_field("label", FieldType::Text)],
+            admin: CollectionAdmin {
+                use_as_title: Some("label".to_string()),
+                ..Default::default()
+            },
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut registry = crate::core::Registry::new();
+        registry.register_collection(tags_def);
+
+        // A Row containing a Relationship field
+        let mut rel_field = make_field("tag", FieldType::Relationship);
+        rel_field.relationship = Some(RelationshipConfig {
+            collection: "tags".to_string(),
+            has_many: false,
+            max_depth: None,
+        });
+        let row_field = FieldDefinition {
+            name: "row1".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![rel_field],
+            ..Default::default()
+        };
+
+        let field_defs = vec![row_field];
+        let mut sub_fields = vec![serde_json::json!({
+            "name": "row1",
+            "field_type": "row",
+            "sub_fields": [{
+                "name": "tag",
+                "field_type": "relationship",
+                "value": "",
+                "relationship_collection": "tags",
+            }],
+        })];
+
+        enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let row_subs = sub_fields[0]["sub_fields"].as_array().unwrap();
+        let options = row_subs[0]["relationship_options"].as_array()
+            .expect("Nested relationship inside Row should be enriched");
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0]["label"], "Rust");
     }
 }
