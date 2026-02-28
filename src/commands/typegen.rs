@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 /// Handle the `typegen` subcommand — loads the Lua registry and generates types.
-pub fn run(config_dir: &Path, lang_str: &str) -> Result<()> {
+pub fn run(config_dir: &Path, lang_str: &str, output_dir: Option<&Path>) -> Result<()> {
     let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
 
     // Load config + Lua VM to get registry
@@ -17,7 +17,7 @@ pub fn run(config_dir: &Path, lang_str: &str) -> Result<()> {
 
     if lang_str == "all" {
         for lang in crate::typegen::Language::all() {
-            let path = crate::typegen::generate_lang(&config_dir, &reg, *lang)
+            let path = crate::typegen::generate_lang(&config_dir, &reg, *lang, output_dir)
                 .with_context(|| format!("Failed to generate {} types", lang.label()))?;
             println!("{}", path.display());
         }
@@ -27,7 +27,7 @@ pub fn run(config_dir: &Path, lang_str: &str) -> Result<()> {
                 "Unknown language '{}'. Valid: lua, ts, go, py, rs, all",
                 lang_str
             ))?;
-        let path = crate::typegen::generate_lang(&config_dir, &reg, lang)
+        let path = crate::typegen::generate_lang(&config_dir, &reg, lang, output_dir)
             .context("Failed to generate type definitions")?;
         println!("{}", path.display());
     }

@@ -1,8 +1,84 @@
 //! Blueprint management — save, use, list, remove reusable config directory templates.
 
 use anyhow::{Context, Result};
+use chrono::Utc;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+/// Manifest filename written to each saved blueprint.
+const MANIFEST_FILENAME: &str = ".crap-blueprint.toml";
+
+/// Metadata about a saved blueprint.
+#[derive(Debug, Serialize, Deserialize)]
+struct BlueprintManifest {
+    /// CMS version that created this blueprint.
+    crap_version: String,
+    /// ISO 8601 timestamp when the blueprint was saved.
+    created_at: Option<String>,
+}
+
+impl BlueprintManifest {
+    /// Create a new manifest for the current CMS version.
+    fn new() -> Self {
+        Self {
+            crap_version: env!("CARGO_PKG_VERSION").to_string(),
+            created_at: Some(Utc::now().to_rfc3339()),
+        }
+    }
+}
+
+/// Write a blueprint manifest file to the given directory.
+fn write_manifest(dir: &Path) -> Result<()> {
+    let manifest = BlueprintManifest::new();
+    let content =
+        toml::to_string_pretty(&manifest).context("Failed to serialize blueprint manifest")?;
+    fs::write(dir.join(MANIFEST_FILENAME), content)
+        .with_context(|| format!("Failed to write manifest to '{}'", dir.display()))?;
+    Ok(())
+}
+
+/// Read a blueprint manifest from the given directory. Returns `None` if the
+/// manifest file does not exist (backward compatible with old blueprints).
+fn read_manifest(dir: &Path) -> Result<Option<BlueprintManifest>> {
+    let path = dir.join(MANIFEST_FILENAME);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("Failed to read manifest from '{}'", path.display()))?;
+    let manifest: BlueprintManifest = toml::from_str(&content)
+        .with_context(|| format!("Failed to parse manifest from '{}'", path.display()))?;
+    Ok(Some(manifest))
+}
+
+/// Check the blueprint version against the running binary version.
+///
+/// Returns `None` if compatible, `Some(message)` on mismatch.
+/// Uses the same prefix-match logic as `CrapConfig::check_version()`.
+fn check_blueprint_version(blueprint_version: &str) -> Option<String> {
+    check_blueprint_version_against(blueprint_version, env!("CARGO_PKG_VERSION"))
+}
+
+/// Inner version check, takes explicit values for testability.
+fn check_blueprint_version_against(blueprint_version: &str, pkg_version: &str) -> Option<String> {
+    // Exact match
+    if blueprint_version == pkg_version {
+        return None;
+    }
+
+    // Prefix match: "0.1" matches "0.1.0", "0.1.3", etc.
+    if pkg_version.starts_with(blueprint_version)
+        && pkg_version.as_bytes().get(blueprint_version.len()) == Some(&b'.')
+    {
+        return None;
+    }
+
+    Some(format!(
+        "Blueprint was created with crap-cms v{}, but running version is v{}",
+        blueprint_version, pkg_version
+    ))
+}
 
 /// Resolve the global blueprints directory.
 ///
@@ -55,6 +131,10 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
     copy_dir_recursive(config_dir, &target, BLUEPRINT_SKIP)
         .with_context(|| format!("Failed to copy config to blueprint '{}'", name))?;
 
+    // Write version manifest
+    write_manifest(&target)
+        .with_context(|| format!("Failed to write manifest for blueprint '{}'", name))?;
+
     println!("Saved blueprint '{}' from {}", name, config_dir.display());
     println!("  Location: {}", target.display());
 
@@ -80,6 +160,13 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
                 name,
                 available.join(", ")
             );
+        }
+    }
+
+    // Check blueprint version compatibility (warn but don't block)
+    if let Some(manifest) = read_manifest(&source)? {
+        if let Some(warning) = check_blueprint_version(&manifest.crap_version) {
+            eprintln!("Warning: {}", warning);
         }
     }
 
@@ -130,7 +217,15 @@ pub fn blueprint_list() -> Result<()> {
         // Count collections and globals for a quick summary
         let collections = count_lua_files(&bp_path.join("collections"));
         let globals = count_lua_files(&bp_path.join("globals"));
-        println!("  {} ({} collection(s), {} global(s))", name, collections, globals);
+        // Show version from manifest if available
+        let version_tag = match read_manifest(&bp_path) {
+            Ok(Some(m)) => format!(" [v{}]", m.crap_version),
+            _ => String::new(),
+        };
+        println!(
+            "  {} ({} collection(s), {} global(s)){}",
+            name, collections, globals, version_tag
+        );
     }
     println!();
     println!("Use with: crap-cms blueprint use <name> [dir]");
@@ -432,6 +527,7 @@ mod tests {
         fs::create_dir_all(&bp_target).unwrap();
 
         copy_dir_recursive(&config, &bp_target, BLUEPRINT_SKIP).unwrap();
+        write_manifest(&bp_target).unwrap();
 
         // Verify blueprint contents
         assert!(bp_target.join("crap.toml").exists());
@@ -439,6 +535,12 @@ mod tests {
         assert!(bp_target.join("collections/posts.lua").exists());
         assert!(!bp_target.join("data").exists(), "data/ should be excluded");
         assert!(!bp_target.join("uploads").exists(), "uploads/ should be excluded");
+
+        // Verify manifest was created
+        assert!(bp_target.join(MANIFEST_FILENAME).exists());
+        let manifest = read_manifest(&bp_target).unwrap().expect("manifest should exist");
+        assert_eq!(manifest.crap_version, env!("CARGO_PKG_VERSION"));
+        assert!(manifest.created_at.is_some());
 
         // "Use" the blueprint to create a new project
         let new_project = tmp.path().join("new-project");
@@ -449,7 +551,95 @@ mod tests {
         assert!(new_project.join("init.lua").exists());
         assert!(new_project.join("collections/posts.lua").exists());
 
+        // Manifest is also copied (it's part of the blueprint)
+        assert!(new_project.join(MANIFEST_FILENAME).exists());
+
         let toml = fs::read_to_string(new_project.join("crap.toml")).unwrap();
         assert!(toml.contains("admin_port = 4000"));
+    }
+
+    #[test]
+    fn test_write_and_read_manifest() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_manifest(tmp.path()).unwrap();
+
+        let manifest = read_manifest(tmp.path()).unwrap().expect("manifest should exist");
+        assert_eq!(manifest.crap_version, env!("CARGO_PKG_VERSION"));
+        assert!(manifest.created_at.is_some());
+
+        // Verify the file is valid TOML
+        let content = fs::read_to_string(tmp.path().join(MANIFEST_FILENAME)).unwrap();
+        assert!(content.contains("crap_version"));
+        assert!(content.contains(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn test_read_manifest_missing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // No manifest file — should return None (backward compatible)
+        let result = read_manifest(tmp.path()).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_check_blueprint_version_exact_match() {
+        assert!(check_blueprint_version_against("0.1.0", "0.1.0").is_none());
+        assert!(check_blueprint_version_against("1.2.3", "1.2.3").is_none());
+    }
+
+    #[test]
+    fn test_check_blueprint_version_prefix_match() {
+        assert!(check_blueprint_version_against("0.1", "0.1.0").is_none());
+        assert!(check_blueprint_version_against("0.1", "0.1.5").is_none());
+        assert!(check_blueprint_version_against("1", "1.2.3").is_none());
+    }
+
+    #[test]
+    fn test_check_blueprint_version_mismatch() {
+        let msg = check_blueprint_version_against("0.2.0", "0.1.0");
+        assert!(msg.is_some());
+        let msg = msg.unwrap();
+        assert!(msg.contains("0.2.0"));
+        assert!(msg.contains("0.1.0"));
+
+        let msg = check_blueprint_version_against("1.0.0", "0.1.0");
+        assert!(msg.is_some());
+    }
+
+    #[test]
+    fn test_check_blueprint_version_current() {
+        // Current version should always match itself
+        assert!(check_blueprint_version(env!("CARGO_PKG_VERSION")).is_none());
+    }
+
+    #[test]
+    fn test_check_blueprint_version_no_false_prefix() {
+        // "0.1" should NOT match "0.10.0" — prefix must be followed by a dot
+        let msg = check_blueprint_version_against("0.1", "0.10.0");
+        assert!(msg.is_some(), "0.1 should not match 0.10.0");
+    }
+
+    #[test]
+    fn test_manifest_roundtrip_serialization() {
+        let manifest = BlueprintManifest {
+            crap_version: "1.2.3".to_string(),
+            created_at: Some("2026-02-28T12:00:00+00:00".to_string()),
+        };
+        let serialized = toml::to_string_pretty(&manifest).unwrap();
+        let deserialized: BlueprintManifest = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.crap_version, "1.2.3");
+        assert_eq!(
+            deserialized.created_at.as_deref(),
+            Some("2026-02-28T12:00:00+00:00")
+        );
+    }
+
+    #[test]
+    fn test_manifest_without_created_at() {
+        // created_at is optional — old manifests might not have it
+        let content = "crap_version = \"0.1.0\"\n";
+        let manifest: BlueprintManifest = toml::from_str(content).unwrap();
+        assert_eq!(manifest.crap_version, "0.1.0");
+        assert!(manifest.created_at.is_none());
     }
 }

@@ -1218,7 +1218,7 @@ fn typegen_all_languages() {
     let reg = registry.read().unwrap();
 
     for lang in typegen::Language::all() {
-        let path = typegen::generate_lang(&config_dir, &reg, *lang).unwrap();
+        let path = typegen::generate_lang(&config_dir, &reg, *lang, None).unwrap();
         assert!(path.exists(), "file should exist for {:?}", lang);
         let expected_ext = format!("generated.{}", lang.file_extension());
         assert!(path.to_string_lossy().ends_with(&expected_ext),
@@ -1554,6 +1554,31 @@ fn blueprint_refuses_overwrite() {
     // If first save fails (e.g., no config dir permissions), that's also acceptable for this test
 }
 
+#[test]
+fn blueprint_save_writes_manifest() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("crap.toml"), "# config").unwrap();
+
+    let bp_name = "test-bp-manifest-check";
+    let result = scaffold::blueprint_save(&config_dir, bp_name, true);
+    if result.is_ok() {
+        // Read the manifest from the blueprint directory
+        let bp_dir = dirs::config_dir().unwrap().join("crap-cms/blueprints").join(bp_name);
+        let manifest_path = bp_dir.join(".crap-blueprint.toml");
+        assert!(manifest_path.exists(), "manifest should be created on blueprint save");
+
+        let contents = std::fs::read_to_string(&manifest_path).unwrap();
+        assert!(contents.contains("crap_version"), "manifest should contain crap_version");
+        assert!(contents.contains(env!("CARGO_PKG_VERSION")), "manifest should contain current version");
+
+        // Clean up
+        let _ = scaffold::blueprint_remove(bp_name);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 17. Make Job
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1885,7 +1910,7 @@ fn cmd_typegen_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "lua");
+    let result = commands::typegen::run(&config_dir, "lua", None);
     assert!(result.is_ok(), "typegen lua should succeed: {:?}", result.err());
 }
 
@@ -1894,7 +1919,7 @@ fn cmd_typegen_all_via_library() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "all");
+    let result = commands::typegen::run(&config_dir, "all", None);
     assert!(result.is_ok(), "typegen all should succeed: {:?}", result.err());
 }
 
@@ -1903,7 +1928,7 @@ fn cmd_typegen_invalid_lang_errors() {
     let (tmp, _pool, _registry) = full_setup();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::typegen::run(&config_dir, "invalid_lang");
+    let result = commands::typegen::run(&config_dir, "invalid_lang", None);
     assert!(result.is_err(), "typegen with invalid language should fail");
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -1911,6 +1936,18 @@ fn cmd_typegen_invalid_lang_errors() {
         "error should mention 'Unknown language', got: {}",
         err_msg
     );
+}
+
+#[test]
+fn cmd_typegen_custom_output_dir() {
+    let (tmp, _pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    let custom_output = tmp.path().join("custom_types");
+
+    let result = commands::typegen::run(&config_dir, "lua", Some(&custom_output));
+    assert!(result.is_ok(), "typegen with custom output should succeed: {:?}", result.err());
+    assert!(custom_output.join("generated.lua").exists(), "should write to custom output dir");
+    assert!(custom_output.join("crap.lua").exists(), "should write API types to custom output dir");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2892,6 +2929,7 @@ fn cmd_status_bad_dir() {
 fn cmd_templates_list_all() {
     let result = commands::templates::run(commands::TemplatesAction::List {
         r#type: None,
+        verbose: false,
     });
     assert!(result.is_ok(), "templates list should succeed: {:?}", result.err());
 }
@@ -2900,6 +2938,7 @@ fn cmd_templates_list_all() {
 fn cmd_templates_list_templates_only() {
     let result = commands::templates::run(commands::TemplatesAction::List {
         r#type: Some("templates".to_string()),
+        verbose: false,
     });
     assert!(result.is_ok(), "templates list templates should succeed: {:?}", result.err());
 }
@@ -2908,6 +2947,7 @@ fn cmd_templates_list_templates_only() {
 fn cmd_templates_list_static_only() {
     let result = commands::templates::run(commands::TemplatesAction::List {
         r#type: Some("static".to_string()),
+        verbose: false,
     });
     assert!(result.is_ok(), "templates list static should succeed: {:?}", result.err());
 }
@@ -2916,8 +2956,18 @@ fn cmd_templates_list_static_only() {
 fn cmd_templates_list_invalid_type() {
     let result = commands::templates::run(commands::TemplatesAction::List {
         r#type: Some("invalid".to_string()),
+        verbose: false,
     });
     assert!(result.is_err(), "templates list with invalid type should fail");
+}
+
+#[test]
+fn cmd_templates_list_verbose() {
+    let result = commands::templates::run(commands::TemplatesAction::List {
+        r#type: None,
+        verbose: true,
+    });
+    assert!(result.is_ok(), "templates list --verbose should succeed: {:?}", result.err());
 }
 
 #[test]

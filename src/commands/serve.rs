@@ -34,6 +34,11 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         .context("Failed to load config")?;
     info!(?cfg, "Configuration loaded");
 
+    // Check crap_version compatibility
+    if let Some(warning) = cfg.check_version() {
+        warn!("{}", warning);
+    }
+
     // Initialize Lua VM and load collections/globals
     let registry = crate::hooks::init_lua(&config_dir, &cfg)
         .context("Failed to initialize Lua VM")?;

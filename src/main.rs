@@ -71,6 +71,10 @@ enum Command {
         /// Output language: lua, ts, go, py, rs (default: lua). Use "all" for all languages.
         #[arg(short, long, default_value = "lua")]
         lang: String,
+
+        /// Output directory for generated files (default: <config>/types/)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
     },
 
     /// Export the embedded content.proto file for gRPC client codegen
@@ -223,7 +227,9 @@ async fn main() -> Result<()> {
                 crap_cms::scaffold::blueprint_remove(&name)
             }
         },
-        Command::Typegen { config, lang } => commands::typegen::run(&config, &lang),
+        Command::Typegen { config, lang, output } => {
+            commands::typegen::run(&config, &lang, output.as_deref())
+        }
         Command::Proto { output } => crap_cms::scaffold::proto_export(output.as_deref()),
         Command::Migrate { config, action } => commands::db::migrate(&config, action),
         Command::Backup { config, output, include_uploads } => {

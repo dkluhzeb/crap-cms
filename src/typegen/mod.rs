@@ -71,14 +71,21 @@ impl Language {
 /// Generate Lua type definitions (default behavior, used on server startup).
 /// Writes to `<config_dir>/types/generated.lua`.
 pub fn generate(config_dir: &Path, registry: &Registry) -> Result<PathBuf> {
-    generate_lang(config_dir, registry, Language::Lua)
+    generate_lang(config_dir, registry, Language::Lua, None)
 }
 
 /// Generate type definitions for a specific language.
-/// Writes to `<config_dir>/types/generated.<ext>`.
+/// Writes to `<output_dir>/generated.<ext>` (defaults to `<config_dir>/types/`).
 /// Also writes `crap.lua` API surface types (keeps them in sync with CMS binary version).
-pub fn generate_lang(config_dir: &Path, registry: &Registry, lang: Language) -> Result<PathBuf> {
-    let types_dir = config_dir.join("types");
+pub fn generate_lang(
+    config_dir: &Path,
+    registry: &Registry,
+    lang: Language,
+    output_dir: Option<&Path>,
+) -> Result<PathBuf> {
+    let types_dir = output_dir
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| config_dir.join("types"));
     std::fs::create_dir_all(&types_dir)?;
 
     // Always write the API surface types (keeps them in sync with CMS version)

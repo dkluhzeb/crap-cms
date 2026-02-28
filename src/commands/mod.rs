@@ -323,6 +323,10 @@ pub enum TemplatesAction {
         /// Filter: "templates" or "static" (default: both)
         #[arg(short, long)]
         r#type: Option<String>,
+
+        /// Show full file tree with individual file sizes
+        #[arg(short, long)]
+        verbose: bool,
     },
     /// Extract default files into the config directory for customization
     Extract {
@@ -381,6 +385,11 @@ pub enum JobsAction {
         #[arg(long, default_value = "7d")]
         older_than: String,
     },
+    /// Check job system health
+    Healthcheck {
+        /// Path to the config directory
+        config: PathBuf,
+    },
 }
 
 /// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.
@@ -389,6 +398,12 @@ pub fn load_config_and_sync(config_dir: &Path) -> Result<(crate::db::DbPool, cra
 
     let cfg = crate::config::CrapConfig::load(&config_dir)
         .context("Failed to load config")?;
+
+    // Check crap_version compatibility
+    if let Some(warning) = cfg.check_version() {
+        tracing::warn!("{}", warning);
+    }
+
     let registry = crate::hooks::init_lua(&config_dir, &cfg)
         .context("Failed to initialize Lua VM")?;
     let pool = crate::db::pool::create_pool(&config_dir, &cfg)

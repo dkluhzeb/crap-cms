@@ -162,6 +162,74 @@ pub fn run(action: super::JobsAction) -> Result<()> {
 
             Ok(())
         }
+        super::JobsAction::Healthcheck { config } => {
+            let config_dir = config.canonicalize().unwrap_or(config);
+            let cfg = crate::config::CrapConfig::load(&config_dir)?;
+            let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
+            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
+            crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
+
+            let reg = registry.read()
+                .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+            let conn = pool.get().context("Failed to get DB connection")?;
+
+            let defined_count = reg.jobs.len();
+
+            // Stale jobs: running but heartbeat expired (heartbeat_interval * 3)
+            let stale_threshold = cfg.jobs.heartbeat_interval * 3;
+            let stale_jobs = crate::db::query::jobs::find_stale_jobs(&conn, stale_threshold)?;
+            let stale_count = stale_jobs.len();
+
+            // Failed jobs in the last 24 hours
+            let failed_24h = crate::db::query::jobs::count_failed_since(&conn, 86400)?;
+
+            // Pending jobs waiting longer than 5 minutes
+            let pending_long = crate::db::query::jobs::count_pending_older_than(&conn, 300)?;
+
+            // Check for scheduled jobs with no recent runs
+            let mut no_recent_runs = Vec::new();
+            for (slug, def) in &reg.jobs {
+                if def.schedule.is_some() {
+                    let last = crate::db::query::jobs::last_completed_run(&conn, slug)?;
+                    if last.is_none() {
+                        // Scheduled job has never completed
+                        no_recent_runs.push(slug.clone());
+                    }
+                }
+            }
+
+            // Determine status
+            let status = if stale_count > 0 {
+                "unhealthy"
+            } else if failed_24h > 0 || pending_long > 0 || !no_recent_runs.is_empty() {
+                "warning"
+            } else {
+                "healthy"
+            };
+
+            println!("Job system health:");
+            println!("  Defined jobs:    {}", defined_count);
+            println!("  Stale jobs:      {}", stale_count);
+            println!("  Failed (24h):    {}", failed_24h);
+            println!("  Pending > 5min:  {}", pending_long);
+            if !no_recent_runs.is_empty() {
+                no_recent_runs.sort();
+                println!("  Never completed: {}", no_recent_runs.join(", "));
+            }
+            println!("  Status: {}", status);
+
+            if stale_count > 0 {
+                println!("\nStale jobs:");
+                for job in &stale_jobs {
+                    println!("  {} ({}): started {}, last heartbeat {}",
+                        job.id, job.slug,
+                        job.started_at.as_deref().unwrap_or("-"),
+                        job.heartbeat_at.as_deref().unwrap_or("never"));
+                }
+            }
+
+            Ok(())
+        }
     }
 }
 

@@ -1,3 +1,5 @@
+# crap_version = "0.1"   # warn if running binary doesn't match
+
 [server]
 admin_port = 3000
 grpc_port = 50051
@@ -23,6 +25,13 @@ enabled = true                # enable SSE + gRPC Subscribe for live mutation ev
 # vm_pool_size = 4              # number of Lua VMs for concurrent hook execution
                                 # default: min(available_parallelism, 8)
 # max_depth = 3                 # max hook recursion depth (CRUD → hook → CRUD chains)
+
+# [jobs]
+# max_concurrent = 10       # max concurrent job executions
+# poll_interval = 1         # seconds between polling for pending jobs
+# cron_interval = 60        # seconds between cron schedule checks
+# heartbeat_interval = 10   # seconds between heartbeat updates
+# auto_purge = "7d"         # purge completed/failed runs older than this
 
 [locale]
 default_locale = "en"         # default locale for content

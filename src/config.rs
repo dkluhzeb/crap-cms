@@ -8,6 +8,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct CrapConfig {
+    /// Required CMS version. If set, warns on mismatch at startup.
+    pub crap_version: Option<String>,
     pub server: ServerConfig,
     pub database: DatabaseConfig,
     pub admin: AdminConfig,
@@ -402,6 +404,44 @@ impl CrapConfig {
         }
     }
 
+    /// Check `crap_version` against the running binary version.
+    ///
+    /// Returns `None` if the version is unset or matches. Returns `Some(message)`
+    /// with a human-readable warning if there is a mismatch. Callers should log
+    /// the message via `tracing::warn!`.
+    ///
+    /// Supports exact match (`"0.1.0"`) and prefix match (`"0.1"` matches any `0.1.x`).
+    pub fn check_version(&self) -> Option<String> {
+        Self::check_version_against(self.crap_version.as_deref(), env!("CARGO_PKG_VERSION"))
+    }
+
+    /// Inner version check, takes explicit values so it is testable without
+    /// depending on the compile-time package version.
+    fn check_version_against(crap_version: Option<&str>, pkg_version: &str) -> Option<String> {
+        let required = match crap_version {
+            Some(v) if !v.is_empty() => v,
+            _ => return None,
+        };
+
+        // Exact match
+        if required == pkg_version {
+            return None;
+        }
+
+        // Prefix match: "0.1" should match "0.1.0", "0.1.3", etc.
+        // The required string must be a proper prefix followed by a dot in the pkg version.
+        if pkg_version.starts_with(required)
+            && pkg_version.as_bytes().get(required.len()) == Some(&b'.')
+        {
+            return None;
+        }
+
+        Some(format!(
+            "crap_version mismatch: config requires \"{}\", but running version is \"{}\"",
+            required, pkg_version
+        ))
+    }
+
     /// Resolve the database path relative to the config directory.
     pub fn db_path(&self, config_dir: &Path) -> PathBuf {
         let p = Path::new(&self.database.path);
@@ -700,5 +740,88 @@ allow_credentials = true
         // Other fields should be defaults
         assert_eq!(config.server.grpc_port, 50051);
         assert_eq!(config.database.path, "data/crap.db");
+    }
+
+    // -- crap_version / check_version tests --
+
+    #[test]
+    fn check_version_none_returns_ok() {
+        assert!(CrapConfig::check_version_against(None, "0.1.0").is_none());
+    }
+
+    #[test]
+    fn check_version_empty_returns_ok() {
+        assert!(CrapConfig::check_version_against(Some(""), "0.1.0").is_none());
+    }
+
+    #[test]
+    fn check_version_exact_match() {
+        assert!(CrapConfig::check_version_against(Some("0.1.0"), "0.1.0").is_none());
+    }
+
+    #[test]
+    fn check_version_prefix_match() {
+        assert!(CrapConfig::check_version_against(Some("0.1"), "0.1.0").is_none());
+        assert!(CrapConfig::check_version_against(Some("0.1"), "0.1.3").is_none());
+        assert!(CrapConfig::check_version_against(Some("0"), "0.1.0").is_none());
+    }
+
+    #[test]
+    fn check_version_prefix_no_false_positive() {
+        // "0.1" should NOT match "0.10.0" — the next char must be '.'
+        let result = CrapConfig::check_version_against(Some("0.1"), "0.10.0");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn check_version_mismatch() {
+        let result = CrapConfig::check_version_against(Some("0.2.0"), "0.1.0");
+        assert!(result.is_some());
+        let msg = result.unwrap();
+        assert!(msg.contains("0.2.0"), "should mention required version");
+        assert!(msg.contains("0.1.0"), "should mention running version");
+    }
+
+    #[test]
+    fn check_version_prefix_mismatch() {
+        let result = CrapConfig::check_version_against(Some("1.0"), "0.1.0");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn check_version_from_struct() {
+        // Test via the public check_version() method on a default config (crap_version = None)
+        let config = CrapConfig::default();
+        assert!(config.crap_version.is_none());
+        assert!(config.check_version().is_none());
+    }
+
+    #[test]
+    fn check_version_from_struct_with_value() {
+        let mut config = CrapConfig::default();
+        config.crap_version = Some(env!("CARGO_PKG_VERSION").to_string());
+        assert!(config.check_version().is_none());
+    }
+
+    #[test]
+    fn crap_version_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "crap_version = \"0.1.0\"\n",
+        ).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.crap_version, Some("0.1.0".to_string()));
+    }
+
+    #[test]
+    fn crap_version_absent_in_toml_is_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 3000\n",
+        ).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert!(config.crap_version.is_none());
     }
 }

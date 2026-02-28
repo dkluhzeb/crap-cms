@@ -285,7 +285,7 @@ crap-cms make job ./my-project send_welcome_email
 crap-cms blueprint save <CONFIG> <NAME> [-f]
 ```
 
-Saves a config directory as a reusable blueprint (excluding `data/`, `uploads/`, `types/`).
+Saves a config directory as a reusable blueprint (excluding `data/`, `uploads/`, `types/`). A `.crap-blueprint.toml` manifest is written with the CMS version and timestamp.
 
 #### `blueprint use`
 
@@ -293,13 +293,15 @@ Saves a config directory as a reusable blueprint (excluding `data/`, `uploads/`,
 crap-cms blueprint use <NAME> [DIR]
 ```
 
-Creates a new project from a saved blueprint.
+Creates a new project from a saved blueprint. If the blueprint was saved with a different CMS version, a warning is printed (but the operation proceeds).
 
 #### `blueprint list`
 
 ```bash
 crap-cms blueprint list
 ```
+
+Lists saved blueprints with collection/global counts and the CMS version they were saved with.
 
 #### `blueprint remove`
 
@@ -351,16 +353,18 @@ crap-cms import ./my-project backup.json -c posts
 ### `typegen` — Generate typed definitions
 
 ```bash
-crap-cms typegen <CONFIG> [-l <LANG>]
+crap-cms typegen <CONFIG> [-l <LANG>] [-o <DIR>]
 ```
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
 | `--lang` | `-l` | `lua` | Output language: `lua`, `ts`, `go`, `py`, `rs`, `all` |
+| `--output` | `-o` | `<config>/types/` | Output directory for generated files |
 
 ```bash
 crap-cms typegen ./my-project
 crap-cms typegen ./my-project -l all
+crap-cms typegen ./my-project -l ts -o ./client/src/types
 ```
 
 ### `proto` — Export proto file
@@ -421,17 +425,18 @@ Extract the compiled-in admin templates and static files into your config direct
 #### `templates list`
 
 ```bash
-crap-cms templates list [-t <TYPE>]
+crap-cms templates list [-t <TYPE>] [-v]
 ```
 
 | Flag | Short | Description |
 |------|-------|-------------|
 | `--type` | `-t` | Filter: `templates` or `static` (default: both) |
+| `--verbose` | `-v` | Show full file tree with individual sizes (default: compact summary) |
 
 ```bash
 crap-cms templates list
 crap-cms templates list -t templates
-crap-cms templates list -t static
+crap-cms templates list -v
 ```
 
 #### `templates extract`
@@ -495,12 +500,23 @@ crap-cms jobs purge <CONFIG> [--older-than <DURATION>]
 |------|---------|-------------|
 | `--older-than` | `7d` | Delete completed/failed/stale runs older than this. Supports `Nd`, `Nh`, `Nm` formats. |
 
+#### `jobs healthcheck`
+
+```bash
+crap-cms jobs healthcheck <CONFIG>
+```
+
+Checks job system health and prints a summary: defined jobs, stale jobs (running but heartbeat expired), failed jobs in the last 24 hours, pending jobs waiting longer than 5 minutes, and scheduled jobs that have never completed a run.
+
+Exit status: `healthy` (no issues), `warning` (failed or long-pending jobs), `unhealthy` (stale jobs detected).
+
 ```bash
 crap-cms jobs list ./my-project
 crap-cms jobs trigger ./my-project cleanup_expired
 crap-cms jobs status ./my-project
 crap-cms jobs status ./my-project --id abc123
 crap-cms jobs purge ./my-project --older-than 30d
+crap-cms jobs healthcheck ./my-project
 ```
 
 ## Environment Variables

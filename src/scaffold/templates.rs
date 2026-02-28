@@ -39,7 +39,129 @@ fn format_size(bytes: usize) -> String {
     }
 }
 
-/// Print files grouped by directory in a tree-like format.
+/// Functional category for a template or static file.
+struct FileCategory {
+    label: &'static str,
+    description: &'static str,
+    /// Prefix patterns to match (e.g., "layout/" matches "layout/base.hbs").
+    prefixes: &'static [&'static str],
+}
+
+/// Template categories ordered by customization relevance.
+const TEMPLATE_CATEGORIES: &[FileCategory] = &[
+    FileCategory {
+        label: "Layout",
+        description: "Page shell, header, sidebar navigation",
+        prefixes: &["layout/"],
+    },
+    FileCategory {
+        label: "Fields",
+        description: "Form input partials (text, select, checkbox, richtext, ...)",
+        prefixes: &["fields/"],
+    },
+    FileCategory {
+        label: "Collections",
+        description: "List, create, edit pages and table rows",
+        prefixes: &["collections/"],
+    },
+    FileCategory {
+        label: "Globals",
+        description: "Global settings edit pages",
+        prefixes: &["globals/"],
+    },
+    FileCategory {
+        label: "Auth",
+        description: "Login, forgot password, reset password pages",
+        prefixes: &["auth/"],
+    },
+    FileCategory {
+        label: "Dashboard",
+        description: "Admin landing page",
+        prefixes: &["dashboard/"],
+    },
+    FileCategory {
+        label: "Errors",
+        description: "404, 403, 500 error pages",
+        prefixes: &["errors/"],
+    },
+    FileCategory {
+        label: "Email",
+        description: "Password reset and email verification templates",
+        prefixes: &["email/"],
+    },
+    FileCategory {
+        label: "Components",
+        description: "Breadcrumb, pagination, version history partials",
+        prefixes: &["components/"],
+    },
+];
+
+/// Static file categories.
+const STATIC_CATEGORIES: &[FileCategory] = &[
+    FileCategory {
+        label: "Styles",
+        description: "CSS files (design tokens, layout, forms, buttons, themes)",
+        prefixes: &[".css"],
+    },
+    FileCategory {
+        label: "Components",
+        description: "JS modules (toast, confirm dialog, richtext editor, ...)",
+        prefixes: &["components/"],
+    },
+    FileCategory {
+        label: "Fonts",
+        description: "Geist font family (woff2/otf/ttf)",
+        prefixes: &["fonts/"],
+    },
+];
+
+/// Print files grouped by functional category with descriptions.
+fn print_categorized(files: &[(String, &[u8])], categories: &[FileCategory]) {
+    // Track which file indices are categorized
+    let mut used = vec![false; files.len()];
+
+    for cat in categories {
+        let matched: Vec<usize> = files.iter().enumerate()
+            .filter(|(i, (path, _))| {
+                !used[*i] && cat.prefixes.iter().any(|prefix| {
+                    if prefix.starts_with('.') {
+                        path.ends_with(prefix) && !path.contains('/')
+                    } else {
+                        path.starts_with(prefix)
+                    }
+                })
+            })
+            .map(|(i, _)| i)
+            .collect();
+
+        if matched.is_empty() {
+            continue;
+        }
+
+        let total: usize = matched.iter().map(|&i| files[i].1.len()).sum();
+        let n = matched.len();
+        println!("  {} ({} {}, {}) — {}", cat.label, n, if n == 1 { "file" } else { "files" }, format_size(total), cat.description);
+        for &i in &matched {
+            println!("    {}", files[i].0);
+            used[i] = true;
+        }
+        println!();
+    }
+
+    // Any uncategorized files
+    let remaining: Vec<usize> = (0..files.len()).filter(|i| !used[*i]).collect();
+    if !remaining.is_empty() {
+        let total: usize = remaining.iter().map(|&i| files[i].1.len()).sum();
+        let n = remaining.len();
+        println!("  Other ({} {}, {})", n, if n == 1 { "file" } else { "files" }, format_size(total));
+        for &i in &remaining {
+            println!("    {}", files[i].0);
+        }
+        println!();
+    }
+}
+
+/// Print files grouped by directory in a tree-like format (verbose mode).
 fn print_file_tree(files: &[(String, &[u8])]) {
     use std::collections::BTreeMap;
 
@@ -67,7 +189,8 @@ fn print_file_tree(files: &[(String, &[u8])]) {
 /// List embedded templates and/or static files.
 ///
 /// `type_filter`: None = both, Some("templates") = templates only, Some("static") = static only.
-pub fn templates_list(type_filter: Option<&str>) -> Result<()> {
+/// `verbose`: show full file tree instead of compact summary.
+pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
     // Validate filter
     if let Some(f) = type_filter {
         if f != "templates" && f != "static" {
@@ -80,17 +203,37 @@ pub fn templates_list(type_filter: Option<&str>) -> Result<()> {
 
     if show_templates {
         let files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
-        println!("Templates ({} files):", files.len());
-        print_file_tree(&files);
-        if show_static {
+        let total_size: usize = files.iter().map(|(_, c)| c.len()).sum();
+        println!("Templates ({} files, {}):", files.len(), format_size(total_size));
+        if verbose {
+            print_file_tree(&files);
+        } else {
+            println!();
+            print_categorized(&files, TEMPLATE_CATEGORIES);
+        }
+        if show_static && !verbose {
+            // categorized mode already adds spacing
+        } else if show_static {
             println!();
         }
     }
 
     if show_static {
         let files = collect_embedded_files_flat(&EMBEDDED_STATIC);
-        println!("Static files ({} files):", files.len());
-        print_file_tree(&files);
+        let total_size: usize = files.iter().map(|(_, c)| c.len()).sum();
+        println!("Static files ({} files, {}):", files.len(), format_size(total_size));
+        if verbose {
+            print_file_tree(&files);
+        } else {
+            println!();
+            print_categorized(&files, STATIC_CATEGORIES);
+        }
+    }
+
+    if !verbose {
+        println!("Extract a file to customize it:");
+        println!("  crap-cms templates extract <CONFIG> <PATH>");
+        println!("  crap-cms templates extract <CONFIG> --all");
     }
 
     Ok(())
@@ -255,11 +398,20 @@ mod tests {
 
     #[test]
     fn test_templates_list() {
-        // Just verify it runs without error
-        assert!(templates_list(None).is_ok());
-        assert!(templates_list(Some("templates")).is_ok());
-        assert!(templates_list(Some("static")).is_ok());
-        assert!(templates_list(Some("invalid")).is_err());
+        // Summary mode (default)
+        assert!(templates_list(None, false).is_ok());
+        assert!(templates_list(Some("templates"), false).is_ok());
+        assert!(templates_list(Some("static"), false).is_ok());
+        assert!(templates_list(Some("invalid"), false).is_err());
+    }
+
+    #[test]
+    fn test_templates_list_verbose() {
+        // Verbose mode (full file tree)
+        assert!(templates_list(None, true).is_ok());
+        assert!(templates_list(Some("templates"), true).is_ok());
+        assert!(templates_list(Some("static"), true).is_ok());
+        assert!(templates_list(Some("invalid"), true).is_err());
     }
 
     #[test]

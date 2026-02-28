@@ -4,9 +4,18 @@ The `crap.toml` file configures the server, database, authentication, and other 
 
 If `crap.toml` does not exist in the config directory, all defaults apply.
 
+## Top-Level Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `crap_version` | string | — | Expected CMS version. If set, a warning is logged on startup when the running binary doesn't match. Supports exact (`"0.1.0"`) or prefix (`"0.1"`) matching. |
+
 ## Full Reference
 
 ```toml
+# Optional: warn if the running binary doesn't match this version
+# crap_version = "0.1.0"
+
 [server]
 admin_port = 3000       # Admin UI port
 grpc_port = 50051       # gRPC API port
@@ -52,6 +61,13 @@ channel_capacity = 1024  # Broadcast channel buffer size
 default_locale = "en"    # Default locale code
 locales = ["en", "de"]   # Supported locales (empty = disabled)
 fallback = true          # Fall back to default locale if field is NULL
+
+[jobs]
+max_concurrent = 10      # Max concurrent job executions across all queues
+poll_interval = 1        # How often to poll for pending jobs (seconds)
+cron_interval = 60       # How often to check cron schedules (seconds)
+heartbeat_interval = 10  # How often running jobs update their heartbeat (seconds)
+auto_purge = "7d"        # Auto-purge completed/failed runs older than this. Empty = disabled
 
 [cors]
 allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (default)
@@ -144,6 +160,16 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 | `default_locale` | string | `"en"` | Default locale code. Content without an explicit locale uses this. |
 | `locales` | string[] | `[]` (empty) | Supported locale codes. **Empty = localization disabled.** When empty, all fields behave as before (single value, no locale columns). |
 | `fallback` | boolean | `true` | When reading a non-default locale, fall back to the default locale value if the requested locale field is NULL. Uses `COALESCE` in SQL. |
+
+### `[jobs]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `max_concurrent` | integer | `10` | Maximum concurrent job executions across all queues. |
+| `poll_interval` | integer | `1` | How often to poll for pending jobs, in seconds. |
+| `cron_interval` | integer | `60` | How often to evaluate cron schedules, in seconds. |
+| `heartbeat_interval` | integer | `10` | How often running jobs update their heartbeat, in seconds. Used to detect stale jobs. |
+| `auto_purge` | string | `"7d"` | Auto-purge completed/failed runs older than this duration. Supports `Nd` (days), `Nh` (hours), `Nm` (minutes). Empty string disables auto-purge. |
 
 ### `[cors]`
 

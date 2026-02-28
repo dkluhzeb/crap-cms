@@ -276,6 +276,50 @@ pub fn purge_old_jobs(conn: &rusqlite::Connection, older_than_secs: u64) -> Resu
     Ok(deleted)
 }
 
+/// Count failed jobs within a recent time window (in seconds).
+pub fn count_failed_since(conn: &rusqlite::Connection, since_secs: u64) -> Result<i64> {
+    let threshold = format!("-{} seconds", since_secs);
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM _crap_jobs
+         WHERE status = 'failed'
+           AND completed_at >= datetime('now', ?1)",
+        [&threshold],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// Count pending jobs that have been waiting longer than the given threshold (in seconds).
+pub fn count_pending_older_than(conn: &rusqlite::Connection, older_than_secs: u64) -> Result<i64> {
+    let threshold = format!("-{} seconds", older_than_secs);
+    let count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM _crap_jobs
+         WHERE status = 'pending'
+           AND created_at < datetime('now', ?1)",
+        [&threshold],
+        |row| row.get(0),
+    )?;
+    Ok(count)
+}
+
+/// Get the most recent completed run for a given job slug.
+pub fn last_completed_run(conn: &rusqlite::Connection, slug: &str) -> Result<Option<JobRun>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
+                scheduled_by, created_at, started_at, completed_at, heartbeat_at
+         FROM _crap_jobs
+         WHERE slug = ?1 AND status = 'completed'
+         ORDER BY completed_at DESC
+         LIMIT 1"
+    )?;
+    let mut rows = stmt.query_map([slug], row_to_job_run)?;
+    match rows.next() {
+        Some(Ok(job)) => Ok(Some(job)),
+        Some(Err(e)) => Err(e.into()),
+        None => Ok(None),
+    }
+}
+
 /// Mark a running job as stale.
 pub fn mark_stale(conn: &rusqlite::Connection, id: &str, error: &str) -> Result<()> {
     conn.execute(
@@ -542,5 +586,78 @@ mod tests {
         // With a very long threshold, nothing should be stale
         let stale = find_stale_jobs(&conn, 99999).unwrap();
         assert!(stale.is_empty());
+    }
+
+    #[test]
+    fn test_count_failed_since() {
+        let conn = setup_db();
+        // Insert a recently failed job
+        conn.execute(
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f1', 'test', 'failed', datetime('now'))",
+            [],
+        ).unwrap();
+        // Insert an old failed job
+        conn.execute(
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f2', 'test', 'failed', datetime('now', '-48 hours'))",
+            [],
+        ).unwrap();
+        // Insert a completed job (should not count)
+        conn.execute(
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', datetime('now'))",
+            [],
+        ).unwrap();
+
+        let count = count_failed_since(&conn, 86400).unwrap(); // 24h
+        assert_eq!(count, 1, "only the recent failure should count");
+
+        let count_all = count_failed_since(&conn, 86400 * 3).unwrap(); // 3 days
+        assert_eq!(count_all, 2, "both failures within 3 days");
+    }
+
+    #[test]
+    fn test_count_pending_older_than() {
+        let conn = setup_db();
+        // Insert a pending job from 10 minutes ago
+        conn.execute(
+            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p1', 'test', 'pending', datetime('now', '-600 seconds'))",
+            [],
+        ).unwrap();
+        // Insert a recent pending job
+        conn.execute(
+            "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p2', 'test', 'pending', datetime('now'))",
+            [],
+        ).unwrap();
+
+        let count = count_pending_older_than(&conn, 300).unwrap(); // 5 min
+        assert_eq!(count, 1, "only the old pending job should count");
+
+        let count_all = count_pending_older_than(&conn, 1).unwrap(); // 1 second
+        assert_eq!(count_all, 1, "still just the old one");
+    }
+
+    #[test]
+    fn test_last_completed_run() {
+        let conn = setup_db();
+
+        // No completed runs
+        let last = last_completed_run(&conn, "test").unwrap();
+        assert!(last.is_none());
+
+        // Add a completed run
+        conn.execute(
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', datetime('now', '-1 hour'))",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c2', 'test', 'completed', datetime('now'))",
+            [],
+        ).unwrap();
+
+        let last = last_completed_run(&conn, "test").unwrap().unwrap();
+        assert_eq!(last.id, "c2", "should return the most recent completed run");
+
+        // Different slug should return None
+        let other = last_completed_run(&conn, "other").unwrap();
+        assert!(other.is_none());
     }
 }

@@ -656,6 +656,18 @@ pub async fn edit_form(
             "value": "",
             "description": "Leave blank to keep current password",
         }));
+
+        // Add locked checkbox — read current lock state from DB
+        let is_locked = state.pool.get().ok()
+            .and_then(|conn| query::auth::is_locked(&conn, &slug, &id).ok())
+            .unwrap_or(false);
+        fields.push(serde_json::json!({
+            "name": "_locked",
+            "field_type": "checkbox",
+            "label": "Account locked",
+            "checked": is_locked,
+            "description": "Prevent this user from logging in",
+        }));
     }
 
     // Split fields into main and sidebar
@@ -890,9 +902,14 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         }
     }
 
-    // Extract password before it enters hooks/regular data flow
+    // Extract password and locked before they enter hooks/regular data flow
     let password = if def.is_auth_collection() {
         form_data.remove("password")
+    } else {
+        None
+    };
+    let locked_value = if def.is_auth_collection() {
+        Some(form_data.remove("_locked"))
     } else {
         None
     };
@@ -915,7 +932,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
     let action_owned = action.clone();
     let result = tokio::task::spawn_blocking(move || {
         // Handle unpublish: set _status to 'draft' and create a version
-        if action_owned == "unpublish" && def_owned.has_versions() {
+        let result = if action_owned == "unpublish" && def_owned.has_versions() {
             let doc = crate::service::unpublish_document(
                 &pool, &runner, &slug_owned, &id_owned, &def_owned, user_doc.as_ref(),
             )?;
@@ -927,7 +944,23 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 password.as_deref(), locale_ctx.as_ref(), locale,
                 user_doc.as_ref(), draft,
             )
+        };
+
+        // Update lock status for auth collections (after successful update)
+        if result.is_ok() {
+            if let Some(locked_field) = locked_value {
+                let should_lock = locked_field.as_deref() == Some("on")
+                    || locked_field.as_deref() == Some("1");
+                let conn = pool.get().context("DB connection for lock update")?;
+                if should_lock {
+                    query::auth::lock_user(&conn, &slug_owned, &id_owned)?;
+                } else {
+                    query::auth::unlock_user(&conn, &slug_owned, &id_owned)?;
+                }
+            }
         }
+
+        result
     }).await;
 
     let locale_suffix = form_locale
