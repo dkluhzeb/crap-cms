@@ -90,6 +90,19 @@
   --sidebar-active-bg: var(--color-primary-bg);
   --sidebar-active-text: var(--color-primary);
 
+  /* Semantic - Surfaces */
+  --surface-primary: var(--bg-elevated);
+  --surface-secondary: var(--bg-surface);
+  --surface-hover: var(--bg-hover);
+
+  /* Semantic - Borders */
+  --border-primary: var(--border-color-hover);
+  --border-default: var(--border-color);
+
+  /* Semantic - Accent */
+  --accent-primary: var(--color-primary);
+  --accent-primary-bg: var(--color-primary-bg);
+
   /* Semantic - Inputs */
   --input-bg: var(--bg-elevated);
   --input-border: var(--border-color-hover);

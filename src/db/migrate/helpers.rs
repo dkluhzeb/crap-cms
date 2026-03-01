@@ -37,6 +37,18 @@ pub(super) fn ensure_locale_column(conn: &rusqlite::Connection, table_name: &str
     Ok(())
 }
 
+/// Ensure a named column exists on a table (ALTER TABLE ADD COLUMN if missing).
+pub(super) fn ensure_column_exists(conn: &rusqlite::Connection, table_name: &str, column: &str, col_type: &str) -> Result<()> {
+    let existing = get_table_columns(conn, table_name)?;
+    if !existing.contains(column) {
+        let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table_name, column, col_type);
+        tracing::info!("Adding {} column to {}", column, table_name);
+        conn.execute(&sql, [])
+            .with_context(|| format!("Failed to add {} to {}", column, table_name))?;
+    }
+    Ok(())
+}
+
 /// A column specification derived from a field definition.
 /// Used by migration code to generate CREATE TABLE / ALTER TABLE statements.
 pub(super) struct ColumnSpec<'a> {
@@ -119,38 +131,56 @@ pub(super) fn sync_join_tables(
         let has_locale_col = field.localized && locale_config.is_enabled();
 
         match field.field_type {
-            FieldType::Relationship => {
+            FieldType::Relationship | FieldType::Upload => {
                 if let Some(ref rc) = field.relationship {
                     if rc.has_many {
                         let table_name = format!("{}_{}", collection_slug, field.name);
                         if !table_exists(conn, &table_name)? {
+                            let poly_col = if rc.is_polymorphic() {
+                                "related_collection TEXT NOT NULL DEFAULT '', "
+                            } else {
+                                ""
+                            };
+                            let poly_pk = if rc.is_polymorphic() {
+                                ", related_collection"
+                            } else {
+                                ""
+                            };
                             let sql = if has_locale_col {
                                 format!(
                                     "CREATE TABLE {} (\
                                         parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
                                         related_id TEXT NOT NULL, \
+                                        {}\
                                         _order INTEGER NOT NULL DEFAULT 0, \
                                         _locale TEXT NOT NULL DEFAULT '{}', \
-                                        PRIMARY KEY (parent_id, related_id, _locale)\
+                                        PRIMARY KEY (parent_id, related_id{}, _locale)\
                                     )",
-                                    table_name, collection_slug, locale_config.default_locale
+                                    table_name, collection_slug, poly_col, locale_config.default_locale, poly_pk
                                 )
                             } else {
                                 format!(
                                     "CREATE TABLE {} (\
                                         parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
                                         related_id TEXT NOT NULL, \
+                                        {}\
                                         _order INTEGER NOT NULL DEFAULT 0, \
-                                        PRIMARY KEY (parent_id, related_id)\
+                                        PRIMARY KEY (parent_id, related_id{})\
                                     )",
-                                    table_name, collection_slug
+                                    table_name, collection_slug, poly_col, poly_pk
                                 )
                             };
                             tracing::info!("Creating junction table: {}", table_name);
                             conn.execute(&sql, [])
                                 .with_context(|| format!("Failed to create junction table {}", table_name))?;
-                        } else if has_locale_col {
-                            ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
+                        } else {
+                            if has_locale_col {
+                                ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
+                            }
+                            // Ensure related_collection column for polymorphic upgrades
+                            if rc.is_polymorphic() {
+                                ensure_column_exists(conn, &table_name, "related_collection", "TEXT NOT NULL DEFAULT ''")?;
+                            }
                         }
                     }
                 }
@@ -370,6 +400,7 @@ mod tests {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -445,6 +476,7 @@ mod tests {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -538,6 +570,7 @@ mod tests {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },

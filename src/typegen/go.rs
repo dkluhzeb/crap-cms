@@ -96,6 +96,15 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
         }
         return;
     }
+    // Emit a comment for polymorphic relationships listing target collections
+    if field.field_type == FieldType::Relationship {
+        if let Some(rc) = &field.relationship {
+            if rc.is_polymorphic() {
+                let targets = rc.all_collections().join(", ");
+                writeln!(out, "\t// Polymorphic relationship — targets: {}", targets).unwrap();
+            }
+        }
+    }
     let go_name = to_pascal_case(&field.name);
     let (go_type, omitempty) = field_to_go(field, parent_pascal);
     let tag = if omitempty {
@@ -109,16 +118,36 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
 fn field_to_go(field: &FieldDefinition, parent_pascal: &str) -> (String, bool) {
     let optional = is_optional(field);
     match &field.field_type {
-        FieldType::Text | FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext | FieldType::Select => {
+        FieldType::Text => {
+            if field.has_many {
+                ("[]string".to_string(), true)
+            } else if optional {
+                ("*string".to_string(), true)
+            } else {
+                ("string".to_string(), false)
+            }
+        }
+        FieldType::Textarea | FieldType::Email | FieldType::Date
+        | FieldType::Richtext | FieldType::Code => {
             if optional {
                 ("*string".to_string(), true)
             } else {
                 ("string".to_string(), false)
             }
         }
+        FieldType::Select | FieldType::Radio => {
+            if field.has_many {
+                ("[]string".to_string(), true)
+            } else if optional {
+                ("*string".to_string(), true)
+            } else {
+                ("string".to_string(), false)
+            }
+        }
         FieldType::Number => {
-            if optional {
+            if field.has_many {
+                ("[]float64".to_string(), true)
+            } else if optional {
                 ("*float64".to_string(), true)
             } else {
                 ("float64".to_string(), false)
@@ -128,6 +157,10 @@ fn field_to_go(field: &FieldDefinition, parent_pascal: &str) -> (String, bool) {
         FieldType::Json => ("interface{}".to_string(), true),
         FieldType::Relationship => {
             match &field.relationship {
+                Some(rc) if rc.is_polymorphic() && rc.has_many => ("[]string".to_string(), true),
+                Some(rc) if rc.is_polymorphic() => {
+                    if optional { ("*string".to_string(), true) } else { ("string".to_string(), false) }
+                }
                 Some(rc) if rc.has_many => ("[]string".to_string(), true),
                 _ if optional => ("*string".to_string(), true),
                 _ => ("string".to_string(), false),
@@ -146,13 +179,16 @@ fn field_to_go(field: &FieldDefinition, parent_pascal: &str) -> (String, bool) {
         FieldType::Collapsible => ("map[string]interface{}".to_string(), true), // layout-only; sub-fields are promoted
         FieldType::Tabs => ("map[string]interface{}".to_string(), true), // layout-only; sub-fields are promoted
         FieldType::Upload => {
-            if optional {
+            if field.relationship.as_ref().map_or(false, |rc| rc.has_many) {
+                ("[]string".to_string(), true)
+            } else if optional {
                 ("*string".to_string(), true)
             } else {
                 ("string".to_string(), false)
             }
         }
         FieldType::Blocks => ("[]map[string]interface{}".to_string(), true),
+        FieldType::Join => ("[]map[string]interface{}".to_string(), true),
     }
 }
 
@@ -213,6 +249,7 @@ mod tests {
                     collection: "users".to_string(),
                     has_many: false,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -220,6 +257,55 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Author    string `json:\"author\"`"));
+    }
+
+    #[test]
+    fn go_polymorphic_has_one() {
+        let col = make_col("comments", vec![
+            FieldDefinition {
+                name: "subject".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "posts".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                    polymorphic: vec!["posts".to_string(), "pages".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-one = string (stores "collection/id" composite)
+        assert!(out.contains("Subject   string `json:\"subject\"`"), "polymorphic has-one should be string: {}", out);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("posts"), "comment should list target collections: {}", out);
+        assert!(out.contains("pages"), "comment should list target collections: {}", out);
+    }
+
+    #[test]
+    fn go_polymorphic_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "related".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "articles".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec!["articles".to_string(), "videos".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-many = []string (array of "collection/id" composites)
+        assert!(out.contains("[]string"), "polymorphic has-many should be []string: {}", out);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("articles"), "comment should list target collections: {}", out);
+        assert!(out.contains("videos"), "comment should list target collections: {}", out);
     }
 
     #[test]
@@ -232,6 +318,7 @@ mod tests {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -382,6 +469,27 @@ mod tests {
     }
 
     #[test]
+    fn upload_has_many_generates_array_type() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "images".to_string(),
+                field_type: FieldType::Upload,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: String::new(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec![],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("[]string"), "has-many upload should be []string: {}", out);
+    }
+
+    #[test]
     fn go_select_field() {
         let col = make_col("posts", vec![
             FieldDefinition {
@@ -449,6 +557,55 @@ mod tests {
         assert!(out.contains("type Tags struct {"));
         assert!(!out.contains("CreatedAt"));
         assert!(!out.contains("UpdatedAt"));
+    }
+
+    #[test]
+    fn go_text_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "labels".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("[]string"), "has-many text should be []string: {}", out);
+        // required has_many: no omitempty on the type itself, but array is always omitempty
+        assert!(out.contains("Tags      []string"), "required has-many text field: {}", out);
+        assert!(out.contains("Labels    []string"), "optional has-many text field: {}", out);
+    }
+
+    #[test]
+    fn go_number_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "scores".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "weights".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("[]float64"), "has-many number should be []float64: {}", out);
+        assert!(out.contains("Scores    []float64"), "required has-many number field: {}", out);
+        assert!(out.contains("Weights   []float64"), "optional has-many number field: {}", out);
     }
 
     #[test]

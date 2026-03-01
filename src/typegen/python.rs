@@ -128,6 +128,15 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         }
         return;
     }
+    // Emit a comment for polymorphic relationships listing target collections
+    if field.field_type == FieldType::Relationship {
+        if let Some(rc) = &field.relationship {
+            if rc.is_polymorphic() {
+                let targets = rc.all_collections().join(", ");
+                writeln!(out, "    # Polymorphic relationship — targets: {}", targets).unwrap();
+            }
+        }
+    }
     let py_type = field_to_py(field);
     if is_optional(field) {
         writeln!(out, "    {}: Optional[{}] = None", field.name, py_type).unwrap();
@@ -139,13 +148,34 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
 
 fn field_to_py(field: &FieldDefinition) -> String {
     match &field.field_type {
-        FieldType::Text | FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext | FieldType::Select | FieldType::Upload => "str".to_string(),
-        FieldType::Number => "float".to_string(),
+        FieldType::Text => {
+            if field.has_many { "list[str]".to_string() } else { "str".to_string() }
+        }
+        FieldType::Textarea | FieldType::Email | FieldType::Date
+        | FieldType::Richtext | FieldType::Code => "str".to_string(),
+        FieldType::Upload => {
+            if field.relationship.as_ref().map_or(false, |rc| rc.has_many) {
+                "list[str]".to_string()
+            } else {
+                "str".to_string()
+            }
+        }
+        FieldType::Select | FieldType::Radio => {
+            if field.has_many {
+                "list[str]".to_string()
+            } else {
+                "str".to_string()
+            }
+        }
+        FieldType::Number => {
+            if field.has_many { "list[float]".to_string() } else { "float".to_string() }
+        }
         FieldType::Checkbox => "bool".to_string(),
         FieldType::Json => "Any".to_string(),
         FieldType::Relationship => {
             match &field.relationship {
+                Some(rc) if rc.is_polymorphic() && rc.has_many => "list[str]".to_string(),
+                Some(rc) if rc.is_polymorphic() => "str".to_string(),
                 Some(rc) if rc.has_many => "list[str]".to_string(),
                 _ => "str".to_string(),
             }
@@ -156,11 +186,14 @@ fn field_to_py(field: &FieldDefinition) -> String {
         FieldType::Collapsible => "dict".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "dict".to_string(), // layout-only; sub-fields are promoted
         FieldType::Blocks => "list[dict]".to_string(),
+        FieldType::Join => "list[dict]".to_string(),
     }
 }
 
 fn default_for_type(field: &FieldDefinition) -> &'static str {
     match &field.field_type {
+        FieldType::Text if field.has_many => "field(default_factory=list)",
+        FieldType::Number if field.has_many => "field(default_factory=list)",
         FieldType::Number => "0.0",
         FieldType::Checkbox => "False",
         _ => "\"\"",
@@ -240,6 +273,7 @@ mod tests {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -247,6 +281,55 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Optional[list[str]]"));
+    }
+
+    #[test]
+    fn python_polymorphic_has_one() {
+        let col = make_col("comments", vec![
+            FieldDefinition {
+                name: "subject".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "posts".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                    polymorphic: vec!["posts".to_string(), "pages".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-one = str (stores "collection/id" composite)
+        assert!(out.contains("subject: str = \"\""), "polymorphic has-one should be str: {}", out);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("posts"), "comment should list target collections: {}", out);
+        assert!(out.contains("pages"), "comment should list target collections: {}", out);
+    }
+
+    #[test]
+    fn python_polymorphic_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "related".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "articles".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec!["articles".to_string(), "videos".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-many = list[str] (array of "collection/id" composites)
+        assert!(out.contains("list[str]"), "polymorphic has-many should be list[str]: {}", out);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("articles"), "comment should list target collections: {}", out);
+        assert!(out.contains("videos"), "comment should list target collections: {}", out);
     }
 
     #[test]
@@ -260,6 +343,7 @@ mod tests {
                     collection: "users".to_string(),
                     has_many: false,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -389,6 +473,27 @@ mod tests {
     }
 
     #[test]
+    fn upload_has_many_generates_array_type() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "images".to_string(),
+                field_type: FieldType::Upload,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: String::new(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec![],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("images: list[str]"), "has-many upload should be list[str]: {}", out);
+    }
+
+    #[test]
     fn python_select_with_options_docstring() {
         let col = make_col("posts", vec![
             FieldDefinition {
@@ -460,6 +565,56 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(!out.contains("created_at"));
+    }
+
+    #[test]
+    fn python_text_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "labels".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("tags: list[str] = field(default_factory=list)"),
+            "required has-many text should use list default: {}", out);
+        assert!(out.contains("labels: Optional[list[str]] = None"),
+            "optional has-many text should be Optional[list[str]]: {}", out);
+    }
+
+    #[test]
+    fn python_number_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "scores".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "weights".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("scores: list[float] = field(default_factory=list)"),
+            "required has-many number should use list default: {}", out);
+        assert!(out.contains("weights: Optional[list[float]] = None"),
+            "optional has-many number should be Optional[list[float]]: {}", out);
     }
 
     #[test]

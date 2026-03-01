@@ -5,7 +5,17 @@ use std::collections::HashSet;
 
 use crate::core::{CollectionDefinition, Document};
 use crate::core::field::FieldType;
-use super::read::find_by_id;
+use super::read::{find, find_by_id};
+use super::{FindQuery, FilterClause, Filter, FilterOp};
+
+/// Parse a polymorphic reference "collection/id" into `(collection, id)`.
+fn parse_poly_ref(s: &str) -> Option<(String, String)> {
+    let pos = s.find('/')?;
+    let col = &s[..pos];
+    let id = &s[pos + 1..];
+    if col.is_empty() || id.is_empty() { return None; }
+    Some((col.to_string(), id.to_string()))
+}
 
 /// Convert a Document into a serde_json::Value for embedding in a parent's fields.
 fn document_to_json(doc: &Document, collection: &str) -> serde_json::Value {
@@ -73,69 +83,169 @@ pub fn populate_relationships(
             continue;
         }
 
-        let rel_def = match registry.get_collection(&rel.collection) {
+        if rel.is_polymorphic() {
+            // Polymorphic: values are "collection/id" composite strings
+            if rel.has_many {
+                let items: Vec<String> = match doc.fields.get(&field.name) {
+                    Some(serde_json::Value::Array(arr)) => {
+                        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                    }
+                    _ => continue,
+                };
+                let mut populated = Vec::new();
+                for item in &items {
+                    if let Some((col, id)) = parse_poly_ref(item) {
+                        if let Some(item_def) = registry.get_collection(&col) {
+                            let item_def = item_def.clone();
+                            if visited.contains(&(col.clone(), id.clone())) {
+                                populated.push(serde_json::Value::String(item.clone()));
+                                continue;
+                            }
+                            if let Some(mut rd) = find_by_id(conn, &col, &item_def, &id, None)? {
+                                if let Some(ref uc) = item_def.upload {
+                                    if uc.enabled { crate::core::upload::assemble_sizes_object(&mut rd, uc); }
+                                }
+                                populate_relationships(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None)?;
+                                populated.push(document_to_json(&rd, &col));
+                            } else {
+                                populated.push(serde_json::Value::String(item.clone()));
+                            }
+                        } else {
+                            populated.push(serde_json::Value::String(item.clone()));
+                        }
+                    } else {
+                        populated.push(serde_json::Value::String(item.clone()));
+                    }
+                }
+                doc.fields.insert(field.name.clone(), serde_json::Value::Array(populated));
+            } else {
+                // Polymorphic has-one: stored as "collection/id"
+                let raw = match doc.fields.get(&field.name) {
+                    Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+                    _ => continue,
+                };
+                if let Some((col, id)) = parse_poly_ref(&raw) {
+                    if visited.contains(&(col.clone(), id.clone())) { continue; }
+                    if let Some(item_def) = registry.get_collection(&col) {
+                        let item_def = item_def.clone();
+                        if let Some(mut rd) = find_by_id(conn, &col, &item_def, &id, None)? {
+                            if let Some(ref uc) = item_def.upload {
+                                if uc.enabled { crate::core::upload::assemble_sizes_object(&mut rd, uc); }
+                            }
+                            populate_relationships(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None)?;
+                            doc.fields.insert(field.name.clone(), document_to_json(&rd, &col));
+                        }
+                    }
+                }
+            }
+        } else {
+            // Non-polymorphic: look up the target collection definition
+            let rel_def = match registry.get_collection(&rel.collection) {
+                Some(d) => d.clone(),
+                None => continue,
+            };
+
+            if rel.has_many {
+                // Has-many: doc.fields[name] is already a JSON array of ID strings (from hydration)
+                let ids: Vec<String> = match doc.fields.get(&field.name) {
+                    Some(serde_json::Value::Array(arr)) => {
+                        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                    }
+                    _ => continue,
+                };
+
+                let mut populated = Vec::new();
+                for id in &ids {
+                    if visited.contains(&(rel.collection.clone(), id.clone())) {
+                        populated.push(serde_json::Value::String(id.clone()));
+                        continue;
+                    }
+                    match find_by_id(conn, &rel.collection, &rel_def, id, None)? {
+                        Some(mut related_doc) => {
+                            if let Some(ref uc) = rel_def.upload {
+                                if uc.enabled {
+                                    crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
+                                }
+                            }
+                            populate_relationships(
+                                conn, registry, &rel.collection, &rel_def,
+                                &mut related_doc, effective_depth - 1, visited, None,
+                            )?;
+                            populated.push(document_to_json(&related_doc, &rel.collection));
+                        }
+                        None => {
+                            populated.push(serde_json::Value::String(id.clone()));
+                        }
+                    }
+                }
+                doc.fields.insert(field.name.clone(), serde_json::Value::Array(populated));
+            } else {
+                // Has-one: doc.fields[name] is a string ID
+                let id = match doc.fields.get(&field.name) {
+                    Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+                    _ => continue,
+                };
+
+                if visited.contains(&(rel.collection.clone(), id.clone())) {
+                    continue;
+                }
+
+                if let Some(mut related_doc) = find_by_id(conn, &rel.collection, &rel_def, &id, None)? {
+                    if let Some(ref uc) = rel_def.upload {
+                        if uc.enabled {
+                            crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
+                        }
+                    }
+                    populate_relationships(
+                        conn, registry, &rel.collection, &rel_def,
+                        &mut related_doc, effective_depth - 1, visited, None,
+                    )?;
+                    doc.fields.insert(field.name.clone(), document_to_json(&related_doc, &rel.collection));
+                }
+            }
+        }
+    }
+
+    // Join fields: virtual reverse lookups
+    for field in &def.fields {
+        if field.field_type != FieldType::Join {
+            continue;
+        }
+        if let Some(sel) = select {
+            if !sel.iter().any(|s| s == &field.name) {
+                continue;
+            }
+        }
+        let jc = match &field.join {
+            Some(jc) => jc,
+            None => continue,
+        };
+        let target_def = match registry.get_collection(&jc.collection) {
             Some(d) => d.clone(),
             None => continue,
         };
-
-        if rel.has_many {
-            // Has-many: doc.fields[name] is already a JSON array of ID strings (from hydration)
-            let ids: Vec<String> = match doc.fields.get(&field.name) {
-                Some(serde_json::Value::Array(arr)) => {
-                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                }
-                _ => continue,
-            };
-
+        let fq = FindQuery {
+            filters: vec![FilterClause::Single(Filter {
+                field: jc.on.clone(),
+                op: FilterOp::Equals(doc.id.clone()),
+            })],
+            ..Default::default()
+        };
+        if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, None) {
             let mut populated = Vec::new();
-            for id in &ids {
-                if visited.contains(&(rel.collection.clone(), id.clone())) {
-                    // Already visited — keep as ID string
-                    populated.push(serde_json::Value::String(id.clone()));
-                    continue;
-                }
-                match find_by_id(conn, &rel.collection, &rel_def, id, None)? {
-                    Some(mut related_doc) => {
-                        if let Some(ref uc) = rel_def.upload {
-                            if uc.enabled {
-                                crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
-                            }
-                        }
-                        populate_relationships(
-                            conn, registry, &rel.collection, &rel_def,
-                            &mut related_doc, effective_depth - 1, visited, None,
-                        )?;
-                        populated.push(document_to_json(&related_doc, &rel.collection));
-                    }
-                    None => {
-                        populated.push(serde_json::Value::String(id.clone()));
-                    }
-                }
-            }
-            doc.fields.insert(field.name.clone(), serde_json::Value::Array(populated));
-        } else {
-            // Has-one: doc.fields[name] is a string ID
-            let id = match doc.fields.get(&field.name) {
-                Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
-                _ => continue,
-            };
-
-            if visited.contains(&(rel.collection.clone(), id.clone())) {
-                continue; // Already visited — keep as ID string
-            }
-
-            if let Some(mut related_doc) = find_by_id(conn, &rel.collection, &rel_def, &id, None)? {
-                if let Some(ref uc) = rel_def.upload {
+            for mut matched_doc in matched_docs {
+                if let Some(ref uc) = target_def.upload {
                     if uc.enabled {
-                        crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
+                        crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
                     }
                 }
                 populate_relationships(
-                    conn, registry, &rel.collection, &rel_def,
-                    &mut related_doc, effective_depth - 1, visited, None,
+                    conn, registry, &jc.collection, &target_def,
+                    &mut matched_doc, depth - 1, visited, None,
                 )?;
-                doc.fields.insert(field.name.clone(), document_to_json(&related_doc, &rel.collection));
+                populated.push(document_to_json(&matched_doc, &jc.collection));
             }
+            doc.fields.insert(field.name.clone(), serde_json::Value::Array(populated));
         }
     }
 
@@ -273,6 +383,7 @@ mod tests {
             collection: "authors".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         make_collection_def("posts", vec![
             make_field("title", FieldType::Text),
@@ -372,6 +483,7 @@ mod tests {
             collection: "posts".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let authors_def = make_collection_def("authors", vec![
             make_field("name", FieldType::Text),
@@ -462,6 +574,7 @@ mod tests {
             collection: "categories".to_string(),
             has_many: true,
             max_depth: None,
+            polymorphic: vec![],
         });
         let posts_def = make_collection_def("posts", vec![
             make_field("title", FieldType::Text),
@@ -522,6 +635,7 @@ mod tests {
             collection: "categories".to_string(),
             has_many: true,
             max_depth: None,
+            polymorphic: vec![],
         });
         let posts_def = make_collection_def("posts", vec![
             make_field("title", FieldType::Text),
@@ -561,6 +675,7 @@ mod tests {
             collection: "authors".to_string(),
             has_many: false,
             max_depth: Some(0),
+            polymorphic: vec![],
         });
         let posts_def = make_collection_def("posts", vec![
             make_field("title", FieldType::Text),
@@ -599,12 +714,14 @@ mod tests {
             collection: "authors".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let mut editor_field = make_field("editor", FieldType::Relationship);
         editor_field.relationship = Some(RelationshipConfig {
             collection: "authors".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let posts_def = make_collection_def("posts", vec![
             make_field("title", FieldType::Text),
@@ -694,6 +811,7 @@ mod tests {
             collection: "categories".to_string(),
             has_many: true,
             max_depth: None,
+            polymorphic: vec![],
         });
         let posts_def = make_collection_def("posts", vec![
             make_field("title", FieldType::Text),
@@ -721,5 +839,353 @@ mod tests {
         assert_eq!(arr.len(), 1);
         // Already visited — should remain as string ID
         assert_eq!(arr[0].as_str(), Some("c1"));
+    }
+
+    // ── Join field tests ──────────────────────────────────────────────────
+
+    fn setup_join_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE authors (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                author TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO authors (id, name, created_at, updated_at)
+                VALUES ('a1', 'Alice', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, author, created_at, updated_at)
+                VALUES ('p1', 'First Post', 'a1', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, author, created_at, updated_at)
+                VALUES ('p2', 'Second Post', 'a1', '2024-01-01', '2024-01-01');
+            INSERT INTO posts (id, title, author, created_at, updated_at)
+                VALUES ('p3', 'Other Post', 'a2', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+        conn
+    }
+
+    fn make_authors_def_with_join() -> CollectionDefinition {
+        let mut join_field = make_field("posts", FieldType::Join);
+        join_field.join = Some(JoinConfig {
+            collection: "posts".to_string(),
+            on: "author".to_string(),
+        });
+        make_collection_def("authors", vec![
+            make_field("name", FieldType::Text),
+            join_field,
+        ])
+    }
+
+    fn make_posts_def_for_join() -> CollectionDefinition {
+        let mut author_field = make_field("author", FieldType::Relationship);
+        author_field.relationship = Some(RelationshipConfig {
+            collection: "authors".to_string(),
+            has_many: false,
+            max_depth: None,
+            polymorphic: vec![],
+        });
+        make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            author_field,
+        ])
+    }
+
+    #[test]
+    fn join_field_populates_reverse_docs() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), serde_json::json!("Alice"));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "authors", &authors_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        let posts = doc.fields.get("posts").expect("posts join field should exist");
+        let arr = posts.as_array().expect("posts should be an array");
+        assert_eq!(arr.len(), 2, "Alice has 2 posts");
+
+        let titles: Vec<&str> = arr.iter()
+            .filter_map(|v| v.get("title").and_then(|t| t.as_str()))
+            .collect();
+        assert!(titles.contains(&"First Post"));
+        assert!(titles.contains(&"Second Post"));
+    }
+
+    #[test]
+    fn join_field_depth_zero_noop() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), serde_json::json!("Alice"));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "authors", &authors_def,
+            &mut doc, 0, &mut visited, None,
+        ).unwrap();
+
+        // At depth=0, join field should not be populated
+        assert!(doc.fields.get("posts").is_none(), "depth=0 should not add join field");
+    }
+
+    #[test]
+    fn join_field_no_matching_docs() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        // Author with no posts
+        let mut doc = Document::new("a99".to_string());
+        doc.fields.insert("name".to_string(), serde_json::json!("Nobody"));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "authors", &authors_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        let posts = doc.fields.get("posts").expect("posts join field should exist");
+        let arr = posts.as_array().expect("posts should be an array");
+        assert!(arr.is_empty(), "no matching posts should produce empty array");
+    }
+
+    #[test]
+    fn join_field_select_filters() {
+        let conn = setup_join_db();
+        let authors_def = make_authors_def_with_join();
+        let posts_def = make_posts_def_for_join();
+        let mut registry = Registry::new();
+        registry.register_collection(authors_def.clone());
+        registry.register_collection(posts_def);
+
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), serde_json::json!("Alice"));
+
+        let mut visited = HashSet::new();
+        // Select only "name", not "posts"
+        let select = vec!["name".to_string()];
+        populate_relationships(
+            &conn, &registry, "authors", &authors_def,
+            &mut doc, 1, &mut visited, Some(&select),
+        ).unwrap();
+
+        // Join field should be skipped because it's not in select
+        assert!(doc.fields.get("posts").is_none(), "join field not in select should be skipped");
+    }
+
+    // ── Polymorphic relationship population ─────────────────────────────────
+
+    fn setup_polymorphic_populate_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE entries (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                related TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE articles (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE pages (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            -- Polymorphic has-many junction table
+            CREATE TABLE entries_refs (
+                parent_id TEXT,
+                related_id TEXT,
+                related_collection TEXT NOT NULL DEFAULT '',
+                _order INTEGER,
+                PRIMARY KEY (parent_id, related_id, related_collection)
+            );
+            INSERT INTO articles VALUES ('a1', 'Article One', '2024-01-01', '2024-01-01');
+            INSERT INTO pages VALUES ('pg1', 'Page One', '2024-01-01', '2024-01-01');
+            INSERT INTO entries VALUES ('e1', 'Entry', 'articles/a1', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+        conn
+    }
+
+    fn make_entries_def_poly_has_one() -> CollectionDefinition {
+        let mut related_field = make_field("related", FieldType::Relationship);
+        related_field.relationship = Some(RelationshipConfig {
+            collection: "articles".to_string(),
+            has_many: false,
+            max_depth: None,
+            polymorphic: vec!["articles".to_string(), "pages".to_string()],
+        });
+        make_collection_def("entries", vec![
+            make_field("title", FieldType::Text),
+            related_field,
+        ])
+    }
+
+    fn make_entries_def_poly_has_many() -> CollectionDefinition {
+        let mut refs_field = make_field("refs", FieldType::Relationship);
+        refs_field.relationship = Some(RelationshipConfig {
+            collection: "articles".to_string(),
+            has_many: true,
+            max_depth: None,
+            polymorphic: vec!["articles".to_string(), "pages".to_string()],
+        });
+        make_collection_def("entries", vec![
+            make_field("title", FieldType::Text),
+            refs_field,
+        ])
+    }
+
+    #[test]
+    fn populate_polymorphic_has_one() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let pages_def = make_collection_def("pages", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+        registry.register_collection(pages_def);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Entry"));
+        doc.fields.insert("related".to_string(), serde_json::json!("articles/a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "entries", &entries_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        // Should be populated as a full document object
+        let related = doc.fields.get("related").expect("related should exist");
+        assert!(related.is_object(), "polymorphic has-one should be populated to object");
+        assert_eq!(related.get("id").and_then(|v| v.as_str()), Some("a1"));
+        assert_eq!(related.get("title").and_then(|v| v.as_str()), Some("Article One"));
+        assert_eq!(related.get("collection").and_then(|v| v.as_str()), Some("articles"));
+    }
+
+    #[test]
+    fn populate_polymorphic_has_one_depth_zero() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("related".to_string(), serde_json::json!("articles/a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "entries", &entries_def,
+            &mut doc, 0, &mut visited, None,
+        ).unwrap();
+
+        // depth=0: should stay as composite string
+        assert_eq!(
+            doc.fields.get("related").and_then(|v| v.as_str()),
+            Some("articles/a1")
+        );
+    }
+
+    #[test]
+    fn populate_polymorphic_has_many() {
+        let conn = setup_polymorphic_populate_db();
+        // Insert junction table data
+        conn.execute_batch(
+            "INSERT INTO entries_refs (parent_id, related_id, related_collection, _order)
+                VALUES ('e1', 'a1', 'articles', 0), ('e1', 'pg1', 'pages', 1);"
+        ).unwrap();
+
+        let entries_def = make_entries_def_poly_has_many();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let pages_def = make_collection_def("pages", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+        registry.register_collection(pages_def);
+
+        // Hydrate first (loads polymorphic has-many from junction table)
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("title".to_string(), serde_json::json!("Entry"));
+        crate::db::query::join::hydrate_document(
+            &conn, "entries", &entries_def.fields, &mut doc, None, None,
+        ).unwrap();
+
+        // Verify hydration produced composite strings
+        let refs = doc.fields.get("refs").expect("refs should be hydrated");
+        let arr = refs.as_array().unwrap();
+        assert_eq!(arr[0].as_str().unwrap(), "articles/a1");
+        assert_eq!(arr[1].as_str().unwrap(), "pages/pg1");
+
+        // Now populate
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "entries", &entries_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        let refs = doc.fields.get("refs").expect("refs should exist after populate");
+        let arr = refs.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        // First item: article
+        assert!(arr[0].is_object(), "item should be populated object");
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("a1"));
+        assert_eq!(arr[0].get("collection").and_then(|v| v.as_str()), Some("articles"));
+        // Second item: page
+        assert!(arr[1].is_object());
+        assert_eq!(arr[1].get("id").and_then(|v| v.as_str()), Some("pg1"));
+        assert_eq!(arr[1].get("collection").and_then(|v| v.as_str()), Some("pages"));
+    }
+
+    #[test]
+    fn populate_polymorphic_unknown_collection_keeps_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        // Don't register "articles" — it's unknown
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("related".to_string(), serde_json::json!("unknown_col/x1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships(
+            &conn, &registry, "entries", &entries_def,
+            &mut doc, 1, &mut visited, None,
+        ).unwrap();
+
+        // Unknown collection: value stays as string
+        assert_eq!(
+            doc.fields.get("related").and_then(|v| v.as_str()),
+            Some("unknown_col/x1")
+        );
     }
 }

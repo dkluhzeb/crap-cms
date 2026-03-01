@@ -44,6 +44,8 @@
 - [Row](fields/row.md)
 - [Collapsible](fields/collapsible.md)
 - [Tabs](fields/tabs.md)
+- [Code](fields/code.md)
+- [Join](fields/join.md)
 - [Upload](fields/upload.md)
 - [Blocks](fields/blocks.md)
 

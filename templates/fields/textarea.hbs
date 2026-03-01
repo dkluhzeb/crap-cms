@@ -6,10 +6,12 @@
 <textarea
   id="field-{{name}}"
   name="{{name}}"
-  rows="8"
+  rows="{{rows}}"
   {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
   {{#if required}}required{{/if}}
   {{#if readonly}}readonly{{/if}}
+  {{#if min_length}}minlength="{{min_length}}"{{/if}}
+  {{#if max_length}}maxlength="{{max_length}}"{{/if}}
   {{#if error}}class="form__input--error"{{/if}}
 >{{value}}</textarea>
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}

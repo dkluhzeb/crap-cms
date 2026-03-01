@@ -1550,6 +1550,7 @@ fn make_posts_with_relationship() -> CollectionDefinition {
                     collection: "categories".to_string(),
                     has_many: false,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -3511,6 +3512,7 @@ fn make_posts_with_has_many() -> CollectionDefinition {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },

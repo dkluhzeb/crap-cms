@@ -13,6 +13,13 @@ crap.collections.define("articles", {
         { name = "status", type = "select", options = {
             { label = "Draft", value = "draft" },
             { label = "Published", value = "published" },
+            { label = "Archived", value = "archived" },
+            { label = "Active", value = "active" },
+            { label = "Red", value = "red" },
+            { label = "Blue", value = "blue" },
+            { label = "Green", value = "green" },
+            { label = "True", value = "true" },
+            { label = "False", value = "false" },
         }},
         { name = "slug", type = "text",
             hooks = {

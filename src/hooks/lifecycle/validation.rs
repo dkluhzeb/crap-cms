@@ -68,6 +68,9 @@ fn validate_fields_recursive(
                     );
                 }
             }
+            FieldType::Join => {
+                // Virtual field — no data to validate
+            }
             _ => {
                 validate_scalar_field(lua, field, data, conn, table, exclude_id, is_draft, prefix, errors);
             }
@@ -113,6 +116,22 @@ fn validate_scalar_field(
             let has_items = match value {
                 Some(serde_json::Value::Array(arr)) => !arr.is_empty(),
                 Some(serde_json::Value::String(s)) => !s.is_empty(),
+                _ => false,
+            };
+            if !has_items {
+                errors.push(FieldError {
+                    field: data_key.clone(),
+                    message: format!("{} is required", field.name),
+                });
+            }
+        } else if field.has_many {
+            // has_many text/number/select stored as JSON array string — "[]" = empty
+            let has_items = match value {
+                Some(serde_json::Value::String(s)) => {
+                    serde_json::from_str::<Vec<serde_json::Value>>(s)
+                        .map(|arr| !arr.is_empty())
+                        .unwrap_or(!s.is_empty())
+                }
                 _ => false,
             };
             if !has_items {
@@ -202,6 +221,168 @@ fn validate_scalar_field(
         }
     }
 
+    // min_length / max_length validation (text, textarea — check string length)
+    // Skip for has_many fields — their values are JSON arrays, validated per-element below
+    if !is_empty && !field.has_many && (field.min_length.is_some() || field.max_length.is_some()) {
+        if let Some(serde_json::Value::String(s)) = value {
+            let len = s.len();
+            if let Some(min_len) = field.min_length {
+                if len < min_len {
+                    errors.push(FieldError {
+                        field: data_key.clone(),
+                        message: format!("{} must be at least {} characters", field.name, min_len),
+                    });
+                }
+            }
+            if let Some(max_len) = field.max_length {
+                if len > max_len {
+                    errors.push(FieldError {
+                        field: data_key.clone(),
+                        message: format!("{} must be at most {} characters", field.name, max_len),
+                    });
+                }
+            }
+        }
+    }
+
+    // min / max validation (number fields — parse as f64, check bounds)
+    // Skip for has_many fields — validated per-element below
+    if !is_empty && !field.has_many && (field.min.is_some() || field.max.is_some()) {
+        let num_val = match value {
+            Some(serde_json::Value::Number(n)) => n.as_f64(),
+            Some(serde_json::Value::String(s)) => s.parse::<f64>().ok(),
+            _ => None,
+        };
+        if let Some(v) = num_val {
+            if let Some(min_val) = field.min {
+                if v < min_val {
+                    errors.push(FieldError {
+                        field: data_key.clone(),
+                        message: format!("{} must be at least {}", field.name, min_val),
+                    });
+                }
+            }
+            if let Some(max_val) = field.max {
+                if v > max_val {
+                    errors.push(FieldError {
+                        field: data_key.clone(),
+                        message: format!("{} must be at most {}", field.name, max_val),
+                    });
+                }
+            }
+        }
+    }
+
+    // Email format validation (only if non-empty)
+    if field.field_type == FieldType::Email && !is_empty {
+        if let Some(serde_json::Value::String(s)) = value {
+            if !is_valid_email_format(s) {
+                errors.push(FieldError {
+                    field: data_key.clone(),
+                    message: format!("{} is not a valid email address", field.name),
+                });
+            }
+        }
+    }
+
+    // Select/Radio option validation (only if non-empty, check value exists in options)
+    if (field.field_type == FieldType::Select || field.field_type == FieldType::Radio)
+        && !is_empty && !field.options.is_empty()
+    {
+        if let Some(serde_json::Value::String(s)) = value {
+            if field.has_many {
+                // has_many select: value is a JSON array string like '["val1","val2"]'
+                if let Ok(values) = serde_json::from_str::<Vec<String>>(s) {
+                    for v in &values {
+                        if !field.options.iter().any(|opt| opt.value == *v) {
+                            errors.push(FieldError {
+                                field: data_key.clone(),
+                                message: format!("{} has an invalid option: {}", field.name, v),
+                            });
+                            break;
+                        }
+                    }
+                }
+            } else if !field.options.iter().any(|opt| opt.value == *s) {
+                errors.push(FieldError {
+                    field: data_key.clone(),
+                    message: format!("{} has an invalid option", field.name),
+                });
+            }
+        }
+    }
+
+    // has_many text/number: validate individual values within the JSON array
+    if (field.field_type == FieldType::Text || field.field_type == FieldType::Number)
+        && field.has_many && !is_empty
+    {
+        if let Some(serde_json::Value::String(s)) = value {
+            if let Ok(values) = serde_json::from_str::<Vec<String>>(s) {
+                // Validate count with min_rows/max_rows
+                if let Some(min_rows) = field.min_rows {
+                    if values.len() < min_rows {
+                        errors.push(FieldError {
+                            field: data_key.clone(),
+                            message: format!("{} must have at least {} values", field.name, min_rows),
+                        });
+                    }
+                }
+                if let Some(max_rows) = field.max_rows {
+                    if values.len() > max_rows {
+                        errors.push(FieldError {
+                            field: data_key.clone(),
+                            message: format!("{} must have at most {} values", field.name, max_rows),
+                        });
+                    }
+                }
+                // Validate each value
+                for v in &values {
+                    if field.field_type == FieldType::Text {
+                        if let Some(min_len) = field.min_length {
+                            if v.len() < min_len {
+                                errors.push(FieldError {
+                                    field: data_key.clone(),
+                                    message: format!("{}: '{}' must be at least {} characters", field.name, v, min_len),
+                                });
+                                break;
+                            }
+                        }
+                        if let Some(max_len) = field.max_length {
+                            if v.len() > max_len {
+                                errors.push(FieldError {
+                                    field: data_key.clone(),
+                                    message: format!("{}: '{}' must be at most {} characters", field.name, v, max_len),
+                                });
+                                break;
+                            }
+                        }
+                    } else if field.field_type == FieldType::Number {
+                        if let Ok(num) = v.parse::<f64>() {
+                            if let Some(min_val) = field.min {
+                                if num < min_val {
+                                    errors.push(FieldError {
+                                        field: data_key.clone(),
+                                        message: format!("{}: {} must be at least {}", field.name, v, min_val),
+                                    });
+                                    break;
+                                }
+                            }
+                            if let Some(max_val) = field.max {
+                                if num > max_val {
+                                    errors.push(FieldError {
+                                        field: data_key.clone(),
+                                        message: format!("{}: {} must be at most {}", field.name, v, max_val),
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Date format validation (only if non-empty)
     if field.field_type == FieldType::Date && !is_empty {
         if let Some(serde_json::Value::String(s)) = value {
@@ -210,6 +391,26 @@ fn validate_scalar_field(
                     field: data_key.clone(),
                     message: format!("{} is not a valid date format", field.name),
                 });
+            }
+            // Date bounds validation (ISO dates sort lexicographically)
+            if let Some(ref min_date) = field.min_date {
+                // Compare the date portion only (first 10 chars for YYYY-MM-DD)
+                let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+                if date_part < min_date.as_str() {
+                    errors.push(FieldError {
+                        field: data_key.clone(),
+                        message: format!("{} must be on or after {}", field.name, min_date),
+                    });
+                }
+            }
+            if let Some(ref max_date) = field.max_date {
+                let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+                if date_part > max_date.as_str() {
+                    errors.push(FieldError {
+                        field: data_key.clone(),
+                        message: format!("{} must be on or before {}", field.name, max_date),
+                    });
+                }
             }
         }
     }
@@ -594,6 +795,22 @@ fn is_valid_date_format(value: &str) -> bool {
     false
 }
 
+/// Check if a string looks like a valid email address.
+/// Simple check: has exactly one @, non-empty local and domain parts, domain has a dot.
+fn is_valid_email_format(value: &str) -> bool {
+    let parts: Vec<&str> = value.splitn(2, '@').collect();
+    if parts.len() != 2 {
+        return false;
+    }
+    let local = parts[0];
+    let domain = parts[1];
+    !local.is_empty()
+        && !domain.is_empty()
+        && domain.contains('.')
+        && !local.contains(char::is_whitespace)
+        && !domain.contains(char::is_whitespace)
+}
+
 /// Evaluate a condition table (JSON) against form data.
 /// A single condition object has `{ field, equals|not_equals|in|not_in|is_truthy|is_falsy }`.
 /// An array of conditions means AND (all must be true).
@@ -905,6 +1122,7 @@ mod tests {
                 collection: "tags".to_string(),
                 has_many: true,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         }];
@@ -928,6 +1146,7 @@ mod tests {
                 collection: "tags".to_string(),
                 has_many: true,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         }];
@@ -1036,6 +1255,7 @@ mod tests {
                 }],
                 label: None,
                 label_field: None,
+                ..Default::default()
             }],
             ..Default::default()
         }];
@@ -1934,5 +2154,665 @@ mod tests {
         data.insert("meta__title".to_string(), json!("Valid Title"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
         assert!(result.is_ok(), "Group→Row: valid data should pass");
+    }
+
+    // ── min_length / max_length validation ──────────────────────────────
+
+    #[test]
+    fn test_validate_min_length_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            min_length: Some(5),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("ab"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at least 5 characters"));
+    }
+
+    #[test]
+    fn test_validate_min_length_passes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            min_length: Some(3),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("hello"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_max_length_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            max_length: Some(5),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("toolongvalue"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at most 5 characters"));
+    }
+
+    #[test]
+    fn test_validate_max_length_passes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            max_length: Some(10),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!("short"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_min_max_length_skipped_for_empty() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "name".to_string(),
+            min_length: Some(5),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("name".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "min_length should not trigger on empty values");
+    }
+
+    // ── min / max (number) validation ───────────────────────────────────
+
+    #[test]
+    fn test_validate_number_min_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, score REAL)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "score".to_string(),
+            field_type: FieldType::Number,
+            min: Some(0.0),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("score".to_string(), json!("-5"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at least 0"));
+    }
+
+    #[test]
+    fn test_validate_number_max_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, score REAL)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "score".to_string(),
+            field_type: FieldType::Number,
+            max: Some(100.0),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("score".to_string(), json!("150"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at most 100"));
+    }
+
+    #[test]
+    fn test_validate_number_min_max_passes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, score REAL)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "score".to_string(),
+            field_type: FieldType::Number,
+            min: Some(0.0),
+            max: Some(100.0),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("score".to_string(), json!("50"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_number_min_max_skipped_for_empty() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, score REAL)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "score".to_string(),
+            field_type: FieldType::Number,
+            min: Some(10.0),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("score".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "min/max should not trigger on empty values");
+    }
+
+    #[test]
+    fn test_validate_number_json_number_value() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, score REAL)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "score".to_string(),
+            field_type: FieldType::Number,
+            min: Some(0.0),
+            max: Some(10.0),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("score".to_string(), json!(15));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at most 10"));
+    }
+
+    // ── Email format validation ─────────────────────────────────────────
+
+    #[test]
+    fn test_validate_email_format_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!("user@example.com"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_email_format_invalid_no_at() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!("not-an-email"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("valid email"));
+    }
+
+    #[test]
+    fn test_validate_email_format_invalid_no_domain() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!("user@"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_email_format_skipped_for_empty() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("email".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Email validation should skip empty values");
+    }
+
+    // ── Select option validation ────────────────────────────────────────
+
+    #[test]
+    fn test_validate_select_option_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, color TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "color".to_string(),
+            field_type: FieldType::Select,
+            options: vec![
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Red".to_string()),
+                    value: "red".to_string(),
+                },
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Blue".to_string()),
+                    value: "blue".to_string(),
+                },
+            ],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("color".to_string(), json!("red"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_select_option_invalid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, color TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "color".to_string(),
+            field_type: FieldType::Select,
+            options: vec![
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Red".to_string()),
+                    value: "red".to_string(),
+                },
+            ],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("color".to_string(), json!("green"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("invalid option"));
+    }
+
+    #[test]
+    fn test_validate_select_option_empty_value_passes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, color TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "color".to_string(),
+            field_type: FieldType::Select,
+            options: vec![
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Red".to_string()),
+                    value: "red".to_string(),
+                },
+            ],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("color".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Empty select value should pass (not required)");
+    }
+
+    // ── is_valid_email_format tests ─────────────────────────────────────
+
+    #[test]
+    fn test_email_format_valid_addresses() {
+        assert!(is_valid_email_format("user@example.com"));
+        assert!(is_valid_email_format("a@b.c"));
+        assert!(is_valid_email_format("test+tag@domain.org"));
+        assert!(is_valid_email_format("user.name@sub.domain.com"));
+    }
+
+    #[test]
+    fn test_email_format_invalid_addresses() {
+        assert!(!is_valid_email_format(""));
+        assert!(!is_valid_email_format("no-at-sign"));
+        assert!(!is_valid_email_format("@no-local.com"));
+        assert!(!is_valid_email_format("user@"));
+        assert!(!is_valid_email_format("user@nodot"));
+        assert!(!is_valid_email_format("user @space.com"));
+        assert!(!is_valid_email_format("user@ space.com"));
+    }
+
+    // ── has_many select validation tests ─────────────────────────────────
+
+    #[test]
+    fn test_validate_has_many_select_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Select,
+            has_many: true,
+            options: vec![
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Red".to_string()),
+                    value: "red".to_string(),
+                },
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Blue".to_string()),
+                    value: "blue".to_string(),
+                },
+            ],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["red","blue"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Valid has_many select values should pass");
+    }
+
+    #[test]
+    fn test_validate_has_many_select_invalid_option() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Select,
+            has_many: true,
+            options: vec![
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Red".to_string()),
+                    value: "red".to_string(),
+                },
+            ],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["red","invalid"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("invalid option"));
+    }
+
+    #[test]
+    fn test_validate_has_many_select_empty_array() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Select,
+            has_many: true,
+            options: vec![
+                crate::core::field::SelectOption {
+                    label: crate::core::field::LocalizedString::Plain("Red".to_string()),
+                    value: "red".to_string(),
+                },
+            ],
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!("[]"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Empty array for has_many select should pass");
+    }
+
+    // ── has_many text/number validation tests ──────────────────────────
+
+    #[test]
+    fn test_validate_has_many_text_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Text,
+            has_many: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["rust","lua","python"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Valid has_many text values should pass");
+    }
+
+    #[test]
+    fn test_validate_has_many_text_min_length_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Text,
+            has_many: true,
+            min_length: Some(3),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["rust","ab"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at least 3 characters"));
+    }
+
+    #[test]
+    fn test_validate_has_many_text_max_rows_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Text,
+            has_many: true,
+            max_rows: Some(2),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at most 2 values"));
+    }
+
+    #[test]
+    fn test_validate_has_many_number_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "scores".to_string(),
+            field_type: FieldType::Number,
+            has_many: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("scores".to_string(), json!(r#"["10","20","30"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Valid has_many number values should pass");
+    }
+
+    #[test]
+    fn test_validate_has_many_number_max_fails() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "scores".to_string(),
+            field_type: FieldType::Number,
+            has_many: true,
+            max: Some(50.0),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("scores".to_string(), json!(r#"["10","75"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("at most 50"));
+    }
+
+    // ── has_many regression tests (bug fixes) ─────────────────────────────
+
+    #[test]
+    fn test_has_many_text_required_empty_array_fails() {
+        // Bug fix: "[]" should be treated as empty for required has_many fields
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Text,
+            has_many: true,
+            required: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!("[]"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err(), "Empty array should fail required check");
+        assert!(result.unwrap_err().errors[0].message.contains("required"));
+    }
+
+    #[test]
+    fn test_has_many_text_required_with_values_passes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Text,
+            has_many: true,
+            required: true,
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("tags".to_string(), json!(r#"["rust"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Non-empty array should pass required check");
+    }
+
+    #[test]
+    fn test_has_many_text_max_length_not_applied_to_json_string() {
+        // Bug fix: max_length should validate per-value, not the JSON string representation
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Text,
+            has_many: true,
+            max_length: Some(10),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        // JSON string is 23 chars, but each value is only 8 chars — should pass
+        data.insert("tags".to_string(), json!(r#"["abcdefgh","abcdefgh"]"#));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "max_length should check per-value, not JSON string length");
+    }
+
+    // ── date bounds validation tests ─────────────────────────────────────
+
+    #[test]
+    fn test_validate_date_min_date_valid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, start_date TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "start_date".to_string(),
+            field_type: FieldType::Date,
+            min_date: Some("2024-01-01".to_string()),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), json!("2024-06-15T12:00:00.000Z"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Date after min_date should pass");
+    }
+
+    #[test]
+    fn test_validate_date_min_date_invalid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, start_date TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "start_date".to_string(),
+            field_type: FieldType::Date,
+            min_date: Some("2024-06-01".to_string()),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), json!("2024-01-15T12:00:00.000Z"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("on or after"));
+    }
+
+    #[test]
+    fn test_validate_date_max_date_invalid() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, end_date TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "end_date".to_string(),
+            field_type: FieldType::Date,
+            max_date: Some("2025-12-31".to_string()),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("end_date".to_string(), json!("2026-03-15T12:00:00.000Z"));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().errors[0].message.contains("on or before"));
+    }
+
+    #[test]
+    fn test_validate_date_bounds_empty_passes() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)").unwrap();
+        let fields = vec![FieldDefinition {
+            name: "d".to_string(),
+            field_type: FieldType::Date,
+            min_date: Some("2024-01-01".to_string()),
+            max_date: Some("2025-12-31".to_string()),
+            ..Default::default()
+        }];
+        let mut data = HashMap::new();
+        data.insert("d".to_string(), json!(""));
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Empty date with bounds should pass (not required)");
+    }
+
+    #[test]
+    fn join_field_skipped_in_validation() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        // Join field with required=true — should still be skipped (virtual, no data)
+        let fields = vec![FieldDefinition {
+            name: "posts".to_string(),
+            field_type: FieldType::Join,
+            required: true,
+            join: Some(crate::core::field::JoinConfig {
+                collection: "posts".to_string(),
+                on: "author".to_string(),
+            }),
+            ..Default::default()
+        }];
+        let data = HashMap::new(); // No data submitted for join field
+        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false);
+        assert!(result.is_ok(), "Join field should be skipped entirely during validation");
     }
 }

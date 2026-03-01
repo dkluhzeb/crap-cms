@@ -11,6 +11,8 @@
   value="{{datetime_local_value}}"
   {{#if required}}required{{/if}}
   {{#if readonly}}readonly{{/if}}
+  {{#if min_date}}min="{{min_date}}T00:00"{{/if}}
+  {{#if max_date}}max="{{max_date}}T23:59"{{/if}}
   {{#if error}}class="form__input--error"{{/if}}
 />
 {{else if (eq picker_appearance "timeOnly")}}
@@ -41,6 +43,8 @@
   value="{{date_only_value}}"
   {{#if required}}required{{/if}}
   {{#if readonly}}readonly{{/if}}
+  {{#if min_date}}min="{{min_date}}"{{/if}}
+  {{#if max_date}}max="{{max_date}}"{{/if}}
   {{#if error}}class="form__input--error"{{/if}}
 />
 {{/if}}

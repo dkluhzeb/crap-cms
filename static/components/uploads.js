@@ -2,54 +2,85 @@
  * Upload field preview behavior.
  *
  * Updates preview image and file info when the user selects a different
- * upload from the dropdown.
+ * upload via the search widget or dropdown.
+ *
+ * Listens for `crap:change` events bubbling from the relationship-search
+ * widget, reads data attributes from the hidden input, and updates the
+ * `.upload-field__preview` and `.upload-field__info` elements.
  */
+
+/**
+ * Update preview and info elements.
+ * @param {HTMLElement} wrapper - The [data-upload-field] wrapper
+ * @param {string|null} thumbnailUrl
+ * @param {string|null} filename
+ * @param {boolean} isImage
+ */
+function updatePreview(wrapper, thumbnailUrl, filename, isImage) {
+  const preview = wrapper.querySelector('.upload-field__preview');
+  const info = wrapper.querySelector('.upload-field__info');
+
+  if (preview) {
+    if (thumbnailUrl && isImage) {
+      preview.innerHTML = '<img src="' + thumbnailUrl + '" alt="Preview" />';
+      preview.style.display = '';
+    } else {
+      preview.innerHTML = '';
+      preview.style.display = 'none';
+    }
+  }
+
+  if (info) {
+    if (filename) {
+      info.innerHTML =
+        '<span class="material-symbols-outlined" style="font-size: 16px;">description</span>' +
+        '<span class="upload-field__filename">' + filename + '</span>';
+      info.style.display = '';
+    } else {
+      info.innerHTML = '';
+      info.style.display = 'none';
+    }
+  }
+}
 
 function initUploadPreviews() {
   document.querySelectorAll('[data-upload-field]').forEach(
     /** @param {HTMLElement} wrapper */ (wrapper) => {
+      if (wrapper.dataset.uploadInit) return;
+      wrapper.dataset.uploadInit = '1';
+
+      // Legacy: <select> for locale_locked fields
       const select = /** @type {HTMLSelectElement | null} */ (wrapper.querySelector('[data-upload-select]'));
-      if (!select) return;
-      // Skip if already initialized
-      if (select.dataset.previewInit) return;
-      select.dataset.previewInit = '1';
+      if (select) {
+        select.addEventListener('change', () => {
+          const option = select.options[select.selectedIndex];
+          if (!option || !option.value) {
+            updatePreview(wrapper, null, null, false);
+            return;
+          }
+          updatePreview(
+            wrapper,
+            option.getAttribute('data-thumbnail'),
+            option.getAttribute('data-filename'),
+            option.getAttribute('data-is-image') === 'true',
+          );
+        });
+        return;
+      }
 
-      const preview = wrapper.querySelector('.upload-field__preview');
-      const info = wrapper.querySelector('.upload-field__info');
-
-      select.addEventListener('change', () => {
-        const option = select.options[select.selectedIndex];
-        if (!option || !option.value) {
-          if (preview) preview.style.display = 'none';
-          if (info) info.style.display = 'none';
+      // Search widget: listen for crap:change events (bubbles from relationship-search)
+      wrapper.addEventListener('crap:change', () => {
+        const hidden = wrapper.querySelector('.relationship-search__hidden input[type="hidden"]');
+        if (!hidden || !hidden.value) {
+          updatePreview(wrapper, null, null, false);
           return;
         }
-
-        const thumbnail = option.getAttribute('data-thumbnail');
-        const filename = option.getAttribute('data-filename');
-        const isImage = option.getAttribute('data-is-image') === 'true';
-
-        // Update preview
-        if (preview) {
-          if (thumbnail && isImage) {
-            preview.innerHTML = '<img src="' + thumbnail + '" alt="Preview" />';
-            preview.style.display = '';
-          } else {
-            preview.style.display = 'none';
-          }
-        }
-
-        // Update info
-        if (info) {
-          if (filename) {
-            info.innerHTML =
-              '<span class="material-symbols-outlined" style="font-size: 16px;">description</span>' +
-              '<span class="upload-field__filename">' + filename + '</span>';
-            info.style.display = '';
-          } else {
-            info.style.display = 'none';
-          }
-        }
+        updatePreview(
+          wrapper,
+          hidden.getAttribute('data-thumbnail'),
+          hidden.getAttribute('data-filename'),
+          hidden.getAttribute('data-is-image') === 'true',
+        );
       });
     }
   );

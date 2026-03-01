@@ -32,7 +32,7 @@ use super::shared::{
 };
 
 use crate::core::upload::inject_upload_metadata;
-use forms::{extract_join_data_from_form, parse_multipart_form};
+use forms::{extract_join_data_from_form, parse_multipart_form, transform_select_has_many};
 
 /// GET /admin/collections — list all registered collections
 pub async fn list_collections(
@@ -304,7 +304,7 @@ pub async fn create_form(
     let mut fields = build_field_contexts(&def.fields, &HashMap::new(), &HashMap::new(), true, non_default_locale);
 
     // Enrich relationship and array fields
-    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), &state, true, non_default_locale, &HashMap::new());
+    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), &state, true, non_default_locale, &HashMap::new(), None);
 
     // Evaluate display conditions (empty form data for create)
     let empty_data = serde_json::json!({});
@@ -422,7 +422,7 @@ pub async fn create_action(
                 Err(e) => {
                     tracing::error!("Upload processing error: {}", e);
                     let mut fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
-                    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), &state, true, false, &HashMap::new());
+                    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), &state, true, false, &HashMap::new(), None);
                     let empty_data = serde_json::json!({});
                     apply_display_conditions(&mut fields, &def.fields, &empty_data, &state.hook_runner, true);
                     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
@@ -458,6 +458,9 @@ pub async fn create_action(
     } else {
         None
     };
+
+    // Convert comma-separated multi-select values to JSON arrays
+    transform_select_has_many(&mut form_data, &def.fields);
 
     // Extract join table data (arrays + has-many relationships) from form
     let join_data = extract_join_data_from_form(&form_data, &def.fields);
@@ -531,7 +534,7 @@ pub async fn create_action(
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
                 let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, &state, true, false, &error_map);
+                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, &state, true, false, &error_map, None);
                 let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
                 apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
@@ -654,7 +657,7 @@ pub async fn edit_form(
     let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), true, non_default_locale);
 
     // Enrich relationship and array fields with extra data
-    enrich_field_contexts(&mut fields, &def.fields, &document.fields, &state, true, non_default_locale, &HashMap::new());
+    enrich_field_contexts(&mut fields, &def.fields, &document.fields, &state, true, non_default_locale, &HashMap::new(), Some(&id));
 
     // Evaluate display conditions with document data
     let form_data_json = serde_json::json!(document.fields);
@@ -888,7 +891,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 Err(e) => {
                     tracing::error!("Upload processing error: {}", e);
                     let mut fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
-                    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new());
+                    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new(), Some(&id));
                     let form_json = serde_json::json!(form_data.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
                     apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
@@ -930,6 +933,9 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
     } else {
         None
     };
+
+    // Convert comma-separated multi-select values to JSON arrays
+    transform_select_has_many(&mut form_data, &def.fields);
 
     // Extract join table data (arrays + has-many relationships) from form
     let join_data = extract_join_data_from_form(&form_data, &def.fields);
@@ -1014,7 +1020,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
                 let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, state, true, false, &error_map);
+                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, state, true, false, &error_map, Some(&id));
                 let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
                 apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
@@ -1337,4 +1343,97 @@ pub async fn evaluate_conditions(
 pub struct EvaluateConditionsRequest {
     form_data: HashMap<String, serde_json::Value>,
     conditions: HashMap<String, String>,
+}
+
+#[derive(serde::Deserialize)]
+pub struct SearchQuery {
+    q: Option<String>,
+    limit: Option<usize>,
+}
+
+/// GET /admin/api/search/{collection}?q=...&limit=20
+/// Returns JSON array of `{id, label}` for relationship field search.
+pub async fn search_collection(
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<SearchQuery>,
+) -> impl IntoResponse {
+    let registry = state.registry.read().unwrap();
+    let Some(def) = registry.get_collection(&slug) else {
+        return axum::Json(serde_json::json!([]));
+    };
+    let title_field = def.title_field().map(|s| s.to_string());
+    let search_term = params.q.unwrap_or_default().to_lowercase();
+    let limit = params.limit.unwrap_or(20).min(100);
+
+    let is_upload = def.upload.as_ref().is_some_and(|u| u.enabled);
+    let admin_thumbnail = def.upload.as_ref()
+        .and_then(|u| u.admin_thumbnail.as_ref().cloned());
+
+    let Ok(conn) = state.pool.get() else {
+        return axum::Json(serde_json::json!([]));
+    };
+
+    // Fetch all docs (SQLite doesn't have great full-text search without FTS extension)
+    // and filter in Rust. For large collections this could be slow, but it's simple
+    // and correct. A future optimization would use SQL LIKE or FTS5.
+    let locale_ctx = crate::db::query::LocaleContext::from_locale_string(
+        None, &state.config.locale,
+    );
+    let find_query = query::FindQuery::default();
+    let Ok(mut docs) = query::find(&conn, &slug, def, &find_query, locale_ctx.as_ref()) else {
+        return axum::Json(serde_json::json!([]));
+    };
+
+    // Assemble sizes for upload collections so we can extract thumbnail URLs
+    if is_upload {
+        if let Some(ref upload_config) = def.upload {
+            for doc in &mut docs {
+                upload::assemble_sizes_object(doc, upload_config);
+            }
+        }
+    }
+
+    let results: Vec<_> = docs.iter()
+        .filter_map(|doc| {
+            let label = if is_upload {
+                doc.get_str("filename")
+                    .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+                    .unwrap_or(&doc.id)
+                    .to_string()
+            } else {
+                title_field.as_ref()
+                    .and_then(|f| doc.get_str(f))
+                    .unwrap_or(&doc.id)
+                    .to_string()
+            };
+            if search_term.is_empty() || label.to_lowercase().contains(&search_term) || doc.id.to_lowercase().contains(&search_term) {
+                let mut item = serde_json::json!({ "id": doc.id, "label": label });
+                if is_upload {
+                    let mime = doc.get_str("mime_type").unwrap_or("");
+                    let is_image = mime.starts_with("image/");
+                    let thumb_url = if is_image {
+                        admin_thumbnail.as_ref()
+                            .and_then(|thumb_name| {
+                                doc.fields.get("sizes")
+                                    .and_then(|v| v.get(thumb_name))
+                                    .and_then(|v| v.get("url"))
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string())
+                            })
+                            .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                    } else { None };
+                    if let Some(url) = thumb_url { item["thumbnail_url"] = serde_json::json!(url); }
+                    item["filename"] = serde_json::json!(label);
+                    if is_image { item["is_image"] = serde_json::json!(true); }
+                }
+                Some(item)
+            } else {
+                None
+            }
+        })
+        .take(limit)
+        .collect();
+
+    axum::Json(serde_json::json!(results))
 }

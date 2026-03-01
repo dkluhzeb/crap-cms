@@ -103,6 +103,15 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
         }
         return;
     }
+    // Emit a comment for polymorphic relationships listing target collections
+    if field.field_type == FieldType::Relationship {
+        if let Some(rc) = &field.relationship {
+            if rc.is_polymorphic() {
+                let targets = rc.all_collections().join(", ");
+                writeln!(out, "    /// Polymorphic relationship — targets: {}", targets).unwrap();
+            }
+        }
+    }
     let rust_type = field_to_rust(field, parent_pascal);
     if is_optional(field) {
         writeln!(out, "    #[serde(skip_serializing_if = \"Option::is_none\")]").unwrap();
@@ -114,13 +123,34 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
 
 fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
-        FieldType::Text | FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext | FieldType::Select | FieldType::Upload => "String".to_string(),
-        FieldType::Number => "f64".to_string(),
+        FieldType::Text => {
+            if field.has_many { "Vec<String>".to_string() } else { "String".to_string() }
+        }
+        FieldType::Textarea | FieldType::Email | FieldType::Date
+        | FieldType::Richtext | FieldType::Code => "String".to_string(),
+        FieldType::Upload => {
+            if field.relationship.as_ref().map_or(false, |rc| rc.has_many) {
+                "Vec<String>".to_string()
+            } else {
+                "String".to_string()
+            }
+        }
+        FieldType::Select | FieldType::Radio => {
+            if field.has_many {
+                "Vec<String>".to_string()
+            } else {
+                "String".to_string()
+            }
+        }
+        FieldType::Number => {
+            if field.has_many { "Vec<f64>".to_string() } else { "f64".to_string() }
+        }
         FieldType::Checkbox => "bool".to_string(),
         FieldType::Json => "serde_json::Value".to_string(),
         FieldType::Relationship => {
             match &field.relationship {
+                Some(rc) if rc.is_polymorphic() && rc.has_many => "Vec<String>".to_string(),
+                Some(rc) if rc.is_polymorphic() => "String".to_string(),
                 Some(rc) if rc.has_many => "Vec<String>".to_string(),
                 _ => "String".to_string(),
             }
@@ -137,6 +167,7 @@ fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
         FieldType::Collapsible => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
         FieldType::Blocks => "Vec<serde_json::Value>".to_string(),
+        FieldType::Join => "Vec<serde_json::Value>".to_string(),
     }
 }
 
@@ -197,6 +228,7 @@ mod tests {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -204,6 +236,55 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Option<Vec<String>>"));
+    }
+
+    #[test]
+    fn rust_polymorphic_has_one() {
+        let col = make_col("comments", vec![
+            FieldDefinition {
+                name: "subject".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "posts".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                    polymorphic: vec!["posts".to_string(), "pages".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-one = String (stores "collection/id" composite)
+        assert!(out.contains("pub subject: String,"), "polymorphic has-one should be String: {}", out);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("posts"), "comment should list target collections: {}", out);
+        assert!(out.contains("pages"), "comment should list target collections: {}", out);
+    }
+
+    #[test]
+    fn rust_polymorphic_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "related".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "articles".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec!["articles".to_string(), "videos".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-many = Vec<String> (array of "collection/id" composites)
+        assert!(out.contains("Vec<String>"), "polymorphic has-many should be Vec<String>: {}", out);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("articles"), "comment should list target collections: {}", out);
+        assert!(out.contains("videos"), "comment should list target collections: {}", out);
     }
 
     #[test]
@@ -217,6 +298,7 @@ mod tests {
                     collection: "users".to_string(),
                     has_many: false,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -312,6 +394,27 @@ mod tests {
     }
 
     #[test]
+    fn upload_has_many_generates_array_type() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "images".to_string(),
+                field_type: FieldType::Upload,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: String::new(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec![],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub images: Vec<String>,"), "has-many upload should be Vec<String>: {}", out);
+    }
+
+    #[test]
     fn rust_global_output() {
         let global = crate::core::collection::GlobalDefinition {
             slug: "site_settings".to_string(),
@@ -356,6 +459,52 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(!out.contains("created_at"));
+    }
+
+    #[test]
+    fn rust_text_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "labels".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub tags: Vec<String>,"), "required has-many text should be Vec<String>: {}", out);
+        assert!(out.contains("Option<Vec<String>>"), "optional has-many text should be Option<Vec<String>>: {}", out);
+    }
+
+    #[test]
+    fn rust_number_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "scores".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "weights".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub scores: Vec<f64>,"), "required has-many number should be Vec<f64>: {}", out);
+        assert!(out.contains("Option<Vec<f64>>"), "optional has-many number should be Option<Vec<f64>>: {}", out);
     }
 
     #[test]

@@ -98,10 +98,10 @@
   </template>
   {{/each}}
 
-  <div class="form__blocks-add">
-    <select id="block-type-{{template_id}}">
+  <div class="form__blocks-add"{{#if picker}} data-picker="{{picker}}"{{/if}}>
+    <select id="block-type-{{template_id}}" class="form__blocks-select">
       {{#each block_definitions}}
-      <option value="{{this.block_type}}">{{this.label}}</option>
+      <option value="{{this.block_type}}"{{#if this.group}} data-group="{{this.group}}"{{/if}}{{#if this.image_url}} data-image-url="{{this.image_url}}"{{/if}}>{{this.label}}</option>
       {{/each}}
     </select>
     <button type="button" class="button button--ghost button--small"

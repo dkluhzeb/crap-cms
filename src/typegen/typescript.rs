@@ -88,6 +88,17 @@ fn render_collection_slug_type(out: &mut String, registry: &Registry) {
     writeln!(out, "export type CollectionSlug = {};", union).unwrap();
 }
 
+fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: &str) {
+    if field.field_type == FieldType::Relationship {
+        if let Some(rc) = &field.relationship {
+            if rc.is_polymorphic() {
+                let targets = rc.all_collections().join(", ");
+                writeln!(out, "{}/** Polymorphic relationship — targets: {} */", indent, targets).unwrap();
+            }
+        }
+    }
+}
+
 fn write_field(out: &mut String, field: &FieldDefinition) {
     // Row is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Row {
@@ -112,6 +123,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         }
         return;
     }
+    write_polymorphic_comment(out, field, "  ");
     let ts_type = field_to_ts(field, "");
     let opt = if is_optional(field) { "?" } else { "" };
     writeln!(out, "  {}{}: {};", field.name, opt, ts_type).unwrap();
@@ -141,6 +153,7 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
         }
         return;
     }
+    write_polymorphic_comment(out, field, "  ");
     let ts_type = field_to_ts(field, parent_pascal);
     let opt = if is_optional(field) { "?" } else { "" };
     writeln!(out, "  {}{}: {};", field.name, opt, ts_type).unwrap();
@@ -148,23 +161,39 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
 
 fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
-        FieldType::Text | FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext => "string".to_string(),
-        FieldType::Number => "number".to_string(),
+        FieldType::Text => {
+            if field.has_many { "string[]".to_string() } else { "string".to_string() }
+        }
+        FieldType::Textarea | FieldType::Email | FieldType::Date
+        | FieldType::Richtext | FieldType::Code => "string".to_string(),
+        FieldType::Number => {
+            if field.has_many { "number[]".to_string() } else { "number".to_string() }
+        }
         FieldType::Checkbox => "boolean".to_string(),
         FieldType::Json => "unknown".to_string(),
-        FieldType::Select => {
-            if field.options.is_empty() {
+        FieldType::Select | FieldType::Radio => {
+            let base = if field.options.is_empty() {
                 "string".to_string()
             } else {
                 field.options.iter()
                     .map(|o| format!("\"{}\"", o.value))
                     .collect::<Vec<_>>()
                     .join(" | ")
+            };
+            if field.has_many {
+                if field.options.is_empty() {
+                    "string[]".to_string()
+                } else {
+                    format!("({})[]", base)
+                }
+            } else {
+                base
             }
         }
         FieldType::Relationship => {
             match &field.relationship {
+                Some(rc) if rc.is_polymorphic() && rc.has_many => "string[]".to_string(),
+                Some(rc) if rc.is_polymorphic() => "string".to_string(),
                 Some(rc) if rc.has_many => "string[]".to_string(),
                 _ => "string".to_string(),
             }
@@ -180,8 +209,15 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
         FieldType::Row => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
         FieldType::Collapsible => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Upload => "string".to_string(),
+        FieldType::Upload => {
+            if field.relationship.as_ref().map_or(false, |rc| rc.has_many) {
+                "string[]".to_string()
+            } else {
+                "string".to_string()
+            }
+        }
         FieldType::Blocks => "Record<string, unknown>[]".to_string(),
+        FieldType::Join => "Record<string, unknown>[]".to_string(),
     }
 }
 
@@ -277,6 +313,7 @@ mod tests {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -284,6 +321,57 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("tags?: string[];"));
+    }
+
+    #[test]
+    fn typescript_polymorphic_has_one() {
+        let col = make_col("comments", vec![
+            FieldDefinition {
+                name: "subject".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "posts".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                    polymorphic: vec!["posts".to_string(), "pages".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-one = string (stores "collection/id" composite)
+        assert!(out.contains("  subject: string;"), "polymorphic has-one should be string: {}", out);
+        // Comment listing target collections
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("posts"), "comment should list target collections: {}", out);
+        assert!(out.contains("pages"), "comment should list target collections: {}", out);
+    }
+
+    #[test]
+    fn typescript_polymorphic_has_many() {
+        let col = make_col("posts", vec![
+            FieldDefinition {
+                name: "related".to_string(),
+                field_type: FieldType::Relationship,
+                has_many: true,
+                relationship: Some(RelationshipConfig {
+                    collection: "articles".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec!["articles".to_string(), "videos".to_string()],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Polymorphic has-many = string[] (array of "collection/id" composites)
+        assert!(out.contains("string[]"), "polymorphic has-many should be string[]: {}", out);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("articles"), "comment should list target collections: {}", out);
+        assert!(out.contains("videos"), "comment should list target collections: {}", out);
     }
 
     #[test]
@@ -297,6 +385,7 @@ mod tests {
                     collection: "users".to_string(),
                     has_many: false,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -393,6 +482,27 @@ mod tests {
     }
 
     #[test]
+    fn upload_has_many_generates_array_type() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "images".to_string(),
+                field_type: FieldType::Upload,
+                required: true,
+                relationship: Some(RelationshipConfig {
+                    collection: String::new(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec![],
+                }),
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  images: string[];"), "has-many upload should be string[]: {}", out);
+    }
+
+    #[test]
     fn typescript_select_without_options() {
         let col = make_col("items", vec![
             FieldDefinition { name: "category".to_string(), field_type: FieldType::Select, required: true, ..Default::default() },
@@ -426,6 +536,52 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(!out.contains("created_at"));
         assert!(!out.contains("updated_at"));
+    }
+
+    #[test]
+    fn typescript_text_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "labels".to_string(),
+                field_type: FieldType::Text,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  tags: string[];"), "required has-many text should be string[]: {}", out);
+        assert!(out.contains("  labels?: string[];"), "optional has-many text should be string[]?: {}", out);
+    }
+
+    #[test]
+    fn typescript_number_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "scores".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "weights".to_string(),
+                field_type: FieldType::Number,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("  scores: number[];"), "required has-many number should be number[]: {}", out);
+        assert!(out.contains("  weights?: number[];"), "optional has-many number should be number[]?: {}", out);
     }
 
     #[test]

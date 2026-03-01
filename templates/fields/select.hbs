@@ -3,30 +3,58 @@
   {{#if required}}<span class="required">*</span>{{/if}}
   {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
-{{#if locale_locked}}
-<input type="hidden" name="{{name}}" value="{{value}}" />
-<select
-  id="field-{{name}}"
-  disabled
-  {{#if error}}class="form__input--error"{{/if}}
->
-  <option value="">-- Select --</option>
-  {{#each options}}
-  <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
-  {{/each}}
-</select>
+{{#if has_many}}
+  {{#if locale_locked}}
+  <input type="hidden" name="{{name}}" value="{{value}}" />
+  <select
+    id="field-{{name}}"
+    multiple
+    disabled
+    {{#if error}}class="form__input--error"{{/if}}
+  >
+    {{#each options}}
+    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+    {{/each}}
+  </select>
+  {{else}}
+  <select
+    id="field-{{name}}"
+    name="{{name}}"
+    multiple
+    {{#if required}}required{{/if}}
+    {{#if error}}class="form__input--error"{{/if}}
+  >
+    {{#each options}}
+    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+    {{/each}}
+  </select>
+  {{/if}}
 {{else}}
-<select
-  id="field-{{name}}"
-  name="{{name}}"
-  {{#if required}}required{{/if}}
-  {{#if error}}class="form__input--error"{{/if}}
->
-  <option value="">-- Select --</option>
-  {{#each options}}
-  <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
-  {{/each}}
-</select>
+  {{#if locale_locked}}
+  <input type="hidden" name="{{name}}" value="{{value}}" />
+  <select
+    id="field-{{name}}"
+    disabled
+    {{#if error}}class="form__input--error"{{/if}}
+  >
+    <option value="">-- Select --</option>
+    {{#each options}}
+    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+    {{/each}}
+  </select>
+  {{else}}
+  <select
+    id="field-{{name}}"
+    name="{{name}}"
+    {{#if required}}required{{/if}}
+    {{#if error}}class="form__input--error"{{/if}}
+  >
+    <option value="">-- Select --</option>
+    {{#each options}}
+    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
+    {{/each}}
+  </select>
+  {{/if}}
 {{/if}}
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

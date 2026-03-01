@@ -1110,6 +1110,7 @@ fn make_articles_with_join_tables() -> CollectionDefinition {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..make_field("tags", FieldType::Relationship)
             },
@@ -1556,6 +1557,7 @@ fn make_categories_def() -> CollectionDefinition {
                     collection: "categories".to_string(),
                     has_many: false,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..make_field("parent", FieldType::Relationship)
             },
@@ -1585,6 +1587,7 @@ fn make_posts_with_category() -> CollectionDefinition {
                     collection: "categories".to_string(),
                     has_many: false,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..make_field("category", FieldType::Relationship)
             },
@@ -1596,6 +1599,7 @@ fn make_posts_with_category() -> CollectionDefinition {
                     collection: "categories".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..make_field("secondary_categories", FieldType::Relationship)
             },
@@ -1607,6 +1611,7 @@ fn make_posts_with_category() -> CollectionDefinition {
                     collection: "categories".to_string(),
                     has_many: false,
                     max_depth: Some(0),
+                    polymorphic: vec![],
                 }),
                 ..make_field("limited_cat", FieldType::Relationship)
             },
@@ -3020,6 +3025,7 @@ fn make_localized_join_def() -> CollectionDefinition {
                     collection: "tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -3897,6 +3903,7 @@ fn make_global_with_join_fields() -> GlobalDefinition {
                     collection: "posts".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..Default::default()
             },
@@ -5105,6 +5112,7 @@ fn make_filterable_def() -> CollectionDefinition {
                     collection: "product_tags".to_string(),
                     has_many: true,
                     max_depth: None,
+                    polymorphic: vec![],
                 }),
                 ..make_field("tags", FieldType::Relationship)
             },

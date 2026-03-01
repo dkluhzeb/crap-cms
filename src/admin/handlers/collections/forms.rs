@@ -45,6 +45,71 @@ pub(crate) fn extract_join_data_from_form(
     join_data
 }
 
+/// Convert comma-separated form values to JSON arrays for `has_many` select fields.
+/// The JS multi-select interceptor joins selected values with commas; this converts
+/// them to JSON array strings (e.g., `"a,b"` → `'["a","b"]'`) for storage in TEXT columns.
+pub(crate) fn transform_select_has_many(
+    form: &mut HashMap<String, String>,
+    field_defs: &[crate::core::field::FieldDefinition],
+) {
+    for field in field_defs {
+        match field.field_type {
+            FieldType::Select | FieldType::Text | FieldType::Number if field.has_many => {
+                if let Some(val) = form.get_mut(&field.name) {
+                    if val.is_empty() {
+                        *val = "[]".to_string();
+                    } else {
+                        let values: Vec<&str> = val.split(',')
+                            .map(|s| s.trim())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        *val = serde_json::json!(values).to_string();
+                    }
+                } else {
+                    form.insert(field.name.clone(), "[]".to_string());
+                }
+            }
+            // Recurse into group sub-fields (stored as flat group__subfield columns)
+            FieldType::Group => {
+                let mut has_many_names: Vec<(String, String)> = Vec::new();
+                for sf in &field.fields {
+                    if matches!(sf.field_type, FieldType::Select | FieldType::Text | FieldType::Number) && sf.has_many {
+                        let full_name = format!("{}__{}", field.name, sf.name);
+                        if let Some(val) = form.get(&full_name) {
+                            let json_val = if val.is_empty() {
+                                "[]".to_string()
+                            } else {
+                                let values: Vec<&str> = val.split(',')
+                                    .map(|s| s.trim())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                                serde_json::json!(values).to_string()
+                            };
+                            has_many_names.push((full_name, json_val));
+                        } else {
+                            has_many_names.push((full_name, "[]".to_string()));
+                        }
+                    }
+                }
+                for (name, val) in has_many_names {
+                    form.insert(name, val);
+                }
+            }
+            // Row/Collapsible promote sub-fields to the same level — recurse
+            FieldType::Row | FieldType::Collapsible => {
+                transform_select_has_many(form, &field.fields);
+            }
+            // Tabs promote sub-fields to the same level — recurse into each tab
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    transform_select_has_many(form, &tab.fields);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Recursively parse composite form data from flat form keys.
 ///
 /// Handles arbitrarily nested keys like `content[0][items][1][title]`.
@@ -152,28 +217,13 @@ fn parse_composite_form_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, FieldAdmin, FieldHooks, FieldAccess};
+    use crate::core::field::{FieldDefinition, SelectOption, LocalizedString};
 
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition {
             name: name.to_string(),
             field_type: ft,
-            required: false,
-            unique: false,
-            validate: None,
-            default_value: None,
-            options: Vec::new(),
-            admin: FieldAdmin::default(),
-            hooks: FieldHooks::default(),
-            access: FieldAccess::default(),
-            relationship: None,
-            fields: Vec::new(),
-            blocks: Vec::new(),
-            tabs: Vec::new(),
-            localized: false,
-            picker_appearance: None,
-            min_rows: None,
-            max_rows: None,
+            ..Default::default()
         }
     }
 
@@ -388,6 +438,87 @@ mod tests {
         assert_eq!(images.len(), 2);
         assert_eq!(images[0]["url"], "a.jpg");
         assert_eq!(images[1]["url"], "b.jpg");
+    }
+
+    // --- transform_select_has_many tests ---
+
+    #[test]
+    fn transform_select_has_many_converts_comma_separated() {
+        let mut form = HashMap::new();
+        form.insert("tags".to_string(), "red,blue,green".to_string());
+
+        let mut field = make_field("tags", FieldType::Select);
+        field.has_many = true;
+        field.options = vec![
+            SelectOption { label: LocalizedString::Plain("Red".to_string()), value: "red".to_string() },
+            SelectOption { label: LocalizedString::Plain("Blue".to_string()), value: "blue".to_string() },
+            SelectOption { label: LocalizedString::Plain("Green".to_string()), value: "green".to_string() },
+        ];
+
+        transform_select_has_many(&mut form, &[field]);
+        assert_eq!(form.get("tags").unwrap(), r#"["red","blue","green"]"#);
+    }
+
+    #[test]
+    fn transform_select_has_many_empty_value() {
+        let mut form = HashMap::new();
+        form.insert("tags".to_string(), String::new());
+
+        let mut field = make_field("tags", FieldType::Select);
+        field.has_many = true;
+
+        transform_select_has_many(&mut form, &[field]);
+        assert_eq!(form.get("tags").unwrap(), "[]");
+    }
+
+    #[test]
+    fn transform_select_has_many_missing_key() {
+        let mut form = HashMap::new();
+
+        let mut field = make_field("tags", FieldType::Select);
+        field.has_many = true;
+
+        transform_select_has_many(&mut form, &[field]);
+        assert_eq!(form.get("tags").unwrap(), "[]");
+    }
+
+    #[test]
+    fn transform_select_has_many_single_value() {
+        let mut form = HashMap::new();
+        form.insert("color".to_string(), "red".to_string());
+
+        let mut field = make_field("color", FieldType::Select);
+        field.has_many = true;
+
+        transform_select_has_many(&mut form, &[field]);
+        assert_eq!(form.get("color").unwrap(), r#"["red"]"#);
+    }
+
+    #[test]
+    fn transform_select_has_many_skips_non_has_many() {
+        let mut form = HashMap::new();
+        form.insert("status".to_string(), "active".to_string());
+
+        let field = make_field("status", FieldType::Select);
+        // has_many is false by default
+
+        transform_select_has_many(&mut form, &[field]);
+        assert_eq!(form.get("status").unwrap(), "active"); // unchanged
+    }
+
+    #[test]
+    fn transform_select_has_many_in_group() {
+        let mut form = HashMap::new();
+        form.insert("meta__tags".to_string(), "a,b".to_string());
+
+        let mut tag_field = make_field("tags", FieldType::Select);
+        tag_field.has_many = true;
+
+        let mut group = make_field("meta", FieldType::Group);
+        group.fields = vec![tag_field];
+
+        transform_select_has_many(&mut form, &[group]);
+        assert_eq!(form.get("meta__tags").unwrap(), r#"["a","b"]"#);
     }
 }
 

@@ -3,18 +3,18 @@
   {{#if required}}<span class="required">*</span>{{/if}}
   {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
-<crap-richtext{{#if features}} data-features='{{json features}}'{{/if}}>
+<crap-code data-language="{{language}}">
   <textarea
     id="field-{{name}}"
     name="{{name}}"
     rows="16"
-    data-field-type="richtext"
+    data-field-type="code"
     style="display: none"
     {{#if placeholder}}placeholder="{{placeholder}}"{{/if}}
     {{#if required}}required{{/if}}
     {{#if readonly}}readonly{{/if}}
     {{#if error}}class="form__input--error"{{/if}}
   >{{value}}</textarea>
-</crap-richtext>
+</crap-code>
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

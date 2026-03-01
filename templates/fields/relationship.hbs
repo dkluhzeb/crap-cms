@@ -4,74 +4,36 @@
   {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
 <div class="relationship-field">
-  {{#if has_many}}
-  {{#if locale_locked}}
-  {{#each relationship_options}}{{#if this.selected}}<input type="hidden" name="{{../name}}" value="{{this.value}}" />{{/if}}{{/each}}
-  <select
-    id="field-{{name}}"
-    multiple
+  <div class="relationship-search"
+    data-relationship-search="true"
+    data-collection="{{relationship_collection}}"
+    data-field-name="{{name}}"
     data-field-type="relationship"
-    data-has-many="true"
-    disabled
-    {{#if error}}class="form__input--error"{{/if}}
-  >
-    {{#each relationship_options}}
-    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
-    {{/each}}
-  </select>
-  {{else}}
-  <select
-    id="field-{{name}}"
-    name="{{name}}"
-    multiple
-    data-field-type="relationship"
-    data-has-many="true"
-    {{#if required}}required{{/if}}
-    {{#if error}}class="form__input--error"{{/if}}
-  >
-    {{#each relationship_options}}
-    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
-    {{/each}}
-  </select>
-  {{/if}}
-  {{else}}
-  {{#if locale_locked}}
-  <input type="hidden" name="{{name}}" value="{{value}}" />
-  <select
-    id="field-{{name}}"
-    data-field-type="relationship"
-    data-relationship-collection="{{relationship_collection}}"
-    disabled
-    {{#if error}}class="form__input--error"{{/if}}
-  >
-    <option value="">-- Select --</option>
-    {{#each relationship_options}}
-    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
-    {{/each}}
-  </select>
-  {{else}}
-  <select
-    id="field-{{name}}"
-    name="{{name}}"
-    data-field-type="relationship"
-    data-relationship-collection="{{relationship_collection}}"
-    {{#if required}}required{{/if}}
-    {{#if error}}class="form__input--error"{{/if}}
-  >
-    <option value="">-- Select --</option>
-    {{#each relationship_options}}
-    <option value="{{this.value}}" {{#if this.selected}}selected{{/if}}>{{this.label}}</option>
-    {{/each}}
-  </select>
-  {{/if}}
-  {{/if}}
+    {{#if has_many}}data-has-many="true"{{/if}}
+    {{#if polymorphic}}data-polymorphic="true" data-collections='{{json collections}}'{{/if}}
+    {{#if picker}}data-picker="{{picker}}"{{/if}}
+    {{#if required}}data-required="true"{{/if}}
+    {{#if readonly}}data-readonly="true"{{/if}}
+    {{#if error}}data-error="true"{{/if}}
+    data-selected='{{json selected_items}}'>
+  </div>
   {{#unless locale_locked}}
   <div class="relationship-field__actions">
+    {{#if polymorphic}}
+      {{#each collections}}
+      <a class="relationship-field__action" href="/admin/collections/{{this}}/create"
+        hx-get="/admin/collections/{{this}}/create" hx-target="body" hx-push-url="true">
+        <span class="material-symbols-outlined" style="font-size: 16px;">add</span>
+        Create {{this}}
+      </a>
+      {{/each}}
+    {{else}}
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
       hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
       <span class="material-symbols-outlined" style="font-size: 16px;">add</span>
       Create new
     </a>
+    {{/if}}
     {{#unless has_many}}
     <a class="relationship-field__action relationship-field__view-link" href="#"
       data-view-for="field-{{name}}"

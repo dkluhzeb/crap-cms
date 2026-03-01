@@ -1,0 +1,22 @@
+<label>
+  {{label}}
+</label>
+<div class="form__join">
+  {{#if join_items}}
+  <div class="form__join-list">
+    {{#each join_items}}
+    <a class="form__join-item" href="/admin/collections/{{../join_collection}}/{{this.id}}/edit"
+      hx-get="/admin/collections/{{../join_collection}}/{{this.id}}/edit" hx-target="body" hx-push-url="true">
+      <span class="form__join-item-label">{{this.label}}</span>
+      <span class="material-symbols-outlined form__join-item-icon">open_in_new</span>
+    </a>
+    {{/each}}
+  </div>
+  {{else}}
+  <p class="form__join-empty">No related items</p>
+  {{/if}}
+  {{#if join_count}}
+  <p class="form__join-count">{{join_count}} item{{#unless (eq join_count 1)}}s{{/unless}}</p>
+  {{/if}}
+</div>
+{{#if description}}<p class="form__help">{{description}}</p>{{/if}}

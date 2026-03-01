@@ -82,23 +82,11 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
                 field_type: FieldType::Email,
                 required: true,
                 unique: true,
-                validate: None,
-                default_value: None,
-                options: Vec::new(),
                 admin: FieldAdmin {
                     placeholder: Some(LocalizedString::Plain("user@example.com".to_string())),
                     ..Default::default()
                 },
-                hooks: FieldHooks::default(),
-                access: FieldAccess::default(),
-                relationship: None,
-                fields: Vec::new(),
-                blocks: Vec::new(),
-                localized: false,
-                tabs: Vec::new(),
-                picker_appearance: None,
-                min_rows: None,
-                max_rows: None,
+                ..Default::default()
             });
         }
     }
@@ -361,23 +349,8 @@ fn parse_format_options(tbl: &Table) -> FormatOptions {
 fn hidden_text_field(name: &str) -> FieldDefinition {
     FieldDefinition {
         name: name.to_string(),
-        field_type: FieldType::Text,
-        required: false,
-        unique: false,
-        validate: None,
-        default_value: None,
-        options: Vec::new(),
         admin: FieldAdmin { hidden: true, ..Default::default() },
-        hooks: FieldHooks::default(),
-        access: FieldAccess::default(),
-        relationship: None,
-        fields: Vec::new(),
-        blocks: Vec::new(),
-        tabs: Vec::new(),
-        localized: false,
-        picker_appearance: None,
-        min_rows: None,
-        max_rows: None,
+        ..Default::default()
     }
 }
 
@@ -386,22 +359,8 @@ fn hidden_number_field(name: &str) -> FieldDefinition {
     FieldDefinition {
         name: name.to_string(),
         field_type: FieldType::Number,
-        required: false,
-        unique: false,
-        validate: None,
-        default_value: None,
-        options: Vec::new(),
         admin: FieldAdmin { hidden: true, ..Default::default() },
-        hooks: FieldHooks::default(),
-        access: FieldAccess::default(),
-        relationship: None,
-        fields: Vec::new(),
-        blocks: Vec::new(),
-        tabs: Vec::new(),
-        localized: false,
-        picker_appearance: None,
-        min_rows: None,
-        max_rows: None,
+        ..Default::default()
     }
 }
 
@@ -411,23 +370,9 @@ fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &CollectionUp
     let mut upload_fields = vec![
         FieldDefinition {
             name: "filename".to_string(),
-            field_type: FieldType::Text,
             required: true,
-            unique: false,
-            validate: None,
-            default_value: None,
-            options: Vec::new(),
             admin: FieldAdmin { readonly: true, ..Default::default() },
-            hooks: FieldHooks::default(),
-            access: FieldAccess::default(),
-            relationship: None,
-            fields: Vec::new(),
-            blocks: Vec::new(),
-            tabs: Vec::new(),
-            localized: false,
-            picker_appearance: None,
-            min_rows: None,
-            max_rows: None,
+            ..Default::default()
         },
         hidden_text_field("mime_type"),
         hidden_number_field("filesize"),
@@ -511,6 +456,15 @@ fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
                 labels_plural,
                 position: get_string(&admin_tbl, "position"),
                 condition: get_string(&admin_tbl, "condition"),
+                step: get_string(&admin_tbl, "step"),
+                rows: admin_tbl.get::<Option<u32>>("rows").ok().flatten(),
+                language: get_string(&admin_tbl, "language"),
+                features: if let Ok(tbl) = get_table(&admin_tbl, "features") {
+                    tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
+                } else {
+                    Vec::new()
+                },
+                picker: get_string(&admin_tbl, "picker"),
             }
         } else {
             FieldAdmin::default()
@@ -531,26 +485,29 @@ fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         // Parse relationship config
         let relationship = if field_type == FieldType::Relationship {
             if let Ok(rel_tbl) = get_table(&field_tbl, "relationship") {
-                let collection = get_string(&rel_tbl, "collection").unwrap_or_default();
+                let (collection, polymorphic) = parse_relationship_collection(&rel_tbl);
                 let has_many = get_bool(&rel_tbl, "has_many", false);
                 let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
-                Some(crate::core::field::RelationshipConfig { collection, has_many, max_depth })
+                Some(crate::core::field::RelationshipConfig { collection, has_many, max_depth, polymorphic })
             } else {
                 // Legacy flat syntax: relation_to + has_many on the field itself
                 get_string(&field_tbl, "relation_to").map(|collection| {
                     let has_many = get_bool(&field_tbl, "has_many", false);
-                    crate::core::field::RelationshipConfig { collection, has_many, max_depth: None }
+                    crate::core::field::RelationshipConfig { collection, has_many, max_depth: None, polymorphic: vec![] }
                 })
             }
         } else if field_type == FieldType::Upload {
-            // Upload: auto-create has-one relationship config from relation_to
+            // Upload: relationship config from relation_to or relationship table
             if let Ok(rel_tbl) = get_table(&field_tbl, "relationship") {
                 let collection = get_string(&rel_tbl, "collection").unwrap_or_default();
+                let has_many = get_bool(&rel_tbl, "has_many", false);
                 let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
-                Some(crate::core::field::RelationshipConfig { collection, has_many: false, max_depth })
+                Some(crate::core::field::RelationshipConfig { collection, has_many, max_depth, polymorphic: vec![] })
             } else {
-                get_string(&field_tbl, "relation_to").map(|collection| {
-                    crate::core::field::RelationshipConfig { collection, has_many: false, max_depth: None }
+                let collection = get_string(&field_tbl, "relation_to");
+                let has_many = get_bool(&field_tbl, "has_many", false);
+                collection.map(|collection| {
+                    crate::core::field::RelationshipConfig { collection, has_many, max_depth: None, polymorphic: vec![] }
                 })
             }
         } else {
@@ -601,6 +558,31 @@ fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
 
         let min_rows = field_tbl.get::<Option<usize>>("min_rows").ok().flatten();
         let max_rows = field_tbl.get::<Option<usize>>("max_rows").ok().flatten();
+        let min_length = field_tbl.get::<Option<usize>>("min_length").ok().flatten();
+        let max_length = field_tbl.get::<Option<usize>>("max_length").ok().flatten();
+        let min = match field_tbl.get::<mlua::Value>("min") {
+            Ok(mlua::Value::Number(n)) => Some(n),
+            Ok(mlua::Value::Integer(i)) => Some(i as f64),
+            _ => None,
+        };
+        let max = match field_tbl.get::<mlua::Value>("max") {
+            Ok(mlua::Value::Number(n)) => Some(n),
+            Ok(mlua::Value::Integer(i)) => Some(i as f64),
+            _ => None,
+        };
+
+        let has_many = get_bool(&field_tbl, "has_many", false);
+        let min_date = get_string(&field_tbl, "min_date");
+        let max_date = get_string(&field_tbl, "max_date");
+
+        // Parse join config for Join fields
+        let join = if field_type == FieldType::Join {
+            let collection = get_string(&field_tbl, "collection").unwrap_or_default();
+            let on = get_string(&field_tbl, "on").unwrap_or_default();
+            Some(crate::core::field::JoinConfig { collection, on })
+        } else {
+            None
+        };
 
         fields.push(FieldDefinition {
             name,
@@ -621,6 +603,14 @@ fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             picker_appearance,
             min_rows,
             max_rows,
+            min_length,
+            max_length,
+            min,
+            max,
+            has_many,
+            min_date,
+            max_date,
+            join,
         });
     }
 
@@ -681,6 +671,8 @@ fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<crate::core::field:
             .map_err(|_| anyhow::anyhow!("Block definition missing 'type'"))?;
         let label = get_localized_string(&block_tbl, "label");
         let label_field = get_string(&block_tbl, "label_field");
+        let group = get_string(&block_tbl, "group");
+        let image_url = get_string(&block_tbl, "image_url");
         let fields = if let Ok(fields_tbl) = get_table(&block_tbl, "fields") {
             parse_fields(&fields_tbl)?
         } else {
@@ -691,6 +683,8 @@ fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<crate::core::field:
             fields,
             label,
             label_field,
+            group,
+            image_url,
         });
     }
     Ok(blocks)
@@ -739,6 +733,30 @@ fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedString> {
 
 fn get_bool(tbl: &Table, key: &str, default: bool) -> bool {
     tbl.get::<Option<bool>>(key).ok().flatten().unwrap_or(default)
+}
+
+/// Parse the `collection` field from a relationship Lua table.
+///
+/// The `collection` key may be:
+/// - A plain string → single-collection relationship, returns `(collection, vec![])`.
+/// - A Lua array of strings → polymorphic relationship, returns `(first, all_slugs)`.
+///   `collection` is set to the first slug; `polymorphic` holds all slugs.
+fn parse_relationship_collection(rel_tbl: &Table) -> (String, Vec<String>) {
+    match rel_tbl.get::<Value>("collection") {
+        Ok(Value::String(s)) => {
+            let col = s.to_str().ok().map(|v| v.to_string()).unwrap_or_default();
+            (col, vec![])
+        }
+        Ok(Value::Table(arr)) => {
+            let slugs: Vec<String> = arr
+                .sequence_values::<String>()
+                .filter_map(|r| r.ok())
+                .collect();
+            let first = slugs.first().cloned().unwrap_or_default();
+            (first, slugs)
+        }
+        _ => (String::new(), vec![]),
+    }
 }
 
 fn get_string_val(tbl: &Table, key: &str) -> mlua::Result<String> {

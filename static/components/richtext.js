@@ -7,8 +7,19 @@
  * Requires `window.ProseMirror` (loaded via prosemirror.js IIFE bundle).
  * Falls back to showing the plain textarea if ProseMirror is unavailable.
  *
+ * Supports `data-features` attribute (JSON array) to limit which toolbar
+ * buttons and editing features are available. When absent, all features
+ * are enabled.
+ *
+ * Available features: "bold", "italic", "code", "link", "heading",
+ * "blockquote", "orderedList", "bulletList", "codeBlock", "horizontalRule"
+ *
  * @example
  * <crap-richtext>
+ *   <textarea name="content" style="display:none">...</textarea>
+ * </crap-richtext>
+ *
+ * <crap-richtext data-features='["bold","italic","heading","link"]'>
  *   <textarea name="content" style="display:none">...</textarea>
  * </crap-richtext>
  */
@@ -35,14 +46,68 @@ class CrapRichtext extends HTMLElement {
 
     textarea.style.display = 'none';
 
-    // Build schema with list support
+    // Parse enabled features (empty = all enabled)
+    /** @type {Set<string>|null} */
+    let enabledFeatures = null;
+    const featuresAttr = this.getAttribute('data-features');
+    if (featuresAttr) {
+      try {
+        const arr = JSON.parse(featuresAttr);
+        if (Array.isArray(arr) && arr.length > 0) {
+          enabledFeatures = new Set(arr);
+        }
+      } catch { /* ignore, all features enabled */ }
+    }
+
+    /**
+     * Check if a feature is enabled.
+     * @param {string} name
+     * @returns {boolean}
+     */
+    const has = (name) => enabledFeatures === null || enabledFeatures.has(name);
+
+    // Build schema — conditionally include nodes and marks
+    const baseNodes = PM.basicSchema.spec.nodes;
+    let nodes = baseNodes;
+
+    // Add list nodes only if list features are enabled
+    if (has('orderedList') || has('bulletList')) {
+      nodes = PM.addListNodes(nodes, 'paragraph block*', 'block');
+    }
+
+    // Remove nodes based on features
+    if (!has('heading')) {
+      nodes = nodes.remove('heading');
+    }
+    if (!has('codeBlock')) {
+      nodes = nodes.remove('code_block');
+    }
+    if (!has('blockquote')) {
+      nodes = nodes.remove('blockquote');
+    }
+    if (!has('horizontalRule')) {
+      nodes = nodes.remove('horizontal_rule');
+    }
+
+    // Build marks — conditionally include
+    let marksObj = {};
+    const baseMarks = PM.basicSchema.spec.marks;
+    if (has('bold') && baseMarks.get('strong')) {
+      marksObj.strong = baseMarks.get('strong');
+    }
+    if (has('italic') && baseMarks.get('em')) {
+      marksObj.em = baseMarks.get('em');
+    }
+    if (has('code') && baseMarks.get('code')) {
+      marksObj.code = baseMarks.get('code');
+    }
+    if (has('link') && baseMarks.get('link')) {
+      marksObj.link = baseMarks.get('link');
+    }
+
     const schema = new PM.Schema({
-      nodes: PM.addListNodes(
-        PM.basicSchema.spec.nodes,
-        'paragraph block*',
-        'block'
-      ),
-      marks: PM.basicSchema.spec.marks,
+      nodes,
+      marks: marksObj,
     });
 
     // Parse existing HTML content into a ProseMirror document
@@ -52,31 +117,37 @@ class CrapRichtext extends HTMLElement {
 
     const isReadonly = textarea.hasAttribute('readonly');
 
-    // Input rules: smart quotes, em dash, ellipsis, plus block-level rules
+    // Input rules: smart quotes, em dash, ellipsis, plus conditional block-level rules
     const rules = [
       ...PM.smartQuotes,
       PM.emDash,
       PM.ellipsis,
-      // > blockquote
-      PM.wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote),
-      // 1. ordered list
-      PM.wrappingInputRule(
+    ];
+
+    if (has('blockquote') && schema.nodes.blockquote) {
+      rules.push(PM.wrappingInputRule(/^\s*>\s$/, schema.nodes.blockquote));
+    }
+    if (has('orderedList') && schema.nodes.ordered_list) {
+      rules.push(PM.wrappingInputRule(
         /^(\d+)\.\s$/,
         schema.nodes.ordered_list,
         (match) => ({ order: +match[1] }),
         (match, node) => node.childCount + node.attrs.order === +match[1]
-      ),
-      // - or * bullet list
-      PM.wrappingInputRule(/^\s*([-*])\s$/, schema.nodes.bullet_list),
-      // ``` code block
-      PM.textblockTypeInputRule(/^```$/, schema.nodes.code_block),
-      // # ## ### headings
-      PM.textblockTypeInputRule(
+      ));
+    }
+    if (has('bulletList') && schema.nodes.bullet_list) {
+      rules.push(PM.wrappingInputRule(/^\s*([-*])\s$/, schema.nodes.bullet_list));
+    }
+    if (has('codeBlock') && schema.nodes.code_block) {
+      rules.push(PM.textblockTypeInputRule(/^```$/, schema.nodes.code_block));
+    }
+    if (has('heading') && schema.nodes.heading) {
+      rules.push(PM.textblockTypeInputRule(
         /^(#{1,3})\s$/,
         schema.nodes.heading,
         (match) => ({ level: match[1].length })
-      ),
-    ];
+      ));
+    }
 
     // Keymap for list operations
     const listKeymap = {};
@@ -86,13 +157,28 @@ class CrapRichtext extends HTMLElement {
       listKeymap['Shift-Tab'] = PM.liftListItem(schema.nodes.list_item);
     }
 
+    // Keyboard shortcuts — only for enabled marks
+    const markKeymap = {};
+    markKeymap['Mod-z'] = PM.undo;
+    markKeymap['Mod-shift-z'] = PM.redo;
+    markKeymap['Mod-y'] = PM.redo;
+    if (has('bold') && schema.marks.strong) {
+      markKeymap['Mod-b'] = PM.toggleMark(schema.marks.strong);
+    }
+    if (has('italic') && schema.marks.em) {
+      markKeymap['Mod-i'] = PM.toggleMark(schema.marks.em);
+    }
+    if (has('code') && schema.marks.code) {
+      markKeymap['Mod-`'] = PM.toggleMark(schema.marks.code);
+    }
+
     // Plugin to track active marks/nodes for toolbar state
     const toolbarPluginKey = new PM.PluginKey('toolbar');
     const toolbarPlugin = new PM.Plugin({
       key: toolbarPluginKey,
       view: () => ({
         update: (/** @type {any} */ view) => {
-          this._updateToolbar(view.state, schema);
+          this._updateToolbar(view.state, schema, has);
         },
       }),
     });
@@ -100,14 +186,7 @@ class CrapRichtext extends HTMLElement {
     const plugins = [
       PM.inputRules({ rules }),
       PM.keymap(listKeymap),
-      PM.keymap({
-        'Mod-z': PM.undo,
-        'Mod-shift-z': PM.redo,
-        'Mod-y': PM.redo,
-        'Mod-b': PM.toggleMark(schema.marks.strong),
-        'Mod-i': PM.toggleMark(schema.marks.em),
-        'Mod-`': PM.toggleMark(schema.marks.code),
-      }),
+      PM.keymap(markKeymap),
       PM.keymap(PM.baseKeymap),
       PM.dropCursor(),
       PM.gapCursor(),
@@ -121,7 +200,7 @@ class CrapRichtext extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>${CrapRichtext._styles()}</style>
       <div class="richtext">
-        ${isReadonly ? '' : `<div class="richtext__toolbar">${CrapRichtext._toolbarHTML()}</div>`}
+        ${isReadonly ? '' : `<div class="richtext__toolbar">${CrapRichtext._toolbarHTML(has)}</div>`}
         <div class="richtext__editor"></div>
       </div>
     `;
@@ -147,11 +226,11 @@ class CrapRichtext extends HTMLElement {
 
     // Wire up toolbar buttons
     if (!isReadonly) {
-      this._bindToolbar(schema);
+      this._bindToolbar(schema, has);
     }
 
     // Initial toolbar state
-    this._updateToolbar(state, schema);
+    this._updateToolbar(state, schema, has);
   }
 
   disconnectedCallback() {
@@ -164,18 +243,27 @@ class CrapRichtext extends HTMLElement {
   /**
    * Bind click handlers to all toolbar buttons.
    * @param {any} schema - ProseMirror schema
+   * @param {(name: string) => boolean} has - feature check
    */
-  _bindToolbar(schema) {
+  _bindToolbar(schema, has) {
     const PM = /** @type {any} */ (window).ProseMirror;
     const toolbar = this.shadowRoot.querySelector('.richtext__toolbar');
     if (!toolbar) return;
 
     /** @type {Record<string, () => void>} */
-    const commands = {
-      bold: () => PM.toggleMark(schema.marks.strong)(this._view.state, this._view.dispatch),
-      italic: () => PM.toggleMark(schema.marks.em)(this._view.state, this._view.dispatch),
-      code: () => PM.toggleMark(schema.marks.code)(this._view.state, this._view.dispatch),
-      link: () => {
+    const commands = {};
+
+    if (has('bold') && schema.marks.strong) {
+      commands.bold = () => PM.toggleMark(schema.marks.strong)(this._view.state, this._view.dispatch);
+    }
+    if (has('italic') && schema.marks.em) {
+      commands.italic = () => PM.toggleMark(schema.marks.em)(this._view.state, this._view.dispatch);
+    }
+    if (has('code') && schema.marks.code) {
+      commands.code = () => PM.toggleMark(schema.marks.code)(this._view.state, this._view.dispatch);
+    }
+    if (has('link') && schema.marks.link) {
+      commands.link = () => {
         const { state, dispatch } = this._view;
         if (this._markActive(state, schema.marks.link)) {
           PM.toggleMark(schema.marks.link)(state, dispatch);
@@ -185,21 +273,31 @@ class CrapRichtext extends HTMLElement {
             PM.toggleMark(schema.marks.link, { href })(state, dispatch);
           }
         }
-      },
-      h1: () => PM.setBlockType(schema.nodes.heading, { level: 1 })(this._view.state, this._view.dispatch),
-      h2: () => PM.setBlockType(schema.nodes.heading, { level: 2 })(this._view.state, this._view.dispatch),
-      h3: () => PM.setBlockType(schema.nodes.heading, { level: 3 })(this._view.state, this._view.dispatch),
-      paragraph: () => PM.setBlockType(schema.nodes.paragraph)(this._view.state, this._view.dispatch),
-      ul: () => PM.wrapInList(schema.nodes.bullet_list)(this._view.state, this._view.dispatch),
-      ol: () => PM.wrapInList(schema.nodes.ordered_list)(this._view.state, this._view.dispatch),
-      blockquote: () => PM.wrapIn(schema.nodes.blockquote)(this._view.state, this._view.dispatch),
-      hr: () => {
+      };
+    }
+    if (has('heading') && schema.nodes.heading) {
+      commands.h1 = () => PM.setBlockType(schema.nodes.heading, { level: 1 })(this._view.state, this._view.dispatch);
+      commands.h2 = () => PM.setBlockType(schema.nodes.heading, { level: 2 })(this._view.state, this._view.dispatch);
+      commands.h3 = () => PM.setBlockType(schema.nodes.heading, { level: 3 })(this._view.state, this._view.dispatch);
+      commands.paragraph = () => PM.setBlockType(schema.nodes.paragraph)(this._view.state, this._view.dispatch);
+    }
+    if (has('bulletList') && schema.nodes.bullet_list) {
+      commands.ul = () => PM.wrapInList(schema.nodes.bullet_list)(this._view.state, this._view.dispatch);
+    }
+    if (has('orderedList') && schema.nodes.ordered_list) {
+      commands.ol = () => PM.wrapInList(schema.nodes.ordered_list)(this._view.state, this._view.dispatch);
+    }
+    if (has('blockquote') && schema.nodes.blockquote) {
+      commands.blockquote = () => PM.wrapIn(schema.nodes.blockquote)(this._view.state, this._view.dispatch);
+    }
+    if (has('horizontalRule') && schema.nodes.horizontal_rule) {
+      commands.hr = () => {
         const { state, dispatch } = this._view;
         dispatch(state.tr.replaceSelectionWith(schema.nodes.horizontal_rule.create()));
-      },
-      undo: () => PM.undo(this._view.state, this._view.dispatch),
-      redo: () => PM.redo(this._view.state, this._view.dispatch),
-    };
+      };
+    }
+    commands.undo = () => PM.undo(this._view.state, this._view.dispatch);
+    commands.redo = () => PM.redo(this._view.state, this._view.dispatch);
 
     toolbar.addEventListener('click', (e) => {
       const btn = /** @type {HTMLElement} */ (e.target).closest('button[data-cmd]');
@@ -228,8 +326,9 @@ class CrapRichtext extends HTMLElement {
    * Update toolbar button active states based on current editor state.
    * @param {any} state
    * @param {any} schema
+   * @param {(name: string) => boolean} has - feature check
    */
-  _updateToolbar(state, schema) {
+  _updateToolbar(state, schema, has) {
     const toolbar = this.shadowRoot?.querySelector('.richtext__toolbar');
     if (!toolbar) return;
 
@@ -242,23 +341,25 @@ class CrapRichtext extends HTMLElement {
 
       switch (cmd) {
         case 'bold':
-          active = this._markActive(state, schema.marks.strong);
+          active = has('bold') && schema.marks.strong && this._markActive(state, schema.marks.strong);
           break;
         case 'italic':
-          active = this._markActive(state, schema.marks.em);
+          active = has('italic') && schema.marks.em && this._markActive(state, schema.marks.em);
           break;
         case 'code':
-          active = this._markActive(state, schema.marks.code);
+          active = has('code') && schema.marks.code && this._markActive(state, schema.marks.code);
           break;
         case 'link':
-          active = this._markActive(state, schema.marks.link);
+          active = has('link') && schema.marks.link && this._markActive(state, schema.marks.link);
           break;
         case 'h1':
         case 'h2':
         case 'h3': {
-          const level = parseInt(cmd[1]);
-          const { $from } = state.selection;
-          active = $from.parent.type === schema.nodes.heading && $from.parent.attrs.level === level;
+          if (has('heading') && schema.nodes.heading) {
+            const level = parseInt(cmd[1]);
+            const { $from } = state.selection;
+            active = $from.parent.type === schema.nodes.heading && $from.parent.attrs.level === level;
+          }
           break;
         }
         case 'paragraph': {
@@ -273,34 +374,52 @@ class CrapRichtext extends HTMLElement {
   }
 
   /**
-   * Generate toolbar button HTML.
+   * Generate toolbar button HTML based on enabled features.
+   * @param {(name: string) => boolean} has - feature check
    * @returns {string}
    */
-  static _toolbarHTML() {
-    return `
-      <div class="richtext__toolbar-group">
-        <button type="button" data-cmd="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>
-        <button type="button" data-cmd="italic" title="Italic (Ctrl+I)"><em>I</em></button>
-        <button type="button" data-cmd="code" title="Inline code (Ctrl+\`)"><code>&lt;/&gt;</code></button>
-        <button type="button" data-cmd="link" title="Link">Link</button>
-      </div>
-      <div class="richtext__toolbar-group">
-        <button type="button" data-cmd="h1" title="Heading 1">H1</button>
-        <button type="button" data-cmd="h2" title="Heading 2">H2</button>
-        <button type="button" data-cmd="h3" title="Heading 3">H3</button>
-        <button type="button" data-cmd="paragraph" title="Paragraph">P</button>
-      </div>
-      <div class="richtext__toolbar-group">
-        <button type="button" data-cmd="ul" title="Bullet list">UL</button>
-        <button type="button" data-cmd="ol" title="Ordered list">OL</button>
-        <button type="button" data-cmd="blockquote" title="Blockquote">Quote</button>
-        <button type="button" data-cmd="hr" title="Horizontal rule">HR</button>
-      </div>
-      <div class="richtext__toolbar-group">
-        <button type="button" data-cmd="undo" title="Undo (Ctrl+Z)">Undo</button>
-        <button type="button" data-cmd="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
-      </div>
-    `;
+  static _toolbarHTML(has) {
+    let html = '';
+
+    // Inline marks group
+    const inlineButtons = [];
+    if (has('bold')) inlineButtons.push('<button type="button" data-cmd="bold" title="Bold (Ctrl+B)"><strong>B</strong></button>');
+    if (has('italic')) inlineButtons.push('<button type="button" data-cmd="italic" title="Italic (Ctrl+I)"><em>I</em></button>');
+    if (has('code')) inlineButtons.push('<button type="button" data-cmd="code" title="Inline code (Ctrl+`)"><code>&lt;/&gt;</code></button>');
+    if (has('link')) inlineButtons.push('<button type="button" data-cmd="link" title="Link">Link</button>');
+    if (inlineButtons.length > 0) {
+      html += `<div class="richtext__toolbar-group">${inlineButtons.join('')}</div>`;
+    }
+
+    // Block type group
+    const blockButtons = [];
+    if (has('heading')) {
+      blockButtons.push('<button type="button" data-cmd="h1" title="Heading 1">H1</button>');
+      blockButtons.push('<button type="button" data-cmd="h2" title="Heading 2">H2</button>');
+      blockButtons.push('<button type="button" data-cmd="h3" title="Heading 3">H3</button>');
+      blockButtons.push('<button type="button" data-cmd="paragraph" title="Paragraph">P</button>');
+    }
+    if (blockButtons.length > 0) {
+      html += `<div class="richtext__toolbar-group">${blockButtons.join('')}</div>`;
+    }
+
+    // List/block group
+    const listButtons = [];
+    if (has('bulletList')) listButtons.push('<button type="button" data-cmd="ul" title="Bullet list">UL</button>');
+    if (has('orderedList')) listButtons.push('<button type="button" data-cmd="ol" title="Ordered list">OL</button>');
+    if (has('blockquote')) listButtons.push('<button type="button" data-cmd="blockquote" title="Blockquote">Quote</button>');
+    if (has('horizontalRule')) listButtons.push('<button type="button" data-cmd="hr" title="Horizontal rule">HR</button>');
+    if (listButtons.length > 0) {
+      html += `<div class="richtext__toolbar-group">${listButtons.join('')}</div>`;
+    }
+
+    // Undo/redo always present
+    html += `<div class="richtext__toolbar-group">
+      <button type="button" data-cmd="undo" title="Undo (Ctrl+Z)">Undo</button>
+      <button type="button" data-cmd="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
+    </div>`;
+
+    return html;
   }
 
   /**

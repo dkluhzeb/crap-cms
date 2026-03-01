@@ -114,6 +114,7 @@ pub fn build_router(state: AdminState, has_auth: bool) -> Router {
         .route("/admin/collections/{slug}/{id}/versions", get(collections::list_versions_page))
         .route("/admin/collections/{slug}/{id}/versions/{version_id}/restore", post(collections::restore_version))
         .route("/admin/collections/{slug}/evaluate-conditions", post(collections::evaluate_conditions))
+        .route("/admin/api/search/{slug}", get(collections::search_collection))
         .route("/admin/globals/{slug}", globals_methods)
         .route("/admin/globals/{slug}/versions", get(globals::list_versions_page))
         .route("/admin/globals/{slug}/versions/{version_id}/restore", post(globals::restore_version))

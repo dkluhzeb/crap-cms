@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType, Breadcrumb};
-use crate::admin::handlers::collections::forms::extract_join_data_from_form;
+use crate::admin::handlers::collections::forms::{extract_join_data_from_form, transform_select_has_many};
 use crate::core::auth::{AuthUser, Claims};
 use crate::core::validate::ValidationError;
 use crate::db::{ops, query};
@@ -103,7 +103,7 @@ pub async fn edit_form(
     let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), false, non_default_locale);
 
     // Enrich relationship fields with options
-    enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, non_default_locale, &HashMap::new());
+    enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, non_default_locale, &HashMap::new(), None);
 
     // Evaluate display conditions
     let form_data_json = serde_json::json!(doc_fields);
@@ -202,6 +202,9 @@ pub async fn update_action(
         }
     }
 
+    // Convert comma-separated multi-select values to JSON arrays
+    transform_select_has_many(&mut form_data, &def.fields);
+
     // Extract join table data (arrays, blocks, has-many) before sending to service
     let join_data = extract_join_data_from_form(&form_data, &def.fields);
 
@@ -262,7 +265,7 @@ pub async fn update_action(
                     .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                     .chain(join_data_clone.iter().map(|(k, v)| (k.clone(), v.clone())))
                     .collect();
-                enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, false, &error_map);
+                enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, false, &error_map, None);
 
                 let form_data_json = serde_json::json!(doc_fields);
                 apply_display_conditions(&mut fields, &def.fields, &form_data_json, &state.hook_runner, false);

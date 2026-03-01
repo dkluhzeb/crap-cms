@@ -8,6 +8,7 @@
             onclick="switchTab(this, '{{@index}}')"
             data-tab-index="{{@index}}">
       {{label}}
+      {{#if error_count}}<span class="form__tabs-tab-error">{{error_count}}</span>{{/if}}
     </button>
     {{/each}}
   </div>

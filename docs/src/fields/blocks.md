@@ -66,6 +66,8 @@ Each block definition has:
 | `type` | string | **Required.** Block type identifier. |
 | `label` | string | Display label (defaults to type name). |
 | `label_field` | string | Sub-field name to use as row label for this block type. |
+| `group` | string | Group name for organizing blocks in the picker dropdown. |
+| `image_url` | string | Image URL for icon/thumbnail in the block picker. |
 | `fields` | FieldDefinition[] | Fields within this block type. |
 
 ## API Representation
@@ -233,6 +235,90 @@ Customize the "Add Block" button text with singular/plural labels.
 ```
 
 With this config, the add button reads "Add Section" instead of "Add Block".
+
+## Block Groups
+
+Organize blocks into groups in the picker dropdown using `<optgroup>` elements. Ungrouped blocks appear at the top.
+
+```lua
+{
+    name = "content",
+    type = "blocks",
+    blocks = {
+        {
+            type = "hero",
+            label = "Hero Section",
+            group = "Layout",
+            fields = { ... },
+        },
+        {
+            type = "columns",
+            label = "Columns",
+            group = "Layout",
+            fields = { ... },
+        },
+        {
+            type = "richtext",
+            label = "Rich Text",
+            group = "Content",
+            fields = { ... },
+        },
+        {
+            type = "divider",
+            label = "Divider",
+            -- No group: appears at the top of the dropdown
+            fields = {},
+        },
+    },
+}
+```
+
+## Card Picker
+
+By default, blocks use a dropdown select to choose the block type. Set `admin.picker = "card"` to use a visual card grid instead. This is useful when you have several block types and want a more visual picker.
+
+```lua
+{
+    name = "content",
+    type = "blocks",
+    admin = {
+        picker = "card",
+    },
+    blocks = {
+        {
+            type = "hero",
+            label = "Hero Section",
+            fields = { ... },
+        },
+        {
+            type = "richtext",
+            label = "Rich Text",
+            fields = { ... },
+        },
+    },
+}
+```
+
+Each card shows the block type label and a generic icon. To display custom icons or thumbnails, set `image_url` on individual block definitions:
+
+```lua
+blocks = {
+    {
+        type = "hero",
+        label = "Hero Section",
+        image_url = "/static/blocks/hero.svg",
+        fields = { ... },
+    },
+    {
+        type = "richtext",
+        label = "Rich Text",
+        image_url = "/static/blocks/text.svg",
+        fields = { ... },
+    },
+}
+```
+
+Blocks without an `image_url` show a generic widget icon. Both `group` and `image_url` can be combined with the card picker.
 
 ## Admin Rendering
 

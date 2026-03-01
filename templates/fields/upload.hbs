@@ -3,6 +3,31 @@
   {{#if required}}<span class="required">*</span>{{/if}}
   {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
+{{#if has_many}}
+<div class="upload-field upload-field--has-many">
+  <div class="relationship-search"
+    data-relationship-search="true"
+    data-collection="{{relationship_collection}}"
+    data-field-name="{{name}}"
+    data-has-many="true"
+    data-field-type="upload"
+    {{#if picker}}data-picker="{{picker}}"{{/if}}
+    {{#if required}}data-required="true"{{/if}}
+    {{#if readonly}}data-readonly="true"{{/if}}
+    {{#if error}}data-error="true"{{/if}}
+    data-selected='{{json selected_items}}'>
+  </div>
+  {{#unless locale_locked}}
+  <div class="upload-field__actions">
+    <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
+      hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
+      <span class="material-symbols-outlined" style="font-size: 16px;">upload</span>
+      Upload new
+    </a>
+  </div>
+  {{/unless}}
+</div>
+{{else}}
 <div class="upload-field" data-upload-field>
   <div class="upload-field__preview" {{#unless selected_preview_url}}style="display: none;"{{/unless}}>
     {{#if selected_preview_url}}
@@ -17,42 +42,25 @@
   </div>
   {{#if locale_locked}}
   <input type="hidden" name="{{name}}" value="{{value}}" />
-  <select
-    id="field-{{name}}"
+  <div class="relationship-search"
+    data-relationship-search="true"
+    data-collection="{{relationship_collection}}"
+    data-field-name="{{name}}"
     data-field-type="upload"
-    data-upload-select
-    disabled
-    {{#if error}}class="form__input--error"{{/if}}
-  >
-    <option value="">-- Select --</option>
-    {{#each relationship_options}}
-    <option value="{{this.value}}"
-      {{#if this.selected}}selected{{/if}}
-      {{#if this.thumbnail_url}}data-thumbnail="{{this.thumbnail_url}}"{{/if}}
-      {{#if this.is_image}}data-is-image="true"{{/if}}
-      data-filename="{{this.filename}}"
-    >{{this.label}}</option>
-    {{/each}}
-  </select>
+    data-readonly="true"
+    data-selected='{{json selected_items}}'>
+  </div>
   {{else}}
-  <select
-    id="field-{{name}}"
-    name="{{name}}"
+  <div class="relationship-search"
+    data-relationship-search="true"
+    data-collection="{{relationship_collection}}"
+    data-field-name="{{name}}"
     data-field-type="upload"
-    data-upload-select
-    {{#if required}}required{{/if}}
-    {{#if error}}class="form__input--error"{{/if}}
-  >
-    <option value="">-- Select --</option>
-    {{#each relationship_options}}
-    <option value="{{this.value}}"
-      {{#if this.selected}}selected{{/if}}
-      {{#if this.thumbnail_url}}data-thumbnail="{{this.thumbnail_url}}"{{/if}}
-      {{#if this.is_image}}data-is-image="true"{{/if}}
-      data-filename="{{this.filename}}"
-    >{{this.label}}</option>
-    {{/each}}
-  </select>
+    {{#if picker}}data-picker="{{picker}}"{{/if}}
+    {{#if required}}data-required="true"{{/if}}
+    {{#if error}}data-error="true"{{/if}}
+    data-selected='{{json selected_items}}'>
+  </div>
   {{#if relationship_collection}}
   <div class="upload-field__actions">
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
@@ -64,5 +72,6 @@
   {{/if}}
   {{/if}}
 </div>
+{{/if}}
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

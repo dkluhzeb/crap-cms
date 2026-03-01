@@ -260,6 +260,8 @@ message BlockInfo {
   string block_type = 1;
   optional string label = 2;
   repeated FieldInfo fields = 3;
+  optional string group = 4;
+  optional string image_url = 5;
 }
 
 message SelectOptionInfo {

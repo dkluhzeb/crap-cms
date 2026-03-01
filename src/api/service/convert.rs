@@ -137,6 +137,8 @@ pub(super) fn field_def_to_proto(field: &crate::core::field::FieldDefinition) ->
             block_type: bd.block_type.clone(),
             label: bd.label.as_ref().map(|ls| ls.resolve_default().to_string()),
             fields: bd.fields.iter().map(field_def_to_proto).collect(),
+            group: bd.group.clone(),
+            image_url: bd.image_url.clone(),
         }).collect(),
         localized: field.localized,
     }
@@ -473,6 +475,7 @@ mod tests {
                 collection: "authors".to_string(),
                 has_many: true,
                 max_depth: Some(3),
+                polymorphic: vec![],
             }),
             ..make_field("author", FieldType::Relationship)
         };

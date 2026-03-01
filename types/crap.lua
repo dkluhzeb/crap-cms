@@ -21,12 +21,13 @@ crap = {}
 --- | "number"       # Integer or float
 --- | "textarea"     # Multi-line text
 --- | "richtext"     # Rich text (stored as JSON)
---- | "select"       # Single select from options
+--- | "select"       # Single or multi select from options (has_many for multi)
+--- | "radio"        # Radio button group (same as select, renders as radio buttons)
 --- | "checkbox"     # Boolean (true/false)
 --- | "date"         # ISO 8601 date/datetime
 --- | "email"        # Validated email address
 --- | "json"         # Arbitrary JSON blob
---- | "upload"       # File upload (references media collection)
+--- | "upload"       # File upload (references media collection; has_many for multi-file)
 --- | "relationship" # Reference to another collection
 --- | "slug"         # Auto-generated URL slug
 --- | "array"        # Repeatable sub-fields
@@ -35,6 +36,8 @@ crap = {}
 --- | "row"          # Layout-only horizontal grouping (no prefix)
 --- | "collapsible"  # Layout-only collapsible section (no prefix)
 --- | "tabs"         # Layout-only tabbed container (no prefix)
+--- | "code"         # Code editor (CodeMirror, admin.language for mode)
+--- | "join"         # Virtual reverse relationship (read-only, no column)
 --- | "point"        # GeoJSON point [lng, lat]
 
 --- A string that can be plain or per-locale.
@@ -45,9 +48,9 @@ crap = {}
 --- @alias crap.FieldWidth "full" | "half" | "third"
 
 --- @class crap.RelationshipConfig
---- @field collection string   Target collection slug (required).
---- @field has_many?  boolean  Many-to-many relationship via junction table (default: false).
---- @field max_depth? integer  Per-field max population depth. Limits depth regardless of request-level depth.
+--- @field collection string|string[]  Target collection slug, or an array of slugs for polymorphic relationships (required). Example: `"posts"` or `{ "posts", "pages" }`.
+--- @field has_many?  boolean          Many-to-many relationship via junction table (default: false).
+--- @field max_depth? integer          Per-field max population depth. Limits depth regardless of request-level depth.
 
 --- @class crap.SelectOption
 --- @field label crap.LocalizedString Display text in the admin UI.
@@ -68,6 +71,11 @@ crap = {}
 --- @field row_label?   string   Lua function ref for computed row labels (arrays/blocks). Receives the row data table, returns a display string or nil. Takes priority over `label_field`. Signature: `fun(row: table): string?`.
 --- @field init_collapsed? boolean  For array/blocks: render rows collapsed by default (default: false).
 --- @field labels?      crap.FieldAdminLabels  Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
+--- @field step?        string   Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
+--- @field rows?        integer  Number of rows for textarea fields (default: 8).
+--- @field language?    string   Language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain".
+--- @field features?    string[] Enabled toolbar features for richtext fields. When absent, all features are enabled. Options: "bold", "italic", "code", "link", "heading", "blockquote", "orderedList", "bulletList", "codeBlock", "horizontalRule".
+--- @field picker?      string   Picker UI style. For blocks fields: "select" (default) uses a dropdown, "card" uses a visual card grid. For relationship/upload fields: "drawer" adds a browse button that opens a slide-in drawer panel (thumbnail grid for uploads, searchable list for relationships).
 
 --- Custom validation function type.
 --- Return nil or true if valid, return a string error message if invalid.
@@ -107,6 +115,8 @@ crap = {}
 --- @field type         string                    Block type identifier (required).
 --- @field label?       crap.LocalizedString      Display label for the block type (defaults to type name).
 --- @field label_field? string                    Sub-field name to use as row label for this block type. Overrides the field-level `admin.label_field` for blocks of this type.
+--- @field group?       string                    Group name for organizing blocks in the picker dropdown (rendered as `<optgroup>`).
+--- @field image_url?   string                    Image URL for displaying an icon/thumbnail in the block picker. When any block has an image, the picker renders as a visual card grid.
 --- @field fields       crap.FieldDefinition[]    Fields within this block type.
 
 --- @alias crap.PickerAppearance "dayOnly" | "dayAndTime" | "timeOnly" | "monthOnly"
@@ -124,7 +134,7 @@ crap = {}
 --- @field options?      crap.SelectOption[] Options for "select" field type.
 --- @field relationship? crap.RelationshipConfig  Relationship config (preferred syntax).
 --- @field relation_to?  string            Target collection (legacy flat syntax).
---- @field has_many?     boolean           Many-to-many relationship (legacy flat syntax, default: false).
+--- @field has_many?     boolean           Multi-value: for select/text = JSON array in TEXT column, for number = JSON array of number strings, for relationship/upload = junction table (default: false). Text/number render as tag inputs in admin.
 --- @field fields?       crap.FieldDefinition[] Sub-fields for "array", "group", "row", and "collapsible" types.
 --- @field blocks?       crap.BlockDefinition[] Block type definitions for "blocks" type.
 --- @field tabs?         crap.FieldTab[]        Tab definitions for "tabs" type. Each tab has a label and fields.
@@ -133,6 +143,14 @@ crap = {}
 --- @field picker_appearance? crap.PickerAppearance  For "date" fields: controls HTML input type and storage format. "dayOnly" (default) = date picker, stored as `YYYY-MM-DDT12:00:00.000Z`. "dayAndTime" = datetime-local picker, stored as full ISO 8601 UTC. "timeOnly" = time picker, stored as `HH:MM`. "monthOnly" = month picker, stored as `YYYY-MM`.
 --- @field min_rows?    integer  Minimum number of rows for array/blocks fields. Validated on create/update (skipped for drafts).
 --- @field max_rows?    integer  Maximum number of rows for array/blocks fields. Validated on create/update (skipped for drafts). Admin UI disables "Add" button at max.
+--- @field min_length?  integer  Minimum string length for text/textarea fields. Validated server-side + HTML minlength attr.
+--- @field max_length?  integer  Maximum string length for text/textarea fields. Validated server-side + HTML maxlength attr.
+--- @field min?         number   Minimum numeric value for number fields. Validated server-side + HTML min attr.
+--- @field max?         number   Maximum numeric value for number fields. Validated server-side + HTML max attr.
+--- @field min_date?    string   Minimum date (ISO format "YYYY-MM-DD") for date fields. Validated server-side + HTML min attr.
+--- @field max_date?    string   Maximum date (ISO format "YYYY-MM-DD") for date fields. Validated server-side + HTML max attr.
+--- @field collection?  string   For "join" type: target collection slug whose documents reference this one.
+--- @field on?          string   For "join" type: field name on the target collection that holds the reference to this document.
 
 --- @class crap.FieldAdminLabels
 --- @field singular? crap.LocalizedString  Custom singular label for row items (e.g., "Slide" → "Add Slide" button).
@@ -893,7 +911,7 @@ crap.schema = {}
 --- @field relationship? { collection: string, has_many: boolean }
 --- @field options?     { label: string, value: string }[]
 --- @field fields?      crap.SchemaField[]
---- @field blocks?      { block_type: string, label?: string, fields: crap.SchemaField[] }[]
+--- @field blocks?      { block_type: string, label?: string, group?: string, image_url?: string, fields: crap.SchemaField[] }[]
 
 --- Get a collection's schema definition.
 --- @param slug string  Collection slug.

@@ -2183,7 +2183,7 @@ fn schema_field_with_options() {
         end
         if status_field == nil then return "NO_STATUS" end
         if status_field.type ~= "select" then return "TYPE:" .. status_field.type end
-        if #status_field.options ~= 2 then return "OPTS:" .. #status_field.options end
+        if #status_field.options ~= 9 then return "OPTS:" .. #status_field.options end
         if status_field.options[1].value ~= "draft" then return "OPT1:" .. status_field.options[1].value end
         if status_field.options[2].value ~= "published" then return "OPT2:" .. status_field.options[2].value end
         return "ok"
@@ -2591,7 +2591,7 @@ fn collections_config_get_includes_select_options() {
         end
         return table.concat(parts, "|")
     "#);
-    assert_eq!(result, "Draft=draft|Published=published");
+    assert_eq!(result, "Draft=draft|Published=published|Archived=archived|Active=active|Red=red|Blue=blue|Green=green|True=true|False=false");
 }
 
 #[test]

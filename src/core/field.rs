@@ -56,6 +56,8 @@ pub enum FieldType {
     Group,
     Upload,
     Blocks,
+    /// Radio buttons. Same as Select in storage (TEXT column) but renders as radio group.
+    Radio,
     /// Layout-only row container. Sub-fields are promoted to parent-level columns
     /// (no prefix, unlike Group). Used only for horizontal layout in the admin UI.
     Row,
@@ -65,6 +67,21 @@ pub enum FieldType {
     /// Layout-only tabbed container. Sub-fields (across all tabs) are promoted to
     /// parent-level columns (no prefix, like Row). Used for tabbed sections in the admin UI.
     Tabs,
+    /// Code editor field. Renders a CodeMirror editor in the admin UI.
+    /// Stored as plain TEXT in SQLite.
+    Code,
+    /// Virtual reverse-relationship field. Shows documents from another collection
+    /// that reference this document. No stored data — computed at read time.
+    Join,
+}
+
+/// Configuration for join (virtual reverse-relationship) fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JoinConfig {
+    /// Target collection slug (the collection whose documents reference this one).
+    pub collection: String,
+    /// Field name on the target collection that holds this document's ID.
+    pub on: String,
 }
 
 /// Configuration for relationship fields (target collection, cardinality, depth cap).
@@ -76,6 +93,27 @@ pub struct RelationshipConfig {
     /// regardless of the request-level depth.
     #[serde(default)]
     pub max_depth: Option<i32>,
+    /// Polymorphic relationship: additional target collections beyond `collection`.
+    /// Empty = single-collection relationship (default, backward compat).
+    /// Non-empty = polymorphic (all targets listed here, `collection` = first).
+    #[serde(default)]
+    pub polymorphic: Vec<String>,
+}
+
+impl RelationshipConfig {
+    /// Returns true if this relationship targets multiple collections.
+    pub fn is_polymorphic(&self) -> bool {
+        !self.polymorphic.is_empty()
+    }
+
+    /// Returns all target collections (polymorphic list, or single `collection`).
+    pub fn all_collections(&self) -> Vec<&str> {
+        if self.is_polymorphic() {
+            self.polymorphic.iter().map(|s| s.as_str()).collect()
+        } else {
+            vec![self.collection.as_str()]
+        }
+    }
 }
 
 impl FieldType {
@@ -85,6 +123,7 @@ impl FieldType {
             FieldType::Number => "REAL",
             FieldType::Textarea => "TEXT",
             FieldType::Select => "TEXT",
+            FieldType::Radio => "TEXT",
             FieldType::Checkbox => "INTEGER",
             FieldType::Date => "TEXT",
             FieldType::Email => "TEXT",
@@ -98,6 +137,8 @@ impl FieldType {
             FieldType::Row => "TEXT", // never used — sub-fields are promoted to parent
             FieldType::Collapsible => "TEXT", // never used — sub-fields are promoted to parent
             FieldType::Tabs => "TEXT", // never used — sub-fields are promoted to parent
+            FieldType::Code => "TEXT",
+            FieldType::Join => "TEXT", // never used — virtual field, no column
         }
     }
 
@@ -108,6 +149,7 @@ impl FieldType {
             "number" => FieldType::Number,
             "textarea" => FieldType::Textarea,
             "select" => FieldType::Select,
+            "radio" => FieldType::Radio,
             "checkbox" => FieldType::Checkbox,
             "date" => FieldType::Date,
             "email" => FieldType::Email,
@@ -121,6 +163,8 @@ impl FieldType {
             "row" => FieldType::Row,
             "collapsible" => FieldType::Collapsible,
             "tabs" => FieldType::Tabs,
+            "code" => FieldType::Code,
+            "join" => FieldType::Join,
             other => {
                 tracing::warn!("Unknown field type '{}', defaulting to Text", other);
                 FieldType::Text
@@ -134,6 +178,7 @@ impl FieldType {
             FieldType::Number => "number",
             FieldType::Textarea => "textarea",
             FieldType::Select => "select",
+            FieldType::Radio => "radio",
             FieldType::Checkbox => "checkbox",
             FieldType::Date => "date",
             FieldType::Email => "email",
@@ -147,6 +192,8 @@ impl FieldType {
             FieldType::Row => "row",
             FieldType::Collapsible => "collapsible",
             FieldType::Tabs => "tabs",
+            FieldType::Code => "code",
+            FieldType::Join => "join",
         }
     }
 }
@@ -181,6 +228,12 @@ pub struct BlockDefinition {
     /// Sub-field name to use as row label for this block type.
     #[serde(default)]
     pub label_field: Option<String>,
+    /// Group name for organizing blocks in the picker dropdown.
+    #[serde(default)]
+    pub group: Option<String>,
+    /// Image URL for displaying an icon/thumbnail in the block picker.
+    #[serde(default)]
+    pub image_url: Option<String>,
 }
 
 /// Admin UI display hints for a field (placeholder, description, visibility, width).
@@ -226,6 +279,25 @@ pub struct FieldAdmin {
     /// - a condition table (serialized to JSON, client-evaluated instantly)
     #[serde(default)]
     pub condition: Option<String>,
+    /// For number fields: the step attribute on the input (e.g., "1", "0.01", "any").
+    #[serde(default)]
+    pub step: Option<String>,
+    /// For textarea fields: number of visible rows (default 8).
+    #[serde(default)]
+    pub rows: Option<u32>,
+    /// For code fields: the language mode (e.g., "json", "javascript", "html", "css", "python").
+    #[serde(default)]
+    pub language: Option<String>,
+    /// For richtext fields: enabled toolbar features.
+    /// When empty, all features are enabled. Possible values:
+    /// "bold", "italic", "code", "link", "heading", "blockquote",
+    /// "orderedList", "bulletList", "codeBlock", "horizontalRule".
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// For blocks fields: picker style. "select" (default) uses a dropdown,
+    /// "card" uses a visual card grid (shows images when image_url is set on blocks).
+    #[serde(default)]
+    pub picker: Option<String>,
 }
 
 /// Lua function references for field-level access control (read/create/update).
@@ -304,6 +376,30 @@ pub struct FieldDefinition {
     /// Maximum number of rows (array/blocks). Validated on create/update.
     #[serde(default)]
     pub max_rows: Option<usize>,
+    /// Minimum string length (text/textarea). Validated server-side.
+    #[serde(default)]
+    pub min_length: Option<usize>,
+    /// Maximum string length (text/textarea). Validated server-side + HTML attr.
+    #[serde(default)]
+    pub max_length: Option<usize>,
+    /// Minimum numeric value (number fields). Validated server-side + HTML attr.
+    #[serde(default)]
+    pub min: Option<f64>,
+    /// Maximum numeric value (number fields). Validated server-side + HTML attr.
+    #[serde(default)]
+    pub max: Option<f64>,
+    /// Allow multiple values (select). Stored as JSON array in TEXT column.
+    #[serde(default)]
+    pub has_many: bool,
+    /// Minimum date value (date fields). ISO format: "2024-01-01". Validated server-side + HTML min attr.
+    #[serde(default)]
+    pub min_date: Option<String>,
+    /// Maximum date value (date fields). ISO format: "2025-12-31". Validated server-side + HTML max attr.
+    #[serde(default)]
+    pub max_date: Option<String>,
+    /// Configuration for join (virtual reverse-relationship) fields.
+    #[serde(default)]
+    pub join: Option<JoinConfig>,
 }
 
 impl Default for FieldDefinition {
@@ -327,6 +423,14 @@ impl Default for FieldDefinition {
             picker_appearance: None,
             min_rows: None,
             max_rows: None,
+            min_length: None,
+            max_length: None,
+            min: None,
+            max: None,
+            has_many: false,
+            min_date: None,
+            max_date: None,
+            join: None,
         }
     }
 }
@@ -342,7 +446,8 @@ impl FieldDefinition {
             FieldType::Collapsible => false, // sub-fields promoted to parent level (no prefix)
             FieldType::Tabs => false,        // sub-fields promoted to parent level (no prefix)
             FieldType::Blocks => false,      // uses a join table
-            FieldType::Relationship => {
+            FieldType::Join => false,        // virtual field, no column
+            FieldType::Relationship | FieldType::Upload => {
                 match &self.relationship {
                     Some(rc) => !rc.has_many,
                     None => true, // default to has-one
@@ -363,6 +468,7 @@ mod tests {
         assert_eq!(FieldType::from_str("number"), FieldType::Number);
         assert_eq!(FieldType::from_str("textarea"), FieldType::Textarea);
         assert_eq!(FieldType::from_str("select"), FieldType::Select);
+        assert_eq!(FieldType::from_str("radio"), FieldType::Radio);
         assert_eq!(FieldType::from_str("checkbox"), FieldType::Checkbox);
         assert_eq!(FieldType::from_str("date"), FieldType::Date);
         assert_eq!(FieldType::from_str("email"), FieldType::Email);
@@ -373,6 +479,8 @@ mod tests {
         assert_eq!(FieldType::from_str("group"), FieldType::Group);
         assert_eq!(FieldType::from_str("upload"), FieldType::Upload);
         assert_eq!(FieldType::from_str("blocks"), FieldType::Blocks);
+        assert_eq!(FieldType::from_str("code"), FieldType::Code);
+        assert_eq!(FieldType::from_str("join"), FieldType::Join);
     }
 
     #[test]
@@ -401,11 +509,12 @@ mod tests {
     fn as_str_roundtrip() {
         let types = [
             FieldType::Text, FieldType::Number, FieldType::Textarea,
-            FieldType::Select, FieldType::Checkbox, FieldType::Date,
+            FieldType::Select, FieldType::Radio, FieldType::Checkbox, FieldType::Date,
             FieldType::Email, FieldType::Json, FieldType::Richtext,
             FieldType::Relationship, FieldType::Array,
             FieldType::Group, FieldType::Upload, FieldType::Blocks,
             FieldType::Row, FieldType::Collapsible, FieldType::Tabs,
+            FieldType::Code, FieldType::Join,
         ];
         for ft in &types {
             assert_eq!(FieldType::from_str(ft.as_str()), *ft);
@@ -522,6 +631,7 @@ mod tests {
                 collection: "posts".to_string(),
                 has_many: false,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         };
@@ -536,6 +646,7 @@ mod tests {
                 collection: "tags".to_string(),
                 has_many: true,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         };
@@ -550,6 +661,36 @@ mod tests {
             ..Default::default()
         };
         assert!(f.has_parent_column(), "relationship with no config defaults to has-one");
+    }
+
+    #[test]
+    fn has_parent_column_upload_has_many_false() {
+        let f = FieldDefinition {
+            field_type: FieldType::Upload,
+            relationship: Some(RelationshipConfig {
+                collection: "media".to_string(),
+                has_many: true,
+                max_depth: None,
+                polymorphic: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(!f.has_parent_column(), "has-many upload should not have parent column");
+    }
+
+    #[test]
+    fn has_parent_column_upload_has_one_true() {
+        let f = FieldDefinition {
+            field_type: FieldType::Upload,
+            relationship: Some(RelationshipConfig {
+                collection: "media".to_string(),
+                has_many: false,
+                max_depth: None,
+                polymorphic: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(f.has_parent_column(), "has-one upload should have parent column");
     }
 
     // ── FieldHooks tests ──────────────────────────────────────────────────
@@ -588,5 +729,9 @@ mod tests {
         assert!(f.tabs.is_empty());
         assert!(f.min_rows.is_none());
         assert!(f.max_rows.is_none());
+        assert!(f.min_length.is_none());
+        assert!(f.max_length.is_none());
+        assert!(f.min.is_none());
+        assert!(f.max.is_none());
     }
 }

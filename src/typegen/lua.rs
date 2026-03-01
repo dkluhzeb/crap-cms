@@ -184,6 +184,15 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         }
         return;
     }
+    // Emit a comment for polymorphic relationships listing target collections
+    if field.field_type == FieldType::Relationship {
+        if let Some(rc) = &field.relationship {
+            if rc.is_polymorphic() {
+                let targets = rc.all_collections().join(", ");
+                writeln!(out, "--- Polymorphic relationship — targets: {}", targets).unwrap();
+            }
+        }
+    }
     let lua_type = field_to_lua_type(field);
     let opt = if is_optional(field) { "?" } else { "" };
     writeln!(out, "---@field {}{opt} {lua_type}", field.name).unwrap();
@@ -191,15 +200,20 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
 
 fn field_to_lua_type(field: &FieldDefinition) -> String {
     match &field.field_type {
-        FieldType::Text | FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext => {
+        FieldType::Text => {
+            if field.has_many { "string[]".to_string() } else { "string".to_string() }
+        }
+        FieldType::Textarea | FieldType::Email | FieldType::Date
+        | FieldType::Richtext | FieldType::Code => {
             "string".to_string()
         }
-        FieldType::Number => "number".to_string(),
+        FieldType::Number => {
+            if field.has_many { "number[]".to_string() } else { "number".to_string() }
+        }
         FieldType::Checkbox => "boolean".to_string(),
         FieldType::Json => "any".to_string(),
-        FieldType::Select => {
-            if field.options.is_empty() {
+        FieldType::Select | FieldType::Radio => {
+            let base = if field.options.is_empty() {
                 "string".to_string()
             } else {
                 field
@@ -208,10 +222,21 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
                     .map(|o| format!("\"{}\"", o.value))
                     .collect::<Vec<_>>()
                     .join(" | ")
+            };
+            if field.has_many {
+                if field.options.is_empty() {
+                    "string[]".to_string()
+                } else {
+                    format!("({}|string)[]", base)
+                }
+            } else {
+                base
             }
         }
         FieldType::Relationship => {
             match &field.relationship {
+                Some(rc) if rc.is_polymorphic() && rc.has_many => "string[]".to_string(),
+                Some(rc) if rc.is_polymorphic() => "string".to_string(),
                 Some(rc) if rc.has_many => "string[]".to_string(),
                 _ => "string".to_string(),
             }
@@ -224,8 +249,15 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
         FieldType::Row => "table".to_string(), // layout-only; sub-fields are promoted
         FieldType::Collapsible => "table".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "table".to_string(), // layout-only; sub-fields are promoted
-        FieldType::Upload => "string".to_string(),
+        FieldType::Upload => {
+            if field.relationship.as_ref().map_or(false, |rc| rc.has_many) {
+                "string[]".to_string()
+            } else {
+                "string".to_string()
+            }
+        }
         FieldType::Blocks => "table[]".to_string(),
+        FieldType::Join => "table[]".to_string(),
     }
 }
 
@@ -485,10 +517,79 @@ mod tests {
                 collection: "tags".to_string(),
                 has_many: true,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         };
         assert_eq!(field_to_lua_type(&f), "string[]");
+    }
+
+    #[test]
+    fn lua_polymorphic_has_one_type() {
+        let f = FieldDefinition {
+            name: "subject".to_string(),
+            field_type: FieldType::Relationship,
+            required: true,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "posts".to_string(),
+                has_many: false,
+                max_depth: None,
+                polymorphic: vec!["posts".to_string(), "pages".to_string()],
+            }),
+            ..Default::default()
+        };
+        // Polymorphic has-one stores "collection/id" composite as string
+        assert_eq!(field_to_lua_type(&f), "string");
+    }
+
+    #[test]
+    fn lua_polymorphic_has_many_type() {
+        let f = FieldDefinition {
+            name: "related".to_string(),
+            field_type: FieldType::Relationship,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "articles".to_string(),
+                has_many: true,
+                max_depth: None,
+                polymorphic: vec!["articles".to_string(), "videos".to_string()],
+            }),
+            ..Default::default()
+        };
+        // Polymorphic has-many stores array of "collection/id" composites
+        assert_eq!(field_to_lua_type(&f), "string[]");
+    }
+
+    #[test]
+    fn lua_polymorphic_comment_emitted() {
+        let col = CollectionDefinition {
+            slug: "comments".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: false,
+            fields: vec![
+                FieldDefinition {
+                    name: "subject".to_string(),
+                    field_type: FieldType::Relationship,
+                    required: true,
+                    relationship: Some(crate::core::field::RelationshipConfig {
+                        collection: "posts".to_string(),
+                        has_many: false,
+                        max_depth: None,
+                        polymorphic: vec!["posts".to_string(), "pages".to_string()],
+                    }),
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None, upload: None,
+            access: CollectionAccess::default(),
+            live: None, versions: None,
+        };
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
+        assert!(out.contains("posts"), "comment should list target collections: {}", out);
+        assert!(out.contains("pages"), "comment should list target collections: {}", out);
     }
 
     #[test]
@@ -501,6 +602,7 @@ mod tests {
                 collection: "users".to_string(),
                 has_many: false,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         };
@@ -539,6 +641,22 @@ mod tests {
     }
 
     #[test]
+    fn upload_has_many_generates_array_type() {
+        let f = FieldDefinition {
+            name: "images".to_string(),
+            field_type: FieldType::Upload,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: String::new(),
+                has_many: true,
+                max_depth: None,
+                polymorphic: vec![],
+            }),
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string[]");
+    }
+
+    #[test]
     fn lua_blocks_type() {
         let f = FieldDefinition {
             name: "content".to_string(),
@@ -546,6 +664,28 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(field_to_lua_type(&f), "table[]");
+    }
+
+    #[test]
+    fn lua_text_has_many() {
+        let f = FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Text,
+            has_many: true,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "string[]");
+    }
+
+    #[test]
+    fn lua_number_has_many() {
+        let f = FieldDefinition {
+            name: "scores".to_string(),
+            field_type: FieldType::Number,
+            has_many: true,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f), "number[]");
     }
 
     #[test]

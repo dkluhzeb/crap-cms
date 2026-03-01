@@ -678,6 +678,7 @@ mod tests {
                 collection: collection.to_string(),
                 has_many: true,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         }
@@ -1346,6 +1347,7 @@ mod tests {
                 collection: "users".to_string(),
                 has_many: false,
                 max_depth: None,
+                polymorphic: vec![],
             }),
             ..Default::default()
         }];

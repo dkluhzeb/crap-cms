@@ -17,16 +17,22 @@ import './toast.js';
 import './confirm.js';
 import './confirm-dialog.js';
 import './richtext.js';
+import './code.js';
+import './tags.js';
 
 // Functional modules (self-initializing)
 import './theme.js';
 import './uploads.js';
 import './relationships.js';
+import './relationship-search.js';
+import './drawer.js';
+import './drawer-picker.js';
 import './conditions.js';
 import './live-events.js';
 import './locale.js';
 import './scroll.js';
 import './time-format.js';
+import './block-picker.js';
 
 // Modules with globals for template onclick handlers
 import { toggleGroup } from './groups.js';

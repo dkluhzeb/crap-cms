@@ -1,12 +1,15 @@
 # Upload
 
-File reference field. Stores a has-one relationship to an upload collection.
+File reference field. Stores a relationship to an upload collection. Supports both single-file (has-one) and multi-file (has-many) modes.
 
 ## Storage
 
-Upload fields store the referenced media document's ID in a TEXT column on the parent table (same as a has-one relationship).
+- **Has-one** (default): stores the referenced media document's ID in a TEXT column on the parent table.
+- **Has-many** (`has_many = true`): stores references in a junction table `{collection}_{field}`, same as has-many relationships.
 
 ## Definition
+
+Single file (has-one):
 
 ```lua
 {
@@ -29,9 +32,35 @@ Or using the expanded relationship syntax:
 }
 ```
 
+Multi-file (has-many):
+
+```lua
+{
+    name = "gallery",
+    type = "upload",
+    relationship = {
+        collection = "media",
+        has_many = true,
+    },
+}
+```
+
+Or with flat syntax:
+
+```lua
+{
+    name = "gallery",
+    type = "upload",
+    relation_to = "media",
+    has_many = true,
+}
+```
+
 The target collection should be an upload collection (defined with `upload = true`).
 
 ## API Representation
+
+### Has-one
 
 At `depth=0`, returns the media document ID as a string:
 
@@ -56,6 +85,44 @@ At `depth=1+`, the ID is populated with the full media document (same as relatio
 }
 ```
 
+### Has-many
+
+At `depth=0`, returns an array of media document IDs:
+
+```json
+{
+  "gallery": ["abc123", "def456"]
+}
+```
+
+At `depth=1+`, each ID is populated with the full media document:
+
+```json
+{
+  "gallery": [
+    { "id": "abc123", "collection": "media", "filename": "hero.jpg", ... },
+    { "id": "def456", "collection": "media", "filename": "banner.png", ... }
+  ]
+}
+```
+
 ## Admin Rendering
 
-Renders as a `<select>` dropdown listing documents from the target upload collection, using the filename as the display label.
+- **Has-one**: renders as a searchable input with filename as the display label and image preview above.
+- **Has-many**: renders as a searchable multi-select widget (same as has-many relationships) with chips for selected files.
+
+## Drawer Picker
+
+Add `admin.picker = "drawer"` to enable a browse button next to the search input. Clicking it opens a slide-in drawer panel with a thumbnail grid for visually browsing upload documents.
+
+```lua
+{
+    name = "featured_image",
+    type = "upload",
+    relation_to = "media",
+    admin = { picker = "drawer" },
+}
+```
+
+- Without `picker`: inline search autocomplete only (default behavior)
+- With `picker = "drawer"`: inline search + browse button that opens a drawer with thumbnail grid

@@ -27,8 +27,8 @@ Every field type accepts these properties:
 
 | Type | SQLite Column | Description |
 |------|---------------|-------------|
-| `text` | TEXT | Single-line string |
-| `number` | REAL | Integer or float |
+| `text` | TEXT | Single-line string (`has_many` for tag input) |
+| `number` | REAL | Integer or float (`has_many` for tag input) |
 | `textarea` | TEXT | Multi-line text |
 | `richtext` | TEXT | Rich text (HTML string) |
 | `select` | TEXT | Single value from predefined options |
@@ -36,11 +36,13 @@ Every field type accepts these properties:
 | `date` | TEXT | Date/datetime/time/month with `picker_appearance` control |
 | `email` | TEXT | Email address |
 | `json` | TEXT | Arbitrary JSON blob |
-| `relationship` | TEXT (has-one) or join table (has-many) | Reference to another collection |
+| `code` | TEXT | Code string with syntax-highlighted editor |
+| `relationship` | TEXT (has-one) or join table (has-many) | Reference to one or more collections; supports polymorphic (`collection = { "posts", "pages" }`) |
 | `array` | join table | Repeatable group of sub-fields |
 | `group` | prefixed columns | Visual grouping of sub-fields (no extra table) |
-| `upload` | TEXT | File reference (has-one relationship to upload collection) |
+| `upload` | TEXT (has-one) or join table (has-many) | File reference to upload collection; supports `has_many` for multi-file |
 | `blocks` | join table | Flexible content blocks with different schemas |
+| `join` | _(none)_ | Virtual reverse relationship (read-only, computed at read time) |
 
 ## `admin` Properties
 

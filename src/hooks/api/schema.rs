@@ -142,12 +142,65 @@ fn field_def_to_lua_table(lua: &Lua, f: &crate::core::field::FieldDefinition) ->
 
     if let Some(ref rc) = f.relationship {
         let rel = lua.create_table()?;
-        rel.set("collection", rc.collection.as_str())?;
+        if rc.is_polymorphic() {
+            let arr = lua.create_table()?;
+            for (i, slug) in rc.polymorphic.iter().enumerate() {
+                arr.set(i + 1, slug.as_str())?;
+            }
+            rel.set("collection", arr)?;
+        } else {
+            rel.set("collection", rc.collection.as_str())?;
+        }
         rel.set("has_many", rc.has_many)?;
         if let Some(md) = rc.max_depth {
             rel.set("max_depth", md)?;
         }
         tbl.set("relationship", rel)?;
+    }
+
+    if let Some(ml) = f.min_length {
+        tbl.set("min_length", ml)?;
+    }
+    if let Some(ml) = f.max_length {
+        tbl.set("max_length", ml)?;
+    }
+    if let Some(v) = f.min {
+        tbl.set("min", v)?;
+    }
+    if let Some(v) = f.max {
+        tbl.set("max", v)?;
+    }
+
+    if f.has_many {
+        tbl.set("has_many", true)?;
+    }
+
+    if let Some(ref md) = f.min_date {
+        tbl.set("min_date", md.as_str())?;
+    }
+    if let Some(ref md) = f.max_date {
+        tbl.set("max_date", md.as_str())?;
+    }
+
+    if let Some(ref lang) = f.admin.language {
+        tbl.set("language", lang.as_str())?;
+    }
+
+    if !f.admin.features.is_empty() {
+        let features = lua.create_table()?;
+        for (i, feat) in f.admin.features.iter().enumerate() {
+            features.set(i + 1, feat.as_str())?;
+        }
+        tbl.set("features", features)?;
+    }
+
+    if let Some(ref p) = f.admin.picker {
+        tbl.set("picker", p.as_str())?;
+    }
+
+    if let Some(ref jc) = f.join {
+        tbl.set("collection", jc.collection.as_str())?;
+        tbl.set("on", jc.on.as_str())?;
     }
 
     if !f.options.is_empty() {
@@ -178,6 +231,12 @@ fn field_def_to_lua_table(lua: &Lua, f: &crate::core::field::FieldDefinition) ->
             bt.set("type", b.block_type.as_str())?;
             if let Some(ref lbl) = b.label {
                 bt.set("label", lbl.resolve_default())?;
+            }
+            if let Some(ref g) = b.group {
+                bt.set("group", g.as_str())?;
+            }
+            if let Some(ref url) = b.image_url {
+                bt.set("image_url", url.as_str())?;
             }
             let bf = lua.create_table()?;
             for (j, sf) in b.fields.iter().enumerate() {
@@ -221,6 +280,7 @@ mod tests {
                         collection: "tags".to_string(),
                         has_many: true,
                         max_depth: Some(1),
+                        polymorphic: vec![],
                     }),
                     ..Default::default()
                 },
@@ -367,5 +427,134 @@ mod tests {
         let first: Table = result.get(1).unwrap();
         let slug: String = first.get("slug").unwrap();
         assert_eq!(slug, "settings");
+    }
+
+    #[test]
+    fn field_def_to_lua_table_polymorphic_relationship() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "refs".to_string(),
+            field_type: crate::core::field::FieldType::Relationship,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "articles".to_string(),
+                has_many: true,
+                max_depth: None,
+                polymorphic: vec!["articles".to_string(), "pages".to_string()],
+            }),
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let rel: Table = tbl.get("relationship").unwrap();
+        // Polymorphic: collection should be a table (array), not a string
+        let col: Table = rel.get("collection").unwrap();
+        let first: String = col.get(1).unwrap();
+        assert_eq!(first, "articles");
+        let second: String = col.get(2).unwrap();
+        assert_eq!(second, "pages");
+        let hm: bool = rel.get("has_many").unwrap();
+        assert!(hm);
+    }
+
+    #[test]
+    fn field_def_to_lua_table_non_polymorphic_relationship() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "author".to_string(),
+            field_type: crate::core::field::FieldType::Relationship,
+            relationship: Some(crate::core::field::RelationshipConfig {
+                collection: "users".to_string(),
+                has_many: false,
+                max_depth: None,
+                polymorphic: vec![],
+            }),
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let rel: Table = tbl.get("relationship").unwrap();
+        // Non-polymorphic: collection should be a string
+        let col: String = rel.get("collection").unwrap();
+        assert_eq!(col, "users");
+    }
+
+    #[test]
+    fn field_def_to_lua_table_richtext_features() {
+        let lua = Lua::new();
+        let mut field = crate::core::field::FieldDefinition {
+            name: "body".to_string(),
+            field_type: crate::core::field::FieldType::Richtext,
+            ..Default::default()
+        };
+        field.admin.features = vec!["bold".to_string(), "italic".to_string(), "heading".to_string()];
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let features: Table = tbl.get("features").unwrap();
+        let f1: String = features.get(1).unwrap();
+        assert_eq!(f1, "bold");
+        let f2: String = features.get(2).unwrap();
+        assert_eq!(f2, "italic");
+        let f3: String = features.get(3).unwrap();
+        assert_eq!(f3, "heading");
+    }
+
+    #[test]
+    fn field_def_to_lua_table_richtext_no_features() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "body".to_string(),
+            field_type: crate::core::field::FieldType::Richtext,
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        // No features key when empty
+        let features: mlua::Result<Table> = tbl.get("features");
+        assert!(features.is_err() || matches!(tbl.get::<Value>("features"), Ok(Value::Nil)));
+    }
+
+    #[test]
+    fn field_def_to_lua_table_blocks_with_group_and_image() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "content".to_string(),
+            field_type: crate::core::field::FieldType::Blocks,
+            blocks: vec![
+                crate::core::field::BlockDefinition {
+                    block_type: "hero".to_string(),
+                    label: Some(crate::core::field::LocalizedString::Plain("Hero".to_string())),
+                    group: Some("Layout".to_string()),
+                    image_url: Some("/static/blocks/hero.svg".to_string()),
+                    ..Default::default()
+                },
+                crate::core::field::BlockDefinition {
+                    block_type: "text".to_string(),
+                    label: Some(crate::core::field::LocalizedString::Plain("Text".to_string())),
+                    group: Some("Content".to_string()),
+                    ..Default::default()
+                },
+                crate::core::field::BlockDefinition {
+                    block_type: "divider".to_string(),
+                    label: Some(crate::core::field::LocalizedString::Plain("Divider".to_string())),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+        let blocks: Table = tbl.get("blocks").unwrap();
+
+        let b1: Table = blocks.get(1).unwrap();
+        assert_eq!(b1.get::<String>("type").unwrap(), "hero");
+        assert_eq!(b1.get::<String>("group").unwrap(), "Layout");
+        assert_eq!(b1.get::<String>("image_url").unwrap(), "/static/blocks/hero.svg");
+
+        let b2: Table = blocks.get(2).unwrap();
+        assert_eq!(b2.get::<String>("group").unwrap(), "Content");
+        assert!(matches!(b2.get::<Value>("image_url"), Ok(Value::Nil)));
+
+        let b3: Table = blocks.get(3).unwrap();
+        assert!(matches!(b3.get::<Value>("group"), Ok(Value::Nil)));
+        assert!(matches!(b3.get::<Value>("image_url"), Ok(Value::Nil)));
     }
 }

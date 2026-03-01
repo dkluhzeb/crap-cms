@@ -12,6 +12,38 @@ fn safe_template_id(name: &str) -> String {
     name.replace('[', "-").replace(']', "")
 }
 
+/// Count errors recursively in a list of field context JSON values.
+/// Looks for `"error"` keys on each field, and recurses into `"sub_fields"` and `"tabs"`.
+fn count_errors_in_fields(fields: &[serde_json::Value]) -> usize {
+    let mut count = 0;
+    for f in fields {
+        if f.get("error").is_some_and(|v| !v.is_null()) {
+            count += 1;
+        }
+        // Recurse into sub_fields (Group, Row, Collapsible)
+        if let Some(subs) = f.get("sub_fields").and_then(|v| v.as_array()) {
+            count += count_errors_in_fields(subs);
+        }
+        // Recurse into tabs
+        if let Some(tabs) = f.get("tabs").and_then(|v| v.as_array()) {
+            for tab in tabs {
+                if let Some(tab_subs) = tab.get("sub_fields").and_then(|v| v.as_array()) {
+                    count += count_errors_in_fields(tab_subs);
+                }
+            }
+        }
+        // Recurse into array rows
+        if let Some(rows) = f.get("rows").and_then(|v| v.as_array()) {
+            for row in rows {
+                if let Some(row_subs) = row.get("sub_fields").and_then(|v| v.as_array()) {
+                    count += count_errors_in_fields(row_subs);
+                }
+            }
+        }
+    }
+    count
+}
+
 /// Max nesting depth for recursive field context building (guard against infinite nesting).
 const MAX_FIELD_DEPTH: usize = 5;
 
@@ -60,21 +92,77 @@ fn build_single_field_context(
         ctx["error"] = serde_json::json!(err);
     }
 
+    // Validation property context: min_length, max_length, min, max, step, rows
+    if let Some(ml) = field.min_length {
+        ctx["min_length"] = serde_json::json!(ml);
+    }
+    if let Some(ml) = field.max_length {
+        ctx["max_length"] = serde_json::json!(ml);
+    }
+    if let Some(v) = field.min {
+        ctx["min"] = serde_json::json!(v);
+        ctx["has_min"] = serde_json::json!(true);
+    }
+    if let Some(v) = field.max {
+        ctx["max"] = serde_json::json!(v);
+        ctx["has_max"] = serde_json::json!(true);
+    }
+    // Number step: use admin.step or default "any"
+    if field.field_type == FieldType::Number {
+        let step = field.admin.step.as_deref().unwrap_or("any");
+        ctx["step"] = serde_json::json!(step);
+    }
+    // Textarea rows: use admin.rows or default 8
+    if field.field_type == FieldType::Textarea {
+        let rows = field.admin.rows.unwrap_or(8);
+        ctx["rows"] = serde_json::json!(rows);
+    }
+    // Date bounds: min_date / max_date
+    if field.field_type == FieldType::Date {
+        if let Some(ref md) = field.min_date {
+            ctx["min_date"] = serde_json::json!(md);
+        }
+        if let Some(ref md) = field.max_date {
+            ctx["max_date"] = serde_json::json!(md);
+        }
+    }
+    // Code language: use admin.language or default "json"
+    if field.field_type == FieldType::Code {
+        let lang = field.admin.language.as_deref().unwrap_or("json");
+        ctx["language"] = serde_json::json!(lang);
+    }
+
     // Beyond max depth, render as a simple text input
     if depth >= MAX_FIELD_DEPTH {
         return ctx;
     }
 
     match &field.field_type {
-        FieldType::Select => {
-            let options: Vec<_> = field.options.iter().map(|opt| {
-                serde_json::json!({
-                    "label": opt.label.resolve_default(),
-                    "value": opt.value,
-                    "selected": opt.value == value,
-                })
-            }).collect();
-            ctx["options"] = serde_json::json!(options);
+        FieldType::Select | FieldType::Radio => {
+            if field.has_many {
+                // Multi-select: value is a JSON array like ["val1","val2"]
+                let selected_values: std::collections::HashSet<String> =
+                    serde_json::from_str(&value)
+                        .unwrap_or_default();
+                let options: Vec<_> = field.options.iter().map(|opt| {
+                    serde_json::json!({
+                        "label": opt.label.resolve_default(),
+                        "value": opt.value,
+                        "selected": selected_values.contains(&opt.value),
+                    })
+                }).collect();
+                ctx["options"] = serde_json::json!(options);
+                ctx["has_many"] = serde_json::json!(true);
+            } else {
+                let options: Vec<_> = field.options.iter().map(|opt| {
+                    serde_json::json!({
+                        "label": opt.label.resolve_default(),
+                        "value": opt.value,
+                        "selected": opt.value == value,
+                    })
+                }).collect();
+                ctx["options"] = serde_json::json!(options);
+            }
         }
         FieldType::Checkbox => {
             let checked = matches!(value.as_str(), "1" | "true" | "on" | "yes");
@@ -84,6 +172,13 @@ fn build_single_field_context(
             if let Some(ref rc) = field.relationship {
                 ctx["relationship_collection"] = serde_json::json!(rc.collection);
                 ctx["has_many"] = serde_json::json!(rc.has_many);
+                if rc.is_polymorphic() {
+                    ctx["polymorphic"] = serde_json::json!(true);
+                    ctx["collections"] = serde_json::json!(rc.polymorphic);
+                }
+            }
+            if let Some(ref p) = field.admin.picker {
+                ctx["picker"] = serde_json::json!(p);
             }
         }
         FieldType::Array => {
@@ -201,10 +296,14 @@ fn build_single_field_context(
                         build_single_field_context(sf, values, errors, &full_name, non_default_locale, depth + 1)
                     }).collect()
                 };
+                let error_count = count_errors_in_fields(&tab_sub_fields);
                 let mut tab_ctx = serde_json::json!({
                     "label": &tab.label,
                     "sub_fields": tab_sub_fields,
                 });
+                if error_count > 0 {
+                    tab_ctx["error_count"] = serde_json::json!(error_count);
+                }
                 if let Some(ref desc) = tab.description {
                     tab_ctx["description"] = serde_json::json!(desc);
                 }
@@ -230,6 +329,25 @@ fn build_single_field_context(
         FieldType::Upload => {
             if let Some(ref rc) = field.relationship {
                 ctx["relationship_collection"] = serde_json::json!(rc.collection);
+                if rc.has_many {
+                    ctx["has_many"] = serde_json::json!(true);
+                }
+            }
+            if let Some(ref p) = field.admin.picker {
+                ctx["picker"] = serde_json::json!(p);
+            }
+        }
+        FieldType::Text | FieldType::Number if field.has_many => {
+            // Tag-style input: value is a JSON array like ["tag1","tag2"]
+            let tags: Vec<String> = serde_json::from_str(&value).unwrap_or_default();
+            ctx["has_many"] = serde_json::json!(true);
+            ctx["tags"] = serde_json::json!(tags);
+            // Store comma-separated for the hidden input
+            ctx["value"] = serde_json::json!(tags.join(","));
+        }
+        FieldType::Richtext => {
+            if !field.admin.features.is_empty() {
+                ctx["features"] = serde_json::json!(field.admin.features);
             }
         }
         FieldType::Blocks => {
@@ -246,6 +364,12 @@ fn build_single_field_context(
                 });
                 if let Some(ref lf) = bd.label_field {
                     def["label_field"] = serde_json::json!(lf);
+                }
+                if let Some(ref g) = bd.group {
+                    def["group"] = serde_json::json!(g);
+                }
+                if let Some(ref url) = bd.image_url {
+                    def["image_url"] = serde_json::json!(url);
                 }
                 def
             }).collect();
@@ -267,6 +391,16 @@ fn build_single_field_context(
             if let Some(ref ls) = field.admin.labels_singular {
                 ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
+            if let Some(ref p) = field.admin.picker {
+                ctx["picker"] = serde_json::json!(p);
+            }
+        }
+        FieldType::Join => {
+            if let Some(ref jc) = field.join {
+                ctx["join_collection"] = serde_json::json!(jc.collection);
+                ctx["join_on"] = serde_json::json!(jc.on);
+            }
+            ctx["readonly"] = serde_json::json!(true);
         }
         _ => {}
     }
@@ -286,21 +420,68 @@ fn apply_field_type_extras(
     non_default_locale: bool,
     depth: usize,
 ) {
+    // Validation property context for sub-fields
+    if let Some(ml) = sf.min_length {
+        sub_ctx["min_length"] = serde_json::json!(ml);
+    }
+    if let Some(ml) = sf.max_length {
+        sub_ctx["max_length"] = serde_json::json!(ml);
+    }
+    if let Some(v) = sf.min {
+        sub_ctx["min"] = serde_json::json!(v);
+        sub_ctx["has_min"] = serde_json::json!(true);
+    }
+    if let Some(v) = sf.max {
+        sub_ctx["max"] = serde_json::json!(v);
+        sub_ctx["has_max"] = serde_json::json!(true);
+    }
+    if sf.field_type == FieldType::Number {
+        let step = sf.admin.step.as_deref().unwrap_or("any");
+        sub_ctx["step"] = serde_json::json!(step);
+    }
+    if sf.field_type == FieldType::Textarea {
+        let rows = sf.admin.rows.unwrap_or(8);
+        sub_ctx["rows"] = serde_json::json!(rows);
+    }
+    if sf.field_type == FieldType::Date {
+        if let Some(ref md) = sf.min_date {
+            sub_ctx["min_date"] = serde_json::json!(md);
+        }
+        if let Some(ref md) = sf.max_date {
+            sub_ctx["max_date"] = serde_json::json!(md);
+        }
+    }
+
     if depth >= MAX_FIELD_DEPTH { return; }
     match &sf.field_type {
         FieldType::Checkbox => {
             let checked = matches!(value, "1" | "true" | "on" | "yes");
             sub_ctx["checked"] = serde_json::json!(checked);
         }
-        FieldType::Select => {
-            let options: Vec<_> = sf.options.iter().map(|opt| {
-                serde_json::json!({
-                    "label": opt.label.resolve_default(),
-                    "value": opt.value,
-                    "selected": opt.value == value,
-                })
-            }).collect();
-            sub_ctx["options"] = serde_json::json!(options);
+        FieldType::Select | FieldType::Radio => {
+            if sf.has_many {
+                let selected_values: std::collections::HashSet<String> =
+                    serde_json::from_str(value)
+                        .unwrap_or_default();
+                let options: Vec<_> = sf.options.iter().map(|opt| {
+                    serde_json::json!({
+                        "label": opt.label.resolve_default(),
+                        "value": opt.value,
+                        "selected": selected_values.contains(&opt.value),
+                    })
+                }).collect();
+                sub_ctx["options"] = serde_json::json!(options);
+                sub_ctx["has_many"] = serde_json::json!(true);
+            } else {
+                let options: Vec<_> = sf.options.iter().map(|opt| {
+                    serde_json::json!({
+                        "label": opt.label.resolve_default(),
+                        "value": opt.value,
+                        "selected": opt.value == value,
+                    })
+                }).collect();
+                sub_ctx["options"] = serde_json::json!(options);
+            }
         }
         FieldType::Date => {
             let appearance = sf.picker_appearance.as_deref().unwrap_or("dayOnly");
@@ -370,10 +551,14 @@ fn apply_field_type_extras(
                 let tab_sub_fields: Vec<_> = tab.fields.iter().map(|nested| {
                     build_single_field_context(nested, values, errors, name_prefix, non_default_locale, depth + 1)
                 }).collect();
+                let error_count = count_errors_in_fields(&tab_sub_fields);
                 let mut tab_ctx = serde_json::json!({
                     "label": &tab.label,
                     "sub_fields": tab_sub_fields,
                 });
+                if error_count > 0 {
+                    tab_ctx["error_count"] = serde_json::json!(error_count);
+                }
                 if let Some(ref desc) = tab.description {
                     tab_ctx["description"] = serde_json::json!(desc);
                 }
@@ -395,6 +580,12 @@ fn apply_field_type_extras(
                 if let Some(ref lf) = bd.label_field {
                     def["label_field"] = serde_json::json!(lf);
                 }
+                if let Some(ref g) = bd.group {
+                    def["group"] = serde_json::json!(g);
+                }
+                if let Some(ref url) = bd.image_url {
+                    def["image_url"] = serde_json::json!(url);
+                }
                 def
             }).collect();
             sub_ctx["block_definitions"] = serde_json::json!(block_defs);
@@ -412,17 +603,43 @@ fn apply_field_type_extras(
             if let Some(ref ls) = sf.admin.labels_singular {
                 sub_ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
+            if let Some(ref p) = sf.admin.picker {
+                sub_ctx["picker"] = serde_json::json!(p);
+            }
         }
         FieldType::Relationship => {
             if let Some(ref rc) = sf.relationship {
                 sub_ctx["relationship_collection"] = serde_json::json!(rc.collection);
                 sub_ctx["has_many"] = serde_json::json!(rc.has_many);
+                if rc.is_polymorphic() {
+                    sub_ctx["polymorphic"] = serde_json::json!(true);
+                    sub_ctx["collections"] = serde_json::json!(rc.polymorphic);
+                }
+            }
+            if let Some(ref p) = sf.admin.picker {
+                sub_ctx["picker"] = serde_json::json!(p);
             }
         }
         FieldType::Upload => {
             if let Some(ref rc) = sf.relationship {
                 sub_ctx["relationship_collection"] = serde_json::json!(rc.collection);
+                if rc.has_many {
+                    sub_ctx["has_many"] = serde_json::json!(true);
+                }
             }
+            if let Some(ref p) = sf.admin.picker {
+                sub_ctx["picker"] = serde_json::json!(p);
+            }
+        }
+        FieldType::Code => {
+            let lang = sf.admin.language.as_deref().unwrap_or("json");
+            sub_ctx["language"] = serde_json::json!(lang);
+        }
+        FieldType::Text | FieldType::Number if sf.has_many => {
+            let tags: Vec<String> = serde_json::from_str(value).unwrap_or_default();
+            sub_ctx["has_many"] = serde_json::json!(true);
+            sub_ctx["tags"] = serde_json::json!(tags);
+            sub_ctx["value"] = serde_json::json!(tags.join(","));
         }
         _ => {}
     }
@@ -562,15 +779,30 @@ fn build_enriched_sub_field_context(
             let checked = matches!(val.as_str(), "1" | "true" | "on" | "yes");
             sub_ctx["checked"] = serde_json::json!(checked);
         }
-        FieldType::Select => {
-            let options: Vec<_> = sf.options.iter().map(|opt| {
-                serde_json::json!({
-                    "label": opt.label.resolve_default(),
-                    "value": opt.value,
-                    "selected": opt.value == val,
-                })
-            }).collect();
-            sub_ctx["options"] = serde_json::json!(options);
+        FieldType::Select | FieldType::Radio => {
+            if sf.has_many {
+                let selected_values: std::collections::HashSet<String> =
+                    serde_json::from_str(&val)
+                        .unwrap_or_default();
+                let options: Vec<_> = sf.options.iter().map(|opt| {
+                    serde_json::json!({
+                        "label": opt.label.resolve_default(),
+                        "value": opt.value,
+                        "selected": selected_values.contains(&opt.value),
+                    })
+                }).collect();
+                sub_ctx["options"] = serde_json::json!(options);
+                sub_ctx["has_many"] = serde_json::json!(true);
+            } else {
+                let options: Vec<_> = sf.options.iter().map(|opt| {
+                    serde_json::json!({
+                        "label": opt.label.resolve_default(),
+                        "value": opt.value,
+                        "selected": opt.value == val,
+                    })
+                }).collect();
+                sub_ctx["options"] = serde_json::json!(options);
+            }
         }
         FieldType::Date => {
             let appearance = sf.picker_appearance.as_deref().unwrap_or("dayOnly");
@@ -591,11 +823,24 @@ fn build_enriched_sub_field_context(
             if let Some(ref rc) = sf.relationship {
                 sub_ctx["relationship_collection"] = serde_json::json!(rc.collection);
                 sub_ctx["has_many"] = serde_json::json!(rc.has_many);
+                if rc.is_polymorphic() {
+                    sub_ctx["polymorphic"] = serde_json::json!(true);
+                    sub_ctx["collections"] = serde_json::json!(rc.polymorphic);
+                }
+            }
+            if let Some(ref p) = sf.admin.picker {
+                sub_ctx["picker"] = serde_json::json!(p);
             }
         }
         FieldType::Upload => {
             if let Some(ref rc) = sf.relationship {
                 sub_ctx["relationship_collection"] = serde_json::json!(rc.collection);
+                if rc.has_many {
+                    sub_ctx["has_many"] = serde_json::json!(true);
+                }
+            }
+            if let Some(ref p) = sf.admin.picker {
+                sub_ctx["picker"] = serde_json::json!(p);
             }
         }
         FieldType::Array => {
@@ -700,6 +945,12 @@ fn build_enriched_sub_field_context(
                 });
                 if let Some(ref lf) = bd.label_field {
                     def["label_field"] = serde_json::json!(lf);
+                }
+                if let Some(ref g) = bd.group {
+                    def["group"] = serde_json::json!(g);
+                }
+                if let Some(ref url) = bd.image_url {
+                    def["image_url"] = serde_json::json!(url);
                 }
                 def
             }).collect();
@@ -851,10 +1102,14 @@ fn build_enriched_sub_field_context(
                     );
                     nested_ctx
                 }).collect();
+                let error_count = count_errors_in_fields(&tab_sub_fields);
                 let mut tab_ctx = serde_json::json!({
                     "label": &tab.label,
                     "sub_fields": tab_sub_fields,
                 });
+                if error_count > 0 {
+                    tab_ctx["error_count"] = serde_json::json!(error_count);
+                }
                 if let Some(ref desc) = tab.description {
                     tab_ctx["description"] = serde_json::json!(desc);
                 }
@@ -862,10 +1117,82 @@ fn build_enriched_sub_field_context(
             }).collect();
             sub_ctx["tabs"] = serde_json::json!(tabs_ctx);
         }
+        FieldType::Text | FieldType::Number if sf.has_many => {
+            let tags: Vec<String> = serde_json::from_str(&val).unwrap_or_default();
+            sub_ctx["has_many"] = serde_json::json!(true);
+            sub_ctx["tags"] = serde_json::json!(tags);
+            sub_ctx["value"] = serde_json::json!(tags.join(","));
+        }
         _ => {}
     }
 
     sub_ctx
+}
+
+/// Build selected_items for a polymorphic relationship field.
+///
+/// Polymorphic values are stored as "collection/id" composites. Each item is
+/// looked up in its respective collection to get its label.
+fn enrich_polymorphic_selected(
+    rc: &crate::core::field::RelationshipConfig,
+    field_name: &str,
+    doc_fields: &HashMap<String, serde_json::Value>,
+    reg: &crate::core::Registry,
+    conn: &rusqlite::Connection,
+    locale_ctx: Option<&crate::db::query::LocaleContext>,
+) -> Vec<serde_json::Value> {
+    // Parse "collection/id" refs
+    let refs: Vec<(String, String)> = if rc.has_many {
+        match doc_fields.get(field_name) {
+            Some(serde_json::Value::Array(arr)) => {
+                arr.iter().filter_map(|v| {
+                    v.as_str().and_then(|s| {
+                        let pos = s.find('/')?;
+                        let col = &s[..pos];
+                        let id = &s[pos + 1..];
+                        if col.is_empty() || id.is_empty() { return None; }
+                        Some((col.to_string(), id.to_string()))
+                    })
+                }).collect()
+            }
+            _ => Vec::new(),
+        }
+    } else {
+        match doc_fields.get(field_name)
+            .or_else(|| None) // fall through to value in ctx
+        {
+            Some(serde_json::Value::String(s)) if !s.is_empty() => {
+                if let Some(pos) = s.find('/') {
+                    let col = &s[..pos];
+                    let id = &s[pos + 1..];
+                    if !col.is_empty() && !id.is_empty() {
+                        vec![(col.to_string(), id.to_string())]
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    Vec::new()
+                }
+            }
+            _ => Vec::new(),
+        }
+    };
+
+    refs.iter().filter_map(|(col, id)| {
+        let related_def = reg.get_collection(col)?;
+        let title_field = related_def.title_field().map(|s| s.to_string());
+        crate::db::query::find_by_id(conn, col, related_def, id, locale_ctx)
+            .ok()
+            .flatten()
+            .map(|doc| {
+                let label = title_field.as_ref()
+                    .and_then(|f| doc.get_str(f))
+                    .unwrap_or(&doc.id)
+                    .to_string();
+                // Include collection in the id so JS knows which collection this item belongs to
+                serde_json::json!({ "id": format!("{}/{}", col, doc.id), "label": label, "collection": col })
+            })
+    }).collect()
 }
 
 /// Enrich field contexts with data that requires DB access:
@@ -881,6 +1208,7 @@ pub(super) fn enrich_field_contexts(
     filter_hidden: bool,
     non_default_locale: bool,
     errors: &HashMap<String, String>,
+    doc_id: Option<&str>,
 ) {
     use crate::core::upload;
     use crate::db::query::{self, LocaleContext};
@@ -906,47 +1234,51 @@ pub(super) fn enrich_field_contexts(
         match field_def.field_type {
             FieldType::Relationship => {
                 if let Some(ref rc) = field_def.relationship {
-                    // Fetch documents from related collection for options
-                    if let Some(related_def) = reg.get_collection(&rc.collection) {
+                    if rc.is_polymorphic() {
+                        // Polymorphic: values are "collection/id" composites
+                        let selected_items = enrich_polymorphic_selected(
+                            rc, &field_def.name, doc_fields, &reg, &conn, rel_locale_ctx.as_ref(),
+                        );
+                        ctx["selected_items"] = serde_json::json!(selected_items);
+                    } else if let Some(related_def) = reg.get_collection(&rc.collection) {
                         let title_field = related_def.title_field().map(|s| s.to_string());
-                        let find_query = query::FindQuery::default();
-                        if let Ok(docs) = query::find(&conn, &rc.collection, related_def, &find_query, rel_locale_ctx.as_ref()) {
-                            if rc.has_many {
-                                // Get selected IDs from hydrated document
-                                let selected_ids: std::collections::HashSet<String> = match doc_fields.get(&field_def.name) {
-                                    Some(serde_json::Value::Array(arr)) => {
-                                        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                                    }
-                                    _ => std::collections::HashSet::new(),
-                                };
-                                let options: Vec<_> = docs.iter().map(|doc| {
+                        if rc.has_many {
+                            let selected_ids: Vec<String> = match doc_fields.get(&field_def.name) {
+                                Some(serde_json::Value::Array(arr)) => {
+                                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                                }
+                                _ => Vec::new(),
+                            };
+                            let selected_items: Vec<_> = selected_ids.iter().filter_map(|id| {
+                                query::find_by_id(&conn, &rc.collection, related_def, id, rel_locale_ctx.as_ref())
+                                    .ok()
+                                    .flatten()
+                                    .map(|doc| {
+                                        let label = title_field.as_ref()
+                                            .and_then(|f| doc.get_str(f))
+                                            .unwrap_or(&doc.id)
+                                            .to_string();
+                                        serde_json::json!({ "id": doc.id, "label": label })
+                                    })
+                            }).collect();
+                            ctx["selected_items"] = serde_json::json!(selected_items);
+                        } else {
+                            let current_value = ctx.get("value")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if !current_value.is_empty() {
+                                if let Ok(Some(doc)) = query::find_by_id(&conn, &rc.collection, related_def, &current_value, rel_locale_ctx.as_ref()) {
                                     let label = title_field.as_ref()
                                         .and_then(|f| doc.get_str(f))
-                                        .unwrap_or(&doc.id);
-                                    serde_json::json!({
-                                        "value": doc.id,
-                                        "label": label,
-                                        "selected": selected_ids.contains(&doc.id),
-                                    })
-                                }).collect();
-                                ctx["relationship_options"] = serde_json::json!(options);
+                                        .unwrap_or(&doc.id)
+                                        .to_string();
+                                    ctx["selected_items"] = serde_json::json!([{ "id": doc.id, "label": label }]);
+                                } else {
+                                    ctx["selected_items"] = serde_json::json!([]);
+                                }
                             } else {
-                                // Has-one: current value from context
-                                let current_value = ctx.get("value")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string();
-                                let options: Vec<_> = docs.iter().map(|doc| {
-                                    let label = title_field.as_ref()
-                                        .and_then(|f| doc.get_str(f))
-                                        .unwrap_or(&doc.id);
-                                    serde_json::json!({
-                                        "value": doc.id,
-                                        "label": label,
-                                        "selected": doc.id == current_value,
-                                    })
-                                }).collect();
-                                ctx["relationship_options"] = serde_json::json!(options);
+                                ctx["selected_items"] = serde_json::json!([]);
                             }
                         }
                     }
@@ -996,83 +1328,100 @@ pub(super) fn enrich_field_contexts(
                         }
                     }
                 }
+                // Enrich the <template> sub-fields so new rows added via JS have upload/relationship options
+                if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                    enrich_nested_fields(sub_arr, &field_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                }
             }
             FieldType::Upload => {
-                // Upload is a has-one relationship to an upload collection
                 if let Some(ref rc) = field_def.relationship {
                     if let Some(related_def) = reg.get_collection(&rc.collection) {
                         let title_field = related_def.title_field().map(|s| s.to_string());
                         let admin_thumbnail = related_def.upload.as_ref()
                             .and_then(|u| u.admin_thumbnail.as_ref().cloned());
-                        let find_query = query::FindQuery::default();
-                        if let Ok(mut docs) = query::find(&conn, &rc.collection, related_def, &find_query, rel_locale_ctx.as_ref()) {
-                            // Assemble sizes for thumbnail lookup
-                            if let Some(ref upload_config) = related_def.upload {
-                                if upload_config.enabled {
-                                    for doc in &mut docs {
-                                        upload::assemble_sizes_object(doc, upload_config);
-                                    }
-                                }
-                            }
 
+                        if rc.has_many {
+                            // Has-many upload: build selected_items from hydrated IDs
+                            let selected_ids: Vec<String> = match doc_fields.get(&field_def.name) {
+                                Some(serde_json::Value::Array(arr)) => {
+                                    arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
+                                }
+                                _ => Vec::new(),
+                            };
+                            let selected_items: Vec<_> = selected_ids.iter().filter_map(|id| {
+                                query::find_by_id(&conn, &rc.collection, related_def, id, rel_locale_ctx.as_ref())
+                                    .ok()
+                                    .flatten()
+                                    .map(|mut doc| {
+                                        if let Some(ref uc) = related_def.upload {
+                                            if uc.enabled { upload::assemble_sizes_object(&mut doc, uc); }
+                                        }
+                                        let label = doc.get_str("filename")
+                                            .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+                                            .unwrap_or(&doc.id)
+                                            .to_string();
+                                        let mime = doc.get_str("mime_type").unwrap_or("").to_string();
+                                        let is_image = mime.starts_with("image/");
+                                        let thumb_url = if is_image {
+                                            admin_thumbnail.as_ref()
+                                                .and_then(|thumb_name| {
+                                                    doc.fields.get("sizes")
+                                                        .and_then(|v| v.get(thumb_name))
+                                                        .and_then(|v| v.get("url"))
+                                                        .and_then(|v| v.as_str())
+                                                        .map(|s| s.to_string())
+                                                })
+                                                .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                                        } else { None };
+                                        let mut item = serde_json::json!({ "id": doc.id, "label": label });
+                                        if let Some(url) = thumb_url { item["thumbnail_url"] = serde_json::json!(url); }
+                                        if is_image { item["is_image"] = serde_json::json!(true); }
+                                        item
+                                    })
+                            }).collect();
+                            ctx["selected_items"] = serde_json::json!(selected_items);
+                        } else {
+                            // Has-one upload: fetch only the selected doc (not all docs)
                             let current_value = ctx.get("value")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-
-                            let mut selected_preview_url = None;
-                            let mut selected_filename = None;
-
-                            let options: Vec<_> = docs.iter().map(|doc| {
-                                let label = doc.get_str("filename")
-                                    .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
-                                    .unwrap_or(&doc.id);
-                                let mime = doc.get_str("mime_type").unwrap_or("");
-                                let is_image = mime.starts_with("image/");
-
-                                // Get thumbnail URL
-                                let thumb_url = if is_image {
-                                    admin_thumbnail.as_ref()
-                                        .and_then(|thumb_name| {
-                                            doc.fields.get("sizes")
-                                                .and_then(|v| v.get(thumb_name))
-                                                .and_then(|v| v.get("url"))
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string())
-                                        })
-                                        .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                            if !current_value.is_empty() {
+                                if let Ok(Some(mut doc)) = query::find_by_id(&conn, &rc.collection, related_def, &current_value, rel_locale_ctx.as_ref()) {
+                                    if let Some(ref uc) = related_def.upload {
+                                        if uc.enabled { upload::assemble_sizes_object(&mut doc, uc); }
+                                    }
+                                    let label = doc.get_str("filename")
+                                        .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+                                        .unwrap_or(&doc.id)
+                                        .to_string();
+                                    let mime = doc.get_str("mime_type").unwrap_or("").to_string();
+                                    let is_image = mime.starts_with("image/");
+                                    let thumb_url = if is_image {
+                                        admin_thumbnail.as_ref()
+                                            .and_then(|thumb_name| {
+                                                doc.fields.get("sizes")
+                                                    .and_then(|v| v.get(thumb_name))
+                                                    .and_then(|v| v.get("url"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string())
+                                            })
+                                            .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                                    } else { None };
+                                    let mut item = serde_json::json!({ "id": doc.id, "label": label });
+                                    if let Some(url) = &thumb_url { item["thumbnail_url"] = serde_json::json!(url); }
+                                    if is_image { item["is_image"] = serde_json::json!(true); }
+                                    item["filename"] = serde_json::json!(label);
+                                    ctx["selected_items"] = serde_json::json!([item]);
+                                    if let Some(url) = thumb_url {
+                                        ctx["selected_preview_url"] = serde_json::json!(url);
+                                    }
+                                    ctx["selected_filename"] = serde_json::json!(label);
                                 } else {
-                                    None
-                                };
-
-                                let is_selected = doc.id == current_value;
-                                if is_selected {
-                                    selected_preview_url = thumb_url.clone();
-                                    selected_filename = Some(label.to_string());
+                                    ctx["selected_items"] = serde_json::json!([]);
                                 }
-
-                                let mut opt = serde_json::json!({
-                                    "value": doc.id,
-                                    "label": label,
-                                    "selected": is_selected,
-                                });
-                                if let Some(ref url) = thumb_url {
-                                    opt["thumbnail_url"] = serde_json::json!(url);
-                                }
-                                if is_image {
-                                    opt["is_image"] = serde_json::json!(true);
-                                }
-                                opt["filename"] = serde_json::json!(label);
-                                opt
-                            }).collect();
-                            ctx["relationship_options"] = serde_json::json!(options);
-                            ctx["relationship_collection"] = serde_json::json!(rc.collection);
-
-                            if let Some(url) = selected_preview_url {
-                                ctx["selected_preview_url"] = serde_json::json!(url);
-                            }
-                            if let Some(fname) = selected_filename {
-                                ctx["selected_filename"] = serde_json::json!(fname);
+                            } else {
+                                ctx["selected_items"] = serde_json::json!([]);
                             }
                         }
                     }
@@ -1142,6 +1491,15 @@ pub(super) fn enrich_field_contexts(
                         }
                     }
                 }
+                // Enrich Upload/Relationship sub-fields within block definition templates
+                // (these are the <template> elements cloned by JS when adding new block rows)
+                if let Some(defs_arr) = ctx.get_mut("block_definitions").and_then(|v| v.as_array_mut()) {
+                    for (def_ctx, block_def) in defs_arr.iter_mut().zip(field_def.blocks.iter()) {
+                        if let Some(sub_arr) = def_ctx.get_mut("fields").and_then(|v| v.as_array_mut()) {
+                            enrich_nested_fields(sub_arr, &block_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                        }
+                    }
+                }
             }
             FieldType::Row | FieldType::Collapsible | FieldType::Group => {
                 // Recurse into layout/group sub-fields to enrich nested Upload/Relationship fields
@@ -1155,6 +1513,34 @@ pub(super) fn enrich_field_contexts(
                     for (tab_ctx, tab_def) in tabs_arr.iter_mut().zip(field_def.tabs.iter()) {
                         if let Some(sub_arr) = tab_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
                             enrich_nested_fields(sub_arr, &tab_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                        }
+                    }
+                }
+            }
+            FieldType::Join => {
+                // Virtual reverse-relationship: query target collection for docs that reference this one
+                if let Some(ref jc) = field_def.join {
+                    if let Some(doc_id_str) = doc_id {
+                        if let Some(target_def) = reg.get_collection(&jc.collection) {
+                            let title_field = target_def.title_field().map(|s| s.to_string());
+                            let fq = query::FindQuery {
+                                filters: vec![query::FilterClause::Single(query::Filter {
+                                    field: jc.on.clone(),
+                                    op: query::FilterOp::Equals(doc_id_str.to_string()),
+                                })],
+                                ..Default::default()
+                            };
+                            if let Ok(docs) = query::find(&conn, &jc.collection, target_def, &fq, rel_locale_ctx.as_ref()) {
+                                let items: Vec<_> = docs.iter().map(|doc| {
+                                    let label = title_field.as_ref()
+                                        .and_then(|f| doc.get_str(f))
+                                        .unwrap_or(&doc.id)
+                                        .to_string();
+                                    serde_json::json!({ "id": doc.id, "label": label })
+                                }).collect();
+                                ctx["join_items"] = serde_json::json!(items);
+                                ctx["join_count"] = serde_json::json!(items.len());
+                            }
                         }
                     }
                 }
@@ -1184,23 +1570,26 @@ fn enrich_nested_fields(
                 if let Some(ref rc) = field_def.relationship {
                     if let Some(related_def) = reg.get_collection(&rc.collection) {
                         let title_field = related_def.title_field().map(|s| s.to_string());
-                        let find_query = query::FindQuery::default();
-                        if let Ok(docs) = query::find(conn, &rc.collection, related_def, &find_query, rel_locale_ctx) {
+                        if rc.has_many {
+                            // Has-many nested relationships use selected_items built by parent
+                        } else {
                             let current_value = ctx.get("value")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-                            let options: Vec<_> = docs.iter().map(|doc| {
-                                let label = title_field.as_ref()
-                                    .and_then(|f| doc.get_str(f))
-                                    .unwrap_or(&doc.id);
-                                serde_json::json!({
-                                    "value": doc.id,
-                                    "label": label,
-                                    "selected": doc.id == current_value,
-                                })
-                            }).collect();
-                            ctx["relationship_options"] = serde_json::json!(options);
+                            if !current_value.is_empty() {
+                                if let Ok(Some(doc)) = query::find_by_id(conn, &rc.collection, related_def, &current_value, rel_locale_ctx) {
+                                    let label = title_field.as_ref()
+                                        .and_then(|f| doc.get_str(f))
+                                        .unwrap_or(&doc.id)
+                                        .to_string();
+                                    ctx["selected_items"] = serde_json::json!([{ "id": doc.id, "label": label }]);
+                                } else {
+                                    ctx["selected_items"] = serde_json::json!([]);
+                                }
+                            } else {
+                                ctx["selected_items"] = serde_json::json!([]);
+                            }
                         }
                     }
                 }
@@ -1211,73 +1600,51 @@ fn enrich_nested_fields(
                         let title_field = related_def.title_field().map(|s| s.to_string());
                         let admin_thumbnail = related_def.upload.as_ref()
                             .and_then(|u| u.admin_thumbnail.as_ref().cloned());
-                        let find_query = query::FindQuery::default();
-                        if let Ok(mut docs) = query::find(conn, &rc.collection, related_def, &find_query, rel_locale_ctx) {
-                            if let Some(ref upload_config) = related_def.upload {
-                                if upload_config.enabled {
-                                    for doc in &mut docs {
-                                        upload::assemble_sizes_object(doc, upload_config);
-                                    }
-                                }
-                            }
 
+                        if rc.has_many {
+                            // Has-many: selected_items already handled by the parent context
+                        } else {
+                            // Has-one upload: fetch only the selected doc via search widget
                             let current_value = ctx.get("value")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
-
-                            let mut selected_preview_url = None;
-                            let mut selected_filename = None;
-
-                            let options: Vec<_> = docs.iter().map(|doc| {
-                                let label = doc.get_str("filename")
-                                    .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
-                                    .unwrap_or(&doc.id);
-                                let mime = doc.get_str("mime_type").unwrap_or("");
-                                let is_image = mime.starts_with("image/");
-
-                                let thumb_url = if is_image {
-                                    admin_thumbnail.as_ref()
-                                        .and_then(|thumb_name| {
-                                            doc.fields.get("sizes")
-                                                .and_then(|v| v.get(thumb_name))
-                                                .and_then(|v| v.get("url"))
-                                                .and_then(|v| v.as_str())
-                                                .map(|s| s.to_string())
-                                        })
-                                        .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                            if !current_value.is_empty() {
+                                if let Ok(Some(mut doc)) = query::find_by_id(conn, &rc.collection, related_def, &current_value, rel_locale_ctx) {
+                                    if let Some(ref uc) = related_def.upload {
+                                        if uc.enabled { upload::assemble_sizes_object(&mut doc, uc); }
+                                    }
+                                    let label = doc.get_str("filename")
+                                        .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+                                        .unwrap_or(&doc.id)
+                                        .to_string();
+                                    let mime = doc.get_str("mime_type").unwrap_or("").to_string();
+                                    let is_image = mime.starts_with("image/");
+                                    let thumb_url = if is_image {
+                                        admin_thumbnail.as_ref()
+                                            .and_then(|thumb_name| {
+                                                doc.fields.get("sizes")
+                                                    .and_then(|v| v.get(thumb_name))
+                                                    .and_then(|v| v.get("url"))
+                                                    .and_then(|v| v.as_str())
+                                                    .map(|s| s.to_string())
+                                            })
+                                            .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                                    } else { None };
+                                    let mut item = serde_json::json!({ "id": doc.id, "label": label });
+                                    if let Some(ref url) = thumb_url { item["thumbnail_url"] = serde_json::json!(url); }
+                                    if is_image { item["is_image"] = serde_json::json!(true); }
+                                    item["filename"] = serde_json::json!(label);
+                                    ctx["selected_items"] = serde_json::json!([item]);
+                                    if let Some(url) = thumb_url {
+                                        ctx["selected_preview_url"] = serde_json::json!(url);
+                                    }
+                                    ctx["selected_filename"] = serde_json::json!(label);
                                 } else {
-                                    None
-                                };
-
-                                let is_selected = doc.id == current_value;
-                                if is_selected {
-                                    selected_preview_url = thumb_url.clone();
-                                    selected_filename = Some(label.to_string());
+                                    ctx["selected_items"] = serde_json::json!([]);
                                 }
-
-                                let mut opt = serde_json::json!({
-                                    "value": doc.id,
-                                    "label": label,
-                                    "selected": is_selected,
-                                });
-                                if let Some(ref url) = thumb_url {
-                                    opt["thumbnail_url"] = serde_json::json!(url);
-                                }
-                                if is_image {
-                                    opt["is_image"] = serde_json::json!(true);
-                                }
-                                opt["filename"] = serde_json::json!(label);
-                                opt
-                            }).collect();
-                            ctx["relationship_options"] = serde_json::json!(options);
-                            ctx["relationship_collection"] = serde_json::json!(rc.collection);
-
-                            if let Some(url) = selected_preview_url {
-                                ctx["selected_preview_url"] = serde_json::json!(url);
-                            }
-                            if let Some(fname) = selected_filename {
-                                ctx["selected_filename"] = serde_json::json!(fname);
+                            } else {
+                                ctx["selected_items"] = serde_json::json!([]);
                             }
                         }
                     }
@@ -1306,6 +1673,10 @@ fn enrich_nested_fields(
                         }
                     }
                 }
+                // Enrich the <template> sub-fields so new rows added via JS have upload/relationship options
+                if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
+                    enrich_nested_fields(sub_arr, &field_def.fields, conn, reg, rel_locale_ctx);
+                }
             }
             FieldType::Blocks => {
                 // Recurse into block rows' sub-fields, matching each row's block type
@@ -1318,6 +1689,14 @@ fn enrich_nested_fields(
                             if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
                                 enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
                             }
+                        }
+                    }
+                }
+                // Enrich block definition templates so new block rows have upload/relationship options
+                if let Some(defs_arr) = ctx.get_mut("block_definitions").and_then(|v| v.as_array_mut()) {
+                    for (def_ctx, block_def) in defs_arr.iter_mut().zip(field_def.blocks.iter()) {
+                        if let Some(sub_arr) = def_ctx.get_mut("fields").and_then(|v| v.as_array_mut()) {
+                            enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
                         }
                     }
                 }
@@ -1918,6 +2297,7 @@ mod tests {
             collection: "users".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let fields = vec![rel_field];
         let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
@@ -1933,6 +2313,7 @@ mod tests {
             collection: "tags".to_string(),
             has_many: true,
             max_depth: None,
+            polymorphic: vec![],
         });
         let fields = vec![rel_field];
         let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
@@ -1974,6 +2355,7 @@ mod tests {
             collection: "media".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let fields = vec![upload_field];
         let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
@@ -2183,6 +2565,81 @@ mod tests {
         assert_eq!(block_defs[0]["label_field"], "body");
     }
 
+    #[test]
+    fn build_field_contexts_blocks_group_and_image_url() {
+        let mut blocks = make_field("content", FieldType::Blocks);
+        blocks.blocks = vec![
+            BlockDefinition {
+                block_type: "hero".to_string(),
+                label: Some(LocalizedString::Plain("Hero".to_string())),
+                group: Some("Layout".to_string()),
+                image_url: Some("/static/blocks/hero.svg".to_string()),
+                ..Default::default()
+            },
+            BlockDefinition {
+                block_type: "text".to_string(),
+                label: Some(LocalizedString::Plain("Text".to_string())),
+                group: Some("Content".to_string()),
+                ..Default::default()
+            },
+            BlockDefinition {
+                block_type: "divider".to_string(),
+                label: Some(LocalizedString::Plain("Divider".to_string())),
+                ..Default::default()
+            },
+        ];
+        let fields = vec![blocks];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        let block_defs = result[0]["block_definitions"].as_array().unwrap();
+
+        assert_eq!(block_defs[0]["group"], "Layout");
+        assert_eq!(block_defs[0]["image_url"], "/static/blocks/hero.svg");
+
+        assert_eq!(block_defs[1]["group"], "Content");
+        assert!(block_defs[1].get("image_url").map_or(true, |v| v.is_null()));
+
+        assert!(block_defs[2].get("group").map_or(true, |v| v.is_null()));
+        assert!(block_defs[2].get("image_url").map_or(true, |v| v.is_null()));
+    }
+
+    #[test]
+    fn build_field_contexts_blocks_picker_card() {
+        let mut blocks = make_field("content", FieldType::Blocks);
+        blocks.admin.picker = Some("card".to_string());
+        blocks.blocks = vec![BlockDefinition {
+            block_type: "text".to_string(),
+            fields: vec![make_field("body", FieldType::Text)],
+            ..Default::default()
+        }];
+        let fields = vec![blocks];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["picker"], "card");
+    }
+
+    // --- has_many text/number inside composites regression tests ---
+
+    #[test]
+    fn has_many_text_in_group_gets_tags_context() {
+        // Bug fix: has_many text inside a Group should produce tags/has_many context
+        let mut group = make_field("meta", FieldType::Group);
+        let mut tags = make_field("tags", FieldType::Text);
+        tags.has_many = true;
+        group.fields = vec![tags];
+        let fields = vec![group];
+
+        let mut values = HashMap::new();
+        values.insert("meta__tags".to_string(), r#"["rust","lua"]"#.to_string());
+        let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
+
+        let sub = result[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(sub[0]["has_many"], true);
+        let tags_arr = sub[0]["tags"].as_array().unwrap();
+        assert_eq!(tags_arr.len(), 2);
+        assert_eq!(tags_arr[0], "rust");
+        assert_eq!(tags_arr[1], "lua");
+        assert_eq!(sub[0]["value"], "rust,lua");
+    }
+
     // --- build_field_contexts: position field ---
 
     #[test]
@@ -2315,6 +2772,7 @@ mod tests {
             collection: "users".to_string(),
             has_many: true,
             max_depth: None,
+            polymorphic: vec![],
         });
         let mut ctx = serde_json::json!({"name": "group__author"});
         apply_field_type_extras(&sf, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__author", false, 0);
@@ -2330,6 +2788,7 @@ mod tests {
             collection: "media".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let mut ctx = serde_json::json!({"name": "group__image"});
         apply_field_type_extras(&sf, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__image", false, 0);
@@ -2487,6 +2946,7 @@ mod tests {
             collection: "media".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let ctx = build_enriched_sub_field_context(
             &sf, Some(&serde_json::json!("img123")), "items", 0,
@@ -2505,6 +2965,7 @@ mod tests {
             collection: "users".to_string(),
             has_many: true,
             max_depth: None,
+            polymorphic: vec![],
         });
         let ctx = build_enriched_sub_field_context(
             &sf, Some(&serde_json::json!("user1")), "items", 0,
@@ -2758,23 +3219,24 @@ mod tests {
             collection: "media".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
 
         let field_defs = vec![upload_field];
         let mut sub_fields = vec![serde_json::json!({
             "name": "content[0][image]",
             "field_type": "upload",
-            "value": "",
+            "value": "img1",
             "relationship_collection": "media",
         })];
 
         enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
 
-        let options = sub_fields[0]["relationship_options"].as_array()
-            .expect("relationship_options should be populated");
-        assert_eq!(options.len(), 2, "Should have 2 media options");
-        assert!(options.iter().any(|o| o["value"] == "img1"), "Should contain img1");
-        assert!(options.iter().any(|o| o["value"] == "img2"), "Should contain img2");
+        let items = sub_fields[0]["selected_items"].as_array()
+            .expect("selected_items should be populated");
+        assert_eq!(items.len(), 1, "Should have 1 selected item");
+        assert_eq!(items[0]["id"], "img1");
+        assert_eq!(items[0]["label"], "logo.png");
     }
 
     #[test]
@@ -2821,6 +3283,7 @@ mod tests {
             collection: "users".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
 
         let field_defs = vec![rel_field];
@@ -2833,12 +3296,11 @@ mod tests {
 
         enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
 
-        let options = sub_fields[0]["relationship_options"].as_array()
-            .expect("relationship_options should be populated");
-        assert_eq!(options.len(), 2, "Should have 2 user options");
-        let alice = options.iter().find(|o| o["value"] == "u1").unwrap();
-        assert_eq!(alice["label"], "Alice");
-        assert_eq!(alice["selected"], true, "u1 should be selected");
+        let items = sub_fields[0]["selected_items"].as_array()
+            .expect("selected_items should be populated");
+        assert_eq!(items.len(), 1, "Should have 1 selected item");
+        assert_eq!(items[0]["id"], "u1");
+        assert_eq!(items[0]["label"], "Alice");
     }
 
     #[test]
@@ -2884,6 +3346,7 @@ mod tests {
             collection: "tags".to_string(),
             has_many: false,
             max_depth: None,
+            polymorphic: vec![],
         });
         let row_field = FieldDefinition {
             name: "row1".to_string(),
@@ -2907,9 +3370,311 @@ mod tests {
         enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
 
         let row_subs = sub_fields[0]["sub_fields"].as_array().unwrap();
-        let options = row_subs[0]["relationship_options"].as_array()
+        // Empty value → selected_items is empty array
+        let items = row_subs[0]["selected_items"].as_array()
             .expect("Nested relationship inside Row should be enriched");
-        assert_eq!(options.len(), 1);
-        assert_eq!(options[0]["label"], "Rust");
+        assert_eq!(items.len(), 0, "Empty value should produce empty selected_items");
+    }
+
+    #[test]
+    fn enrich_nested_fields_blocks_template_gets_upload_options() {
+        // Regression: block definition templates (for new rows) must have upload options enriched
+        use crate::core::collection::*;
+        use crate::core::field::RelationshipConfig;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                filename TEXT,
+                mime_type TEXT,
+                url TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO media (id, filename, mime_type, url, created_at, updated_at)
+            VALUES ('m1', 'photo.jpg', 'image/jpeg', '/uploads/photo.jpg', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let media_def = CollectionDefinition {
+            slug: "media".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                make_field("filename", FieldType::Text),
+                make_field("mime_type", FieldType::Text),
+                make_field("url", FieldType::Text),
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: Some(crate::core::upload::CollectionUpload { enabled: true, ..Default::default() }),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut registry = crate::core::Registry::new();
+        registry.register_collection(media_def);
+
+        // A Blocks field with an "image" block containing an upload field
+        let mut upload_field = make_field("image", FieldType::Upload);
+        upload_field.relationship = Some(RelationshipConfig {
+            collection: "media".to_string(),
+            has_many: false,
+            max_depth: None,
+            polymorphic: vec![],
+        });
+        let blocks_field = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            blocks: vec![BlockDefinition {
+                block_type: "image".to_string(),
+                fields: vec![upload_field],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        let field_defs = vec![blocks_field];
+        // Simulate the block_definitions context (as built by build_single_field_context)
+        let mut sub_fields = vec![serde_json::json!({
+            "name": "content",
+            "field_type": "blocks",
+            "block_definitions": [{
+                "block_type": "image",
+                "label": "Image",
+                "fields": [{
+                    "name": "content[__INDEX__][image]",
+                    "field_type": "upload",
+                    "value": "",
+                    "relationship_collection": "media",
+                }],
+            }],
+            "rows": [],
+        })];
+
+        enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let block_defs = sub_fields[0]["block_definitions"].as_array().unwrap();
+        let fields = block_defs[0]["fields"].as_array().unwrap();
+        // Empty value → selected_items is empty array (no full table scan)
+        let items = fields[0]["selected_items"].as_array()
+            .expect("Upload inside block template should have selected_items");
+        assert_eq!(items.len(), 0, "Empty value should produce empty selected_items");
+    }
+
+    #[test]
+    fn enrich_nested_fields_array_template_gets_upload_options() {
+        // Regression: array sub_fields template (for new rows) must have upload options enriched
+        use crate::core::collection::*;
+        use crate::core::field::RelationshipConfig;
+
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                filename TEXT,
+                mime_type TEXT,
+                url TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            INSERT INTO media (id, filename, mime_type, url, created_at, updated_at)
+            VALUES ('m1', 'doc.pdf', 'application/pdf', '/uploads/doc.pdf', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let media_def = CollectionDefinition {
+            slug: "media".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                make_field("filename", FieldType::Text),
+                make_field("mime_type", FieldType::Text),
+                make_field("url", FieldType::Text),
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: Some(crate::core::upload::CollectionUpload { enabled: true, ..Default::default() }),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut registry = crate::core::Registry::new();
+        registry.register_collection(media_def);
+
+        let mut upload_field = make_field("file", FieldType::Upload);
+        upload_field.relationship = Some(RelationshipConfig {
+            collection: "media".to_string(),
+            has_many: false,
+            max_depth: None,
+            polymorphic: vec![],
+        });
+        let array_field = FieldDefinition {
+            name: "attachments".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![upload_field],
+            ..Default::default()
+        };
+
+        let field_defs = vec![array_field];
+        let mut sub_fields = vec![serde_json::json!({
+            "name": "attachments",
+            "field_type": "array",
+            "sub_fields": [{
+                "name": "attachments[__INDEX__][file]",
+                "field_type": "upload",
+                "value": "",
+                "relationship_collection": "media",
+            }],
+            "rows": [],
+        })];
+
+        enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
+
+        let template_fields = sub_fields[0]["sub_fields"].as_array().unwrap();
+        // Empty value → selected_items is empty array (no full table scan)
+        let items = template_fields[0]["selected_items"].as_array()
+            .expect("Upload inside array template should have selected_items");
+        assert_eq!(items.len(), 0, "Empty value should produce empty selected_items");
+    }
+
+    // --- count_errors_in_fields tests ---
+
+    #[test]
+    fn count_errors_empty_fields() {
+        assert_eq!(count_errors_in_fields(&[]), 0);
+    }
+
+    #[test]
+    fn count_errors_no_errors() {
+        let fields = vec![
+            serde_json::json!({"name": "title", "value": "hello"}),
+            serde_json::json!({"name": "body", "value": "world"}),
+        ];
+        assert_eq!(count_errors_in_fields(&fields), 0);
+    }
+
+    #[test]
+    fn count_errors_direct_errors() {
+        let fields = vec![
+            serde_json::json!({"name": "title", "error": "Required"}),
+            serde_json::json!({"name": "body", "value": "ok"}),
+            serde_json::json!({"name": "email", "error": "Invalid email"}),
+        ];
+        assert_eq!(count_errors_in_fields(&fields), 2);
+    }
+
+    #[test]
+    fn count_errors_nested_in_sub_fields() {
+        let fields = vec![
+            serde_json::json!({
+                "name": "group1",
+                "sub_fields": [
+                    {"name": "nested1", "error": "Too short"},
+                    {"name": "nested2", "value": "ok"},
+                ]
+            }),
+        ];
+        assert_eq!(count_errors_in_fields(&fields), 1);
+    }
+
+    #[test]
+    fn count_errors_nested_in_tabs() {
+        let fields = vec![
+            serde_json::json!({
+                "name": "settings",
+                "tabs": [
+                    {
+                        "label": "General",
+                        "sub_fields": [
+                            {"name": "f1", "error": "Required"},
+                            {"name": "f2", "error": "Too long"},
+                        ]
+                    },
+                    {
+                        "label": "Advanced",
+                        "sub_fields": [
+                            {"name": "f3", "value": "ok"},
+                        ]
+                    }
+                ]
+            }),
+        ];
+        assert_eq!(count_errors_in_fields(&fields), 2);
+    }
+
+    #[test]
+    fn count_errors_nested_in_array_rows() {
+        let fields = vec![
+            serde_json::json!({
+                "name": "items",
+                "rows": [
+                    {
+                        "index": 0,
+                        "sub_fields": [
+                            {"name": "items[0][title]", "error": "Required"},
+                        ]
+                    },
+                    {
+                        "index": 1,
+                        "sub_fields": [
+                            {"name": "items[1][title]", "value": "ok"},
+                        ]
+                    }
+                ]
+            }),
+        ];
+        assert_eq!(count_errors_in_fields(&fields), 1);
+    }
+
+    #[test]
+    fn count_errors_null_error_not_counted() {
+        let fields = vec![
+            serde_json::json!({"name": "title", "error": null}),
+        ];
+        assert_eq!(count_errors_in_fields(&fields), 0);
+    }
+
+    #[test]
+    fn tabs_field_context_includes_error_count() {
+        use crate::core::field::FieldTab;
+
+        let mut tabs_field = make_field("settings", FieldType::Tabs);
+        tabs_field.tabs = vec![
+            FieldTab {
+                label: "General".to_string(),
+                description: None,
+                fields: vec![
+                    {
+                        let mut f = make_field("title", FieldType::Text);
+                        f.required = true;
+                        f
+                    },
+                    make_field("slug", FieldType::Text),
+                ],
+            },
+            FieldTab {
+                label: "Advanced".to_string(),
+                description: None,
+                fields: vec![
+                    make_field("meta", FieldType::Text),
+                ],
+            },
+        ];
+
+        let values = HashMap::new(); // empty values -> required field "title" has no value
+        let mut errors = HashMap::new();
+        errors.insert("title".to_string(), "Title is required".to_string());
+
+        let result = build_field_contexts(&[tabs_field], &values, &errors, false, false);
+        let tabs = result[0]["tabs"].as_array().expect("tabs should be an array");
+
+        // First tab has 1 error (title is required)
+        assert_eq!(tabs[0]["error_count"], 1);
+        // Second tab has no errors
+        assert!(tabs[1].get("error_count").is_none() || tabs[1]["error_count"].is_null());
     }
 }

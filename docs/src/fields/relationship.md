@@ -36,11 +36,43 @@ Uses a junction table (`{collection}_{field}`) with `parent_id`, `related_id`, a
 
 At `depth=0`, the field value is an array of string IDs. At `depth=1+`, each ID is replaced with the full document object.
 
+## Polymorphic Relationships
+
+A relationship field can reference documents from multiple collections by setting `collection` to a Lua array of slugs instead of a single string.
+
+```lua
+{
+    name = "related_content",
+    type = "relationship",
+    relationship = {
+        collection = { "posts", "pages" },
+        has_many = false,
+    },
+}
+```
+
+**Has-one storage** — the column stores a composite string in `"collection/id"` format (e.g., `"posts/abc123"`). At `depth=0` the raw composite string is returned. At `depth=1+` it is replaced with the full document object.
+
+**Has-many storage** — uses a junction table (same as a regular has-many) with an additional `related_collection` TEXT column that records which collection each referenced document belongs to.
+
+```lua
+{
+    name = "featured_items",
+    type = "relationship",
+    relationship = {
+        collection = { "posts", "pages", "events" },
+        has_many = true,
+    },
+}
+```
+
+**Admin UI** — the relationship picker fetches and displays search results grouped by collection, so editors can find and select documents from any of the target collections in one widget.
+
 ## Relationship Config
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `collection` | string | **required** | Target collection slug |
+| `collection` | string \| string[] | **required** | Target collection slug, or an array of slugs for polymorphic relationships |
 | `has_many` | boolean | `false` | Use a junction table for many-to-many |
 | `max_depth` | integer | `nil` | Per-field cap on population depth |
 
@@ -59,7 +91,23 @@ CREATE TABLE posts_tags (
 
 ## Admin Rendering
 
-Has-one renders as a searchable select dropdown. Has-many renders as a multi-select with drag-and-drop ordering.
+Has-one renders as a searchable input. Has-many renders as a multi-select with chips for selected items.
+
+## Drawer Picker
+
+Add `admin.picker = "drawer"` to enable a browse button next to the search input. Clicking it opens a slide-in drawer panel with a searchable list for browsing documents.
+
+```lua
+{
+    name = "author",
+    type = "relationship",
+    relationship = { collection = "users" },
+    admin = { picker = "drawer" },
+}
+```
+
+- Without `picker`: inline search autocomplete only (default behavior)
+- With `picker = "drawer"`: inline search + browse button that opens a drawer with a scrollable list
 
 ## Population Depth
 

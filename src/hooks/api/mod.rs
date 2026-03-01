@@ -555,6 +555,11 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
         tbl.set("picker_appearance", pa.as_str())?;
     }
 
+    // has_many for scalar fields (text, number, select — not relationship/upload which use RelationshipConfig)
+    if f.has_many && f.relationship.is_none() {
+        tbl.set("has_many", true)?;
+    }
+
     // options (select fields)
     if !f.options.is_empty() {
         let opts = lua.create_table()?;
@@ -590,6 +595,64 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
             has_any = true;
         }
         if f.admin.collapsed { admin.set("collapsed", true)?; has_any = true; }
+        if let Some(ref lf) = f.admin.label_field {
+            admin.set("label_field", lf.as_str())?;
+            has_any = true;
+        }
+        if let Some(ref rl) = f.admin.row_label {
+            admin.set("row_label", rl.as_str())?;
+            has_any = true;
+        }
+        if f.admin.init_collapsed {
+            admin.set("init_collapsed", true)?;
+            has_any = true;
+        }
+        if let Some(ref ls) = f.admin.labels_singular {
+            let labels = lua.create_table()?;
+            labels.set("singular", localized_string_to_lua(lua, ls)?)?;
+            if let Some(ref lp) = f.admin.labels_plural {
+                labels.set("plural", localized_string_to_lua(lua, lp)?)?;
+            }
+            admin.set("labels", labels)?;
+            has_any = true;
+        } else if let Some(ref lp) = f.admin.labels_plural {
+            let labels = lua.create_table()?;
+            labels.set("plural", localized_string_to_lua(lua, lp)?)?;
+            admin.set("labels", labels)?;
+            has_any = true;
+        }
+        if let Some(ref pos) = f.admin.position {
+            admin.set("position", pos.as_str())?;
+            has_any = true;
+        }
+        if let Some(ref cond) = f.admin.condition {
+            admin.set("condition", cond.as_str())?;
+            has_any = true;
+        }
+        if let Some(ref s) = f.admin.step {
+            admin.set("step", s.as_str())?;
+            has_any = true;
+        }
+        if let Some(r) = f.admin.rows {
+            admin.set("rows", r)?;
+            has_any = true;
+        }
+        if let Some(ref lang) = f.admin.language {
+            admin.set("language", lang.as_str())?;
+            has_any = true;
+        }
+        if !f.admin.features.is_empty() {
+            let features = lua.create_table()?;
+            for (i, feat) in f.admin.features.iter().enumerate() {
+                features.set(i + 1, feat.as_str())?;
+            }
+            admin.set("features", features)?;
+            has_any = true;
+        }
+        if let Some(ref p) = f.admin.picker {
+            admin.set("picker", p.as_str())?;
+            has_any = true;
+        }
         if has_any {
             tbl.set("admin", admin)?;
         }
@@ -658,6 +721,12 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
             bt.set("type", b.block_type.as_str())?;
             if let Some(ref lbl) = b.label {
                 bt.set("label", localized_string_to_lua(lua, lbl)?)?;
+            }
+            if let Some(ref g) = b.group {
+                bt.set("group", g.as_str())?;
+            }
+            if let Some(ref url) = b.image_url {
+                bt.set("image_url", url.as_str())?;
             }
             let bf = lua.create_table()?;
             for (j, sf) in b.fields.iter().enumerate() {
@@ -1319,6 +1388,7 @@ mod tests {
                 collection: "users".to_string(),
                 has_many: true,
                 max_depth: Some(2),
+                polymorphic: vec![],
             }),
             ..Default::default()
         };
@@ -1367,6 +1437,7 @@ mod tests {
                     ..Default::default()
                 }],
                 label_field: None,
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1378,6 +1449,40 @@ mod tests {
         let bf: mlua::Table = b1.get("fields").unwrap();
         let bf1: mlua::Table = bf.get(1).unwrap();
         assert_eq!(bf1.get::<String>("name").unwrap(), "body");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_has_many_text() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "tags".to_string(),
+            field_type: crate::core::field::FieldType::Text,
+            has_many: true,
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        assert!(tbl.get::<bool>("has_many").unwrap());
+    }
+
+    #[test]
+    fn test_field_config_to_lua_blocks_group_and_image() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "content".to_string(),
+            field_type: crate::core::field::FieldType::Blocks,
+            blocks: vec![crate::core::field::BlockDefinition {
+                block_type: "hero".to_string(),
+                group: Some("Layout".to_string()),
+                image_url: Some("/static/hero.svg".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let blocks: mlua::Table = tbl.get("blocks").unwrap();
+        let b1: mlua::Table = blocks.get(1).unwrap();
+        assert_eq!(b1.get::<String>("group").unwrap(), "Layout");
+        assert_eq!(b1.get::<String>("image_url").unwrap(), "/static/hero.svg");
     }
 
     #[test]
@@ -1428,6 +1533,63 @@ mod tests {
         let access: mlua::Table = tbl.get("access").unwrap();
         assert_eq!(access.get::<String>("read").unwrap(), "hooks.access.check");
         assert_eq!(access.get::<String>("create").unwrap(), "hooks.access.admin");
+    }
+
+    /// Regression test: field_config_to_lua must emit ALL FieldAdmin properties
+    /// so that plugins using config.list() + define() don't lose admin settings.
+    #[test]
+    fn test_field_config_to_lua_admin_roundtrip_all_properties() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "content".to_string(),
+            field_type: crate::core::field::FieldType::Blocks,
+            admin: crate::core::field::FieldAdmin {
+                label: Some(crate::core::field::LocalizedString::Plain("Content".to_string())),
+                placeholder: Some(crate::core::field::LocalizedString::Plain("Add content...".to_string())),
+                description: Some(crate::core::field::LocalizedString::Plain("Main content area".to_string())),
+                hidden: false,
+                readonly: false,
+                width: Some("full".to_string()),
+                collapsed: true,
+                label_field: Some("heading".to_string()),
+                row_label: Some("hooks.content_row_label".to_string()),
+                init_collapsed: true,
+                labels_singular: Some(crate::core::field::LocalizedString::Plain("Block".to_string())),
+                labels_plural: Some(crate::core::field::LocalizedString::Plain("Blocks".to_string())),
+                position: Some("main".to_string()),
+                condition: Some("hooks.show_content".to_string()),
+                step: Some("1".to_string()),
+                rows: Some(12),
+                language: Some("json".to_string()),
+                features: vec!["bold".to_string(), "italic".to_string()],
+                picker: Some("card".to_string()),
+            },
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let admin: mlua::Table = tbl.get("admin").unwrap();
+
+        // Every FieldAdmin property must be present
+        assert_eq!(admin.get::<String>("label").unwrap(), "Content");
+        assert_eq!(admin.get::<String>("placeholder").unwrap(), "Add content...");
+        assert_eq!(admin.get::<String>("description").unwrap(), "Main content area");
+        assert_eq!(admin.get::<String>("width").unwrap(), "full");
+        assert_eq!(admin.get::<bool>("collapsed").unwrap(), true);
+        assert_eq!(admin.get::<String>("label_field").unwrap(), "heading");
+        assert_eq!(admin.get::<String>("row_label").unwrap(), "hooks.content_row_label");
+        assert_eq!(admin.get::<bool>("init_collapsed").unwrap(), true);
+        let labels: mlua::Table = admin.get("labels").unwrap();
+        assert_eq!(labels.get::<String>("singular").unwrap(), "Block");
+        assert_eq!(labels.get::<String>("plural").unwrap(), "Blocks");
+        assert_eq!(admin.get::<String>("position").unwrap(), "main");
+        assert_eq!(admin.get::<String>("condition").unwrap(), "hooks.show_content");
+        assert_eq!(admin.get::<String>("step").unwrap(), "1");
+        assert_eq!(admin.get::<u32>("rows").unwrap(), 12);
+        assert_eq!(admin.get::<String>("language").unwrap(), "json");
+        let features: mlua::Table = admin.get("features").unwrap();
+        assert_eq!(features.get::<String>(1).unwrap(), "bold");
+        assert_eq!(features.get::<String>(2).unwrap(), "italic");
+        assert_eq!(admin.get::<String>("picker").unwrap(), "card");
     }
 
     #[test]
