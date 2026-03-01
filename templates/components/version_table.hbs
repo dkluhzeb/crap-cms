@@ -15,7 +15,7 @@
       <tr>
         <td><span class="edit-sidebar__version-number">v{{this.version}}</span></td>
         <td><span class="badge badge--{{this.status}}">{{this.status}}</span></td>
-        <td>{{this.created_at}}</td>
+        <td><time datetime="{{this.created_at}}">{{this.created_at}}</time></td>
         <td>
           {{#unless this.latest}}
           <form method="post" action="{{../restore_url_prefix}}/versions/{{this.id}}/restore" style="margin:0;">

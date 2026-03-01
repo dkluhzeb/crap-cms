@@ -6,11 +6,15 @@
   <a class="card" href="/admin/collections/{{this.slug}}"
     hx-get="/admin/collections/{{this.slug}}" hx-target="body" hx-push-url="true">
     <div class="card__header">
-      <span class="material-symbols-outlined">folder</span>
+      <span class="material-symbols-outlined">{{#if this.is_upload}}image{{else if this.is_auth}}person{{else}}folder{{/if}}</span>
       <h3>{{this.display_name}}</h3>
+      {{#if this.is_auth}}<span class="card__badge">auth</span>{{/if}}
+      {{#if this.is_upload}}<span class="card__badge">media</span>{{/if}}
+      {{#if this.has_versions}}<span class="card__badge">versions</span>{{/if}}
     </div>
     <div class="card__body">
-      <p>{{this.count}} item(s)</p>
+      <p class="card__stat">{{this.count}} {{this.singular_name}}(s)</p>
+      {{#if this.last_updated}}<p class="card__meta">{{t "last_updated"}} <time datetime="{{this.last_updated}}">{{this.last_updated}}</time></p>{{/if}}
     </div>
   </a>
   {{/each}}
@@ -25,7 +29,13 @@
     <div class="card__header">
       <span class="material-symbols-outlined">settings</span>
       <h3>{{this.display_name}}</h3>
+      {{#if this.has_versions}}<span class="card__badge">versions</span>{{/if}}
     </div>
+    {{#if this.last_updated}}
+    <div class="card__body">
+      <p class="card__meta">{{t "last_updated"}} <time datetime="{{this.last_updated}}">{{this.last_updated}}</time></p>
+    </div>
+    {{/if}}
   </a>
   {{/each}}
 </div>

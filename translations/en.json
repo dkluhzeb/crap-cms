@@ -64,5 +64,6 @@
   "draft": "Draft",
   "version": "Version",
   "shared_field": "Shared across locales",
-  "view_all_versions": "View all versions"
+  "view_all_versions": "View all versions",
+  "last_updated": "Last updated"
 }

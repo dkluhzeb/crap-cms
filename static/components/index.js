@@ -26,6 +26,7 @@ import './conditions.js';
 import './live-events.js';
 import './locale.js';
 import './scroll.js';
+import './time-format.js';
 
 // Modules with globals for template onclick handlers
 import { toggleGroup } from './groups.js';

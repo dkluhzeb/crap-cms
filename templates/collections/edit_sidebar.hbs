@@ -105,13 +105,13 @@
         {{#if document.created_at}}
         <div class="edit-sidebar__meta-row">
           <span class="edit-sidebar__meta-label">{{t "created"}}</span>
-          <span class="edit-sidebar__meta-value">{{document.created_at}}</span>
+          <span class="edit-sidebar__meta-value"><time datetime="{{document.created_at}}">{{document.created_at}}</time></span>
         </div>
         {{/if}}
         {{#if document.updated_at}}
         <div class="edit-sidebar__meta-row">
           <span class="edit-sidebar__meta-label">{{t "updated"}}</span>
-          <span class="edit-sidebar__meta-value">{{document.updated_at}}</span>
+          <span class="edit-sidebar__meta-value"><time datetime="{{document.updated_at}}">{{document.updated_at}}</time></span>
         </div>
         {{/if}}
       </div>

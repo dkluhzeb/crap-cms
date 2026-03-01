@@ -9,7 +9,7 @@
     </a>
   </td>
   {{#if ../collection.has_drafts}}<td><span class="badge badge--{{this.status}}">{{this.status}}</span></td>{{/if}}
-  <td>{{this.created_at}}</td>
+  <td><time datetime="{{this.created_at}}">{{this.created_at}}</time></td>
   <td>
     <a class="button button--ghost button--small" href="/admin/collections/{{collection.slug}}/{{this.id}}/delete"
       hx-get="/admin/collections/{{collection.slug}}/{{this.id}}/delete" hx-target="body" hx-push-url="true">

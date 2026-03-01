@@ -50,3 +50,22 @@ a.card:hover {
   color: var(--text-secondary);
   font-size: var(--text-sm);
 }
+
+.card__meta {
+  margin-top: var(--space-xs) !important;
+  font-size: var(--text-xs) !important;
+  color: var(--text-tertiary) !important;
+}
+
+.card__badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+  background: var(--color-primary-bg);
+  color: var(--color-primary);
+}

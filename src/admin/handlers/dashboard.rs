@@ -22,20 +22,42 @@ pub async fn index(
             Ok(r) => r,
             Err(e) => return Html(format!("<h1>Error</h1><pre>Registry lock poisoned: {}</pre>", e)),
         };
+        let conn = state.pool.get().ok();
         for (slug, def) in &reg.collections {
             let count = crate::db::ops::count_documents(&state.pool, slug, def, &[], None)
                 .unwrap_or(0);
+            let last_updated = conn.as_ref().and_then(|c| {
+                c.query_row(
+                    &format!("SELECT MAX(updated_at) FROM \"{}\"", slug),
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                ).ok().flatten()
+            });
             collection_cards.push(serde_json::json!({
                 "slug": slug,
                 "display_name": def.display_name(),
                 "singular_name": def.singular_name(),
                 "count": count,
+                "last_updated": last_updated,
+                "is_auth": def.is_auth_collection(),
+                "is_upload": def.upload.is_some(),
+                "has_versions": def.has_versions(),
             }));
         }
         for (slug, def) in &reg.globals {
+            let table_name = format!("_global_{}", slug);
+            let last_updated = conn.as_ref().and_then(|c| {
+                c.query_row(
+                    &format!("SELECT updated_at FROM \"{}\" WHERE id = 'default'", table_name),
+                    [],
+                    |row| row.get::<_, Option<String>>(0),
+                ).ok().flatten()
+            });
             global_cards.push(serde_json::json!({
                 "slug": slug,
                 "display_name": def.display_name(),
+                "last_updated": last_updated,
+                "has_versions": def.has_versions(),
             }));
         }
     }
