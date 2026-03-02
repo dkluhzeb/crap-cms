@@ -18,6 +18,8 @@ Add `admin.condition` to a field definition, referencing a Lua function:
 
 The condition references a Lua function using the standard hook ref format (`hooks.<collection>.<name>`). The function receives the current form data and returns **either** a condition table (client-side) or a boolean (server-side).
 
+The `data` parameter is typed per-collection (`crap.data.Posts`, `crap.global_data.SiteSettings`) for IDE autocomplete. The type generator emits these types automatically.
+
 Use `crap-cms make hook` with `--type condition` to scaffold condition hooks:
 
 ```bash
@@ -33,6 +35,8 @@ When the function returns a **table**, it is serialized to JSON and embedded in 
 
 ```lua
 -- hooks/posts/show_external_url.lua
+---@param data crap.data.Posts
+---@return table
 return function(data)
     return { field = "post_type", equals = "link" }
 end
@@ -44,6 +48,8 @@ When the function returns a **boolean**, the field visibility is re-evaluated on
 
 ```lua
 -- hooks/posts/show_premium_options.lua
+---@param data crap.data.Posts
+---@return boolean
 return function(data)
     -- Complex logic that needs server-side evaluation
     local tags = data.tags or {}
@@ -73,6 +79,8 @@ Return an array of condition tables to require all conditions to be true:
 
 ```lua
 -- hooks/posts/show_advanced.lua
+---@param data crap.data.Posts
+---@return table
 return function(data)
     return {
         { field = "post_type", not_equals = "link" },

@@ -27,13 +27,39 @@ end
 | `operation` | string | `"create"`, `"update"`, `"find"`, `"find_by_id"` |
 | `data` | table | Full document data (read-only snapshot) |
 
+### Typed Contexts
+
+The type generator (`crap-cms types lua`) emits per-collection field hook contexts
+with typed `data` fields:
+
+- **Collections:** `crap.field_hook.{PascalCase}` — e.g., `crap.field_hook.Posts`
+  has `data: crap.data.Posts`
+- **Globals:** `crap.field_hook.global_{slug}` — e.g., `crap.field_hook.global_site_settings`
+  has `data: crap.global_data.SiteSettings`
+
+Use the typed context when a hook is specific to one collection:
+
+```lua
+---@param value number|nil
+---@param context crap.field_hook.Inquiries
+---@return number|nil
+return function(value, context)
+    -- context.data is typed as crap.data.Inquiries
+    -- IDE autocompletes context.data.name, context.data.email, etc.
+    return value
+end
+```
+
+For shared hooks that work across multiple collections, use the generic
+`crap.FieldHookContext` (where `data` is `table<string, any>`).
+
 ## Events
 
 | Event | CRUD Access | Use Case |
 |-------|-------------|----------|
 | `before_validate` | Yes | Normalize values before validation (trim, lowercase, etc.) |
 | `before_change` | Yes | Transform values after validation (compute derived fields) |
-| `after_change` | No | Side effects after write (logging, cache) |
+| `after_change` | Yes | Side effects after write with CRUD access (logging, cascades) |
 | `after_read` | No | Transform values before response (formatting, computed fields) |
 
 ## Definition

@@ -26,11 +26,11 @@ end)
 |-------|-------------|
 | `before_validate` | Before field validation on create/update |
 | `before_change` | After validation, before write on create/update |
-| `after_change` | After create/update (fire-and-forget) |
+| `after_change` | After create/update (runs in transaction, has CRUD access) |
 | `before_read` | Before returning read results |
-| `after_read` | After read, before response |
+| `after_read` | After read, before response (no CRUD access) |
 | `before_delete` | Before delete |
-| `after_delete` | After delete (fire-and-forget) |
+| `after_delete` | After delete (runs in transaction, has CRUD access) |
 | `before_broadcast` | Before live event broadcast (can suppress or transform) |
 
 ## crap.hooks.remove(event, fn)

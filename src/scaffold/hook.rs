@@ -139,9 +139,9 @@ pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
 
     let lua = match opts.hook_type {
         HookType::Collection => {
-            let is_delete = matches!(opts.position, "before_delete" | "after_delete");
-            let context_type = if is_delete {
-                // Delete hooks receive { data = { id = "..." } } — no typed document fields.
+            let is_generic = matches!(opts.position, "before_delete" | "after_delete" | "before_broadcast");
+            let context_type = if is_generic {
+                // Delete and broadcast hooks use generic context (operation includes delete, not just create/update).
                 "crap.HookContext".to_string()
             } else if opts.is_global {
                 format!("crap.hook.global_{}", opts.collection)
@@ -162,20 +162,28 @@ end
                 context_type = context_type,
             )
         }
-        HookType::Field => format!(
-            r#"--- {position} field hook for {collection}.{field}.
+        HookType::Field => {
+            let context_type = if opts.is_global {
+                format!("crap.field_hook.global_{}", opts.collection)
+            } else {
+                format!("crap.field_hook.{}", to_pascal_case(opts.collection))
+            };
+            format!(
+                r#"--- {position} field hook for {collection}.{field}.
 ---@param value any
----@param context crap.FieldHookContext
+---@param context {context_type}
 ---@return any
 return function(value, context)
     -- TODO: implement
     return value
 end
 "#,
-            position = opts.position,
-            collection = opts.collection,
-            field = opts.field.unwrap_or("?"),
-        ),
+                position = opts.position,
+                collection = opts.collection,
+                field = opts.field.unwrap_or("?"),
+                context_type = context_type,
+            )
+        }
         HookType::Access => format!(
             r#"--- {position} access control for {collection}.
 ---@param context crap.AccessContext
@@ -412,6 +420,20 @@ mod tests {
     }
 
     #[test]
+    fn test_make_hook_before_broadcast_uses_generic_context() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = make_hook_opts(
+            tmp.path(), "filter_event", HookType::Collection,
+            "posts", "before_broadcast", None, false,
+        );
+        make_hook(&opts).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/posts/filter_event.lua")).unwrap();
+        assert!(content.contains("crap.HookContext"), "before_broadcast should use generic HookContext, got:\n{content}");
+        assert!(!content.contains("crap.hook.Posts"), "before_broadcast should not use typed context");
+    }
+
+    #[test]
     fn test_make_hook_read_uses_typed_context() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let opts = make_hook_opts(
@@ -435,8 +457,36 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join("hooks/posts/normalize.lua")).unwrap();
         assert!(content.contains("before_validate field hook for posts.title"));
-        assert!(content.contains("crap.FieldHookContext"));
+        assert!(content.contains("crap.field_hook.Posts"), "should use typed field hook context, got:\n{content}");
+        assert!(!content.contains("crap.FieldHookContext"), "should not use generic FieldHookContext");
         assert!(content.contains("return function(value, context)"));
+    }
+
+    #[test]
+    fn test_make_hook_field_global() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut opts = make_hook_opts(
+            tmp.path(), "sanitize", HookType::Field,
+            "site_settings", "before_change", Some("tagline"), false,
+        );
+        opts.is_global = true;
+        make_hook(&opts).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/site_settings/sanitize.lua")).unwrap();
+        assert!(content.contains("crap.field_hook.global_site_settings"), "should use global field hook type, got:\n{content}");
+    }
+
+    #[test]
+    fn test_make_hook_field_multi_word_slug() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = make_hook_opts(
+            tmp.path(), "trim", HookType::Field,
+            "blog_posts", "before_validate", Some("title"), false,
+        );
+        make_hook(&opts).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("hooks/blog_posts/trim.lua")).unwrap();
+        assert!(content.contains("crap.field_hook.BlogPosts"), "should PascalCase multi-word slug, got:\n{content}");
     }
 
     #[test]

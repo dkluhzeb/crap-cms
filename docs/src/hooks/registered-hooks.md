@@ -45,7 +45,8 @@ crap.hooks.remove("before_change", my_hook)
 Registered hooks follow the same rules as collection-level hooks:
 
 - **Before-event hooks** (`before_validate`, `before_change`, `before_delete`) have CRUD access via the shared transaction
-- **After-event hooks** (`after_change`, `after_read`, `after_delete`) do NOT have CRUD access
+- **Write after-event hooks** (`after_change`, `after_delete`) have CRUD access — they run inside the same transaction via `run_hooks_with_conn`
+- **Read after-event hooks** (`after_read`) do NOT have CRUD access — they run without a transaction
 
 ## Execution Order
 

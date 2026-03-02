@@ -4,6 +4,8 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 
+use crate::typegen::to_pascal_case;
+
 /// Scaffold a job Lua file in `jobs/<slug>.lua`.
 ///
 /// Generates a module with a `run` handler, followed by `crap.jobs.define()`.
@@ -57,10 +59,15 @@ pub fn make_job(
     config_lines.push(format!("    labels = {{ singular = \"{}\" }},", label));
 
     let config_body = config_lines.join("\n");
+    let pascal = to_pascal_case(slug);
 
     let lua = format!(
         r#"--- {label} job handler.
 local M = {{}}
+
+-- Type the data shape passed via crap.jobs.queue():
+-- ---@class {pascal}Data
+-- ---@field my_field string
 
 ---@param context crap.JobHandlerContext
 ---@return table?
@@ -68,6 +75,9 @@ function M.run(context)
     -- context.data = input data from queue() or {{}} for cron
     -- context.job  = {{ slug, attempt, max_attempts }}
     -- Full CRUD access: crap.collections.find(), .create(), etc.
+
+    -- ---@type {pascal}Data
+    -- local data = context.data
 
     -- TODO: implement
     return nil
@@ -81,6 +91,7 @@ return M
 "#,
         label = label,
         slug = slug,
+        pascal = pascal,
         config_body = config_body,
     );
 
@@ -118,10 +129,21 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join("jobs/cleanup.lua")).unwrap();
         assert!(content.contains("local M = {}"));
+        assert!(content.contains("crap.JobHandlerContext"));
         assert!(content.contains("function M.run(context)"));
         assert!(content.contains("crap.jobs.define(\"cleanup\""));
         assert!(content.contains("handler = \"jobs.cleanup.run\""));
         assert!(content.contains("return M"));
+    }
+
+    #[test]
+    fn test_make_job_data_class_hint() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_job(tmp.path(), "process_inquiry", None, None, None, None, false).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("jobs/process_inquiry.lua")).unwrap();
+        assert!(content.contains("@class ProcessInquiryData"), "should hint PascalCase data class, got:\n{content}");
+        assert!(content.contains("@type ProcessInquiryData"), "should hint data cast");
     }
 
     #[test]

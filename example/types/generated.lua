@@ -21,14 +21,24 @@
 
 ---@class crap.hook.Categories
 ---@field collection "categories"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Categories
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Categories
 ---@field documents crap.doc.Categories[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Categories fun(ctx: crap.hook.Categories): crap.hook.Categories
+
+---@class crap.field_hook.Categories
+---@field field_name string
+---@field collection "categories"
+---@field operation string
+---@field data crap.data.Categories
 
 ---@class crap.filters.Categories
 ---@field id? crap.FilterValue
@@ -81,14 +91,24 @@
 
 ---@class crap.hook.Clients
 ---@field collection "clients"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Clients
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Clients
 ---@field documents crap.doc.Clients[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Clients fun(ctx: crap.hook.Clients): crap.hook.Clients
+
+---@class crap.field_hook.Clients
+---@field field_name string
+---@field collection "clients"
+---@field operation string
+---@field data crap.data.Clients
 
 ---@class crap.filters.Clients
 ---@field id? crap.FilterValue
@@ -153,14 +173,24 @@
 
 ---@class crap.hook.Events
 ---@field collection "events"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Events
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Events
 ---@field documents crap.doc.Events[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Events fun(ctx: crap.hook.Events): crap.hook.Events
+
+---@class crap.field_hook.Events
+---@field field_name string
+---@field collection "events"
+---@field operation string
+---@field data crap.data.Events
 
 ---@class crap.filters.Events
 ---@field id? crap.FilterValue
@@ -223,14 +253,24 @@
 
 ---@class crap.hook.Inquiries
 ---@field collection "inquiries"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Inquiries
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Inquiries
 ---@field documents crap.doc.Inquiries[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Inquiries fun(ctx: crap.hook.Inquiries): crap.hook.Inquiries
+
+---@class crap.field_hook.Inquiries
+---@field field_name string
+---@field collection "inquiries"
+---@field operation string
+---@field data crap.data.Inquiries
 
 ---@class crap.filters.Inquiries
 ---@field id? crap.FilterValue
@@ -322,14 +362,24 @@
 
 ---@class crap.hook.Media
 ---@field collection "media"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Media
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Media
 ---@field documents crap.doc.Media[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Media fun(ctx: crap.hook.Media): crap.hook.Media
+
+---@class crap.field_hook.Media
+---@field field_name string
+---@field collection "media"
+---@field operation string
+---@field data crap.data.Media
 
 ---@class crap.filters.Media
 ---@field id? crap.FilterValue
@@ -395,14 +445,24 @@
 
 ---@class crap.hook.Pages
 ---@field collection "pages"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Pages
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Pages
 ---@field documents crap.doc.Pages[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Pages fun(ctx: crap.hook.Pages): crap.hook.Pages
+
+---@class crap.field_hook.Pages
+---@field field_name string
+---@field collection "pages"
+---@field operation string
+---@field data crap.data.Pages
 
 ---@class crap.filters.Pages
 ---@field id? crap.FilterValue
@@ -464,14 +524,24 @@
 
 ---@class crap.hook.Posts
 ---@field collection "posts"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Posts
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Posts
 ---@field documents crap.doc.Posts[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Posts fun(ctx: crap.hook.Posts): crap.hook.Posts
+
+---@class crap.field_hook.Posts
+---@field field_name string
+---@field collection "posts"
+---@field operation string
+---@field data crap.data.Posts
 
 ---@class crap.filters.Posts
 ---@field id? crap.FilterValue
@@ -552,14 +622,24 @@
 
 ---@class crap.hook.Projects
 ---@field collection "projects"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Projects
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Projects
 ---@field documents crap.doc.Projects[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Projects fun(ctx: crap.hook.Projects): crap.hook.Projects
+
+---@class crap.field_hook.Projects
+---@field field_name string
+---@field collection "projects"
+---@field operation string
+---@field data crap.data.Projects
 
 ---@class crap.filters.Projects
 ---@field id? crap.FilterValue
@@ -625,14 +705,24 @@
 
 ---@class crap.hook.Services
 ---@field collection "services"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Services
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Services
 ---@field documents crap.doc.Services[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Services fun(ctx: crap.hook.Services): crap.hook.Services
+
+---@class crap.field_hook.Services
+---@field field_name string
+---@field collection "services"
+---@field operation string
+---@field data crap.data.Services
 
 ---@class crap.filters.Services
 ---@field id? crap.FilterValue
@@ -677,14 +767,24 @@
 
 ---@class crap.hook.Tags
 ---@field collection "tags"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Tags
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Tags
 ---@field documents crap.doc.Tags[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Tags fun(ctx: crap.hook.Tags): crap.hook.Tags
+
+---@class crap.field_hook.Tags
+---@field field_name string
+---@field collection "tags"
+---@field operation string
+---@field data crap.data.Tags
 
 ---@class crap.filters.Tags
 ---@field id? crap.FilterValue
@@ -731,14 +831,24 @@
 
 ---@class crap.hook.Testimonials
 ---@field collection "testimonials"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Testimonials
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Testimonials
 ---@field documents crap.doc.Testimonials[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Testimonials fun(ctx: crap.hook.Testimonials): crap.hook.Testimonials
+
+---@class crap.field_hook.Testimonials
+---@field field_name string
+---@field collection "testimonials"
+---@field operation string
+---@field data crap.data.Testimonials
 
 ---@class crap.filters.Testimonials
 ---@field id? crap.FilterValue
@@ -786,14 +896,24 @@
 
 ---@class crap.hook.Users
 ---@field collection "users"
----@field operation "create" | "update"
+---@field operation "create" | "update" | "find" | "find_by_id"
 ---@field data crap.data.Users
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
 
 ---@class crap.find_result.Users
 ---@field documents crap.doc.Users[]
 ---@field total integer
 
 ---@alias crap.hook_fn.Users fun(ctx: crap.hook.Users): crap.hook.Users
+
+---@class crap.field_hook.Users
+---@field field_name string
+---@field collection "users"
+---@field operation string
+---@field data crap.data.Users
 
 ---@class crap.filters.Users
 ---@field id? crap.FilterValue
@@ -813,6 +933,11 @@
 ---@field offset? integer
 ---@field locale? string
 
+---@class crap.array_row.PartnerLogos
+---@field name string
+---@field logo? string
+---@field url? string
+
 ---@class crap.global_data.Footer
 ---@field copyright_text? string
 ---@field show_social_links? boolean
@@ -828,8 +953,28 @@
 
 ---@class crap.hook.global_footer
 ---@field global "footer"
----@field operation "create" | "update"
+---@field operation "update" | "get_global"
 ---@field data crap.global_data.Footer
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
+
+---@class crap.field_hook.global_footer
+---@field field_name string
+---@field global "footer"
+---@field operation string
+---@field data crap.global_data.Footer
+
+---@class crap.array_row.MainNav
+---@field label string
+---@field url string
+---@field open_in_new_tab? boolean
+---@field children? crap.array_row.Children[]
+
+---@class crap.array_row.Children
+---@field label string
+---@field url string
 
 ---@class crap.global_data.Navigation
 ---@field main_nav? crap.array_row.MainNav[]
@@ -842,7 +987,17 @@
 
 ---@class crap.hook.global_navigation
 ---@field global "navigation"
----@field operation "create" | "update"
+---@field operation "update" | "get_global"
+---@field data crap.global_data.Navigation
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
+
+---@class crap.field_hook.global_navigation
+---@field field_name string
+---@field global "navigation"
+---@field operation string
 ---@field data crap.global_data.Navigation
 
 ---@class crap.global_data.SiteSettings
@@ -874,7 +1029,17 @@
 
 ---@class crap.hook.global_site_settings
 ---@field global "site_settings"
----@field operation "create" | "update"
+---@field operation "update" | "get_global"
+---@field data crap.global_data.SiteSettings
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
+
+---@class crap.field_hook.global_site_settings
+---@field field_name string
+---@field global "site_settings"
+---@field operation string
 ---@field data crap.global_data.SiteSettings
 
 ---@overload fun(collection: "categories", query?: crap.query.Categories): crap.find_result.Categories
@@ -893,4 +1058,22 @@
 ---@param query? crap.FindQuery
 ---@return crap.FindResult
 function crap.collections.find(collection, query) end
+
+---@overload fun(collection: "categories", id: string, opts?: crap.FindByIdOptions): crap.doc.Categories?
+---@overload fun(collection: "clients", id: string, opts?: crap.FindByIdOptions): crap.doc.Clients?
+---@overload fun(collection: "events", id: string, opts?: crap.FindByIdOptions): crap.doc.Events?
+---@overload fun(collection: "inquiries", id: string, opts?: crap.FindByIdOptions): crap.doc.Inquiries?
+---@overload fun(collection: "media", id: string, opts?: crap.FindByIdOptions): crap.doc.Media?
+---@overload fun(collection: "pages", id: string, opts?: crap.FindByIdOptions): crap.doc.Pages?
+---@overload fun(collection: "posts", id: string, opts?: crap.FindByIdOptions): crap.doc.Posts?
+---@overload fun(collection: "projects", id: string, opts?: crap.FindByIdOptions): crap.doc.Projects?
+---@overload fun(collection: "services", id: string, opts?: crap.FindByIdOptions): crap.doc.Services?
+---@overload fun(collection: "tags", id: string, opts?: crap.FindByIdOptions): crap.doc.Tags?
+---@overload fun(collection: "testimonials", id: string, opts?: crap.FindByIdOptions): crap.doc.Testimonials?
+---@overload fun(collection: "users", id: string, opts?: crap.FindByIdOptions): crap.doc.Users?
+---@param collection string
+---@param id string
+---@param opts? crap.FindByIdOptions
+---@return crap.Document?
+function crap.collections.find_by_id(collection, id, opts) end
 

@@ -32,19 +32,36 @@ pub(super) fn render(registry: &Registry) -> String {
     out
 }
 
+/// Recursively collect all array fields (including those inside layout wrappers).
+fn collect_array_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinition> {
+    let mut result = Vec::new();
+    for f in fields {
+        if f.field_type == FieldType::Array && !f.fields.is_empty() {
+            result.push(f);
+            // Also recurse into the array's own sub-fields (nested arrays)
+            result.extend(collect_array_fields(&f.fields));
+        } else if matches!(f.field_type, FieldType::Row | FieldType::Collapsible | FieldType::Group) {
+            result.extend(collect_array_fields(&f.fields));
+        } else if f.field_type == FieldType::Tabs {
+            for tab in &f.tabs {
+                result.extend(collect_array_fields(&tab.fields));
+            }
+        }
+    }
+    result
+}
+
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
     // Array sub-type classes (emitted before the collection class that references them)
-    for f in &col.fields {
-        if f.field_type == FieldType::Array && !f.fields.is_empty() {
-            let sub_pascal = to_pascal_case(&f.name);
-            writeln!(out, "---@class crap.array_row.{sub_pascal}").unwrap();
-            for sf in &f.fields {
-                write_field(out, sf);
-            }
-            out.push('\n');
+    for f in collect_array_fields(&col.fields) {
+        let sub_pascal = to_pascal_case(&f.name);
+        writeln!(out, "---@class crap.array_row.{sub_pascal}").unwrap();
+        for sf in &f.fields {
+            write_field(out, sf);
         }
+        out.push('\n');
     }
 
     // crap.data.* — hook ctx.data (mutable input)
@@ -69,8 +86,12 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // crap.hook.* — typed HookContext
     writeln!(out, "---@class crap.hook.{pascal}").unwrap();
     writeln!(out, "---@field collection \"{}\"", col.slug).unwrap();
-    writeln!(out, "---@field operation \"create\" | \"update\"").unwrap();
+    writeln!(out, "---@field operation \"create\" | \"update\" | \"find\" | \"find_by_id\"").unwrap();
     writeln!(out, "---@field data crap.data.{pascal}").unwrap();
+    writeln!(out, "---@field context table<string, any>").unwrap();
+    writeln!(out, "---@field hook_depth integer").unwrap();
+    writeln!(out, "---@field locale? string").unwrap();
+    writeln!(out, "---@field draft? boolean").unwrap();
     out.push('\n');
 
     // crap.find_result.*
@@ -85,6 +106,14 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
         "---@alias crap.hook_fn.{pascal} fun(ctx: crap.hook.{pascal}): crap.hook.{pascal}"
     )
     .unwrap();
+    out.push('\n');
+
+    // crap.field_hook.* — typed FieldHookContext (data = full document)
+    writeln!(out, "---@class crap.field_hook.{pascal}").unwrap();
+    writeln!(out, "---@field field_name string").unwrap();
+    writeln!(out, "---@field collection \"{}\"", col.slug).unwrap();
+    writeln!(out, "---@field operation string").unwrap();
+    writeln!(out, "---@field data crap.data.{pascal}").unwrap();
     out.push('\n');
 
     // crap.filters.* — typed filter keys
@@ -112,6 +141,16 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
+    // Array sub-type classes (same as collections — recurse into layout wrappers)
+    for f in collect_array_fields(&global.fields) {
+        let sub_pascal = to_pascal_case(&f.name);
+        writeln!(out, "---@class crap.array_row.{sub_pascal}").unwrap();
+        for sf in &f.fields {
+            write_field(out, sf);
+        }
+        out.push('\n');
+    }
+
     // crap.global_data.*
     writeln!(out, "---@class crap.global_data.{pascal}").unwrap();
     for f in &global.fields {
@@ -132,7 +171,19 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     // crap.hook.global_*
     writeln!(out, "---@class crap.hook.global_{}", global.slug).unwrap();
     writeln!(out, "---@field global \"{}\"", global.slug).unwrap();
-    writeln!(out, "---@field operation \"create\" | \"update\"").unwrap();
+    writeln!(out, "---@field operation \"update\" | \"get_global\"").unwrap();
+    writeln!(out, "---@field data crap.global_data.{pascal}").unwrap();
+    writeln!(out, "---@field context table<string, any>").unwrap();
+    writeln!(out, "---@field hook_depth integer").unwrap();
+    writeln!(out, "---@field locale? string").unwrap();
+    writeln!(out, "---@field draft? boolean").unwrap();
+    out.push('\n');
+
+    // crap.field_hook.global_* — typed FieldHookContext for globals
+    writeln!(out, "---@class crap.field_hook.global_{}", global.slug).unwrap();
+    writeln!(out, "---@field field_name string").unwrap();
+    writeln!(out, "---@field global \"{}\"", global.slug).unwrap();
+    writeln!(out, "---@field operation string").unwrap();
     writeln!(out, "---@field data crap.global_data.{pascal}").unwrap();
     out.push('\n');
 }
@@ -145,6 +196,7 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
         return;
     }
 
+    // find() overloads
     for slug in &slugs {
         let pascal = to_pascal_case(slug);
         writeln!(
@@ -157,6 +209,22 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
     writeln!(out, "---@param query? crap.FindQuery").unwrap();
     writeln!(out, "---@return crap.FindResult").unwrap();
     writeln!(out, "function crap.collections.find(collection, query) end").unwrap();
+    out.push('\n');
+
+    // find_by_id() overloads
+    for slug in &slugs {
+        let pascal = to_pascal_case(slug);
+        writeln!(
+            out,
+            "---@overload fun(collection: \"{slug}\", id: string, opts?: crap.FindByIdOptions): crap.doc.{pascal}?"
+        )
+        .unwrap();
+    }
+    writeln!(out, "---@param collection string").unwrap();
+    writeln!(out, "---@param id string").unwrap();
+    writeln!(out, "---@param opts? crap.FindByIdOptions").unwrap();
+    writeln!(out, "---@return crap.Document?").unwrap();
+    writeln!(out, "function crap.collections.find_by_id(collection, id, opts) end").unwrap();
     out.push('\n');
 }
 
@@ -382,9 +450,15 @@ mod tests {
         assert!(out.contains("---@class crap.hook.Posts"));
         assert!(out.contains("---@field collection \"posts\""));
         assert!(out.contains("---@field data crap.data.Posts"));
+        assert!(out.contains("---@field hook_depth integer"), "hook context should have hook_depth");
+        assert!(out.contains("---@field draft? boolean"), "hook context should have draft");
+        assert!(out.contains("---@field context table<string, any>"), "hook context should have context");
         assert!(out.contains("---@class crap.find_result.Posts"));
         assert!(out.contains("---@field documents crap.doc.Posts[]"));
         assert!(out.contains("---@alias crap.hook_fn.Posts"));
+        assert!(out.contains("---@class crap.field_hook.Posts"));
+        assert!(out.contains("---@field data crap.data.Posts"));
+        assert!(out.contains("---@field field_name string"));
         assert!(out.contains("---@class crap.filters.Posts"));
         assert!(out.contains("---@class crap.query.Posts"));
     }
@@ -435,6 +509,56 @@ mod tests {
         assert!(out.contains("---@field tagline? string"));
         assert!(out.contains("---@class crap.global_doc.SiteSettings"));
         assert!(out.contains("---@class crap.hook.global_site_settings"));
+        assert!(out.contains("---@class crap.field_hook.global_site_settings"));
+    }
+
+    #[test]
+    fn render_global_array_row() {
+        let global = GlobalDefinition {
+            slug: "navigation".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![
+                FieldDefinition {
+                    name: "main_nav".to_string(),
+                    field_type: FieldType::Array,
+                    fields: vec![
+                        text_field("label", true),
+                        text_field("url", true),
+                    ],
+                    ..Default::default()
+                },
+            ],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut out = String::new();
+        render_global(&mut out, &global);
+
+        assert!(out.contains("---@class crap.array_row.MainNav"), "global array should emit sub-type class, got:\n{out}");
+        assert!(out.contains("---@field label string"));
+    }
+
+    #[test]
+    fn render_global_hook_context_fields() {
+        let global = GlobalDefinition {
+            slug: "footer".to_string(),
+            labels: CollectionLabels::default(),
+            fields: vec![text_field("copyright", true)],
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        let mut out = String::new();
+        render_global(&mut out, &global);
+
+        assert!(out.contains("---@field hook_depth integer"), "global hook context should have hook_depth");
+        assert!(out.contains("---@field draft? boolean"), "global hook context should have draft");
+        assert!(out.contains("---@field context table<string, any>"), "global hook context should have context");
     }
 
     #[test]
@@ -499,6 +623,9 @@ mod tests {
         assert!(output.contains("---@overload fun(collection: \"pages\""));
         assert!(output.contains("---@overload fun(collection: \"posts\""));
         assert!(output.contains("function crap.collections.find(collection, query) end"));
+        // find_by_id overloads
+        assert!(output.contains("fun(collection: \"posts\", id: string, opts?: crap.FindByIdOptions): crap.doc.Posts?"));
+        assert!(output.contains("function crap.collections.find_by_id(collection, id, opts) end"));
     }
 
     #[test]

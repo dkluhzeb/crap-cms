@@ -1,7 +1,7 @@
 --- Custom auth strategy: API key authentication via X-API-Key header.
 --- Uses crap.crypto.hmac to verify HMAC-signed keys against the secret from env.
----@param context { headers: table, collection: string }
----@return table|nil
+---@param context crap.AuthStrategyContext
+---@return crap.Document?
 return function(context)
 	local api_key = context.headers["x-api-key"]
 	if not api_key then

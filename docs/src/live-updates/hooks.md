@@ -2,7 +2,7 @@
 
 ## `before_broadcast`
 
-A lifecycle event that fires after the write commits but before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.
+A lifecycle event that fires inside the write transaction, before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.
 
 ### Collection-Level
 
@@ -55,9 +55,9 @@ end)
 
 If any hook returns `false`/`nil`, the event is suppressed and no further hooks run.
 
-### No CRUD Access
+### CRUD Access
 
-`before_broadcast` hooks fire after the transaction commits, so they do **not** have CRUD access (same as `after_change` and `after_delete`).
+`before_broadcast` hooks run inside the transaction and **do** have CRUD access via `crap.collections.*` and `crap.globals.*`.
 
 ## `live` Setting Functions
 

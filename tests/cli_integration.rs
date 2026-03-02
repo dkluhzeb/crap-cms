@@ -449,7 +449,7 @@ fn make_hook_field_hook() {
     scaffold::make_hook(&opts).unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("hooks/posts/normalize.lua")).unwrap();
-    assert!(content.contains("crap.FieldHookContext"));
+    assert!(content.contains("crap.field_hook.Posts"), "should use typed field hook context");
     assert!(content.contains("return function(value, context)"));
     assert!(content.contains("return value"));
 }

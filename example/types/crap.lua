@@ -29,7 +29,6 @@ crap = {}
 --- | "json"         # Arbitrary JSON blob
 --- | "upload"       # File upload (references media collection; has_many for multi-file)
 --- | "relationship" # Reference to another collection
---- | "slug"         # Auto-generated URL slug
 --- | "array"        # Repeatable sub-fields
 --- | "group"        # Visual grouping (no extra table)
 --- | "blocks"       # Flexible content blocks
@@ -38,7 +37,6 @@ crap = {}
 --- | "tabs"         # Layout-only tabbed container (no prefix)
 --- | "code"         # Code editor (CodeMirror, admin.language for mode)
 --- | "join"         # Virtual reverse relationship (read-only, no column)
---- | "point"        # GeoJSON point [lng, lat]
 
 --- A string that can be plain or per-locale.
 --- Plain: `"Title"` — used as-is.
@@ -102,9 +100,9 @@ crap = {}
 --- @field operation   string              The operation: "create", "update", "find", "find_by_id", etc.
 --- @field data        table<string, any>  Full document data (read-only snapshot).
 ---
---- Note: before_validate and before_change field hooks have full CRUD access
---- (crap.collections.find/create/update/delete) via the parent transaction.
---- after_change and after_read field hooks do NOT have CRUD access (fire-and-forget).
+--- Note: before_validate, before_change, and after_change field hooks have full
+--- CRUD access (crap.collections.find/create/update/delete) via the parent transaction.
+--- after_read field hooks do NOT have CRUD access.
 
 --- @class crap.FieldTab
 --- @field label       string                    Tab label displayed in the tab bar (required).
@@ -397,9 +395,13 @@ function crap.fields.join(config) end
 --- @field update? string Hook ref for update access control.
 --- @field delete? string Hook ref for delete access control.
 
+--- @class crap.AuthStrategyContext
+--- @field headers    table<string, string>  Request headers (lowercase keys).
+--- @field collection string                 Auth collection slug.
+
 --- @class crap.AuthStrategy
 --- @field name          string  Strategy name (e.g., "api-key", "ldap").
---- @field authenticate  string  Lua function ref (module.function format) that receives `{ headers, collection }` and returns a user document or nil.
+--- @field authenticate  string  Lua function ref (module.function format). Receives `crap.AuthStrategyContext`, returns a user document or nil.
 
 --- @class crap.CollectionAuth
 --- @field enabled?          boolean             Enable auth for this collection (default: false).
@@ -432,9 +434,12 @@ function crap.fields.join(config) end
 --- @field admin_thumbnail? string              Name of image_size to show in admin list.
 --- @field format_options?  crap.FormatOptions  Auto-generate format variants for each size.
 
+--- @class crap.VersionsConfig
+--- @field drafts?       boolean  Enable draft/publish workflow (default: false). Adds `_status` column.
+--- @field max_versions? integer  Maximum version snapshots to keep per document (default: unlimited).
+
 --- @class crap.CollectionConfig
 --- @field labels?     crap.CollectionLabels      Display names.
---- @field slug?       string                     URL segment (defaults to name).
 --- @field timestamps? boolean                    Auto created_at/updated_at (default: true).
 --- @field auth?       boolean|crap.CollectionAuth  Enable authentication on this collection. `true` for defaults, or a config table with strategies/token_expiry/disable_local.
 --- @field upload?     boolean|crap.CollectionUpload  Enable file uploads. `true` for defaults, or a config table with mime_types/max_file_size/image_sizes.
@@ -442,17 +447,19 @@ function crap.fields.join(config) end
 --- @field admin?      crap.CollectionAdmin       Admin UI options.
 --- @field hooks?      crap.CollectionHooks       Hook references.
 --- @field access?     crap.CollectionAccess      Access control function refs.
+--- @field versions?   boolean|crap.VersionsConfig  Enable versioning. `true` for defaults, or a config table with drafts/max_versions.
 --- @field live?       boolean|string              Live event broadcasting. `false` to disable, string for Lua function ref that receives `{ collection, operation, data }` and returns boolean. Absent = enabled (broadcast all).
 
 
 -- ── Global Types ─────────────────────────────────────────────
 
 --- @class crap.GlobalConfig
---- @field labels?  crap.CollectionLabels    Display names.
---- @field fields?  crap.FieldDefinition[]   Field definitions.
---- @field hooks?   crap.CollectionHooks     Hook references.
---- @field access?  crap.CollectionAccess    Access control function refs.
---- @field live?    boolean|string           Live event broadcasting. Same as collection `live`.
+--- @field labels?    crap.CollectionLabels    Display names.
+--- @field fields?    crap.FieldDefinition[]   Field definitions.
+--- @field hooks?     crap.CollectionHooks     Hook references.
+--- @field access?    crap.CollectionAccess    Access control function refs.
+--- @field versions?  boolean|crap.VersionsConfig  Enable versioning. Same as collection `versions`.
+--- @field live?      boolean|string           Live event broadcasting. Same as collection `live`.
 
 
 -- ── Document Types ───────────────────────────────────────────
@@ -515,25 +522,12 @@ function crap.fields.join(config) end
 
 --- @class crap.HookContext
 --- @field collection string                 Collection slug.
---- @field operation  string                 The operation: "create", "update", "delete", "find", "find_by_id", "get_global", or "init".
---- @field data       table<string, any>     Document data (mutable in before_* hooks). For read hooks, contains document fields. In after_change/after_delete hooks, `data.id` contains the document ID.
+--- @field operation  "create"|"update"|"delete"|"find"|"find_by_id"|"get_global"|"init"  The operation being performed.
+--- @field data       table<string, any>     Document data (mutable in before_* hooks). For read hooks, contains document fields including id/timestamps. For delete hooks, contains only `{ id = "..." }`. In after_change hooks, `data.id` contains the new document ID.
 --- @field locale?    string                 Current locale code (nil if localization disabled or default locale).
---- @field original_doc? crap.Document       Original document (on update).
---- @field req?       crap.RequestContext     Request context (if available).
---- @field context  table<string, any>     Request-scoped shared table. Persists from before_validate through after_change within one request. Only JSON-compatible values survive (no functions/userdata).
-
---- @class crap.ReadHookContext
---- @field collection string           Collection slug.
---- @field doc        crap.Document    The document being read.
---- @field req?       crap.RequestContext
-
---- @class crap.DeleteHookContext
---- @field collection string           Collection slug.
---- @field id         string           Document ID being deleted.
---- @field req?       crap.RequestContext
-
---- @class crap.RequestContext
---- @field user? crap.User  Authenticated user (nil if anonymous).
+--- @field context    table<string, any>     Request-scoped shared table. Persists from before_validate through after_change within one request. Only JSON-compatible values survive (no functions/userdata).
+--- @field hook_depth integer                Current recursion depth. 0 = top-level API/admin call, 1+ = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: 3).
+--- @field draft?     boolean                True when this is a draft save (only set for collections with `versions.drafts` enabled).
 
 --- @class crap.FieldAccess
 --- @field read?   string Hook ref for field read access control.
@@ -556,11 +550,6 @@ function crap.fields.join(config) end
 --- @field user? crap.Document      Full user document from auth collection (nil if anonymous).
 --- @field id?   string             Document ID (for update/delete/find_by_id).
 --- @field data? table<string, any> Incoming data (for create/update).
-
---- @class crap.User
---- @field id    string
---- @field email string
---- @field role  string
 
 
 -- ── crap.collections ─────────────────────────────────────────
@@ -615,11 +604,14 @@ function crap.collections.find_by_id(collection, id, opts) end
 --- @field locale?         string   Locale code for localized fields. Nil = default locale.
 --- @field overrideAccess? boolean  Skip access control checks (default: true). Set to false to enforce collection-level and field-level access for the current user.
 --- @field draft?          boolean  When true and the collection has `versions.drafts`, creates the document with `_status = 'draft'` and skips required-field validation.
+--- @field hooks?          boolean  Run lifecycle hooks (default: true). Set false to bypass hooks (e.g., for seeding/migrations).
 
 --- @class crap.UpdateOptions
 --- @field locale?         string   Locale code for localized fields. Nil = default locale.
 --- @field overrideAccess? boolean  Skip access control checks (default: true). Set to false to enforce collection-level and field-level access for the current user.
 --- @field draft?          boolean  When true and the collection has `versions.drafts`, performs a version-only save (main table unchanged, only a draft version snapshot is created).
+--- @field hooks?          boolean  Run lifecycle hooks (default: true). Set false to bypass hooks.
+--- @field unpublish?      boolean  When true and the collection has `versions`, sets `_status` to `"draft"` (unpublishes). Data is not modified.
 
 --- Create a new document.
 --- Inside hooks, runs within the parent operation's transaction.
@@ -640,6 +632,7 @@ function crap.collections.update(collection, id, data, opts) end
 
 --- @class crap.DeleteOptions
 --- @field overrideAccess? boolean  Skip access control checks (default: true). Set to false to enforce collection-level access for the current user.
+--- @field hooks?          boolean  Run lifecycle hooks (default: true). Set false to bypass hooks.
 
 --- Delete a document.
 --- Inside hooks, runs within the parent operation's transaction.
@@ -664,7 +657,6 @@ function crap.collections.count(collection, query) end
 
 --- @class crap.UpdateManyQuery
 --- @field filters?        table<string, crap.FilterValue>  Field filters to match documents. Supports dot notation for nested fields (same as FindQuery).
---- @field where?          string                 JSON where clause.
 --- @field locale?         string                 Locale code for localized fields.
 --- @field overrideAccess? boolean                Skip access control checks (default: true).
 --- @field draft?          boolean                Include draft documents (default: false).
@@ -682,7 +674,7 @@ function crap.collections.update_many(collection, query, data, opts) end
 
 --- @class crap.DeleteManyQuery
 --- @field filters?        table<string, crap.FilterValue>  Field filters to match documents. Supports dot notation for nested fields (same as FindQuery).
---- @field where?          string                 JSON where clause.
+--- @field locale?         string                 Locale code for localized fields.
 --- @field overrideAccess? boolean                Skip access control checks (default: true).
 
 --- Delete multiple documents matching a query. All-or-nothing: checks delete access
@@ -757,18 +749,15 @@ crap.hooks = {}
 --- | "after_delete"
 --- | "before_broadcast"
 --- | "before_render"
---- | "after_login"
---- | "after_logout"
---- | "on_init"
 
---- Register a hook function for an event.
+--- Register a hook function for an event. Fires for all collections.
 --- @param event crap.HookEvent  The lifecycle event to hook into.
---- @param fn    function         Hook function receiving context table.
+--- @param fn    fun(context: crap.HookContext): crap.HookContext  Hook function.
 function crap.hooks.register(event, fn) end
 
---- Remove a previously registered hook function.
+--- Remove a previously registered hook function (identity-based via rawequal).
 --- @param event crap.HookEvent  The lifecycle event.
---- @param fn    function         The function to remove.
+--- @param fn    fun(context: crap.HookContext): crap.HookContext  The function to remove.
 function crap.hooks.remove(event, fn) end
 
 
@@ -780,18 +769,15 @@ crap.log = {}
 
 --- Log an info-level message.
 --- @param msg string  Log message.
---- @param data? table Additional structured data.
-function crap.log.info(msg, data) end
+function crap.log.info(msg) end
 
 --- Log a warning-level message.
 --- @param msg string  Log message.
---- @param data? table Additional structured data.
-function crap.log.warn(msg, data) end
+function crap.log.warn(msg) end
 
 --- Log an error-level message.
 --- @param msg string  Log message.
---- @param data? table Additional structured data.
-function crap.log.error(msg, data) end
+function crap.log.error(msg) end
 
 
 -- ── crap.util ────────────────────────────────────────────────
@@ -926,14 +912,16 @@ function crap.util.date_now() end
 function crap.util.date_timestamp() end
 
 --- Parse a date string to Unix timestamp. Tries RFC 3339, then common formats.
+--- Throws an error if the string cannot be parsed.
 --- @param str string  Date string to parse.
---- @return integer? timestamp  Unix seconds, or nil on parse failure.
+--- @return integer timestamp  Unix seconds.
 function crap.util.date_parse(str) end
 
 --- Format a Unix timestamp using a format string (chrono syntax).
+--- Throws an error if the timestamp or format is invalid.
 --- @param timestamp integer  Unix seconds.
 --- @param format string      Format string (e.g., "%Y-%m-%d %H:%M:%S").
---- @return string?
+--- @return string
 function crap.util.date_format(timestamp, format) end
 
 --- Add seconds to a timestamp.
@@ -1112,6 +1100,7 @@ crap.schema = {}
 --- @field has_auth    boolean
 --- @field has_upload  boolean
 --- @field has_versions boolean
+--- @field has_drafts  boolean
 --- @field fields      crap.SchemaField[]
 
 --- @class crap.SchemaField
@@ -1120,7 +1109,7 @@ crap.schema = {}
 --- @field required     boolean
 --- @field localized    boolean
 --- @field unique       boolean
---- @field relationship? { collection: string, has_many: boolean }
+--- @field relationship? { collection: string, has_many: boolean, max_depth?: integer }
 --- @field options?     { label: string, value: string }[]
 --- @field fields?      crap.SchemaField[]
 --- @field blocks?      { block_type: string, label?: string, group?: string, image_url?: string, fields: crap.SchemaField[] }[]

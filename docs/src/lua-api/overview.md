@@ -23,10 +23,10 @@ CRUD functions (`crap.collections.find`, `.create`, `.update`, `.delete`, `crap.
 - `before_validate` hooks — Yes
 - `before_change` hooks — Yes
 - `before_delete` hooks — Yes
-- `on_init` hooks — Yes
-- `after_change` hooks — No
-- `after_read` hooks — No
-- `after_delete` hooks — No
+- `after_change` hooks — Yes (runs inside the same transaction via `run_hooks_with_conn`)
+- `after_delete` hooks — Yes (runs inside the same transaction via `run_hooks_with_conn`)
+- `after_read` hooks — No (no transaction)
+- `before_read` hooks — No (no transaction)
 - Collection definition files — No
 
 Calling CRUD functions outside of transaction context results in an error:

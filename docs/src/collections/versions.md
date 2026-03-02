@@ -199,11 +199,11 @@ Clicking Restore writes the snapshot data back to the main table and redirects t
 
 ## Access Control
 
-Draft operations use the existing `update` access rule. There is no separate access rule for drafts. If you need finer-grained control (e.g., only admins can publish, but editors can save drafts), use the `ctx.draft` field in your access hooks:
+Draft operations use the existing `update` access rule. There is no separate access rule for drafts. If you need finer-grained control (e.g., only admins can publish, but editors can save drafts), inspect the incoming `data._status` field in your access hooks:
 
 ```lua
 function hooks.access.publish_control(ctx)
-    if ctx.draft then
+    if ctx.data and ctx.data._status == "draft" then
         -- Any authenticated user can save drafts
         return ctx.user ~= nil
     end

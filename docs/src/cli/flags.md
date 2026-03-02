@@ -236,7 +236,13 @@ Missing flags are resolved via interactive prompts. The wizard lists collections
 | `access` | `read`, `create`, `update`, `delete` |
 | `condition` | `table`, `boolean` |
 
-Generated hooks use per-collection typed annotations (`crap.hook.Posts`, `crap.data.Posts`) for IDE support. Delete hooks use the generic `crap.HookContext` since their data only contains the document ID.
+Generated hooks use per-collection typed annotations for IDE support:
+
+- **Collection hooks:** `crap.hook.Posts`, `crap.hook.global_site_settings`
+- **Field hooks:** `crap.field_hook.Posts`, `crap.field_hook.global_site_settings`
+- **Condition hooks:** `crap.data.Posts`, `crap.global_data.SiteSettings`
+- **Delete hooks:** generic `crap.HookContext` (data only contains the document ID)
+- **Access hooks:** generic `crap.AccessContext`
 
 ```bash
 # Interactive (prompts for everything)

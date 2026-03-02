@@ -21,6 +21,42 @@ Collection-level hooks receive a context table and must return a (potentially mo
 }
 ```
 
+## Typed Contexts
+
+The type generator (`crap-cms types lua`) emits per-collection context types with typed
+`data` fields for IDE autocomplete:
+
+- **Collections:** `crap.hook.{PascalCase}` — e.g., `crap.hook.Posts` has
+  `data: crap.data.Posts` and `collection: "posts"` (literal)
+- **Globals:** `crap.hook.global_{slug}` — e.g., `crap.hook.global_site_settings`
+  has `data: crap.global_data.SiteSettings`
+
+Use the typed context for hooks that target a specific collection:
+
+```lua
+---@param context crap.hook.Posts
+---@return crap.hook.Posts
+return function(context)
+    -- context.data.title, context.data.slug, etc. autocomplete
+    return context
+end
+```
+
+**Delete hooks** receive only `{ id = "..." }` in `data` (not full document fields),
+so they use the generic `crap.HookContext`:
+
+```lua
+---@param context crap.HookContext
+---@return crap.HookContext
+return function(context)
+    local id = context.data.id
+    return context
+end
+```
+
+For shared hooks that fire across multiple collections (e.g., via
+`crap.hooks.register()`), use the generic `crap.HookContext`.
+
 ## Data Mutation
 
 In **before-write hooks** (`before_validate`, `before_change`), you can modify `ctx.data` and return the modified context. The changes flow through to the database write.
