@@ -70,7 +70,8 @@ Create a new document.
 message CreateRequest {
   string collection = 1;
   google.protobuf.Struct data = 2;
-  optional bool draft = 4;  // true = create as draft (versioned collections)
+  optional string locale = 3;           // locale code for localized fields
+  optional bool draft = 4;              // true = create as draft (versioned collections)
 }
 
 message CreateResponse {
@@ -100,7 +101,9 @@ message UpdateRequest {
   string collection = 1;
   string id = 2;
   google.protobuf.Struct data = 3;
-  optional bool draft = 5;  // true = version-only save (main table unchanged)
+  optional string locale = 4;           // locale code for localized fields
+  optional bool draft = 5;              // true = version-only save (main table unchanged)
+  optional bool unpublish = 6;          // true = set status to draft
 }
 
 message UpdateResponse {
@@ -145,6 +148,7 @@ Get a global's current value.
 ```protobuf
 message GetGlobalRequest {
   string slug = 1;
+  optional string locale = 2;           // locale code for localized fields
 }
 
 message GetGlobalResponse {
@@ -165,6 +169,7 @@ Update a global's value.
 message UpdateGlobalRequest {
   string slug = 1;
   google.protobuf.Struct data = 2;
+  optional string locale = 3;           // locale code for localized fields
 }
 
 message UpdateGlobalResponse {
