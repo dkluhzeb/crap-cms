@@ -1,3 +1,6 @@
+{{#each upload_hidden_fields}}
+<input type="hidden" name="{{this.name}}" value="{{this.value}}" />
+{{/each}}
 {{#if collection.is_upload}}
 <div class="upload-section">
   {{#if upload.preview}}

@@ -945,6 +945,84 @@ mod tests {
         assert_eq!(blocks[0]["_block_type"], "hero");
         assert_eq!(blocks[1]["_block_type"], "text");
     }
+
+    #[test]
+    fn persist_create_with_upload_metadata() {
+        // Simulate a media collection with upload fields injected
+        let conn = Connection::open_in_memory().unwrap();
+
+        let mut fields = vec![
+            FieldDefinition {
+                name: "alt".to_string(),
+                required: true,
+                ..Default::default()
+            },
+        ];
+
+        // Simulate inject_upload_fields
+        let upload_fields = vec![
+            FieldDefinition { name: "filename".to_string(), required: true, ..Default::default() },
+            FieldDefinition { name: "mime_type".to_string(), admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "filesize".to_string(), field_type: FieldType::Number, admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "width".to_string(), field_type: FieldType::Number, admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "height".to_string(), field_type: FieldType::Number, admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "url".to_string(), admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+        ];
+        // inject_upload_fields inserts at position 0
+        for (i, f) in upload_fields.into_iter().enumerate() {
+            fields.insert(i, f);
+        }
+
+        let def = CollectionDefinition {
+            slug: "media".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields,
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            live: None,
+            versions: None,
+        };
+
+        // Create table with all columns
+        conn.execute_batch(
+            "CREATE TABLE media (
+                id TEXT PRIMARY KEY,
+                filename TEXT NOT NULL,
+                mime_type TEXT,
+                filesize REAL,
+                width REAL,
+                height REAL,
+                url TEXT,
+                alt TEXT NOT NULL,
+                created_at TEXT,
+                updated_at TEXT
+            )"
+        ).unwrap();
+
+        // Simulate data after inject_upload_metadata
+        let mut data = HashMap::new();
+        data.insert("alt".to_string(), "Test Image".to_string());
+        data.insert("filename".to_string(), "abc123_test.jpg".to_string());
+        data.insert("mime_type".to_string(), "image/jpeg".to_string());
+        data.insert("filesize".to_string(), "12345".to_string());
+        data.insert("width".to_string(), "1920".to_string());
+        data.insert("height".to_string(), "1080".to_string());
+        data.insert("url".to_string(), "/uploads/media/abc123_test.jpg".to_string());
+
+        let doc = persist_create(&conn, "media", &def, &data, &HashMap::new(), None, None, false).unwrap();
+
+        assert_eq!(doc.get_str("filename"), Some("abc123_test.jpg"));
+        assert_eq!(doc.get_str("mime_type"), Some("image/jpeg"), "mime_type should be stored");
+        assert_eq!(doc.get_str("url"), Some("/uploads/media/abc123_test.jpg"), "url should be stored");
+        // Number fields come back as JSON numbers
+        assert_eq!(doc.fields.get("width").and_then(|v| v.as_f64()), Some(1920.0), "width should be stored");
+        assert_eq!(doc.fields.get("height").and_then(|v| v.as_f64()), Some(1080.0), "height should be stored");
+        assert_eq!(doc.fields.get("filesize").and_then(|v| v.as_f64()), Some(12345.0), "filesize should be stored");
+    }
 }
 
 /// Fire-and-forget: generate a verification token and send the verification email.

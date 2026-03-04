@@ -263,6 +263,23 @@ pub async fn list_items(
     render_or_error(&state, "collections/items", &data).into_response()
 }
 
+/// Collect hidden upload field values from form data for re-rendering after validation errors.
+/// Returns a JSON array of `{ "name": "...", "value": "..." }` objects for hidden `<input>` elements.
+fn collect_upload_hidden_fields(
+    fields: &[crate::core::field::FieldDefinition],
+    form_data: &HashMap<String, String>,
+) -> serde_json::Value {
+    let hidden_fields: Vec<serde_json::Value> = fields.iter()
+        .filter(|f| f.admin.hidden)
+        .filter_map(|f| {
+            form_data.get(&f.name).map(|v| {
+                serde_json::json!({"name": &f.name, "value": v})
+            })
+        })
+        .collect();
+    serde_json::json!(hidden_fields)
+}
+
 /// GET /admin/collections/{slug}/create — show create form
 pub async fn create_form(
     State(state): State<AdminState>,
@@ -516,7 +533,7 @@ pub async fn create_action(
                 let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
                 apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
-                let data = ContextBuilder::new(&state, None)
+                let mut data = ContextBuilder::new(&state, None)
                     .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
                     .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
                     .collection_def(&def)
@@ -525,6 +542,10 @@ pub async fn create_action(
                     .set("editing", serde_json::json!(false))
                     .set("has_drafts", serde_json::json!(def.has_drafts()))
                     .build();
+                // Preserve upload metadata as hidden inputs so they survive form re-submission
+                if def.is_upload_collection() {
+                    data["upload_hidden_fields"] = collect_upload_hidden_fields(&def.fields, &form_data_clone);
+                }
                 html_with_toast(&state, "collections/edit", &data, &e.to_string())
             } else {
                 tracing::error!("Create error: {}", e);
@@ -992,7 +1013,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
                 apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
-                let data = ContextBuilder::new(state, None)
+                let mut data = ContextBuilder::new(state, None)
                     .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
                     .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
                     .collection_def(&def)
@@ -1002,6 +1023,10 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                     .set("editing", serde_json::json!(true))
                     .set("has_drafts", serde_json::json!(def.has_drafts()))
                     .build();
+                // Preserve upload metadata as hidden inputs so they survive form re-submission
+                if def.is_upload_collection() {
+                    data["upload_hidden_fields"] = collect_upload_hidden_fields(&def.fields, &form_data_clone);
+                }
                 html_with_toast(state, "collections/edit", &data, &e.to_string())
             } else {
                 tracing::error!("Update error: {}", e);
@@ -1380,4 +1405,62 @@ pub async fn search_collection(
         .collect();
 
     axum::Json(serde_json::json!(results))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::field::{FieldAdmin, FieldDefinition, FieldType};
+
+    #[test]
+    fn collect_upload_hidden_fields_basic() {
+        let fields = vec![
+            FieldDefinition { name: "filename".to_string(), ..Default::default() },
+            FieldDefinition { name: "mime_type".to_string(), admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "url".to_string(), admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "width".to_string(), field_type: FieldType::Number, admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "alt".to_string(), ..Default::default() },
+        ];
+        let mut form_data = HashMap::new();
+        form_data.insert("filename".to_string(), "test.jpg".to_string());
+        form_data.insert("mime_type".to_string(), "image/jpeg".to_string());
+        form_data.insert("url".to_string(), "/uploads/media/test.jpg".to_string());
+        form_data.insert("width".to_string(), "1920".to_string());
+        form_data.insert("alt".to_string(), "Test".to_string());
+
+        let result = collect_upload_hidden_fields(&fields, &form_data);
+        let arr = result.as_array().unwrap();
+
+        // Only hidden fields: mime_type, url, width (not filename or alt — they're not hidden)
+        assert_eq!(arr.len(), 3);
+        assert!(arr.iter().any(|f| f["name"] == "mime_type" && f["value"] == "image/jpeg"));
+        assert!(arr.iter().any(|f| f["name"] == "url" && f["value"] == "/uploads/media/test.jpg"));
+        assert!(arr.iter().any(|f| f["name"] == "width" && f["value"] == "1920"));
+    }
+
+    #[test]
+    fn collect_upload_hidden_fields_missing_values() {
+        let fields = vec![
+            FieldDefinition { name: "url".to_string(), admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+            FieldDefinition { name: "mime_type".to_string(), admin: FieldAdmin { hidden: true, ..Default::default() }, ..Default::default() },
+        ];
+        // Only url is in form_data, not mime_type
+        let mut form_data = HashMap::new();
+        form_data.insert("url".to_string(), "/uploads/media/test.jpg".to_string());
+
+        let result = collect_upload_hidden_fields(&fields, &form_data);
+        let arr = result.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "url");
+    }
+
+    #[test]
+    fn collect_upload_hidden_fields_no_hidden() {
+        let fields = vec![
+            FieldDefinition { name: "alt".to_string(), ..Default::default() },
+        ];
+        let form_data = HashMap::new();
+        let result = collect_upload_hidden_fields(&fields, &form_data);
+        assert_eq!(result.as_array().unwrap().len(), 0);
+    }
 }
