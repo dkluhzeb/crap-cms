@@ -22,6 +22,34 @@ use crate::hooks::lifecycle::{self, HookContext, HookEvent, HookRunner};
 /// Result of a write operation: the document and the request-scoped hook context.
 pub type WriteResult = (Document, HashMap<String, serde_json::Value>);
 
+/// Recursively merge join-table data (blocks, arrays, relationships) into a snapshot,
+/// handling Tabs/Row/Collapsible layout wrappers.
+fn merge_join_data_into_snapshot(
+    obj: &mut serde_json::Map<String, serde_json::Value>,
+    fields: &[FieldDefinition],
+    data: &HashMap<String, serde_json::Value>,
+) {
+    use crate::core::field::FieldType;
+    for field in fields {
+        match field.field_type {
+            FieldType::Array | FieldType::Blocks | FieldType::Relationship => {
+                if let Some(v) = data.get(&field.name) {
+                    obj.insert(field.name.clone(), v.clone());
+                }
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                merge_join_data_into_snapshot(obj, &field.fields, data);
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    merge_join_data_into_snapshot(obj, &tab.fields, data);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Save a draft-only version: merge incoming hook-processed data onto existing doc,
 /// create a version snapshot, and prune. `final_ctx_data` contains all hook-modified
 /// data including join table fields (arrays, blocks, relationships).
@@ -50,18 +78,7 @@ fn save_draft_version(
     // build_snapshot hydrates from join tables (which have the old/published data),
     // so we must overwrite with the hook-processed data for draft-only saves.
     if let Some(obj) = snapshot.as_object_mut() {
-        for field in fields {
-            match field.field_type {
-                crate::core::field::FieldType::Array
-                | crate::core::field::FieldType::Blocks
-                | crate::core::field::FieldType::Relationship => {
-                    if let Some(v) = final_ctx_data.get(&field.name) {
-                        obj.insert(field.name.clone(), v.clone());
-                    }
-                }
-                _ => {}
-            }
-        }
+        merge_join_data_into_snapshot(obj, fields, final_ctx_data);
     }
     query::create_version(conn, table, parent_id, "draft", &snapshot)?;
     if let Some(vc) = versions {
@@ -843,6 +860,90 @@ mod tests {
         // Should be capped at max_versions=2
         let count = query::count_versions(&conn, "posts", &id).unwrap();
         assert_eq!(count, 2, "versions should be pruned to max_versions=2");
+    }
+
+    #[test]
+    fn persist_draft_version_includes_blocks_inside_tabs() {
+        // Regression: blocks inside Tabs were missing from draft version snapshots
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT,
+                updated_at TEXT
+            );
+            CREATE TABLE posts_content (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                _order INTEGER,
+                _block_type TEXT,
+                data TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL DEFAULT 'published',
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            )"
+        ).unwrap();
+
+        let blocks_field = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
+        let tabs_field = FieldDefinition {
+            name: "page_settings".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![FieldTab {
+                label: "Content".to_string(),
+                description: None,
+                fields: vec![blocks_field],
+            }],
+            ..Default::default()
+        };
+        let def = CollectionDefinition {
+            versions: Some(VersionsConfig { drafts: true, max_versions: 10 }),
+            fields: vec![
+                FieldDefinition { name: "title".to_string(), ..Default::default() },
+                tabs_field,
+            ],
+            ..test_def()
+        };
+
+        // Create a published document
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Page 1".to_string());
+        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let id = doc.id.clone();
+
+        // Save a draft with blocks data
+        let mut hook_data: HashMap<String, serde_json::Value> = HashMap::new();
+        hook_data.insert("title".to_string(), serde_json::json!("Page 1 Draft"));
+        hook_data.insert("content".to_string(), serde_json::json!([
+            {"_block_type": "hero", "heading": "Welcome"},
+            {"_block_type": "text", "body": "Hello world"},
+        ]));
+
+        persist_draft_version(&conn, "posts", &id, &def, &hook_data, None).unwrap();
+
+        // Find the draft version and check its snapshot contains blocks data
+        let versions = query::list_versions(&conn, "posts", &id, None, None).unwrap();
+        let draft_version = versions.iter().find(|v| v.status == "draft")
+            .expect("should have a draft version");
+        let snapshot = draft_version.snapshot.as_object().unwrap();
+        let content = snapshot.get("content")
+            .expect("draft snapshot must include blocks from inside Tabs");
+        let blocks = content.as_array().unwrap();
+        assert_eq!(blocks.len(), 2, "draft snapshot should have 2 blocks");
+        assert_eq!(blocks[0]["_block_type"], "hero");
+        assert_eq!(blocks[1]["_block_type"], "text");
     }
 }
 

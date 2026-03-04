@@ -187,6 +187,7 @@ pub(super) fn sync_join_tables(
             }
             FieldType::Array => {
                 let table_name = format!("{}_{}", collection_slug, field.name);
+                let flat_subs = crate::core::field::flatten_array_sub_fields(&field.fields);
                 if !table_exists(conn, &table_name)? {
                     let mut columns = vec![
                         "id TEXT PRIMARY KEY".to_string(),
@@ -196,7 +197,7 @@ pub(super) fn sync_join_tables(
                     if has_locale_col {
                         columns.push(format!("_locale TEXT NOT NULL DEFAULT '{}'", locale_config.default_locale));
                     }
-                    for sub_field in &field.fields {
+                    for sub_field in &flat_subs {
                         columns.push(format!("{} {}", sub_field.name, sub_field.field_type.sqlite_type()));
                     }
                     let sql = format!(
@@ -213,7 +214,7 @@ pub(super) fn sync_join_tables(
                     }
                     // Alter: add missing sub-field columns
                     let existing = get_table_columns(conn, &table_name)?;
-                    for sub_field in &field.fields {
+                    for sub_field in &flat_subs {
                         if !existing.contains(&sub_field.name) {
                             let sql = format!(
                                 "ALTER TABLE {} ADD COLUMN {} {}",
@@ -250,6 +251,14 @@ pub(super) fn sync_join_tables(
                         .with_context(|| format!("Failed to create blocks table {}", table_name))?;
                 } else if has_locale_col {
                     ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
+                }
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                sync_join_tables(conn, collection_slug, &field.fields, locale_config)?;
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    sync_join_tables(conn, collection_slug, &tab.fields, locale_config)?;
                 }
             }
             _ => {}
@@ -457,6 +466,98 @@ mod tests {
         let cols = get_table_columns(&conn, "posts_content").unwrap();
         assert!(cols.contains("id"));
         assert!(cols.contains("parent_id"));
+        assert!(cols.contains("_block_type"));
+        assert!(cols.contains("data"));
+    }
+
+    #[test]
+    fn blocks_inside_tabs_creates_join_table() {
+        // Regression: blocks inside Tabs didn't get their join table created
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let blocks_field = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
+        let tabs_field = FieldDefinition {
+            name: "page_settings".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![
+                crate::core::field::FieldTab {
+                    label: "Content".to_string(),
+                    description: None,
+                    fields: vec![blocks_field],
+                },
+            ],
+            ..Default::default()
+        };
+        let def = simple_collection("posts", vec![
+            FieldDefinition { name: "title".to_string(), ..Default::default() },
+            tabs_field,
+        ]);
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "posts_content").unwrap(), "blocks table inside Tabs must be created");
+        let cols = get_table_columns(&conn, "posts_content").unwrap();
+        assert!(cols.contains("_block_type"));
+        assert!(cols.contains("data"));
+    }
+
+    #[test]
+    fn array_inside_row_creates_join_table() {
+        // Regression: array inside Row didn't get its join table created
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let array_field = FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![text_field("label"), text_field("value")],
+            ..Default::default()
+        };
+        let row_field = FieldDefinition {
+            name: "main_row".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![array_field],
+            ..Default::default()
+        };
+        let def = simple_collection("posts", vec![text_field("title"), row_field]);
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "posts_items").unwrap(), "array table inside Row must be created");
+        let cols = get_table_columns(&conn, "posts_items").unwrap();
+        assert!(cols.contains("parent_id"));
+        assert!(cols.contains("label"));
+        assert!(cols.contains("value"));
+    }
+
+    #[test]
+    fn blocks_inside_collapsible_creates_join_table() {
+        // Regression: blocks inside Collapsible didn't get its join table created
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let blocks_field = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
+        let collapsible_field = FieldDefinition {
+            name: "advanced".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![blocks_field],
+            ..Default::default()
+        };
+        let def = simple_collection("posts", vec![text_field("title"), collapsible_field]);
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "posts_content").unwrap(), "blocks table inside Collapsible must be created");
+        let cols = get_table_columns(&conn, "posts_content").unwrap();
         assert!(cols.contains("_block_type"));
         assert!(cols.contains("data"));
     }
@@ -776,5 +877,76 @@ mod tests {
         assert!(names.contains(&"meta__title"), "Localized Group→Tabs: meta__title");
         assert!(specs.iter().any(|s| s.col_name == "meta__title" && s.is_localized),
                 "meta__title should be marked localized via inheritance");
+    }
+
+    #[test]
+    fn array_with_tabs_creates_flat_columns() {
+        use crate::core::field::FieldTab;
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let array_field = FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![
+                text_field("plain"),
+                FieldDefinition {
+                    name: "layout".to_string(),
+                    field_type: FieldType::Tabs,
+                    tabs: vec![
+                        FieldTab {
+                            label: "General".to_string(),
+                            description: None,
+                            fields: vec![text_field("title")],
+                        },
+                        FieldTab {
+                            label: "Content".to_string(),
+                            description: None,
+                            fields: vec![text_field("body")],
+                        },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let def = simple_collection("posts", vec![text_field("name"), array_field]);
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        assert!(table_exists(&conn, "posts_items").unwrap());
+        let cols = get_table_columns(&conn, "posts_items").unwrap();
+        assert!(cols.contains("plain"), "plain sub-field column");
+        assert!(cols.contains("title"), "title from tabs should be promoted");
+        assert!(cols.contains("body"), "body from tabs should be promoted");
+        assert!(!cols.contains("layout"), "layout wrapper should NOT be a column");
+    }
+
+    #[test]
+    fn array_with_row_creates_flat_columns() {
+        let pool = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let array_field = FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![
+                FieldDefinition {
+                    name: "row_wrap".to_string(),
+                    field_type: FieldType::Row,
+                    fields: vec![text_field("x"), text_field("y")],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let def = simple_collection("posts", vec![array_field]);
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_items").unwrap();
+        assert!(cols.contains("x"), "x from row should be promoted");
+        assert!(cols.contains("y"), "y from row should be promoted");
+        assert!(!cols.contains("row_wrap"), "row wrapper should NOT be a column");
     }
 }

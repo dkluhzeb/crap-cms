@@ -379,6 +379,8 @@ fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &CollectionUp
         hidden_number_field("width"),
         hidden_number_field("height"),
         hidden_text_field("url"),
+        hidden_number_field("focal_x"),
+        hidden_number_field("focal_y"),
     ];
 
     // Per-size typed fields: {size}_url, {size}_width, {size}_height
@@ -1251,15 +1253,17 @@ mod tests {
             ..Default::default()
         };
         inject_upload_fields(&mut fields, &upload);
-        // Should have base upload fields (filename, mime_type, filesize, width, height, url) + original alt_text
-        assert_eq!(fields.len(), 7); // 6 base + 1 user
+        // Should have base upload fields (filename, mime_type, filesize, width, height, url, focal_x, focal_y) + original alt_text
+        assert_eq!(fields.len(), 9); // 8 base + 1 user
         assert_eq!(fields[0].name, "filename");
         assert_eq!(fields[1].name, "mime_type");
         assert_eq!(fields[2].name, "filesize");
         assert_eq!(fields[3].name, "width");
         assert_eq!(fields[4].name, "height");
         assert_eq!(fields[5].name, "url");
-        assert_eq!(fields[6].name, "alt_text"); // user field pushed to end
+        assert_eq!(fields[6].name, "focal_x");
+        assert_eq!(fields[7].name, "focal_y");
+        assert_eq!(fields[8].name, "alt_text"); // user field pushed to end
     }
 
     #[test]
@@ -1278,11 +1282,11 @@ mod tests {
             ..Default::default()
         };
         inject_upload_fields(&mut fields, &upload);
-        // 6 base + 3 per-size (thumb_url, thumb_width, thumb_height)
-        assert_eq!(fields.len(), 9);
-        assert_eq!(fields[6].name, "thumb_url");
-        assert_eq!(fields[7].name, "thumb_width");
-        assert_eq!(fields[8].name, "thumb_height");
+        // 8 base + 3 per-size (thumb_url, thumb_width, thumb_height)
+        assert_eq!(fields.len(), 11);
+        assert_eq!(fields[8].name, "thumb_url");
+        assert_eq!(fields[9].name, "thumb_width");
+        assert_eq!(fields[10].name, "thumb_height");
     }
 
     #[test]
@@ -1305,8 +1309,8 @@ mod tests {
             ..Default::default()
         };
         inject_upload_fields(&mut fields, &upload);
-        // 6 base + 3 per-size + 2 format variants (card_webp_url, card_avif_url)
-        assert_eq!(fields.len(), 11);
+        // 8 base + 3 per-size + 2 format variants (card_webp_url, card_avif_url)
+        assert_eq!(fields.len(), 13);
         let names: Vec<&str> = fields.iter().map(|f| f.name.as_str()).collect();
         assert!(names.contains(&"card_webp_url"));
         assert!(names.contains(&"card_avif_url"));

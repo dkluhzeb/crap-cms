@@ -1,8 +1,16 @@
 {{#if collection.is_upload}}
 <div class="upload-section">
   {{#if upload.preview}}
-  <div class="upload-section__preview">
-    <img src="{{upload.preview}}" alt="Current file" />
+  <div class="upload-section__preview" data-focal-point
+    data-focal-x="{{upload.focal_x}}"
+    data-focal-y="{{upload.focal_y}}">
+    <div class="focal-point">
+      <img src="{{upload.preview}}" alt="Current file" />
+      <div class="focal-point__marker"></div>
+    </div>
+    <input type="hidden" name="focal_x" value="{{upload.focal_x}}" />
+    <input type="hidden" name="focal_y" value="{{upload.focal_y}}" />
+    <p class="focal-point__hint">Click image to set focal point</p>
   </div>
   {{/if}}
   {{#if upload.info}}

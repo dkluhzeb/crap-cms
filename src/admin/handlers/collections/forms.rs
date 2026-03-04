@@ -38,6 +38,16 @@ pub(crate) fn extract_join_data_from_form(
                 let json_rows = parse_composite_form_data(form, &field.name, &[]);
                 join_data.insert(field.name.clone(), serde_json::Value::Array(json_rows));
             }
+            FieldType::Row | FieldType::Collapsible => {
+                let nested = extract_join_data_from_form(form, &field.fields);
+                join_data.extend(nested);
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    let nested = extract_join_data_from_form(form, &tab.fields);
+                    join_data.extend(nested);
+                }
+            }
             _ => {}
         }
     }
@@ -176,9 +186,10 @@ fn parse_composite_form_data(
         }
 
         // Process nested keys recursively
+        let flat_defs = crate::core::field::flatten_array_sub_fields(sub_field_defs);
         for (base_key, nested_entries) in nested_keys {
             // Look up the field definition for this sub-field to determine type
-            let sf_def = sub_field_defs.iter().find(|sf| sf.name == base_key);
+            let sf_def = flat_defs.iter().find(|sf| sf.name == base_key).copied();
             let nested_sub_defs = sf_def.map(|sf| sf.fields.as_slice()).unwrap_or(&[]);
 
             // Reconstruct a form-like HashMap with the base_key as prefix
@@ -440,6 +451,76 @@ mod tests {
         assert_eq!(images[1]["url"], "b.jpg");
     }
 
+    // --- extract_join_data_from_form: layout field recursion (regression) ---
+
+    #[test]
+    fn extract_join_data_blocks_inside_tabs() {
+        // Regression: blocks inside a Tabs field were silently dropped on save
+        let mut form = HashMap::new();
+        form.insert("content[0][_block_type]".to_string(), "hero".to_string());
+        form.insert("content[0][heading]".to_string(), "Welcome".to_string());
+        form.insert("content[1][_block_type]".to_string(), "text".to_string());
+        form.insert("content[1][body]".to_string(), "Hello world".to_string());
+
+        let blocks_field = make_field("content", FieldType::Blocks);
+        let mut tabs_field = make_field("page_settings", FieldType::Tabs);
+        tabs_field.tabs = vec![
+            crate::core::field::FieldTab {
+                label: "Content".to_string(),
+                description: None,
+                fields: vec![blocks_field],
+            },
+        ];
+
+        let result = extract_join_data_from_form(&form, &[
+            make_field("title", FieldType::Text),
+            tabs_field,
+        ]);
+        let content = result.get("content").expect("blocks inside tabs must be extracted");
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["_block_type"], "hero");
+        assert_eq!(arr[0]["heading"], "Welcome");
+        assert_eq!(arr[1]["_block_type"], "text");
+        assert_eq!(arr[1]["body"], "Hello world");
+    }
+
+    #[test]
+    fn extract_join_data_blocks_inside_row() {
+        let mut form = HashMap::new();
+        form.insert("items[0][_block_type]".to_string(), "card".to_string());
+        form.insert("items[0][title]".to_string(), "Card 1".to_string());
+
+        let blocks_field = make_field("items", FieldType::Blocks);
+        let mut row_field = make_field("layout", FieldType::Row);
+        row_field.fields = vec![blocks_field];
+
+        let result = extract_join_data_from_form(&form, &[row_field]);
+        let items = result.get("items").expect("blocks inside row must be extracted");
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(items[0]["_block_type"], "card");
+    }
+
+    #[test]
+    fn extract_join_data_array_inside_collapsible() {
+        let mut form = HashMap::new();
+        form.insert("links[0][url]".to_string(), "https://example.com".to_string());
+        form.insert("links[0][label]".to_string(), "Example".to_string());
+
+        let mut array_field = make_field("links", FieldType::Array);
+        array_field.fields = vec![
+            make_field("url", FieldType::Text),
+            make_field("label", FieldType::Text),
+        ];
+        let mut collapsible = make_field("sidebar", FieldType::Collapsible);
+        collapsible.fields = vec![array_field];
+
+        let result = extract_join_data_from_form(&form, &[collapsible]);
+        let links = result.get("links").expect("array inside collapsible must be extracted");
+        assert_eq!(links.as_array().unwrap().len(), 1);
+        assert_eq!(links[0]["url"], "https://example.com");
+    }
+
     // --- transform_select_has_many tests ---
 
     #[test]
@@ -519,6 +600,67 @@ mod tests {
 
         transform_select_has_many(&mut form, &[group]);
         assert_eq!(form.get("meta__tags").unwrap(), r#"["a","b"]"#);
+    }
+
+    #[test]
+    fn parse_array_with_tabs_sub_fields() {
+        // Sub-fields are inside a Tabs wrapper but form keys are flat
+        let mut form = HashMap::new();
+        form.insert("items[0][title]".to_string(), "Hello".to_string());
+        form.insert("items[0][body]".to_string(), "World".to_string());
+        form.insert("items[1][title]".to_string(), "Second".to_string());
+        form.insert("items[1][body]".to_string(), "Content".to_string());
+
+        let sub_defs = vec![
+            FieldDefinition {
+                name: "layout".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![
+                    crate::core::field::FieldTab {
+                        label: "General".to_string(),
+                        description: None,
+                        fields: vec![make_field("title", FieldType::Text)],
+                    },
+                    crate::core::field::FieldTab {
+                        label: "Content".to_string(),
+                        description: None,
+                        fields: vec![make_field("body", FieldType::Text)],
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0]["title"], "Hello");
+        assert_eq!(result[0]["body"], "World");
+        assert_eq!(result[1]["title"], "Second");
+        assert_eq!(result[1]["body"], "Content");
+    }
+
+    #[test]
+    fn parse_array_with_row_sub_fields() {
+        let mut form = HashMap::new();
+        form.insert("items[0][x]".to_string(), "10".to_string());
+        form.insert("items[0][y]".to_string(), "20".to_string());
+
+        let sub_defs = vec![
+            FieldDefinition {
+                name: "row_wrap".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![
+                    make_field("x", FieldType::Text),
+                    make_field("y", FieldType::Text),
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let result = parse_composite_form_data(&form, "items", &sub_defs);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["x"], "10");
+        assert_eq!(result[0]["y"], "20");
     }
 }
 

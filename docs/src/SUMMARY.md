@@ -7,14 +7,8 @@
 - [Installation](getting-started/installation.md)
 - [Quick Start](getting-started/quickstart.md)
 - [Config Directory](getting-started/config-directory.md)
-
-# Configuration
-
 - [crap.toml](configuration/crap-toml.md)
-
-# Localization
-
-- [Overview](locale/overview.md)
+- [Localization](locale/overview.md)
 
 # CLI
 
@@ -53,6 +47,15 @@
 
 - [Overview](globals/overview.md)
 
+# Relationships
+
+- [Overview](relationships/overview.md)
+- [Population Depth](relationships/population-depth.md)
+
+# Query & Filters
+
+- [Overview](query-and-filters/overview.md)
+
 # Hooks
 
 - [Overview](hooks/overview.md)
@@ -63,35 +66,24 @@
 - [Hook Context](hooks/hook-context.md)
 - [Transaction Access](hooks/transaction-access.md)
 
-# Access Control
+# Jobs & Plugins
 
-- [Overview](access-control/overview.md)
-- [Collection-Level](access-control/collection-level.md)
-- [Field-Level](access-control/field-level.md)
-- [Filter Constraints](access-control/filter-constraints.md)
+- [Jobs](jobs/overview.md)
+- [Plugins](plugins/overview.md)
 
-# Authentication
+# Authentication & Access Control
 
-- [Overview](authentication/overview.md)
+- [Auth Overview](authentication/overview.md)
 - [Auth Collections](authentication/auth-collections.md)
 - [Login Flow](authentication/login-flow.md)
 - [Custom Strategies](authentication/custom-strategies.md)
 - [CLI User Creation](authentication/cli-user-creation.md)
+- [Access Control Overview](access-control/overview.md)
+- [Collection-Level Access](access-control/collection-level.md)
+- [Field-Level Access](access-control/field-level.md)
+- [Filter Constraints](access-control/filter-constraints.md)
 
-# Relationships
-
-- [Overview](relationships/overview.md)
-- [Population Depth](relationships/population-depth.md)
-
-# Jobs
-
-- [Overview](jobs/overview.md)
-
-# Plugins
-
-- [Overview](plugins/overview.md)
-
-# Uploads
+# Uploads & Images
 
 - [Overview](uploads/overview.md)
 - [Image Processing](uploads/image-processing.md)
@@ -131,10 +123,6 @@
 - [Admin SSE](live-updates/admin-sse.md)
 - [Hooks](live-updates/hooks.md)
 
-# Database
-
-- [Overview](database/overview.md)
-
 # Admin UI
 
 - [Overview](admin-ui/overview.md)
@@ -144,10 +132,7 @@
 - [Display Conditions](admin-ui/display-conditions.md)
 - [Themes](admin-ui/themes.md)
 
-# Query & Filters
-
-- [Overview](query-and-filters/overview.md)
-
 # Internals
 
+- [Database](database/overview.md)
 - [API Surface Comparison](internals/api-surface-comparison.md)

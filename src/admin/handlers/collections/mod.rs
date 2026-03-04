@@ -723,6 +723,16 @@ pub async fn edit_form(
         let width = document.fields.get("width").and_then(|v| v.as_f64()).map(|v| v as u32);
         let height = document.fields.get("height").and_then(|v| v.as_f64()).map(|v| v as u32);
 
+        // Pass focal point values
+        let focal_x = document.fields.get("focal_x").and_then(|v| v.as_f64());
+        let focal_y = document.fields.get("focal_y").and_then(|v| v.as_f64());
+        if let Some(fx) = focal_x {
+            upload_ctx["focal_x"] = serde_json::json!(fx);
+        }
+        if let Some(fy) = focal_y {
+            upload_ctx["focal_y"] = serde_json::json!(fy);
+        }
+
         // Show preview for images
         if let (Some(url), Some(mime)) = (url, mime_type) {
             if mime.starts_with("image/") {
@@ -1193,8 +1203,11 @@ pub async fn list_versions_page(
         _ => {}
     }
 
+    // Build locale context so localized column names resolve correctly
+    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+
     // Fetch the document for breadcrumb title
-    let document = match ops::find_document_by_id(&state.pool, &slug, &def, &id, None) {
+    let document = match ops::find_document_by_id(&state.pool, &slug, &def, &id, locale_ctx.as_ref()) {
         Ok(Some(doc)) => doc,
         Ok(None) => return not_found(&state, &format!("Document '{}' not found", id)).into_response(),
         Err(e) => return server_error(&state, &format!("Query error: {}", e)).into_response(),

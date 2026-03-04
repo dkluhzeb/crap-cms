@@ -24,6 +24,7 @@ import './relationship-search.js';
 
 // ── Behaviors ──
 import './uploads.js';
+import './focal-point.js';
 import './block-picker.js';
 import './conditions.js';
 import './live-events.js';

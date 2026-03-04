@@ -1060,6 +1060,39 @@ select[multiple] {
   object-fit: contain;
 }
 
+/* Focal point picker */
+.focal-point {
+  position: relative;
+  display: inline-block;
+  cursor: crosshair;
+}
+
+.focal-point img {
+  max-width: 300px;
+  max-height: 200px;
+  border-radius: var(--radius-md);
+  object-fit: contain;
+  display: block;
+}
+
+.focal-point__marker {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  border: 2px solid white;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.3), inset 0 0 0 1px rgba(0,0,0,0.3);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  transition: left 0.15s, top 0.15s;
+}
+
+.focal-point__hint {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  margin: var(--space-xs) 0 0;
+}
+
 .upload-section__info {
   margin-bottom: var(--space-md);
   font-size: var(--text-sm);

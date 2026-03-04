@@ -48,6 +48,8 @@ When uploads are enabled, these fields are automatically injected before your cu
 | `width` | number | Yes | Image width (images only) |
 | `height` | number | Yes | Image height (images only) |
 | `url` | text | Yes | URL path to the original file |
+| `focal_x` | number | Yes | Focal point X coordinate (0.0–1.0, default center) |
+| `focal_y` | number | Yes | Focal point Y coordinate (0.0–1.0, default center) |
 
 For each image size, additional fields are injected:
 
@@ -133,6 +135,30 @@ When serving image files, the upload handler performs automatic content negotiat
 AVIF is preferred over WebP when both are accepted. The response includes a `Vary: Accept` header so caches store format-specific versions correctly.
 
 This works for all image URLs (`/uploads/...`) including originals and resized variants. Non-image files (PDFs, etc.) are always served as-is.
+
+## Focal Point
+
+Upload collections include `focal_x` and `focal_y` fields that store the subject/focus coordinates of an image as floats in the 0.0–1.0 range. Center is `(0.5, 0.5)`.
+
+**Setting in Admin UI:** On the upload collection edit page, click anywhere on the image preview to set the focal point. A crosshair marker shows the current position. The values are saved with the form.
+
+**Frontend usage:** Use the coordinates with CSS `object-position` to keep the subject in frame when cropping at different aspect ratios:
+
+```css
+.responsive-image {
+  object-fit: cover;
+  object-position: calc(var(--focal-x) * 100%) calc(var(--focal-y) * 100%);
+}
+```
+
+Or inline from template data:
+
+```html
+<img src="/uploads/media/photo.jpg"
+     style="object-fit: cover; object-position: 50% 30%;" />
+```
+
+The values are available in API responses as `focal_x` and `focal_y` number fields.
 
 ## File Deletion
 

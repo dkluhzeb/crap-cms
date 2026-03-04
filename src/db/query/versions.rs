@@ -244,31 +244,19 @@ fn extract_snapshot_data(
             }
             continue;
         }
-        // Row/Collapsible fields promote sub-fields as top-level columns (no prefix)
+        // Row/Collapsible fields promote sub-fields as top-level columns (no prefix).
+        // Recurse to handle nested layout wrappers (e.g., Row inside Tabs).
         if field.field_type == crate::core::field::FieldType::Row
             || field.field_type == crate::core::field::FieldType::Collapsible
         {
-            for sub in &field.fields {
-                if sub.localized && locales_enabled {
-                    continue;
-                }
-                if let Some(s) = snapshot_val_to_string(obj.get(&sub.name)) {
-                    data.insert(sub.name.clone(), s);
-                }
-            }
+            data.extend(extract_snapshot_data(obj, &field.fields, locales_enabled));
             continue;
         }
-        // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix)
+        // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix).
+        // Recurse to handle nested layout wrappers.
         if field.field_type == crate::core::field::FieldType::Tabs {
             for tab in &field.tabs {
-                for sub in &tab.fields {
-                    if sub.localized && locales_enabled {
-                        continue;
-                    }
-                    if let Some(s) = snapshot_val_to_string(obj.get(&sub.name)) {
-                        data.insert(sub.name.clone(), s);
-                    }
-                }
+                data.extend(extract_snapshot_data(obj, &tab.fields, locales_enabled));
             }
             continue;
         }
@@ -320,29 +308,25 @@ fn restore_locale_and_join_data(
                 }
                 continue;
             }
-            // Row/Collapsible fields promote sub-fields as top-level columns (no prefix)
+            // Row/Collapsible fields promote sub-fields as top-level columns (no prefix).
+            // Recurse to handle nested layout wrappers.
             if field.field_type == crate::core::field::FieldType::Row
                 || field.field_type == crate::core::field::FieldType::Collapsible
             {
-                for sub in &field.fields {
-                    if !sub.localized { continue; }
-                    restore_locale_columns(
-                        obj.get(&sub.name), &sub.name, locale_config,
-                        &mut set_clauses, &mut params, &mut idx,
-                    );
-                }
+                collect_locale_restore_fields(
+                    &field.fields, obj, locale_config,
+                    &mut set_clauses, &mut params, &mut idx,
+                );
                 continue;
             }
-            // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix)
+            // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix).
+            // Recurse to handle nested layout wrappers.
             if field.field_type == crate::core::field::FieldType::Tabs {
                 for tab in &field.tabs {
-                    for sub in &tab.fields {
-                        if !sub.localized { continue; }
-                        restore_locale_columns(
-                            obj.get(&sub.name), &sub.name, locale_config,
-                            &mut set_clauses, &mut params, &mut idx,
-                        );
-                    }
+                    collect_locale_restore_fields(
+                        &tab.fields, obj, locale_config,
+                        &mut set_clauses, &mut params, &mut idx,
+                    );
                 }
                 continue;
             }
@@ -367,18 +351,40 @@ fn restore_locale_and_join_data(
 
     // Restore join table data from snapshot
     let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
-    for field in fields {
-        if !field.has_parent_column() {
-            if let Some(v) = obj.get(&field.name) {
-                join_data.insert(field.name.clone(), v.clone());
-            }
-        }
-    }
+    collect_join_data_from_snapshot(fields, obj, &mut join_data);
     if !join_data.is_empty() {
         super::save_join_table_data(conn, table, fields, parent_id, &join_data, None)?;
     }
 
     Ok(())
+}
+
+/// Recursively collect join table data (Blocks/Arrays/Relationships) from a snapshot,
+/// including fields nested inside Tabs/Row/Collapsible layout wrappers.
+fn collect_join_data_from_snapshot(
+    fields: &[FieldDefinition],
+    obj: &serde_json::Map<String, serde_json::Value>,
+    join_data: &mut HashMap<String, serde_json::Value>,
+) {
+    for field in fields {
+        match field.field_type {
+            crate::core::field::FieldType::Row | crate::core::field::FieldType::Collapsible => {
+                collect_join_data_from_snapshot(&field.fields, obj, join_data);
+            }
+            crate::core::field::FieldType::Tabs => {
+                for tab in &field.tabs {
+                    collect_join_data_from_snapshot(&tab.fields, obj, join_data);
+                }
+            }
+            _ => {
+                if !field.has_parent_column() {
+                    if let Some(v) = obj.get(&field.name) {
+                        join_data.insert(field.name.clone(), v.clone());
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Restore a version snapshot back to the main table. Updates all regular columns
@@ -426,6 +432,52 @@ pub fn restore_version(
 
 /// Helper: emit SET clauses that NULL all locale columns for a field, then set the
 /// default locale column to the snapshot value.
+/// Recursively collect locale fields to restore from layout wrappers (Row/Collapsible/Tabs).
+fn collect_locale_restore_fields(
+    fields: &[FieldDefinition],
+    obj: &serde_json::Map<String, serde_json::Value>,
+    locale_config: &LocaleConfig,
+    set_clauses: &mut Vec<String>,
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    idx: &mut usize,
+) {
+    for field in fields {
+        if field.field_type == crate::core::field::FieldType::Group {
+            let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
+            for sub in &field.fields {
+                let is_localized = field.localized || sub.localized;
+                if !is_localized { continue; }
+                let base = format!("{}__{}", field.name, sub.name);
+                let val = obj.get(&base)
+                    .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
+                restore_locale_columns(
+                    val, &base, locale_config,
+                    set_clauses, params, idx,
+                );
+            }
+        } else if field.field_type == crate::core::field::FieldType::Row
+            || field.field_type == crate::core::field::FieldType::Collapsible
+        {
+            collect_locale_restore_fields(
+                &field.fields, obj, locale_config,
+                set_clauses, params, idx,
+            );
+        } else if field.field_type == crate::core::field::FieldType::Tabs {
+            for tab in &field.tabs {
+                collect_locale_restore_fields(
+                    &tab.fields, obj, locale_config,
+                    set_clauses, params, idx,
+                );
+            }
+        } else if field.localized && field.has_parent_column() {
+            restore_locale_columns(
+                obj.get(&field.name), &field.name, locale_config,
+                set_clauses, params, idx,
+            );
+        }
+    }
+}
+
 fn restore_locale_columns(
     snapshot_val: Option<&serde_json::Value>,
     field_name: &str,
@@ -819,5 +871,303 @@ mod tests {
         ).unwrap();
         let data2 = extract_snapshot_data(&obj2, &fields, false);
         assert_eq!(data2.get("seo__title"), Some(&"Nested SEO".to_string()));
+    }
+
+    #[test]
+    fn extract_snapshot_data_tabs_promotes_sub_fields() {
+        // Fields inside Tabs should be promoted as top-level columns (no prefix)
+        let fields = vec![
+            FieldDefinition {
+                name: "page_settings".to_string(),
+                field_type: crate::core::field::FieldType::Tabs,
+                tabs: vec![crate::core::field::FieldTab {
+                    label: "Settings".to_string(),
+                    description: None,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "template".to_string(),
+                            field_type: crate::core::field::FieldType::Select,
+                            ..Default::default()
+                        },
+                        FieldDefinition {
+                            name: "show_in_nav".to_string(),
+                            field_type: crate::core::field::FieldType::Checkbox,
+                            ..Default::default()
+                        },
+                    ],
+                }],
+                ..Default::default()
+            },
+        ];
+
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"template": "landing", "show_in_nav": true})
+        ).unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+        assert_eq!(data.get("template"), Some(&"landing".to_string()));
+        assert_eq!(data.get("show_in_nav"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn extract_snapshot_data_row_promotes_sub_fields() {
+        let fields = vec![
+            FieldDefinition {
+                name: "main_row".to_string(),
+                field_type: crate::core::field::FieldType::Row,
+                fields: vec![
+                    FieldDefinition {
+                        name: "width".to_string(),
+                        field_type: crate::core::field::FieldType::Number,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"width": 100})
+        ).unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+        assert_eq!(data.get("width"), Some(&"100".to_string()));
+    }
+
+    #[test]
+    fn extract_snapshot_data_nested_row_in_tabs() {
+        // Regression: Row inside Tabs at the collection top level was not recursed
+        use crate::core::field::FieldTab;
+        let fields = vec![
+            FieldDefinition {
+                name: "layout".to_string(),
+                field_type: crate::core::field::FieldType::Tabs,
+                tabs: vec![
+                    FieldTab {
+                        label: "General".to_string(),
+                        description: None,
+                        fields: vec![
+                            FieldDefinition {
+                                name: "inner_row".to_string(),
+                                field_type: crate::core::field::FieldType::Row,
+                                fields: vec![
+                                    FieldDefinition {
+                                        name: "title".to_string(),
+                                        ..Default::default()
+                                    },
+                                    FieldDefinition {
+                                        name: "slug".to_string(),
+                                        ..Default::default()
+                                    },
+                                ],
+                                ..Default::default()
+                            },
+                        ],
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({"title": "Hello", "slug": "hello"})
+        ).unwrap();
+
+        let data = extract_snapshot_data(&obj, &fields, false);
+        assert_eq!(data.get("title"), Some(&"Hello".to_string()),
+            "Row inside Tabs must be recursed");
+        assert_eq!(data.get("slug"), Some(&"hello".to_string()));
+    }
+
+    #[test]
+    fn collect_join_data_from_snapshot_tabs() {
+        // Blocks inside Tabs should be collected as join data
+        let fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: crate::core::field::FieldType::Text,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "page_settings".to_string(),
+                field_type: crate::core::field::FieldType::Tabs,
+                tabs: vec![crate::core::field::FieldTab {
+                    label: "Content".to_string(),
+                    description: None,
+                    fields: vec![FieldDefinition {
+                        name: "content".to_string(),
+                        field_type: crate::core::field::FieldType::Blocks,
+                        ..Default::default()
+                    }],
+                }],
+                ..Default::default()
+            },
+        ];
+
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({
+                "title": "Hello",
+                "content": [{"_block_type": "hero", "heading": "Welcome"}]
+            })
+        ).unwrap();
+
+        let mut join_data = HashMap::new();
+        collect_join_data_from_snapshot(&fields, &obj, &mut join_data);
+
+        assert!(!join_data.contains_key("title"), "scalar field should not be in join data");
+        assert!(join_data.contains_key("content"), "blocks inside Tabs must be in join data");
+        let blocks = join_data["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["_block_type"], "hero");
+    }
+
+    #[test]
+    fn collect_join_data_from_snapshot_row_and_collapsible() {
+        let fields = vec![
+            FieldDefinition {
+                name: "row_wrapper".to_string(),
+                field_type: crate::core::field::FieldType::Row,
+                fields: vec![FieldDefinition {
+                    name: "items".to_string(),
+                    field_type: crate::core::field::FieldType::Array,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "advanced".to_string(),
+                field_type: crate::core::field::FieldType::Collapsible,
+                fields: vec![FieldDefinition {
+                    name: "related".to_string(),
+                    field_type: crate::core::field::FieldType::Relationship,
+                    relationship: Some(crate::core::field::RelationshipConfig {
+                        collection: "tags".to_string(),
+                        has_many: true,
+                        max_depth: None,
+                        polymorphic: vec![],
+                    }),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ];
+
+        let obj: serde_json::Map<String, serde_json::Value> = serde_json::from_value(
+            serde_json::json!({
+                "items": [{"label": "A"}],
+                "related": ["t1", "t2"]
+            })
+        ).unwrap();
+
+        let mut join_data = HashMap::new();
+        collect_join_data_from_snapshot(&fields, &obj, &mut join_data);
+
+        assert!(join_data.contains_key("items"), "array inside Row must be in join data");
+        assert!(join_data.contains_key("related"), "has-many inside Collapsible must be in join data");
+    }
+
+    #[test]
+    fn restore_version_localized_blocks_inside_tabs() {
+        // Regression: restore_locale_and_join_data tried to SET locale columns for
+        // blocks fields inside Tabs (which don't have parent columns), causing SQL error.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title__en TEXT,
+                title__de TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE posts_content (
+                id TEXT PRIMARY KEY,
+                parent_id TEXT,
+                _order INTEGER,
+                _block_type TEXT,
+                data TEXT
+            );
+            CREATE TABLE _versions_posts (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO posts (id, title__en, title__de, _status) VALUES ('p1', 'Hello', 'Hallo', 'published');"
+        ).unwrap();
+
+        let locale_config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+
+        let blocks_field = FieldDefinition {
+            name: "content".to_string(),
+            field_type: crate::core::field::FieldType::Blocks,
+            localized: true,
+            ..Default::default()
+        };
+        let def = crate::core::collection::CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: true,
+            fields: vec![
+                FieldDefinition {
+                    name: "title".to_string(),
+                    field_type: crate::core::field::FieldType::Text,
+                    localized: true,
+                    ..Default::default()
+                },
+                FieldDefinition {
+                    name: "page_settings".to_string(),
+                    field_type: crate::core::field::FieldType::Tabs,
+                    tabs: vec![crate::core::field::FieldTab {
+                        label: "Content".to_string(),
+                        description: None,
+                        fields: vec![blocks_field],
+                    }],
+                    ..Default::default()
+                },
+            ],
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            live: None,
+            versions: Some(crate::core::collection::VersionsConfig { drafts: true, max_versions: 10 }),
+        };
+
+        let snapshot = serde_json::json!({
+            "title": "Restored Title",
+            "content": [
+                {"_block_type": "hero", "heading": "Welcome back"}
+            ]
+        });
+
+        // This should NOT fail with "Failed to restore locale columns"
+        let doc = restore_version(&conn, "posts", &def, "p1", &snapshot, "published", &locale_config).unwrap();
+        assert_eq!(doc.id, "p1");
+
+        // Verify title was restored to default locale
+        let title: String = conn.query_row(
+            "SELECT title__en FROM posts WHERE id = 'p1'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(title, "Restored Title");
+
+        // Verify blocks were restored to join table
+        let block_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM posts_content WHERE parent_id = 'p1'", [], |r| r.get(0)
+        ).unwrap();
+        assert_eq!(block_count, 1, "blocks from snapshot should be restored");
+
+        // Verify a version was created for the restore
+        let version_count = count_versions(&conn, "posts", "p1").unwrap();
+        assert_eq!(version_count, 1);
     }
 }

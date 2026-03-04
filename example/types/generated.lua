@@ -302,6 +302,8 @@
 ---@field width? number
 ---@field height? number
 ---@field url? string
+---@field focal_x? number
+---@field focal_y? number
 ---@field thumbnail_url? string
 ---@field thumbnail_width? number
 ---@field thumbnail_height? number
@@ -334,6 +336,8 @@
 ---@field width? number
 ---@field height? number
 ---@field url? string
+---@field focal_x? number
+---@field focal_y? number
 ---@field thumbnail_url? string
 ---@field thumbnail_width? number
 ---@field thumbnail_height? number
@@ -389,6 +393,8 @@
 ---@field width? crap.FilterValue
 ---@field height? crap.FilterValue
 ---@field url? crap.FilterValue
+---@field focal_x? crap.FilterValue
+---@field focal_y? crap.FilterValue
 ---@field thumbnail_url? crap.FilterValue
 ---@field thumbnail_width? crap.FilterValue
 ---@field thumbnail_height? crap.FilterValue
@@ -417,7 +423,7 @@
 
 ---@class crap.query.Media
 ---@field where? crap.where.Media
----@field order_by? "id"|"-id"|"filename"|"-filename"|"mime_type"|"-mime_type"|"filesize"|"-filesize"|"width"|"-width"|"height"|"-height"|"url"|"-url"|"thumbnail_url"|"-thumbnail_url"|"thumbnail_width"|"-thumbnail_width"|"thumbnail_height"|"-thumbnail_height"|"thumbnail_webp_url"|"-thumbnail_webp_url"|"thumbnail_avif_url"|"-thumbnail_avif_url"|"card_url"|"-card_url"|"card_width"|"-card_width"|"card_height"|"-card_height"|"card_webp_url"|"-card_webp_url"|"card_avif_url"|"-card_avif_url"|"hero_url"|"-hero_url"|"hero_width"|"-hero_width"|"hero_height"|"-hero_height"|"hero_webp_url"|"-hero_webp_url"|"hero_avif_url"|"-hero_avif_url"|"og_url"|"-og_url"|"og_width"|"-og_width"|"og_height"|"-og_height"|"og_webp_url"|"-og_webp_url"|"og_avif_url"|"-og_avif_url"|"alt"|"-alt"|"caption"|"-caption"|"credit"|"-credit"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"filename"|"-filename"|"mime_type"|"-mime_type"|"filesize"|"-filesize"|"width"|"-width"|"height"|"-height"|"url"|"-url"|"focal_x"|"-focal_x"|"focal_y"|"-focal_y"|"thumbnail_url"|"-thumbnail_url"|"thumbnail_width"|"-thumbnail_width"|"thumbnail_height"|"-thumbnail_height"|"thumbnail_webp_url"|"-thumbnail_webp_url"|"thumbnail_avif_url"|"-thumbnail_avif_url"|"card_url"|"-card_url"|"card_width"|"-card_width"|"card_height"|"-card_height"|"card_webp_url"|"-card_webp_url"|"card_avif_url"|"-card_avif_url"|"hero_url"|"-hero_url"|"hero_width"|"-hero_width"|"hero_height"|"-hero_height"|"hero_webp_url"|"-hero_webp_url"|"hero_avif_url"|"-hero_avif_url"|"og_url"|"-og_url"|"og_width"|"-og_width"|"og_height"|"-og_height"|"og_webp_url"|"-og_webp_url"|"og_avif_url"|"-og_avif_url"|"alt"|"-alt"|"caption"|"-caption"|"credit"|"-credit"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -804,6 +810,101 @@
 ---@field offset? integer
 ---@field locale? string
 
+---@class crap.array_row.TabbedItems
+---@field title string
+---@field description? string
+---@field color? "red" | "blue" | "green"
+---@field featured? boolean
+
+---@class crap.array_row.Coordinates
+---@field x number
+---@field y number
+---@field z? number
+---@field label? string
+
+---@class crap.array_row.FaqItems
+---@field question string
+---@field answer? string
+---@field source_url? string
+
+---@class crap.array_row.TeamMembers
+---@field first_name string
+---@field last_name string
+---@field email? string
+---@field job_title? string
+---@field linkedin? string
+---@field github? string
+
+---@class crap.data.TestNesting
+---@field name string
+---@field tabbed_items? crap.array_row.TabbedItems[]
+---@field coordinates? crap.array_row.Coordinates[]
+---@field faq_items? crap.array_row.FaqItems[]
+---@field team_members? crap.array_row.TeamMembers[]
+---@field sections? table[]
+---@field theme? "light" | "dark"
+---@field layout? "grid" | "list"
+---@field custom_config? any
+---@field custom_css? string
+---@field seo? table
+
+---@class crap.doc.TestNesting
+---@field id string
+---@field name string
+---@field tabbed_items? crap.array_row.TabbedItems[]
+---@field coordinates? crap.array_row.Coordinates[]
+---@field faq_items? crap.array_row.FaqItems[]
+---@field team_members? crap.array_row.TeamMembers[]
+---@field sections? table[]
+---@field theme? "light" | "dark"
+---@field layout? "grid" | "list"
+---@field custom_config? any
+---@field custom_css? string
+---@field seo? table
+---@field created_at? string
+---@field updated_at? string
+
+---@class crap.hook.TestNesting
+---@field collection "test_nesting"
+---@field operation "create" | "update" | "find" | "find_by_id"
+---@field data crap.data.TestNesting
+---@field context table<string, any>
+---@field hook_depth integer
+---@field locale? string
+---@field draft? boolean
+
+---@class crap.find_result.TestNesting
+---@field documents crap.doc.TestNesting[]
+---@field total integer
+
+---@alias crap.hook_fn.TestNesting fun(ctx: crap.hook.TestNesting): crap.hook.TestNesting
+
+---@class crap.field_hook.TestNesting
+---@field field_name string
+---@field collection "test_nesting"
+---@field operation string
+---@field data crap.data.TestNesting
+
+---@class crap.where.TestNesting
+---@field id? crap.FilterValue
+---@field name? crap.FilterValue
+---@field theme? crap.FilterValue
+---@field layout? crap.FilterValue
+---@field custom_config? crap.FilterValue
+---@field custom_css? crap.FilterValue
+---@field seo__meta_title? crap.FilterValue
+---@field seo__meta_description? crap.FilterValue
+---@field seo__no_index? crap.FilterValue
+---@field created_at? crap.FilterValue
+---@field updated_at? crap.FilterValue
+
+---@class crap.query.TestNesting
+---@field where? crap.where.TestNesting
+---@field order_by? "id"|"-id"|"name"|"-name"|"theme"|"-theme"|"layout"|"-layout"|"custom_config"|"-custom_config"|"custom_css"|"-custom_css"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_description"|"-seo__meta_description"|"seo__no_index"|"-seo__no_index"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field limit? integer
+---@field offset? integer
+---@field locale? string
+
 ---@class crap.data.Testimonials
 ---@field author_name string
 ---@field author_title? string
@@ -1052,6 +1153,7 @@
 ---@overload fun(collection: "projects", query?: crap.query.Projects): crap.find_result.Projects
 ---@overload fun(collection: "services", query?: crap.query.Services): crap.find_result.Services
 ---@overload fun(collection: "tags", query?: crap.query.Tags): crap.find_result.Tags
+---@overload fun(collection: "test_nesting", query?: crap.query.TestNesting): crap.find_result.TestNesting
 ---@overload fun(collection: "testimonials", query?: crap.query.Testimonials): crap.find_result.Testimonials
 ---@overload fun(collection: "users", query?: crap.query.Users): crap.find_result.Users
 ---@param collection string
@@ -1069,6 +1171,7 @@ function crap.collections.find(collection, query) end
 ---@overload fun(collection: "projects", id: string, opts?: crap.FindByIdOptions): crap.doc.Projects?
 ---@overload fun(collection: "services", id: string, opts?: crap.FindByIdOptions): crap.doc.Services?
 ---@overload fun(collection: "tags", id: string, opts?: crap.FindByIdOptions): crap.doc.Tags?
+---@overload fun(collection: "test_nesting", id: string, opts?: crap.FindByIdOptions): crap.doc.TestNesting?
 ---@overload fun(collection: "testimonials", id: string, opts?: crap.FindByIdOptions): crap.doc.Testimonials?
 ---@overload fun(collection: "users", id: string, opts?: crap.FindByIdOptions): crap.doc.Users?
 ---@param collection string

@@ -435,6 +435,27 @@ impl Default for FieldDefinition {
     }
 }
 
+/// Recursively flatten layout wrappers (Row, Collapsible, Tabs) to extract leaf fields.
+/// Used by Array join table DDL, read, write, and form parsing — layout wrappers are
+/// transparent inside arrays, so their children should be promoted as individual columns.
+pub fn flatten_array_sub_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinition> {
+    let mut result = Vec::new();
+    for f in fields {
+        match f.field_type {
+            FieldType::Row | FieldType::Collapsible => {
+                result.extend(flatten_array_sub_fields(&f.fields));
+            }
+            FieldType::Tabs => {
+                for tab in &f.tabs {
+                    result.extend(flatten_array_sub_fields(&tab.fields));
+                }
+            }
+            _ => result.push(f),
+        }
+    }
+    result
+}
+
 impl FieldDefinition {
     /// Whether this field has a column on the parent table.
     /// False for Array, Group, Row, Blocks, and has-many Relationship (they use join tables or prefixed/promoted columns).
@@ -733,5 +754,96 @@ mod tests {
         assert!(f.max_length.is_none());
         assert!(f.min.is_none());
         assert!(f.max.is_none());
+    }
+
+    // ── flatten_array_sub_fields tests ────────────────────────────────────
+
+    fn text_field(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Text,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_basic() {
+        let fields = vec![
+            text_field("title"),
+            FieldDefinition {
+                name: "layout".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![text_field("slug"), text_field("author")],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "settings".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![
+                    FieldTab {
+                        label: "General".to_string(),
+                        description: None,
+                        fields: vec![text_field("color")],
+                    },
+                    FieldTab {
+                        label: "Advanced".to_string(),
+                        description: None,
+                        fields: vec![text_field("cache")],
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+        let flat = flatten_array_sub_fields(&fields);
+        let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["title", "slug", "author", "color", "cache"]);
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_nested() {
+        // Row inside Tabs
+        let fields = vec![
+            FieldDefinition {
+                name: "layout".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![FieldTab {
+                    label: "Tab".to_string(),
+                    description: None,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "row".to_string(),
+                            field_type: FieldType::Row,
+                            fields: vec![text_field("a"), text_field("b")],
+                            ..Default::default()
+                        },
+                    ],
+                }],
+                ..Default::default()
+            },
+        ];
+        let flat = flatten_array_sub_fields(&fields);
+        let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_empty() {
+        let flat = flatten_array_sub_fields(&[]);
+        assert!(flat.is_empty());
+    }
+
+    #[test]
+    fn flatten_array_sub_fields_collapsible() {
+        let fields = vec![
+            FieldDefinition {
+                name: "advanced".to_string(),
+                field_type: FieldType::Collapsible,
+                fields: vec![text_field("x"), text_field("y")],
+                ..Default::default()
+            },
+        ];
+        let flat = flatten_array_sub_fields(&fields);
+        let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
+        assert_eq!(names, vec!["x", "y"]);
     }
 }

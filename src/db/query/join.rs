@@ -218,12 +218,14 @@ pub fn set_array_rows(
         ).with_context(|| format!("Failed to clear array table {}", table_name))?;
     }
 
-    if rows.is_empty() || sub_fields.is_empty() {
+    let flat_subs = crate::core::field::flatten_array_sub_fields(sub_fields);
+
+    if rows.is_empty() || flat_subs.is_empty() {
         return Ok(());
     }
 
-    // Build column list from sub-fields
-    let col_names: Vec<&str> = sub_fields.iter().map(|f| f.name.as_str()).collect();
+    // Build column list from flattened sub-fields
+    let col_names: Vec<&str> = flat_subs.iter().map(|f| f.name.as_str()).collect();
     let (all_cols, placeholders) = if let Some(_) = locale {
         let all_cols = format!(
             "id, parent_id, _order, _locale, {}",
@@ -258,7 +260,7 @@ pub fn set_array_rows(
         if let Some(loc) = locale {
             params.push(Box::new(loc.to_string()));
         }
-        for sf in sub_fields {
+        for sf in &flat_subs {
             let value = row.get(&sf.name).cloned().unwrap_or_default();
             params.push(coerce_value(&sf.field_type, &value));
         }
@@ -279,7 +281,8 @@ pub fn find_array_rows(
     locale: Option<&str>,
 ) -> Result<Vec<serde_json::Value>> {
     let table_name = format!("{}_{}", collection, field_name);
-    let col_names: Vec<&str> = sub_fields.iter().map(|f| f.name.as_str()).collect();
+    let flat_subs = crate::core::field::flatten_array_sub_fields(sub_fields);
+    let col_names: Vec<&str> = flat_subs.iter().map(|f| f.name.as_str()).collect();
     let select_cols = if col_names.is_empty() {
         "id".to_string()
     } else {
@@ -307,7 +310,7 @@ pub fn find_array_rows(
         let mut map = serde_json::Map::new();
         let id: String = row.get(0)?;
         map.insert("id".to_string(), serde_json::Value::String(id));
-        for (i, sf) in sub_fields.iter().enumerate() {
+        for (i, sf) in flat_subs.iter().enumerate() {
             let val: rusqlite::types::Value = row.get(i + 1)?;
             let json_val = match val {
                 rusqlite::types::Value::Null => serde_json::Value::Null,
@@ -583,9 +586,14 @@ pub fn hydrate_document(
                     doc.fields.insert(field.name.clone(), serde_json::Value::Object(group_obj));
                 }
             }
-            FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
-                // Row/Collapsible/Tabs sub-fields are already top-level columns — no reconstruction needed.
-                // They stay as flat fields in doc.fields with their own names.
+            FieldType::Row | FieldType::Collapsible => {
+                // Sub-fields are top-level columns, but recurse for join-table types (blocks, arrays, relationships)
+                hydrate_document(conn, slug, &field.fields, doc, select, locale_ctx)?;
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    hydrate_document(conn, slug, &tab.fields, doc, select, locale_ctx)?;
+                }
             }
             FieldType::Blocks => {
                 let mut rows = find_block_rows(conn, slug, &field.name, &doc.id, locale_ref)?;
@@ -675,6 +683,14 @@ pub fn save_join_table_data(
                         _ => Vec::new(),
                     };
                     set_block_rows(conn, slug, &field.name, parent_id, &rows, locale_ref)?;
+                }
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                save_join_table_data(conn, slug, &field.fields, parent_id, data, locale_ctx)?;
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    save_join_table_data(conn, slug, &tab.fields, parent_id, data, locale_ctx)?;
                 }
             }
             _ => {}
@@ -1336,5 +1352,250 @@ mod tests {
             ("articles".to_string(), "a1".to_string()),
             ("pages".to_string(), "pg1".to_string()),
         ]);
+    }
+
+    // ── Regression: blocks inside Tabs ──────────────────────────────────────
+
+    #[test]
+    fn save_and_hydrate_blocks_inside_tabs() {
+        // Regression: blocks nested inside a Tabs field were lost on save and invisible on read
+        let conn = setup_join_db();
+
+        let blocks_field = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
+        let tabs_field = FieldDefinition {
+            name: "page_settings".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![
+                FieldTab {
+                    label: "Content".to_string(),
+                    description: None,
+                    fields: vec![blocks_field],
+                },
+            ],
+            ..Default::default()
+        };
+        let fields = vec![
+            FieldDefinition { name: "title".to_string(), ..Default::default() },
+            tabs_field,
+        ];
+
+        // Save blocks via the Tabs wrapper
+        let mut data = HashMap::new();
+        data.insert("content".to_string(), serde_json::json!([
+            {"_block_type": "hero", "heading": "Welcome"},
+            {"_block_type": "text", "body": "Hello world"},
+        ]));
+        save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
+
+        // Verify blocks were written
+        let rows = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
+        assert_eq!(rows.len(), 2, "blocks should be saved through Tabs");
+        assert_eq!(rows[0]["_block_type"], "hero");
+        assert_eq!(rows[1]["_block_type"], "text");
+
+        // Hydrate document and verify blocks come back
+        let mut doc = Document {
+            id: "p1".to_string(),
+            fields: serde_json::Map::new().into_iter().collect(),
+            created_at: None,
+            updated_at: None,
+        };
+        doc.fields.insert("title".to_string(), serde_json::json!("Post 1"));
+        hydrate_document(&conn, "posts", &fields, &mut doc, None, None).unwrap();
+
+        let content = doc.fields.get("content").expect("blocks must be hydrated through Tabs");
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["_block_type"], "hero");
+        assert_eq!(arr[1]["_block_type"], "text");
+    }
+
+    #[test]
+    fn save_and_hydrate_array_inside_row() {
+        // Regression: arrays nested inside a Row field were lost on save and invisible on read
+        let conn = setup_join_db();
+
+        let array_field = FieldDefinition {
+            name: "items".to_string(),
+            field_type: FieldType::Array,
+            fields: array_sub_fields(),
+            ..Default::default()
+        };
+        let row_field = FieldDefinition {
+            name: "main_row".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![array_field],
+            ..Default::default()
+        };
+        let fields = vec![
+            FieldDefinition { name: "title".to_string(), ..Default::default() },
+            row_field,
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("items".to_string(), serde_json::json!([
+            {"label": "First", "value": "1"},
+            {"label": "Second", "value": "2"},
+        ]));
+        save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
+
+        let rows = find_array_rows(&conn, "posts", "items", "p1", &array_sub_fields(), None).unwrap();
+        assert_eq!(rows.len(), 2, "array should be saved through Row");
+        assert_eq!(rows[0]["label"], "First");
+        assert_eq!(rows[1]["label"], "Second");
+
+        let mut doc = Document {
+            id: "p1".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        hydrate_document(&conn, "posts", &fields, &mut doc, None, None).unwrap();
+
+        let items = doc.fields.get("items").expect("array must be hydrated through Row");
+        let arr = items.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["label"], "First");
+        assert_eq!(arr[1]["value"], "2");
+    }
+
+    #[test]
+    fn save_and_hydrate_blocks_inside_collapsible() {
+        // Regression: blocks nested inside a Collapsible field were lost
+        let conn = setup_join_db();
+
+        let blocks_field = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
+        let collapsible_field = FieldDefinition {
+            name: "advanced".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![blocks_field],
+            ..Default::default()
+        };
+        let fields = vec![
+            FieldDefinition { name: "title".to_string(), ..Default::default() },
+            collapsible_field,
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("content".to_string(), serde_json::json!([
+            {"_block_type": "cta", "heading": "Buy now"},
+        ]));
+        save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
+
+        let rows = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
+        assert_eq!(rows.len(), 1, "blocks should be saved through Collapsible");
+        assert_eq!(rows[0]["_block_type"], "cta");
+
+        let mut doc = Document {
+            id: "p1".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        hydrate_document(&conn, "posts", &fields, &mut doc, None, None).unwrap();
+
+        let content = doc.fields.get("content").expect("blocks must be hydrated through Collapsible");
+        let arr = content.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["_block_type"], "cta");
+    }
+
+    #[test]
+    fn set_and_find_array_rows_with_tabs() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_items (
+                 id TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 _order INTEGER,
+                 title TEXT,
+                 body TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');"
+        ).unwrap();
+
+        // Sub-fields wrapped in Tabs
+        let sub_fields = vec![
+            FieldDefinition {
+                name: "layout".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![
+                    FieldTab {
+                        label: "General".to_string(),
+                        description: None,
+                        fields: vec![FieldDefinition {
+                            name: "title".to_string(),
+                            ..Default::default()
+                        }],
+                    },
+                    FieldTab {
+                        label: "Content".to_string(),
+                        description: None,
+                        fields: vec![FieldDefinition {
+                            name: "body".to_string(),
+                            ..Default::default()
+                        }],
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let mut row = HashMap::new();
+        row.insert("title".to_string(), "Hello".to_string());
+        row.insert("body".to_string(), "World".to_string());
+        set_array_rows(&conn, "posts", "items", "p1", &[row], &sub_fields, None).unwrap();
+
+        let result = find_array_rows(&conn, "posts", "items", "p1", &sub_fields, None).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["title"], "Hello");
+        assert_eq!(result[0]["body"], "World");
+    }
+
+    #[test]
+    fn set_and_find_array_rows_with_row_wrapper() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_items (
+                 id TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 _order INTEGER,
+                 x TEXT,
+                 y TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');"
+        ).unwrap();
+
+        let sub_fields = vec![
+            FieldDefinition {
+                name: "row_wrap".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![
+                    FieldDefinition { name: "x".to_string(), ..Default::default() },
+                    FieldDefinition { name: "y".to_string(), ..Default::default() },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let mut row = HashMap::new();
+        row.insert("x".to_string(), "10".to_string());
+        row.insert("y".to_string(), "20".to_string());
+        set_array_rows(&conn, "posts", "items", "p1", &[row], &sub_fields, None).unwrap();
+
+        let result = find_array_rows(&conn, "posts", "items", "p1", &sub_fields, None).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0]["x"], "10");
+        assert_eq!(result[0]["y"], "20");
     }
 }
