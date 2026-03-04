@@ -48,6 +48,12 @@ Use the plain sub-field names directly — no prefix needed:
 }
 ```
 
+## Nesting
+
+Collapsible can be nested inside other layout wrappers (Tabs, Row) and inside Array/Blocks sub-fields at arbitrary depth. All nesting combinations work — see the [Layout Wrappers](overview.md#layout-wrappers) section for details and examples.
+
+> **Depth limit:** The admin UI caps layout nesting at 5 levels. The data layer has no limit.
+
 ## Admin Rendering
 
 Sub-fields are rendered inside a collapsible section with a toggle header. The section can start collapsed via `admin.collapsed = true`. Clicking the header toggles visibility. This is useful for grouping related fields that don't need to be visible at all times (e.g., SEO settings, advanced options).

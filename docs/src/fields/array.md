@@ -35,6 +35,38 @@ crap.fields.array({
 
 Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.) but do not support nested arrays or relationships.
 
+### Layout Wrappers in Sub-Fields
+
+Array sub-fields can be organized with [Row](row.md), [Collapsible](collapsible.md), and [Tabs](tabs.md) layout wrappers. These are transparent — their children become flat columns in the join table, exactly as if they were listed directly in `fields`.
+
+```lua
+crap.fields.array({
+    name = "items",
+    fields = {
+        crap.fields.tabs({
+            name = "item_tabs",
+            tabs = {
+                {
+                    label = "Content",
+                    fields = {
+                        crap.fields.text({ name = "title", required = true }),
+                        crap.fields.textarea({ name = "description" }),
+                    },
+                },
+                {
+                    label = "Appearance",
+                    fields = {
+                        crap.fields.select({ name = "color", options = { ... } }),
+                    },
+                },
+            },
+        }),
+    },
+})
+```
+
+The join table gets columns `title`, `description`, and `color` — the Tabs wrapper is invisible at the data layer. Nesting is supported at arbitrary depth (e.g., Row inside Tabs inside Array). See [Layout Wrappers](overview.md#layout-wrappers) for details.
+
 ## API Representation
 
 In API responses, array fields appear as a JSON array of objects:

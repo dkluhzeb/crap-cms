@@ -46,6 +46,12 @@ Use the plain sub-field names directly — no prefix needed:
 }
 ```
 
+## Nesting
+
+Row can be nested inside other layout wrappers (Tabs, Collapsible) and inside Array/Blocks sub-fields at arbitrary depth. All nesting combinations work — see the [Layout Wrappers](overview.md#layout-wrappers) section for details and examples.
+
+> **Depth limit:** The admin UI caps layout nesting at 5 levels. The data layer has no limit.
+
 ## Admin Rendering
 
 Sub-fields are rendered in a horizontal row layout. The row itself has no fieldset, legend, or collapsible wrapper — it is purely a layout mechanism for placing related fields side by side.

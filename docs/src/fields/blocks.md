@@ -56,6 +56,41 @@ crap.fields.blocks({
 })
 ```
 
+### Layout Wrappers in Block Fields
+
+Block sub-fields can be organized with [Row](row.md), [Collapsible](collapsible.md), and [Tabs](tabs.md) layout wrappers. Since blocks store data as JSON, wrappers are transparent at the data layer — their children appear as flat keys in the JSON object.
+
+```lua
+blocks = {
+    {
+        type = "feature_card",
+        label = "Feature Card",
+        fields = {
+            crap.fields.tabs({
+                name = "card_tabs",
+                tabs = {
+                    {
+                        label = "Content",
+                        fields = {
+                            crap.fields.text({ name = "heading", required = true }),
+                            crap.fields.textarea({ name = "body" }),
+                        },
+                    },
+                    {
+                        label = "Style",
+                        fields = {
+                            crap.fields.select({ name = "variant", options = { ... } }),
+                        },
+                    },
+                },
+            }),
+        },
+    },
+}
+```
+
+The JSON data contains `heading`, `body`, and `variant` as flat keys — the Tabs wrapper is invisible. Nesting is supported at arbitrary depth. See [Layout Wrappers](overview.md#layout-wrappers) for details.
+
 ## Block Definitions
 
 Each block definition has:

@@ -68,6 +68,12 @@ Use the plain sub-field names directly — tabs are invisible at the data layer:
 }
 ```
 
+## Nesting
+
+Tabs can be nested inside other layout wrappers (Row, Collapsible) and inside Array/Blocks sub-fields at arbitrary depth. Tab fields can themselves contain Row, Collapsible, or nested Tabs. All nesting combinations work — see the [Layout Wrappers](overview.md#layout-wrappers) section for details and examples.
+
+> **Depth limit:** The admin UI caps layout nesting at 5 levels. The data layer has no limit.
+
 ## Admin Rendering
 
 Sub-fields are organized into tabs with a tab bar at the top. The first tab is active by default. Clicking a tab button switches the visible panel. Each tab can have its own description text.
