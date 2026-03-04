@@ -732,6 +732,122 @@ pub(super) fn split_sidebar_fields(
 /// Build a sub-field context for a single field within an array/blocks row,
 /// recursively handling nested composite sub-fields.
 ///
+/// Build enriched child field contexts from structured JSON data.
+/// Used by layout wrapper handlers (Tabs/Row/Collapsible) inside Array/Blocks
+/// rows to correctly propagate structured data to nested layout wrappers.
+///
+/// For each child field:
+/// - Layout wrappers get transparent names and the whole parent data object
+/// - Leaf fields get `parent_name[field_name]` names and their specific value
+/// - Recursion handles arbitrary nesting depth (Row inside Tabs inside Array, etc.)
+fn build_enriched_children_from_data(
+    fields: &[crate::core::field::FieldDefinition],
+    data: Option<&serde_json::Value>,
+    parent_name: &str,
+    locale_locked: bool,
+    non_default_locale: bool,
+    depth: usize,
+    errors: &HashMap<String, String>,
+) -> Vec<serde_json::Value> {
+    if depth >= MAX_FIELD_DEPTH { return Vec::new(); }
+
+    let data_obj = data.and_then(|v| v.as_object());
+
+    fields.iter().map(|child| {
+        let is_wrapper = matches!(child.field_type,
+            FieldType::Tabs | FieldType::Row | FieldType::Collapsible);
+
+        let child_raw = if is_wrapper {
+            data // pass whole object
+        } else {
+            data_obj.and_then(|m| m.get(&child.name))
+        };
+
+        let child_name = if is_wrapper {
+            parent_name.to_string() // transparent
+        } else {
+            format!("{}[{}]", parent_name, child.name)
+        };
+
+        let child_val = child_raw
+            .map(|v| match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => String::new(),
+                other => {
+                    if is_wrapper {
+                        String::new()
+                    } else {
+                        other.to_string()
+                    }
+                }
+            })
+            .unwrap_or_default();
+
+        let child_label = child.admin.label.as_ref()
+            .map(|ls| ls.resolve_default().to_string())
+            .unwrap_or_else(|| auto_label_from_name(&child.name));
+
+        let mut child_ctx = serde_json::json!({
+            "name": child_name,
+            "field_type": child.field_type.as_str(),
+            "label": child_label,
+            "value": child_val,
+            "required": child.required,
+            "readonly": child.admin.readonly || locale_locked,
+            "locale_locked": locale_locked,
+            "placeholder": child.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
+            "description": child.admin.description.as_ref().map(|ls| ls.resolve_default()),
+        });
+
+        if let Some(err) = errors.get(&child_name) {
+            child_ctx["error"] = serde_json::json!(err);
+        }
+
+        match child.field_type {
+            FieldType::Row | FieldType::Collapsible => {
+                let sub_fields = build_enriched_children_from_data(
+                    &child.fields, child_raw, &child_name,
+                    locale_locked, non_default_locale, depth + 1, errors,
+                );
+                child_ctx["sub_fields"] = serde_json::json!(sub_fields);
+                if child.field_type == FieldType::Collapsible && child.admin.collapsed {
+                    child_ctx["collapsed"] = serde_json::json!(true);
+                }
+            }
+            FieldType::Tabs => {
+                let tabs_ctx: Vec<_> = child.tabs.iter().map(|tab| {
+                    let tab_sub_fields = build_enriched_children_from_data(
+                        &tab.fields, child_raw, &child_name,
+                        locale_locked, non_default_locale, depth + 1, errors,
+                    );
+                    let error_count = count_errors_in_fields(&tab_sub_fields);
+                    let mut tab_ctx = serde_json::json!({
+                        "label": &tab.label,
+                        "sub_fields": tab_sub_fields,
+                    });
+                    if error_count > 0 {
+                        tab_ctx["error_count"] = serde_json::json!(error_count);
+                    }
+                    if let Some(ref desc) = tab.description {
+                        tab_ctx["description"] = serde_json::json!(desc);
+                    }
+                    tab_ctx
+                }).collect();
+                child_ctx["tabs"] = serde_json::json!(tabs_ctx);
+            }
+            _ => {
+                apply_field_type_extras(
+                    child, &child_val, &mut child_ctx,
+                    &HashMap::new(), errors, &child_name,
+                    non_default_locale, depth + 1,
+                );
+            }
+        }
+
+        child_ctx
+    }).collect()
+}
+
 /// `sf`: the sub-field definition
 /// `raw_value`: the raw JSON value for this sub-field from the hydrated document
 /// `parent_name`: the parent field's name (e.g. "content")
@@ -1048,101 +1164,25 @@ fn build_enriched_sub_field_context(
             }
         }
         FieldType::Row | FieldType::Collapsible => {
-            // Nested row/collapsible: sub-fields are stored as keys in the same row object
-            let row_obj = match raw_value {
-                Some(serde_json::Value::Object(_)) => raw_value,
-                _ => None,
-            };
-            let nested_sub_fields: Vec<_> = sf.fields.iter().map(|nested_sf| {
-                let nested_raw = if matches!(nested_sf.field_type,
-                    FieldType::Tabs | FieldType::Row | FieldType::Collapsible)
-                {
-                    row_obj // pass through whole object for nested layout wrappers
-                } else {
-                    row_obj
-                        .and_then(|v| v.as_object())
-                        .and_then(|m| m.get(&nested_sf.name))
-                };
-                let nested_name = format!("{}[{}]", indexed_name, nested_sf.name);
-                let nested_val = nested_raw
-                    .map(|v| match v {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Null => String::new(),
-                        other => other.to_string(),
-                    })
-                    .unwrap_or_default();
-                let nested_label = nested_sf.admin.label.as_ref()
-                    .map(|ls| ls.resolve_default().to_string())
-                    .unwrap_or_else(|| auto_label_from_name(&nested_sf.name));
-                let mut nested_ctx = serde_json::json!({
-                    "name": nested_name,
-                    "field_type": nested_sf.field_type.as_str(),
-                    "label": nested_label,
-                    "value": nested_val,
-                    "required": nested_sf.required,
-                    "readonly": nested_sf.admin.readonly || locale_locked,
-                    "locale_locked": locale_locked,
-                    "placeholder": nested_sf.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
-                    "description": nested_sf.admin.description.as_ref().map(|ls| ls.resolve_default()),
-                });
-                apply_field_type_extras(
-                    nested_sf, &nested_val, &mut nested_ctx,
-                    &HashMap::new(), &HashMap::new(), &nested_name,
-                    non_default_locale, depth + 1,
-                );
-                nested_ctx
-            }).collect();
+            // Nested row/collapsible: use recursive helper that handles
+            // arbitrary nesting of layout wrappers with structured data
+            let nested_sub_fields = build_enriched_children_from_data(
+                &sf.fields, raw_value, &indexed_name,
+                locale_locked, non_default_locale, depth + 1, errors,
+            );
             sub_ctx["sub_fields"] = serde_json::json!(nested_sub_fields);
             if sf.field_type == FieldType::Collapsible && sf.admin.collapsed {
                 sub_ctx["collapsed"] = serde_json::json!(true);
             }
         }
         FieldType::Tabs => {
-            // Nested tabs: iterate tabs, each with sub-fields from the row object
-            let row_obj = match raw_value {
-                Some(serde_json::Value::Object(_)) => raw_value,
-                _ => None,
-            };
+            // Nested tabs: use recursive helper that handles
+            // arbitrary nesting of layout wrappers with structured data
             let tabs_ctx: Vec<_> = sf.tabs.iter().map(|tab| {
-                let tab_sub_fields: Vec<_> = tab.fields.iter().map(|nested_sf| {
-                    let nested_raw = if matches!(nested_sf.field_type,
-                        FieldType::Tabs | FieldType::Row | FieldType::Collapsible)
-                    {
-                        row_obj // pass through whole object for nested layout wrappers
-                    } else {
-                        row_obj
-                            .and_then(|v| v.as_object())
-                            .and_then(|m| m.get(&nested_sf.name))
-                    };
-                    let nested_name = format!("{}[{}]", indexed_name, nested_sf.name);
-                    let nested_val = nested_raw
-                        .map(|v| match v {
-                            serde_json::Value::String(s) => s.clone(),
-                            serde_json::Value::Null => String::new(),
-                            other => other.to_string(),
-                        })
-                        .unwrap_or_default();
-                    let nested_label = nested_sf.admin.label.as_ref()
-                        .map(|ls| ls.resolve_default().to_string())
-                        .unwrap_or_else(|| auto_label_from_name(&nested_sf.name));
-                    let mut nested_ctx = serde_json::json!({
-                        "name": nested_name,
-                        "field_type": nested_sf.field_type.as_str(),
-                        "label": nested_label,
-                        "value": nested_val,
-                        "required": nested_sf.required,
-                        "readonly": nested_sf.admin.readonly || locale_locked,
-                        "locale_locked": locale_locked,
-                        "placeholder": nested_sf.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
-                        "description": nested_sf.admin.description.as_ref().map(|ls| ls.resolve_default()),
-                    });
-                    apply_field_type_extras(
-                        nested_sf, &nested_val, &mut nested_ctx,
-                        &HashMap::new(), &HashMap::new(), &nested_name,
-                        non_default_locale, depth + 1,
-                    );
-                    nested_ctx
-                }).collect();
+                let tab_sub_fields = build_enriched_children_from_data(
+                    &tab.fields, raw_value, &indexed_name,
+                    locale_locked, non_default_locale, depth + 1, errors,
+                );
                 let error_count = count_errors_in_fields(&tab_sub_fields);
                 let mut tab_ctx = serde_json::json!({
                     "label": &tab.label,
@@ -4055,5 +4095,100 @@ mod tests {
         assert_eq!(children[0]["value"], "10");
         assert_eq!(children[1]["name"], "items[0][y]");
         assert_eq!(children[1]["value"], "20");
+    }
+
+    #[test]
+    fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
+        use crate::core::field::FieldTab;
+
+        // Array "team_members" with Tabs containing Rows (double nesting)
+        let mut arr_field = make_field("team_members", FieldType::Array);
+        arr_field.fields = vec![
+            FieldDefinition {
+                name: "member_tabs".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![
+                    FieldTab {
+                        label: "Personal".to_string(),
+                        description: None,
+                        fields: vec![
+                            FieldDefinition {
+                                name: "name_row".to_string(),
+                                field_type: FieldType::Row,
+                                fields: vec![
+                                    make_field("first_name", FieldType::Text),
+                                    make_field("last_name", FieldType::Text),
+                                ],
+                                ..Default::default()
+                            },
+                            make_field("email", FieldType::Email),
+                        ],
+                    },
+                    FieldTab {
+                        label: "Professional".to_string(),
+                        description: None,
+                        fields: vec![
+                            make_field("job_title", FieldType::Text),
+                        ],
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+
+        let row_data = serde_json::json!([
+            {"id": "r1", "first_name": "John", "last_name": "Doe", "email": "john@example.com", "job_title": "Dev"}
+        ]);
+
+        let fields = vec![arr_field.clone()];
+        let values = HashMap::new();
+        let errors = HashMap::new();
+        let mut contexts = build_field_contexts(&fields, &values, &errors, false, false);
+
+        let mut doc_fields = HashMap::new();
+        doc_fields.insert("team_members".to_string(), row_data);
+
+        let state = make_test_state();
+
+        super::enrich_field_contexts(
+            &mut contexts, &fields, &doc_fields, &state,
+            false, false, &errors, None,
+        );
+
+        let rows = contexts[0]["rows"].as_array().expect("should have rows");
+        assert_eq!(rows.len(), 1);
+
+        // Top level: Tabs wrapper (transparent name)
+        let row_sub_fields = rows[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(row_sub_fields.len(), 1);
+        assert_eq!(row_sub_fields[0]["field_type"], "tabs");
+        assert_eq!(row_sub_fields[0]["name"], "team_members[0]");
+
+        let tabs = row_sub_fields[0]["tabs"].as_array().unwrap();
+        assert_eq!(tabs.len(), 2);
+
+        // Personal tab: Row (transparent) + email
+        let personal_fields = tabs[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(personal_fields.len(), 2);
+
+        // Row wrapper should be transparent: team_members[0] (not team_members[0][name_row])
+        assert_eq!(personal_fields[0]["field_type"], "row");
+        assert_eq!(personal_fields[0]["name"], "team_members[0]");
+
+        // Row children should be: team_members[0][first_name], team_members[0][last_name]
+        let row_children = personal_fields[0]["sub_fields"].as_array().unwrap();
+        assert_eq!(row_children[0]["name"], "team_members[0][first_name]");
+        assert_eq!(row_children[0]["value"], "John");
+        assert_eq!(row_children[1]["name"], "team_members[0][last_name]");
+        assert_eq!(row_children[1]["value"], "Doe");
+
+        // email field
+        assert_eq!(personal_fields[1]["name"], "team_members[0][email]");
+        assert_eq!(personal_fields[1]["value"], "john@example.com");
+
+        // Professional tab: job_title
+        let pro_fields = tabs[1]["sub_fields"].as_array().unwrap();
+        assert_eq!(pro_fields[0]["name"], "team_members[0][job_title]");
+        assert_eq!(pro_fields[0]["value"], "Dev");
     }
 }

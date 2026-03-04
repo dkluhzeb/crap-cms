@@ -272,6 +272,10 @@ input[type="checkbox"]:disabled {
   gap: var(--spacing-md, var(--space-md));
 }
 
+.form__row > .form__field--row-item {
+  grid-column: auto;
+}
+
 /* ── Collapsible ──────────────────────────────────────────────── */
 
 .form__collapsible {
