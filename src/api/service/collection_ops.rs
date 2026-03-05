@@ -161,6 +161,7 @@ impl ContentService {
                     depth,
                     select_slice,
                     cache_ref,
+                    locale_ctx.as_ref(),
                 )?;
                 return Ok((docs, total));
             }
@@ -274,6 +275,7 @@ impl ContentService {
                         &mut visited,
                         select_slice,
                         cache_ref,
+                        locale_ctx.as_ref(),
                     )?;
                 }
             }

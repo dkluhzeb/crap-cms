@@ -137,7 +137,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                     format!("Registry lock: {}", e)
                 ))?;
                 query::populate_relationships_batch(
-                    conn, &r, &collection, &def, &mut docs, depth, select_slice,
+                    conn, &r, &collection, &def, &mut docs, depth, select_slice, locale_ctx.as_ref(),
                 ).map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
             }
             // Assemble sizes for upload collections
@@ -266,7 +266,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                     ))?;
                     let mut visited = std::collections::HashSet::new();
                     query::populate_relationships(
-                        conn, &r, &collection, &def, d, depth, &mut visited, select_slice,
+                        conn, &r, &collection, &def, d, depth, &mut visited, select_slice, locale_ctx.as_ref(),
                     ).map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
                 }
                 // Assemble sizes for upload collections

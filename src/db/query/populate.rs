@@ -7,7 +7,7 @@ use dashmap::DashMap;
 use crate::core::{CollectionDefinition, Document};
 use crate::core::field::FieldType;
 use super::read::{find, find_by_id, find_by_ids};
-use super::{FindQuery, FilterClause, Filter, FilterOp};
+use super::{FindQuery, FilterClause, Filter, FilterOp, LocaleContext};
 
 /// Shared cache for populated documents. Key is (collection_slug, document_id).
 /// Uses DashMap for concurrent cross-request sharing with interior mutability.
@@ -51,9 +51,10 @@ pub fn populate_relationships(
     depth: i32,
     visited: &mut HashSet<(String, String)>,
     select: Option<&[String]>,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     let cache = PopulateCache::new();
-    populate_relationships_cached(conn, registry, collection_slug, def, doc, depth, visited, select, &cache)
+    populate_relationships_cached(conn, registry, collection_slug, def, doc, depth, visited, select, &cache, locale_ctx)
 }
 
 /// Recursively populate relationship fields with full document objects.
@@ -71,6 +72,7 @@ pub fn populate_relationships_cached(
     visited: &mut HashSet<(String, String)>,
     select: Option<&[String]>,
     cache: &PopulateCache,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     if depth <= 0 {
         return Ok(());
@@ -131,7 +133,7 @@ pub fn populate_relationships_cached(
                 for (col, col_ids) in &ids_by_collection {
                     if let Some(item_def) = registry.get_collection(col) {
                         let item_def = item_def.clone();
-                        let fetched = find_by_ids(conn, col, &item_def, col_ids, None)?;
+                        let fetched = find_by_ids(conn, col, &item_def, col_ids, locale_ctx)?;
                         let doc_map: HashMap<String, Document> = fetched.into_iter()
                             .map(|d| (d.id.clone(), d))
                             .collect();
@@ -154,7 +156,7 @@ pub fn populate_relationships_cached(
                                     if let Some(ref uc) = item_def.upload {
                                         if uc.enabled { crate::core::upload::assemble_sizes_object(&mut rd, uc); }
                                     }
-                                    populate_relationships_cached(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None, cache)?;
+                                    populate_relationships_cached(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None, cache, locale_ctx)?;
                                     cache.insert((col.clone(), rd.id.clone()), rd.clone());
                                     populated.push(document_to_json(&rd, &col));
                                 } else {
@@ -184,11 +186,11 @@ pub fn populate_relationships_cached(
                         let poly_cache_key = (col.clone(), id.clone());
                         if let Some(cached) = cache.get(&poly_cache_key) {
                             doc.fields.insert(field.name.clone(), document_to_json(cached.value(), &col));
-                        } else if let Some(mut rd) = find_by_id(conn, &col, &item_def, &id, None)? {
+                        } else if let Some(mut rd) = find_by_id(conn, &col, &item_def, &id, locale_ctx)? {
                             if let Some(ref uc) = item_def.upload {
                                 if uc.enabled { crate::core::upload::assemble_sizes_object(&mut rd, uc); }
                             }
-                            populate_relationships_cached(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None, cache)?;
+                            populate_relationships_cached(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None, cache, locale_ctx)?;
                             cache.insert(poly_cache_key, rd.clone());
                             doc.fields.insert(field.name.clone(), document_to_json(&rd, &col));
                         }
@@ -218,7 +220,7 @@ pub fn populate_relationships_cached(
                     .collect();
 
                 // Batch fetch all needed documents in one query
-                let fetched = find_by_ids(conn, &rel.collection, &rel_def, &fetch_ids, None)?;
+                let fetched = find_by_ids(conn, &rel.collection, &rel_def, &fetch_ids, locale_ctx)?;
                 let mut fetched_map: HashMap<String, Document> = fetched.into_iter()
                     .map(|d| (d.id.clone(), d))
                     .collect();
@@ -243,7 +245,7 @@ pub fn populate_relationships_cached(
                                 }
                                 populate_relationships_cached(
                                     conn, registry, &rel.collection, &rel_def,
-                                    &mut related_doc, effective_depth - 1, visited, None, cache,
+                                    &mut related_doc, effective_depth - 1, visited, None, cache, locale_ctx,
                                 )?;
                                 cache.insert(hm_cache_key, related_doc.clone());
                                 populated.push(document_to_json(&related_doc, &rel.collection));
@@ -269,7 +271,7 @@ pub fn populate_relationships_cached(
                 let ho_cache_key = (rel.collection.clone(), id.clone());
                 if let Some(cached) = cache.get(&ho_cache_key) {
                     doc.fields.insert(field.name.clone(), document_to_json(cached.value(), &rel.collection));
-                } else if let Some(mut related_doc) = find_by_id(conn, &rel.collection, &rel_def, &id, None)? {
+                } else if let Some(mut related_doc) = find_by_id(conn, &rel.collection, &rel_def, &id, locale_ctx)? {
                     if let Some(ref uc) = rel_def.upload {
                         if uc.enabled {
                             crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
@@ -277,7 +279,7 @@ pub fn populate_relationships_cached(
                     }
                     populate_relationships_cached(
                         conn, registry, &rel.collection, &rel_def,
-                        &mut related_doc, effective_depth - 1, visited, None, cache,
+                        &mut related_doc, effective_depth - 1, visited, None, cache, locale_ctx,
                     )?;
                     cache.insert(ho_cache_key, related_doc.clone());
                     doc.fields.insert(field.name.clone(), document_to_json(&related_doc, &rel.collection));
@@ -311,7 +313,7 @@ pub fn populate_relationships_cached(
             })],
             ..Default::default()
         };
-        if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, None) {
+        if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
             let mut populated = Vec::new();
             for mut matched_doc in matched_docs {
                 if let Some(ref uc) = target_def.upload {
@@ -321,7 +323,7 @@ pub fn populate_relationships_cached(
                 }
                 populate_relationships_cached(
                     conn, registry, &jc.collection, &target_def,
-                    &mut matched_doc, depth - 1, visited, None, cache,
+                    &mut matched_doc, depth - 1, visited, None, cache, locale_ctx,
                 )?;
                 populated.push(document_to_json(&matched_doc, &jc.collection));
             }
@@ -343,9 +345,10 @@ pub fn populate_relationships_batch(
     docs: &mut [Document],
     depth: i32,
     select: Option<&[String]>,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     let cache = PopulateCache::new();
-    populate_relationships_batch_cached(conn, registry, collection_slug, def, docs, depth, select, &cache)
+    populate_relationships_batch_cached(conn, registry, collection_slug, def, docs, depth, select, &cache, locale_ctx)
 }
 
 /// Batch-populate relationship fields across a slice of documents.
@@ -367,6 +370,7 @@ pub fn populate_relationships_batch_cached(
     depth: i32,
     select: Option<&[String]>,
     cache: &PopulateCache,
+    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     if depth <= 0 || docs.is_empty() {
         return Ok(());
@@ -444,7 +448,7 @@ pub fn populate_relationships_batch_cached(
                             }
                         }
                         if !uncached_ids.is_empty() {
-                            let mut fetched = find_by_ids(conn, col, &item_def, &uncached_ids, None)?;
+                            let mut fetched = find_by_ids(conn, col, &item_def, &uncached_ids, locale_ctx)?;
                             for d in &mut fetched {
                                 if let Some(ref uc) = item_def.upload {
                                     if uc.enabled {
@@ -455,7 +459,7 @@ pub fn populate_relationships_batch_cached(
                             if effective_depth - 1 > 0 {
                                 populate_relationships_batch_cached(
                                     conn, registry, col, &item_def,
-                                    &mut fetched, effective_depth - 1, None, cache,
+                                    &mut fetched, effective_depth - 1, None, cache, locale_ctx,
                                 )?;
                             }
                             for d in fetched {
@@ -528,7 +532,7 @@ pub fn populate_relationships_batch_cached(
                             }
                         }
                         if !uncached_ids.is_empty() {
-                            let mut fetched = find_by_ids(conn, col, &item_def, &uncached_ids, None)?;
+                            let mut fetched = find_by_ids(conn, col, &item_def, &uncached_ids, locale_ctx)?;
                             for d in &mut fetched {
                                 if let Some(ref uc) = item_def.upload {
                                     if uc.enabled {
@@ -539,7 +543,7 @@ pub fn populate_relationships_batch_cached(
                             if effective_depth - 1 > 0 {
                                 populate_relationships_batch_cached(
                                     conn, registry, col, &item_def,
-                                    &mut fetched, effective_depth - 1, None, cache,
+                                    &mut fetched, effective_depth - 1, None, cache, locale_ctx,
                                 )?;
                             }
                             for d in fetched {
@@ -601,7 +605,7 @@ pub fn populate_relationships_batch_cached(
                     }
                 }
                 if !uncached_ids.is_empty() {
-                    let mut fetched = find_by_ids(conn, &rel.collection, &rel_def, &uncached_ids, None)?;
+                    let mut fetched = find_by_ids(conn, &rel.collection, &rel_def, &uncached_ids, locale_ctx)?;
                     for d in &mut fetched {
                         if let Some(ref uc) = rel_def.upload {
                             if uc.enabled {
@@ -612,7 +616,7 @@ pub fn populate_relationships_batch_cached(
                     if effective_depth - 1 > 0 {
                         populate_relationships_batch_cached(
                             conn, registry, &rel.collection, &rel_def,
-                            &mut fetched, effective_depth - 1, None, cache,
+                            &mut fetched, effective_depth - 1, None, cache, locale_ctx,
                         )?;
                     }
                     for d in fetched {
@@ -664,7 +668,7 @@ pub fn populate_relationships_batch_cached(
                     }
                 }
                 if !uncached_ids.is_empty() {
-                    let mut fetched = find_by_ids(conn, &rel.collection, &rel_def, &uncached_ids, None)?;
+                    let mut fetched = find_by_ids(conn, &rel.collection, &rel_def, &uncached_ids, locale_ctx)?;
                     for d in &mut fetched {
                         if let Some(ref uc) = rel_def.upload {
                             if uc.enabled {
@@ -675,7 +679,7 @@ pub fn populate_relationships_batch_cached(
                     if effective_depth - 1 > 0 {
                         populate_relationships_batch_cached(
                             conn, registry, &rel.collection, &rel_def,
-                            &mut fetched, effective_depth - 1, None, cache,
+                            &mut fetched, effective_depth - 1, None, cache, locale_ctx,
                         )?;
                     }
                     for d in fetched {
@@ -732,7 +736,7 @@ pub fn populate_relationships_batch_cached(
                     })],
                     ..Default::default()
                 };
-                if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, None) {
+                if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
                     let mut populated = Vec::new();
                     for mut matched_doc in matched_docs {
                         if let Some(ref uc) = target_def.upload {
@@ -742,7 +746,7 @@ pub fn populate_relationships_batch_cached(
                         }
                         populate_relationships_cached(
                             conn, registry, &jc.collection, &target_def,
-                            &mut matched_doc, depth - 1, &mut doc_visited, None, cache,
+                            &mut matched_doc, depth - 1, &mut doc_visited, None, cache, locale_ctx,
                         )?;
                         populated.push(document_to_json(&matched_doc, &jc.collection));
                     }
@@ -916,8 +920,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 0, &mut visited, None,
-        ).unwrap();
+            &mut doc, 0, &mut visited, None, None).unwrap();
 
         // Author field should remain a string ID, not populated
         assert_eq!(
@@ -942,8 +945,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         // Author field should now be a populated object
         let author = doc.fields.get("author").expect("author field should exist");
@@ -1012,7 +1014,7 @@ mod tests {
         // Use high depth to ensure circular ref protection kicks in rather than depth limit
         let result = populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 10, &mut visited, None,
+            &mut doc, 10, &mut visited, None, None,
         );
 
         assert!(result.is_ok(), "should not infinite loop on circular references");
@@ -1097,8 +1099,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         let tags = doc.fields.get("tags").expect("tags field should exist");
         let arr = tags.as_array().expect("tags should be an array");
@@ -1157,8 +1158,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         let tags = doc.fields.get("tags").expect("tags should exist");
         let arr = tags.as_array().expect("tags should be an array");
@@ -1196,8 +1196,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         // author should remain a string ID because max_depth=0 caps effective_depth to 0
         assert_eq!(
@@ -1245,8 +1244,7 @@ mod tests {
         let select = vec!["author".to_string()]; // Only populate author, not editor
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, Some(&select),
-        ).unwrap();
+            &mut doc, 1, &mut visited, Some(&select), None).unwrap();
 
         // author should be populated
         let author = doc.fields.get("author").expect("author should exist");
@@ -1273,8 +1271,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         // Empty string ID should be skipped (the `_ => continue` branch)
         assert_eq!(
@@ -1334,8 +1331,7 @@ mod tests {
 
         populate_relationships(
             &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         let tags = doc.fields.get("tags").expect("tags should exist");
         let arr = tags.as_array().expect("tags should be array");
@@ -1415,8 +1411,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "authors", &authors_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         let posts = doc.fields.get("posts").expect("posts join field should exist");
         let arr = posts.as_array().expect("posts should be an array");
@@ -1444,8 +1439,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "authors", &authors_def,
-            &mut doc, 0, &mut visited, None,
-        ).unwrap();
+            &mut doc, 0, &mut visited, None, None).unwrap();
 
         // At depth=0, join field should not be populated
         assert!(doc.fields.get("posts").is_none(), "depth=0 should not add join field");
@@ -1467,8 +1461,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "authors", &authors_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         let posts = doc.fields.get("posts").expect("posts join field should exist");
         let arr = posts.as_array().expect("posts should be an array");
@@ -1492,8 +1485,7 @@ mod tests {
         let select = vec!["name".to_string()];
         populate_relationships(
             &conn, &registry, "authors", &authors_def,
-            &mut doc, 1, &mut visited, Some(&select),
-        ).unwrap();
+            &mut doc, 1, &mut visited, Some(&select), None).unwrap();
 
         // Join field should be skipped because it's not in select
         assert!(doc.fields.get("posts").is_none(), "join field not in select should be skipped");
@@ -1584,8 +1576,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "entries", &entries_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         // Should be populated as a full document object
         let related = doc.fields.get("related").expect("related should exist");
@@ -1608,8 +1599,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "entries", &entries_def,
-            &mut doc, 0, &mut visited, None,
-        ).unwrap();
+            &mut doc, 0, &mut visited, None, None).unwrap();
 
         // depth=0: should stay as composite string
         assert_eq!(
@@ -1652,8 +1642,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "entries", &entries_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         let refs = doc.fields.get("refs").expect("refs should exist after populate");
         let arr = refs.as_array().unwrap();
@@ -1682,8 +1671,7 @@ mod tests {
         let mut visited = HashSet::new();
         populate_relationships(
             &conn, &registry, "entries", &entries_def,
-            &mut doc, 1, &mut visited, None,
-        ).unwrap();
+            &mut doc, 1, &mut visited, None, None).unwrap();
 
         // Unknown collection: value stays as string
         assert_eq!(
@@ -1702,7 +1690,7 @@ mod tests {
 
         let mut docs = vec![];
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 0, None,
+            &conn, &registry, "posts", &posts_def, &mut docs, 0, None, None,
         ).unwrap();
         // Empty docs + depth 0 → no-op, no error
     }
@@ -1715,7 +1703,7 @@ mod tests {
 
         let mut docs = vec![];
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None,
+            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
         ).unwrap();
     }
 
@@ -1758,7 +1746,7 @@ mod tests {
         ];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None,
+            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
         ).unwrap();
 
         // All three should have populated authors
@@ -1818,7 +1806,7 @@ mod tests {
         ];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None,
+            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
         ).unwrap();
 
         // p1 tags: Tech, Science
@@ -1876,7 +1864,7 @@ mod tests {
 
         let select = vec!["author".to_string()];
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, Some(&select),
+            &conn, &registry, "posts", &posts_def, &mut docs, 1, Some(&select), None,
         ).unwrap();
 
         // author should be populated
@@ -1911,7 +1899,7 @@ mod tests {
         }];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None,
+            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
         ).unwrap();
 
         // max_depth=0 should prevent population
@@ -1937,7 +1925,7 @@ mod tests {
         }];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None,
+            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
         ).unwrap();
 
         // Missing doc stays as ID string
@@ -1962,7 +1950,7 @@ mod tests {
         ];
 
         populate_relationships_batch(
-            &conn, &registry, "authors", &authors_def, &mut docs, 1, None,
+            &conn, &registry, "authors", &authors_def, &mut docs, 1, None, None,
         ).unwrap();
 
         let posts = docs[0].fields.get("posts").expect("join field should be populated");
@@ -1989,7 +1977,7 @@ mod tests {
         }];
 
         populate_relationships_batch(
-            &conn, &registry, "entries", &entries_def, &mut docs, 1, None,
+            &conn, &registry, "entries", &entries_def, &mut docs, 1, None, None,
         ).unwrap();
 
         let related = &docs[0].fields["related"];
@@ -2022,7 +2010,7 @@ mod tests {
 
         let mut docs = vec![doc];
         populate_relationships_batch(
-            &conn, &registry, "entries", &entries_def, &mut docs, 1, None,
+            &conn, &registry, "entries", &entries_def, &mut docs, 1, None, None,
         ).unwrap();
 
         let refs = docs[0].fields.get("refs").unwrap();

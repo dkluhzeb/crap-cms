@@ -1667,7 +1667,7 @@ fn populate_depth_0_leaves_ids() {
     // Populate at depth 0 — should be a no-op
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 0, &mut visited, None)
+    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 0, &mut visited, None, None)
         .expect("Populate failed");
 
     // category should still be an ID string
@@ -1692,7 +1692,7 @@ fn populate_depth_1_hydrates_has_one() {
 
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None)
+    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None, None)
         .expect("Populate failed");
 
     // category should be a full document object
@@ -1730,7 +1730,7 @@ fn populate_depth_1_hydrates_has_many() {
         .expect("Hydrate failed");
 
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None)
+    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None, None)
         .expect("Populate failed");
 
     let sec_cats = post.get("secondary_categories").expect("should exist");
@@ -1768,7 +1768,7 @@ fn populate_circular_ref_stops() {
     // Populate at depth 10 — should not infinite loop
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "categories", &cats_def, &mut cat_a, 10, &mut visited, None)
+    query::populate_relationships(&conn, &registry.read().unwrap(), "categories", &cats_def, &mut cat_a, 10, &mut visited, None, None)
         .expect("Populate should not loop");
     // Should complete without panic
 }
@@ -1787,7 +1787,7 @@ fn populate_missing_related_doc() {
 
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None)
+    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None, None)
         .expect("Populate should handle missing");
 
     // Category should remain as a string ID (not populated)
@@ -1814,11 +1814,121 @@ fn populate_respects_field_max_depth() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     // Even with depth=5, the limited_cat field has max_depth=0, so it shouldn't populate
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 5, &mut visited, None)
+    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 5, &mut visited, None, None)
         .expect("Populate failed");
 
     // limited_cat should remain as string ID (max_depth=0 prevents population)
     assert_eq!(post.get_str("limited_cat"), Some(cat.id.as_str()));
+}
+
+// Regression: populate_relationships with localized fields on the related collection
+// used to fail because find_by_ids was called without locale_ctx, generating
+// `SELECT caption` instead of `SELECT caption__en` for localized columns.
+#[test]
+fn populate_with_localized_related_collection() {
+    let (_tmp, pool) = create_test_pool();
+    let shared_registry = Registry::shared();
+
+    // "media" collection with a localized field
+    let media_def = CollectionDefinition {
+        slug: "media".to_string(),
+        labels: CollectionLabels::default(),
+        timestamps: true,
+        fields: vec![
+            make_field("url", FieldType::Text),
+            FieldDefinition {
+                name: "caption".to_string(),
+                localized: true,
+                ..make_field("caption", FieldType::Text)
+            },
+        ],
+        admin: CollectionAdmin::default(),
+        hooks: CollectionHooks::default(),
+        auth: None,
+        upload: None,
+        access: CollectionAccess::default(),
+        live: None,
+        versions: None,
+    };
+
+    // "articles" collection with a relationship to media
+    let articles_def = CollectionDefinition {
+        slug: "articles".to_string(),
+        labels: CollectionLabels::default(),
+        timestamps: true,
+        fields: vec![
+            make_field("title", FieldType::Text),
+            FieldDefinition {
+                name: "image".to_string(),
+                field_type: FieldType::Relationship,
+                relationship: Some(RelationshipConfig {
+                    collection: "media".to_string(),
+                    has_many: false,
+                    max_depth: None,
+                    polymorphic: vec![],
+                }),
+                ..make_field("image", FieldType::Relationship)
+            },
+        ],
+        admin: CollectionAdmin::default(),
+        hooks: CollectionHooks::default(),
+        auth: None,
+        upload: None,
+        access: CollectionAccess::default(),
+        live: None,
+        versions: None,
+    };
+
+    {
+        let mut reg = shared_registry.write().unwrap();
+        reg.register_collection(media_def.clone());
+        reg.register_collection(articles_def.clone());
+    }
+
+    let locale_config = LocaleConfig {
+        default_locale: "en".to_string(),
+        locales: vec!["en".to_string(), "de".to_string()],
+        fallback: true,
+    };
+    migrate::sync_all(&pool, &shared_registry, &locale_config).expect("Sync failed");
+
+    let locale_ctx = query::LocaleContext {
+        mode: query::LocaleMode::Single("en".to_string()),
+        config: locale_config.clone(),
+    };
+
+    // Create a media document with localized caption
+    let mut conn = pool.get().expect("conn");
+    let tx = conn.transaction().expect("tx");
+    let mut media_data = HashMap::new();
+    media_data.insert("url".to_string(), "/img/test.png".to_string());
+    media_data.insert("caption".to_string(), "Test image".to_string());
+    let media_doc = query::create(&tx, "media", &media_def, &media_data, Some(&locale_ctx))
+        .expect("Create media");
+
+    // Create an article referencing the media
+    let mut article_data = HashMap::new();
+    article_data.insert("title".to_string(), "My Article".to_string());
+    article_data.insert("image".to_string(), media_doc.id.clone());
+    let mut article = query::create(&tx, "articles", &articles_def, &article_data, None)
+        .expect("Create article");
+    tx.commit().expect("Commit");
+
+    // Populate at depth 1 WITH locale_ctx — this used to fail with
+    // "Failed to prepare find_by_ids query on 'media'" because the populate
+    // code didn't forward locale_ctx to find_by_ids.
+    let conn = pool.get().expect("conn");
+    let mut visited = HashSet::new();
+    query::populate_relationships(
+        &conn, &shared_registry.read().unwrap(), "articles", &articles_def,
+        &mut article, 1, &mut visited, None, Some(&locale_ctx),
+    ).expect("Populate with localized related collection should succeed");
+
+    // image should be populated as a full object
+    let img = article.get("image").expect("image field should exist");
+    assert!(img.is_object(), "image should be populated object, got: {:?}", img);
+    assert_eq!(img.get("url").unwrap().as_str().unwrap(), "/img/test.png");
+    assert_eq!(img.get("caption").unwrap().as_str().unwrap(), "Test image");
 }
 
 // ── 1E. Type Coercion & Edge Cases ────────────────────────────────────────────
