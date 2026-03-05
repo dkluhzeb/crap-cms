@@ -48,6 +48,8 @@ pub struct AuthUser {
     #[allow(dead_code)]
     pub claims: Claims,
     pub user_doc: crate::core::Document,
+    /// Preferred admin UI locale (e.g. "en", "de"). Loaded from user settings.
+    pub ui_locale: String,
 }
 
 /// JWT claims for auth tokens.

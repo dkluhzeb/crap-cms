@@ -6,6 +6,7 @@
   <script>
     (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
   </script>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link href="/static/styles.css" rel="stylesheet" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
   <title>Login - Crap CMS</title>
@@ -25,11 +26,11 @@
     </div>
 
     {{#if success}}
-    <div class="auth-card__success">{{success}}</div>
+    <div class="auth-card__success">{{t success}}</div>
     {{/if}}
 
     {{#if error}}
-    <div class="auth-card__error">{{error}}</div>
+    <div class="auth-card__error">{{t error}}</div>
     {{/if}}
 
     {{#if disable_local}}
@@ -58,7 +59,7 @@
 
       <div class="form__field">
         <label for="password">{{t "password"}}</label>
-        <input type="password" name="password" id="password" placeholder="Password" required autocomplete="current-password" />
+        <input type="password" name="password" id="password" placeholder="{{t "password"}}" required autocomplete="current-password" />
       </div>
 
       <button type="submit" class="button button--primary auth-card__submit">{{t "login"}}</button>

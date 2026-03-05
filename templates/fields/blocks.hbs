@@ -4,10 +4,10 @@
     {{#if required}}<span class="required">*</span>{{/if}}
     <span class="form__array-count" id="array-count-{{template_id}}">{{row_count}}</span>
     <span class="form__array-legend-actions">
-      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows-collapse" title="Collapse all">
+      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows-collapse" title="{{t "collapse_all"}}">
         <span class="material-symbols-outlined" style="font-size:14px">unfold_less</span>
       </button>
-      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows-expand" title="Expand all">
+      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows-expand" title="{{t "expand_all"}}">
         <span class="material-symbols-outlined" style="font-size:14px">unfold_more</span>
       </button>
     </span>
@@ -17,22 +17,22 @@
     {{#each rows}}
     <div class="form__array-row{{#if ../init_collapsed}}{{#unless this.has_errors}} form__array-row--collapsed{{/unless}}{{/if}}{{#if this.has_errors}} form__array-row--has-errors{{/if}}" data-row-index="{{this.index}}">
       <div class="form__array-row-header" data-action="toggle-array-row">
-        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="Drag to reorder">
+        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="{{t "drag_to_reorder"}}">
           <span class="material-symbols-outlined" style="font-size:16px">drag_indicator</span>
         </span>
         <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
         <span class="form__array-row-title">{{#if this.custom_label}}{{this.custom_label}}{{else}}{{this.block_label}} {{this.index}}{{/if}}</span>
-        {{#if this.has_errors}}<span class="form__array-row-error-badge" title="Contains validation errors"><span class="material-symbols-outlined" style="font-size:16px">error</span></span>{{/if}}
-        <button type="button" class="form__array-row-btn" data-action="move-row-up" title="Move up">
+        {{#if this.has_errors}}<span class="form__array-row-error-badge" title="{{t "validation_errors"}}"><span class="material-symbols-outlined" style="font-size:16px">error</span></span>{{/if}}
+        <button type="button" class="form__array-row-btn" data-action="move-row-up" title="{{t "move_up"}}">
           <span class="material-symbols-outlined" style="font-size:16px">arrow_upward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="move-row-down" title="Move down">
+        <button type="button" class="form__array-row-btn" data-action="move-row-down" title="{{t "move_down"}}">
           <span class="material-symbols-outlined" style="font-size:16px">arrow_downward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="duplicate-row" title="Duplicate">
+        <button type="button" class="form__array-row-btn" data-action="duplicate-row" title="{{t "duplicate"}}">
           <span class="material-symbols-outlined" style="font-size:16px">content_copy</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="remove-array-row" title="Remove">
+        <button type="button" class="form__array-row-btn" data-action="remove-array-row" title="{{t "remove"}}">
           <span class="material-symbols-outlined" style="font-size:16px">close</span>
         </button>
       </div>
@@ -50,27 +50,27 @@
     {{/each}}
   </div>
 
-  {{#unless rows}}<div class="form__array-empty"><p>No items yet</p></div>{{/unless}}
+  {{#unless rows}}<div class="form__array-empty"><p>{{t "no_items_yet_generic"}}</p></div>{{/unless}}
 
   {{#each block_definitions}}
   <template id="block-template-{{../template_id}}-{{this.block_type}}"{{#if this.label_field}} data-label-field="{{this.label_field}}"{{/if}}>
     <div class="form__array-row" data-row-index="__INDEX__">
       <div class="form__array-row-header" data-action="toggle-array-row">
-        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="Drag to reorder">
+        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="{{t "drag_to_reorder"}}">
           <span class="material-symbols-outlined" style="font-size:16px">drag_indicator</span>
         </span>
         <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
         <span class="form__array-row-title">{{this.label}} __INDEX__</span>
-        <button type="button" class="form__array-row-btn" data-action="move-row-up" title="Move up">
+        <button type="button" class="form__array-row-btn" data-action="move-row-up" title="{{t "move_up"}}">
           <span class="material-symbols-outlined" style="font-size:16px">arrow_upward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="move-row-down" title="Move down">
+        <button type="button" class="form__array-row-btn" data-action="move-row-down" title="{{t "move_down"}}">
           <span class="material-symbols-outlined" style="font-size:16px">arrow_downward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="duplicate-row" title="Duplicate">
+        <button type="button" class="form__array-row-btn" data-action="duplicate-row" title="{{t "duplicate"}}">
           <span class="material-symbols-outlined" style="font-size:16px">content_copy</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="remove-array-row" title="Remove">
+        <button type="button" class="form__array-row-btn" data-action="remove-array-row" title="{{t "remove"}}">
           <span class="material-symbols-outlined" style="font-size:16px">close</span>
         </button>
       </div>
@@ -98,7 +98,7 @@
         data-action="add-block-row" data-template-id="{{template_id}}"
         {{#if max_rows}}data-max-rows="{{max_rows}}"{{/if}}>
       <span class="material-symbols-outlined" style="font-size:16px">add</span>
-      Add {{#if add_label}}{{add_label}}{{else}}Block{{/if}}
+      Add {{#if add_label}}{{add_label}}{{else}}{{t "block"}}{{/if}}
     </button>
   </div>
 

@@ -190,33 +190,35 @@ pub fn mark_verified(
 
 // ── User settings functions ────────────────────────────────────────────────
 
-/// Get user settings JSON blob. Returns None if no settings saved.
+/// Get user settings JSON blob from `_crap_user_settings` table.
+/// Returns None if no settings saved.
 pub fn get_user_settings(
     conn: &rusqlite::Connection,
-    slug: &str,
     user_id: &str,
 ) -> Result<Option<String>> {
-    let sql = format!("SELECT _settings FROM {} WHERE id = ?1", slug);
-    let result = conn.query_row(&sql, [user_id], |row| {
-        row.get::<_, Option<String>>(0)
-    });
+    let result = conn.query_row(
+        "SELECT settings FROM _crap_user_settings WHERE user_id = ?1",
+        [user_id],
+        |row| row.get::<_, String>(0),
+    );
     match result {
-        Ok(settings) => Ok(settings),
+        Ok(settings) => Ok(Some(settings)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context(format!("Failed to get settings for {} in {}", user_id, slug)),
+        Err(e) => Err(e).context(format!("Failed to get settings for user {}", user_id)),
     }
 }
 
-/// Set user settings JSON blob.
+/// Set user settings JSON blob (UPSERT into `_crap_user_settings`).
 pub fn set_user_settings(
     conn: &rusqlite::Connection,
-    slug: &str,
     user_id: &str,
     settings_json: &str,
 ) -> Result<()> {
-    let sql = format!("UPDATE {} SET _settings = ?1 WHERE id = ?2", slug);
-    conn.execute(&sql, rusqlite::params![settings_json, user_id])
-        .with_context(|| format!("Failed to set settings for {} in {}", user_id, slug))?;
+    conn.execute(
+        "INSERT INTO _crap_user_settings (user_id, settings) VALUES (?1, ?2)
+         ON CONFLICT(user_id) DO UPDATE SET settings = excluded.settings",
+        rusqlite::params![user_id, settings_json],
+    ).with_context(|| format!("Failed to set settings for user {}", user_id))?;
     Ok(())
 }
 
@@ -569,37 +571,50 @@ mod tests {
         assert!(!result, "NULL _verified should be treated as false");
     }
 
-    // ── user settings tests ─────────────────────────────────────────────────
+    // ── user settings tests (_crap_user_settings table) ──────────────────────
+
+    fn setup_user_settings_table(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS _crap_user_settings (
+                user_id TEXT PRIMARY KEY,
+                settings TEXT NOT NULL DEFAULT '{}'
+            );"
+        ).unwrap();
+    }
 
     #[test]
-    fn get_user_settings_none_when_null() {
+    fn get_user_settings_none_when_no_row() {
         let conn = setup_auth_db();
-        let result = get_user_settings(&conn, "users", "user1").unwrap();
+        setup_user_settings_table(&conn);
+        let result = get_user_settings(&conn, "user1").unwrap();
         assert!(result.is_none(), "Should return None when no settings saved");
     }
 
     #[test]
     fn set_then_get_user_settings() {
         let conn = setup_auth_db();
+        setup_user_settings_table(&conn);
         let settings = r#"{"posts":{"columns":["title","status"]}}"#;
-        set_user_settings(&conn, "users", "user1", settings).unwrap();
-        let result = get_user_settings(&conn, "users", "user1").unwrap();
+        set_user_settings(&conn, "user1", settings).unwrap();
+        let result = get_user_settings(&conn, "user1").unwrap();
         assert_eq!(result.as_deref(), Some(settings));
     }
 
     #[test]
     fn set_user_settings_overwrites() {
         let conn = setup_auth_db();
-        set_user_settings(&conn, "users", "user1", r#"{"a":1}"#).unwrap();
-        set_user_settings(&conn, "users", "user1", r#"{"b":2}"#).unwrap();
-        let result = get_user_settings(&conn, "users", "user1").unwrap();
+        setup_user_settings_table(&conn);
+        set_user_settings(&conn, "user1", r#"{"a":1}"#).unwrap();
+        set_user_settings(&conn, "user1", r#"{"b":2}"#).unwrap();
+        let result = get_user_settings(&conn, "user1").unwrap();
         assert_eq!(result.as_deref(), Some(r#"{"b":2}"#));
     }
 
     #[test]
     fn get_user_settings_nonexistent_user() {
         let conn = setup_auth_db();
-        let result = get_user_settings(&conn, "users", "nonexistent").unwrap();
+        setup_user_settings_table(&conn);
+        let result = get_user_settings(&conn, "nonexistent").unwrap();
         assert!(result.is_none(), "Non-existent user should return None");
     }
 }

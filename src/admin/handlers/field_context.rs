@@ -3834,6 +3834,9 @@ mod tests {
         let login_limiter = std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(5, 300)
         );
+        let translations = std::sync::Arc::new(
+            crate::admin::translations::Translations::load(tmp.path())
+        );
         let state = crate::admin::AdminState {
             config,
             config_dir: tmp.path().to_path_buf(),
@@ -3846,6 +3849,7 @@ mod tests {
             event_bus: None,
             login_limiter,
             has_auth: false,
+            translations,
         };
 
         // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -3910,6 +3914,9 @@ mod tests {
         let login_limiter = std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(5, 300)
         );
+        let translations = std::sync::Arc::new(
+            crate::admin::translations::Translations::load(tmp.path())
+        );
         let state = crate::admin::AdminState {
             config,
             config_dir: tmp.path().to_path_buf(),
@@ -3922,6 +3929,7 @@ mod tests {
             event_bus: None,
             login_limiter,
             has_auth: false,
+            translations,
         };
 
         super::enrich_field_contexts(
@@ -3958,6 +3966,9 @@ mod tests {
         let login_limiter = std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(5, 300)
         );
+        let translations = std::sync::Arc::new(
+            crate::admin::translations::Translations::load(tmp.path())
+        );
         crate::admin::AdminState {
             config,
             config_dir: tmp.path().to_path_buf(),
@@ -3970,6 +3981,7 @@ mod tests {
             event_bus: None,
             login_limiter,
             has_auth: false,
+            translations,
         }
     }
 

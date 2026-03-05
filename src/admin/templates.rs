@@ -170,16 +170,22 @@ impl HelperDef for TranslationHelper {
         &self,
         h: &Helper<'rc>,
         _r: &'reg Handlebars<'reg>,
-        _ctx: &'rc handlebars::Context,
+        ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
         let key = h.param(0)
             .and_then(|p| p.value().as_str())
             .unwrap_or("");
 
+        // Read locale from template context (_locale), default to "en"
+        let locale = ctx.data()
+            .get("_locale")
+            .and_then(|v| v.as_str())
+            .unwrap_or("en");
+
         let hash = h.hash();
         if hash.is_empty() {
-            let translated = self.translations.get(key);
+            let translated = self.translations.get(locale, key);
             Ok(ScopedJson::Derived(serde_json::Value::String(translated.to_string())))
         } else {
             let mut params = std::collections::HashMap::new();
@@ -192,7 +198,7 @@ impl HelperDef for TranslationHelper {
                 };
                 params.insert(k.to_string(), val);
             }
-            let translated = self.translations.get_interpolated(key, &params);
+            let translated = self.translations.get_interpolated(locale, key, &params);
             Ok(ScopedJson::Derived(serde_json::Value::String(translated)))
         }
     }
@@ -403,7 +409,7 @@ mod tests {
     #[test]
     fn create_handlebars_loads_templates() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         // Should have at least the compiled-in templates (dashboard/index, auth/login, etc.)
         // Rendering dashboard/index with minimal data should work (non-strict mode)
@@ -417,7 +423,7 @@ mod tests {
     #[test]
     fn eq_helper_works() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         let mut hbs_mut = (*hbs).clone();
         hbs_mut.register_template_string("test_eq", "{{#if (eq a b)}}EQUAL{{else}}NOT_EQUAL{{/if}}")
@@ -431,7 +437,7 @@ mod tests {
     /// Helper to create a Handlebars instance with all helpers registered for testing.
     fn test_hbs() -> Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         (*hbs).clone()
     }
@@ -583,7 +589,7 @@ mod tests {
         // Override auth/login with custom content
         std::fs::write(templates_dir.join("login.hbs"), "CUSTOM_LOGIN_PAGE").unwrap();
 
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         let result = hbs.render("auth/login", &serde_json::json!({})).unwrap();
         assert_eq!(result, "CUSTOM_LOGIN_PAGE");
@@ -596,7 +602,7 @@ mod tests {
         std::fs::create_dir_all(&nested_dir).unwrap();
         std::fs::write(nested_dir.join("page.hbs"), "DEEP_NESTED").unwrap();
 
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         let result = hbs.render("custom/deep/page", &serde_json::json!({})).unwrap();
         assert_eq!(result, "DEEP_NESTED");
@@ -612,7 +618,7 @@ mod tests {
         // A .hbs file should be registered
         std::fs::write(templates_dir.join("custom.hbs"), "IS_TEMPLATE").unwrap();
 
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         assert!(hbs.render("custom", &serde_json::json!({})).is_ok());
         // "notes" should not be registered as a template
@@ -622,7 +628,7 @@ mod tests {
     #[test]
     fn dev_mode_enables_dev_mode() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), true, translations).expect("create_handlebars");
         assert!(hbs.dev_mode());
     }
@@ -630,7 +636,7 @@ mod tests {
     #[test]
     fn non_dev_mode_disables_dev_mode() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         assert!(!hbs.dev_mode());
     }
@@ -707,7 +713,7 @@ mod tests {
             r#"{"hello": "Hello World"}"#,
         ).unwrap();
 
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         let mut hbs = (*hbs).clone();
         hbs.register_template_string("t", "{{t \"hello\"}}").unwrap();
@@ -725,7 +731,7 @@ mod tests {
             r#"{"greeting": "Hello {{name}}, you have {{count}} items"}"#,
         ).unwrap();
 
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         let mut hbs = (*hbs).clone();
         hbs.register_template_string("t", "{{t \"greeting\" name=\"Alice\" count=5}}").unwrap();
@@ -743,7 +749,7 @@ mod tests {
             r#"{"status": "Active: {{active}}"}"#,
         ).unwrap();
 
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         let mut hbs = (*hbs).clone();
         hbs.register_template_string("t", "{{t \"status\" active=true}}").unwrap();
@@ -754,7 +760,7 @@ mod tests {
     #[test]
     fn translation_helper_missing_key_returns_key() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         let mut hbs = (*hbs).clone();
         hbs.register_template_string("t", "{{t \"nonexistent.key\"}}").unwrap();
@@ -1076,7 +1082,7 @@ mod tests {
     #[test]
     fn embedded_templates_include_dashboard() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         // The compiled-in templates should include dashboard/index
         let result = hbs.render("dashboard/index", &serde_json::json!({
@@ -1090,7 +1096,7 @@ mod tests {
     #[test]
     fn embedded_templates_include_field_partials() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = Arc::new(Translations::load(tmp.path(), "en"));
+        let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         // Field partials should be registered
         let result = hbs.render("fields/text", &serde_json::json!({

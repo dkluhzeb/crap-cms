@@ -9,6 +9,7 @@
 
 import { registerInit } from './actions.js';
 import { getConfirmDialog } from './confirm-dialog.js';
+import { t } from './i18n.js';
 
 /** @type {boolean} */
 let dirty = false;
@@ -27,8 +28,8 @@ function markDirty() { dirty = true; }
  */
 function askLeave() {
   return getConfirmDialog().prompt(
-    'You have unsaved changes. Leave this page?',
-    { confirmLabel: 'Leave', cancelLabel: 'Stay' },
+    t('unsaved_changes'),
+    { confirmLabel: t('leave'), cancelLabel: t('stay') },
   );
 }
 

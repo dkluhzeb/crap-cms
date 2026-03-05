@@ -529,7 +529,7 @@ pub async fn list_items(
     // Load user column preferences
     let user_columns: Option<Vec<String>> = auth_user.as_ref().and_then(|Extension(au)| {
         let conn = state.pool.get().ok()?;
-        let settings_json = query::auth::get_user_settings(&conn, &au.claims.collection, &au.claims.sub).ok()??;
+        let settings_json = query::auth::get_user_settings(&conn, &au.claims.sub).ok()??;
         let settings: serde_json::Value = serde_json::from_str(&settings_json).ok()?;
         let cols = settings.get(&slug)?.get("columns")?.as_array()?;
         Some(cols.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
@@ -632,6 +632,7 @@ pub async fn list_items(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::CollectionItems, def.display_name())
         .set("page_title", serde_json::json!(def.display_name()))
         .collection_def(&def)
@@ -689,10 +690,9 @@ pub async fn save_user_settings(
     // Load existing settings, merge, save
     let pool = state.pool.clone();
     let user_id = auth_user.claims.sub.clone();
-    let auth_slug = auth_user.claims.collection.clone();
     let result = tokio::task::spawn_blocking(move || {
         let conn = pool.get().context("Failed to get DB connection")?;
-        let existing = query::auth::get_user_settings(&conn, &auth_slug, &user_id)?;
+        let existing = query::auth::get_user_settings(&conn, &user_id)?;
         let mut settings: serde_json::Value = existing
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok())
@@ -701,7 +701,7 @@ pub async fn save_user_settings(
         settings[&collection_slug] = serde_json::json!({ "columns": valid_columns });
 
         let json_str = serde_json::to_string(&settings)?;
-        query::auth::set_user_settings(&conn, &auth_slug, &user_id, &json_str)?;
+        query::auth::set_user_settings(&conn, &user_id, &json_str)?;
         Ok::<_, anyhow::Error>(())
     }).await;
 
@@ -778,6 +778,7 @@ pub async fn create_form(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let mut data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
         .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
         .collection_def(&def)
@@ -870,6 +871,7 @@ pub async fn create_action(
                     apply_display_conditions(&mut fields, &def.fields, &empty_data, &state.hook_runner, true);
                     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
                     let data = ContextBuilder::new(&state, None)
+                        .locale_from_auth(&auth_user)
                         .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
                         .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
                         .collection_def(&def)
@@ -982,6 +984,7 @@ pub async fn create_action(
                 apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
                 let mut data = ContextBuilder::new(&state, None)
+                    .locale_from_auth(&auth_user)
                     .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
                     .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
                     .collection_def(&def)
@@ -1154,6 +1157,7 @@ pub async fn edit_form(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let mut data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
         .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
         .collection_def(&def)
@@ -1333,6 +1337,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                     apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
                     let data = ContextBuilder::new(state, None)
+                        .locale_from_auth(auth_user)
                         .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
                         .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
                         .collection_def(&def)
@@ -1462,6 +1467,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
                 let mut data = ContextBuilder::new(state, None)
+                    .locale_from_auth(auth_user)
                     .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
                     .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
                     .collection_def(&def)
@@ -1521,6 +1527,7 @@ pub async fn delete_confirm(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::CollectionDelete, format!("Delete {}", def.singular_name()))
         .set("page_title", serde_json::json!(format!("Delete {}", def.singular_name())))
         .collection_def(&def)
@@ -1709,6 +1716,7 @@ pub async fn list_versions_page(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::CollectionVersions, format!("Version History — {}", doc_title))
         .set("page_title", serde_json::json!(format!("Version History — {}", doc_title)))
         .collection_def(&def)

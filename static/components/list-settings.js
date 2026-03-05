@@ -12,6 +12,7 @@
 
 import { registerAction, registerInit } from './actions.js';
 import { getDrawer } from './drawer.js';
+import { t } from './i18n.js';
 
 /** @type {string|null} */
 let currentSlug = null;
@@ -61,7 +62,7 @@ registerAction('open-column-picker', () => {
   const options = JSON.parse(island.textContent || '[]');
 
   const drawer = getDrawer();
-  drawer.open({ title: 'Columns' });
+  drawer.open({ title: t('columns') });
 
   const body = drawer.body;
   body.innerHTML = '';
@@ -97,7 +98,7 @@ registerAction('open-column-picker', () => {
   const saveBtn = document.createElement('button');
   saveBtn.type = 'submit';
   saveBtn.className = 'button button--primary button--small';
-  saveBtn.textContent = 'Save';
+  saveBtn.textContent = t('save');
   footer.appendChild(saveBtn);
 
   form.appendChild(footer);
@@ -196,7 +197,7 @@ function buildValueInput(fieldMeta, op, currentValue = '') {
   if (fieldMeta.field_type === 'checkbox') {
     const select = document.createElement('select');
     select.name = 'filter-value';
-    for (const [val, label] of [['1', 'Yes'], ['0', 'No']]) {
+    for (const [val, label] of [['1', t('yes')], ['0', t('no')]]) {
       const option = document.createElement('option');
       option.value = val;
       option.textContent = label;
@@ -217,7 +218,7 @@ function buildValueInput(fieldMeta, op, currentValue = '') {
     input.type = 'date';
   } else {
     input.type = 'text';
-    input.placeholder = 'Value...';
+    input.placeholder = t('value_placeholder');
   }
 
   return input;
@@ -234,7 +235,7 @@ registerAction('open-filter-builder', () => {
   const existing = parseCurrentFilters();
 
   const drawer = getDrawer();
-  drawer.open({ title: 'Filters' });
+  drawer.open({ title: t('filters') });
 
   const body = drawer.body;
   body.innerHTML = '';
@@ -329,7 +330,7 @@ registerAction('open-filter-builder', () => {
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'button button--ghost button--small';
-  addBtn.innerHTML = '<span class="material-symbols-outlined">add</span> Add condition';
+  addBtn.innerHTML = '<span class="material-symbols-outlined">add</span> ' + t('add_condition');
   addBtn.addEventListener('click', () => addRow());
   container.appendChild(addBtn);
 
@@ -339,14 +340,14 @@ registerAction('open-filter-builder', () => {
 
   const clearBtn = document.createElement('a');
   clearBtn.className = 'button button--ghost button--small';
-  clearBtn.textContent = 'Clear all';
+  clearBtn.textContent = t('clear_all');
   clearBtn.href = `/admin/collections/${currentSlug}`;
   footer.appendChild(clearBtn);
 
   const applyBtn = document.createElement('button');
   applyBtn.type = 'button';
   applyBtn.className = 'button button--primary button--small';
-  applyBtn.textContent = 'Apply';
+  applyBtn.textContent = t('apply');
   applyBtn.addEventListener('click', () => {
     const url = new URL(window.location.href);
     // Remove existing where params

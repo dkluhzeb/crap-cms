@@ -146,9 +146,9 @@ fn setup_app_with_config(
     let hook_runner =
         HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
 
-    let translations = Arc::new(Translations::load(tmp.path(), "en"));
+    let translations = Arc::new(Translations::load(tmp.path()));
     let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations).expect("create handlebars");
+        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
@@ -169,6 +169,7 @@ fn setup_app_with_config(
         event_bus: None,
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         has_auth,
+        translations,
     };
 
     let router = build_router(state);

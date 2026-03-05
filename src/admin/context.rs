@@ -72,7 +72,7 @@ pub struct ContextBuilder {
 }
 
 impl ContextBuilder {
-    /// Create a new builder with `crap`, `nav`, and `user` pre-populated.
+    /// Create a new builder with `crap`, `nav`, `user`, and locale pre-populated.
     pub fn new(state: &AdminState, claims: Option<&Claims>) -> Self {
         let mut data = Map::new();
 
@@ -98,6 +98,10 @@ impl ContextBuilder {
             }));
         }
 
+        // locale defaults
+        data.insert("_locale".into(), Value::String(state.config.locale.default_locale.clone()));
+        data.insert("available_locales".into(), json!(state.translations.available_locales()));
+
         Self { data }
     }
 
@@ -109,7 +113,25 @@ impl ContextBuilder {
             "dev_mode": state.config.admin.dev_mode,
             "auth_enabled": true,
         }));
+        // locale defaults for auth pages
+        data.insert("_locale".into(), Value::String(state.config.locale.default_locale.clone()));
+        data.insert("available_locales".into(), json!(state.translations.available_locales()));
         Self { data }
+    }
+
+    /// Set the locale for this context (overrides the default).
+    pub fn locale(mut self, locale: &str) -> Self {
+        self.data.insert("_locale".into(), Value::String(locale.to_string()));
+        self
+    }
+
+    /// Set the locale from an optional auth user (convenience for handlers).
+    pub fn locale_from_auth(self, auth_user: &Option<axum::Extension<crate::core::auth::AuthUser>>) -> Self {
+        if let Some(axum::Extension(au)) = auth_user {
+            self.locale(&au.ui_locale)
+        } else {
+            self
+        }
     }
 
     /// Set page metadata (type and title).

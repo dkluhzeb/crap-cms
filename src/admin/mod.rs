@@ -19,6 +19,8 @@ use crate::core::rate_limit::LoginRateLimiter;
 use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
+use self::translations::Translations;
+
 /// Shared state for all admin handlers.
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -34,6 +36,7 @@ pub struct AdminState {
     pub event_bus: Option<EventBus>,
     pub login_limiter: Arc<LoginRateLimiter>,
     pub has_auth: bool,
+    pub translations: Arc<Translations>,
 }
 
 impl AdminState {

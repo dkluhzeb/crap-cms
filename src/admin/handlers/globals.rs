@@ -126,6 +126,7 @@ pub async fn edit_form(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::GlobalEdit, def.display_name())
         .breadcrumbs(vec![
             Breadcrumb::link("Dashboard", "/admin"),
@@ -260,6 +261,7 @@ pub async fn update_action(
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
 
                 let data = ContextBuilder::new(&state, None)
+                    .locale_from_auth(&auth_user)
                     .page(PageType::GlobalEdit, def.display_name())
                     .global_def(&def)
                     .fields(main_fields)
@@ -321,6 +323,7 @@ pub async fn list_versions_page(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::GlobalVersions, format!("Version History — {}", def.display_name()))
         .set("page_title", serde_json::json!(format!("Version History — {}", def.display_name())))
         .global_def(&def)

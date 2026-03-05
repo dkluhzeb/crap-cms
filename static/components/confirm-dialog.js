@@ -11,6 +11,8 @@
  * The global `htmx:confirm` listener (registered below) will intercept
  * the native confirm and show this dialog instead.
  */
+import { t } from './i18n.js';
+
 class CrapConfirmDialog extends HTMLElement {
   constructor() {
     super();
@@ -80,8 +82,8 @@ class CrapConfirmDialog extends HTMLElement {
           <p></p>
         </div>
         <div class="actions">
-          <button class="cancel" type="button">Cancel</button>
-          <button class="confirm" type="button">Confirm</button>
+          <button class="cancel" type="button">${t('cancel')}</button>
+          <button class="confirm" type="button">${t('confirm')}</button>
         </div>
       </dialog>
     `;
@@ -96,7 +98,7 @@ class CrapConfirmDialog extends HTMLElement {
    * @returns {Promise<boolean>}
    */
   prompt(message, opts = {}) {
-    const { confirmLabel = 'Confirm', cancelLabel = 'Cancel' } = opts;
+    const { confirmLabel = t('confirm'), cancelLabel = t('cancel') } = opts;
     return new Promise((resolve) => {
       const dialog = this.shadowRoot.querySelector('dialog');
       this.shadowRoot.querySelector('p').textContent = message;

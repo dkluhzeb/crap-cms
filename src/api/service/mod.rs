@@ -125,6 +125,7 @@ impl ContentService {
         Some(AuthUser {
             claims,
             user_doc: doc,
+            ui_locale: "en".to_string(),
         })
     }
 

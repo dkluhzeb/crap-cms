@@ -13,7 +13,7 @@
     {{/each}}
   </div>
   {{else}}
-  <p class="form__join-empty">No related items</p>
+  <p class="form__join-empty">{{t "no_related_items"}}</p>
   {{/if}}
   {{#if join_count}}
   <p class="form__join-count">{{join_count}} item{{#unless (eq join_count 1)}}s{{/unless}}</p>

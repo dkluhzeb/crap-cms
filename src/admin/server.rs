@@ -36,11 +36,10 @@ pub async fn start(
     jwt_secret: String,
     event_bus: Option<EventBus>,
 ) -> Result<()> {
-    let admin_locale = &config.locale.default_locale;
     let translations = std::sync::Arc::new(
-        super::translations::Translations::load(&config_dir, admin_locale)
+        super::translations::Translations::load(&config_dir)
     );
-    let handlebars = super::templates::create_handlebars(&config_dir, config.admin.dev_mode, translations)?;
+    let handlebars = super::templates::create_handlebars(&config_dir, config.admin.dev_mode, translations.clone())?;
     let email_renderer = std::sync::Arc::new(
         crate::core::email::EmailRenderer::new(&config_dir)?
     );
@@ -67,6 +66,7 @@ pub async fn start(
         event_bus,
         login_limiter,
         has_auth,
+        translations,
     };
 
     let app = build_router(state);
@@ -118,7 +118,8 @@ pub fn build_router(state: AdminState) -> Router {
         .route("/admin/globals/{slug}/versions", get(globals::list_versions_page))
         .route("/admin/globals/{slug}/versions/{version_id}/restore", post(globals::restore_version))
         .route("/admin/events", get(events::sse_handler))
-        .route("/admin/api/session-refresh", post(auth_handlers::session_refresh));
+        .route("/admin/api/session-refresh", post(auth_handlers::session_refresh))
+        .route("/admin/api/locale", post(auth_handlers::save_locale));
 
     // Apply auth middleware if auth collections exist OR require_auth is set
     let needs_auth_layer = has_auth || state.config.admin.require_auth;
@@ -413,7 +414,22 @@ async fn auth_middleware(
         }
     }
 
-    Redirect::to("/admin/login").into_response()
+    // HTMX follows 302 redirects and swaps the response into the target,
+    // which breaks standalone pages like login. Use HX-Redirect to force a
+    // full page navigation instead.
+    let is_htmx = request.headers()
+        .get("HX-Request")
+        .is_some();
+
+    if is_htmx {
+        axum::response::Response::builder()
+            .status(StatusCode::OK)
+            .header("HX-Redirect", "/admin/login")
+            .body(axum::body::Body::empty())
+            .unwrap()
+    } else {
+        Redirect::to("/admin/login").into_response()
+    }
 }
 
 /// Gate 2: Check `admin.access` Lua function. Returns a 403 response if the user
@@ -465,6 +481,7 @@ fn admin_denied_response(state: &AdminState) -> axum::response::Response {
 
 /// Load the full user document for an authenticated user.
 /// Returns None if the user can't be found (e.g., deleted since JWT was issued).
+/// Also loads `ui_locale` from `_crap_user_settings`.
 // Excluded from coverage: requires full DB pool + SharedRegistry with auth collection definitions.
 // Tested indirectly through integration tests (admin login flow).
 #[cfg(not(tarpaulin_include))]
@@ -478,9 +495,19 @@ pub(crate) fn load_auth_user(
     let locale_ctx = query::LocaleContext::from_locale_string(None, locale_config);
     let conn = pool.get().ok()?;
     let doc = query::find_by_id(&conn, &claims.collection, &def, &claims.sub, locale_ctx.as_ref()).ok()??;
+
+    // Load ui_locale from _crap_user_settings
+    let ui_locale = query::get_user_settings(&conn, &claims.sub)
+        .ok()
+        .flatten()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("ui_locale").and_then(|l| l.as_str()).map(|s| s.to_string()))
+        .unwrap_or_else(|| locale_config.default_locale.clone());
+
     Some(AuthUser {
         claims: claims.clone(),
         user_doc: doc,
+        ui_locale,
     })
 }
 

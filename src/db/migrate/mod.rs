@@ -61,6 +61,14 @@ pub fn sync_all(pool: &DbPool, registry: &SharedRegistry, locale_config: &Locale
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);"
     ).context("Failed to create _crap_jobs table")?;
 
+    // Create user settings table (decoupled from auth collections)
+    tx.execute_batch(
+        "CREATE TABLE IF NOT EXISTS _crap_user_settings (
+            user_id TEXT PRIMARY KEY,
+            settings TEXT NOT NULL DEFAULT '{}'
+        );"
+    ).context("Failed to create _crap_user_settings table")?;
+
     // Create image processing queue table
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS _crap_image_queue (

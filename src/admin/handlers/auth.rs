@@ -2,6 +2,7 @@
 
 use axum::{
     extract::{Form, Query, State},
+    Extension,
     http::StatusCode,
     response::{Html, IntoResponse, Redirect},
 };
@@ -59,14 +60,14 @@ pub async fn login_action(
 ) -> axum::response::Response {
     // Check rate limit before doing any work
     if state.login_limiter.is_blocked(&form.email) {
-        return login_error(&state, "Too many login attempts. Please try again later.", &form.email);
+        return login_error(&state, "error_too_many_attempts", &form.email);
     }
 
     let def = state.registry.get_collection(&form.collection).cloned();
 
     let def = match def {
         Some(d) if d.is_auth_collection() => d,
-        _ => return login_error(&state, "Invalid collection", &form.email),
+        _ => return login_error(&state, "error_invalid_collection", &form.email),
     };
 
     let pool = state.pool.clone();
@@ -99,14 +100,14 @@ pub async fn login_action(
 
         // Check if account is locked
         if query::is_locked(&conn, &slug, &user.id)? {
-            return Ok(Some(Err("This account has been locked".to_string())));
+            return Ok(Some(Err("error_account_locked".to_string())));
         }
 
         // Check email verification if enabled
         if verify_email {
             let verified = query::is_verified(&conn, &slug, &user.id)?;
             if !verified {
-                return Ok(Some(Err("Please verify your email before logging in".to_string())));
+                return Ok(Some(Err("error_verify_email".to_string())));
             }
         }
 
@@ -121,15 +122,15 @@ pub async fn login_action(
         }
         Ok(Ok(None)) => {
             state.login_limiter.record_failure(&form.email);
-            return login_error(&state, "Invalid email or password", &form.email);
+            return login_error(&state, "error_invalid_credentials", &form.email);
         }
         Ok(Err(e)) => {
             tracing::error!("Login error: {}", e);
-            return login_error(&state, "Internal error", &form.email);
+            return login_error(&state, "error_internal", &form.email);
         }
         Err(e) => {
             tracing::error!("Login task error: {}", e);
-            return login_error(&state, "Internal error", &form.email);
+            return login_error(&state, "error_internal", &form.email);
         }
     };
 
@@ -159,7 +160,7 @@ pub async fn login_action(
         Ok(t) => t,
         Err(e) => {
             tracing::error!("Token creation error: {}", e);
-            return login_error(&state, "Internal error", &form.email);
+            return login_error(&state, "error_internal", &form.email);
         }
     };
 
@@ -425,7 +426,7 @@ pub async fn reset_password_page(
     if valid {
         builder = builder.set("token", serde_json::json!(query.token));
     } else {
-        builder = builder.set("error", serde_json::json!("Invalid or expired reset link. Please request a new one."));
+        builder = builder.set("error", serde_json::json!("error_reset_link_invalid"));
     }
 
     let data = builder.build();
@@ -446,7 +447,7 @@ pub async fn reset_password_action(
         let data = ContextBuilder::auth(&state)
             .page(PageType::AuthReset, "Reset Password")
             .set("token", serde_json::json!(form.token))
-            .set("error", serde_json::json!("Passwords do not match"))
+            .set("error", serde_json::json!("error_passwords_no_match"))
             .build();
         return match state.render("auth/reset_password", &data) {
             Ok(html) => Html(html).into_response(),
@@ -458,7 +459,7 @@ pub async fn reset_password_action(
         let data = ContextBuilder::auth(&state)
             .page(PageType::AuthReset, "Reset Password")
             .set("token", serde_json::json!(form.token))
-            .set("error", serde_json::json!("Password must be at least 6 characters"))
+            .set("error", serde_json::json!("error_password_min_length"))
             .build();
         return match state.render("auth/reset_password", &data) {
             Ok(html) => Html(html).into_response(),
@@ -494,13 +495,13 @@ pub async fn reset_password_action(
 
     match result {
         Ok(Ok(())) => {
-            Redirect::to("/admin/login?success=Password+reset+successfully").into_response()
+            Redirect::to("/admin/login?success=success_password_reset").into_response()
         }
         Ok(Err(e)) => {
             let msg = if e.to_string().contains("expired") {
-                "Reset link has expired. Please request a new one."
+                "error_reset_link_expired"
             } else {
-                "Invalid or expired reset link."
+                "error_reset_link_invalid"
             };
             let data = ContextBuilder::auth(&state)
                 .page(PageType::AuthReset, "Reset Password")
@@ -515,7 +516,7 @@ pub async fn reset_password_action(
             tracing::error!("Reset password task error: {}", e);
             let data = ContextBuilder::auth(&state)
                 .page(PageType::AuthReset, "Reset Password")
-                .set("error", serde_json::json!("An internal error occurred"))
+                .set("error", serde_json::json!("error_internal"))
                 .build();
             match state.render("auth/reset_password", &data) {
                 Ok(html) => Html(html).into_response(),
@@ -562,11 +563,55 @@ pub async fn verify_email(
 
     match result {
         Ok(Ok(true)) => {
-            Redirect::to("/admin/login?success=Email+verified+successfully").into_response()
+            Redirect::to("/admin/login?success=success_email_verified").into_response()
         }
         _ => {
             Redirect::to("/admin/login").into_response()
         }
+    }
+}
+
+// ── Locale preference ─────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct LocaleForm {
+    pub locale: String,
+}
+
+/// POST /admin/api/locale — save user's preferred admin UI locale.
+pub async fn save_locale(
+    State(state): State<AdminState>,
+    Extension(auth_user): Extension<crate::core::auth::AuthUser>,
+    Form(form): Form<LocaleForm>,
+) -> impl IntoResponse {
+    // Validate locale is available
+    let available = state.translations.available_locales();
+    if !available.contains(&form.locale.as_str()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
+    let pool = state.pool.clone();
+    let user_id = auth_user.claims.sub.clone();
+    let locale = form.locale.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = pool.get()?;
+        let existing = query::get_user_settings(&conn, &user_id)?;
+        let mut settings: serde_json::Value = existing
+            .as_deref()
+            .and_then(|s| serde_json::from_str(s).ok())
+            .unwrap_or_else(|| serde_json::json!({}));
+
+        settings["ui_locale"] = serde_json::json!(locale);
+
+        let json_str = serde_json::to_string(&settings)?;
+        query::set_user_settings(&conn, &user_id, &json_str)?;
+        Ok::<_, anyhow::Error>(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
 

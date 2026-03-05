@@ -9,6 +9,9 @@
  * path in your config directory's static/ folder (overlay pattern).
  */
 
+// ── i18n ──
+import './i18n.js';
+
 // ── Event delegation ──
 import './actions.js';
 
@@ -34,6 +37,7 @@ import './time-format.js';
 import './scroll.js';
 import './theme.js';
 import './locale.js';
+import './locale-picker.js';
 
 // ── Actions ──
 import './list-settings.js';

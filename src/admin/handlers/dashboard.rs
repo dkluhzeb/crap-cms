@@ -8,12 +8,13 @@ use axum::{
 
 use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
-use crate::core::auth::Claims;
+use crate::core::auth::{AuthUser, Claims};
 
 /// Render the admin dashboard with collection and global summary cards.
 pub async fn index(
     State(state): State<AdminState>,
     claims: Option<Extension<Claims>>,
+    auth_user: Option<Extension<AuthUser>>,
 ) -> Html<String> {
     let mut collection_cards = Vec::new();
     let mut global_cards = Vec::new();
@@ -62,11 +63,10 @@ pub async fn index(
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
+        .locale_from_auth(&auth_user)
         .page(PageType::Dashboard, "Dashboard")
         .set("collection_cards", serde_json::Value::Array(collection_cards))
         .set("global_cards", serde_json::Value::Array(global_cards))
-        // Backward compat: dashboard template uses {{#each collections}} and {{#each globals}}
-        // These are now the card data (with counts), distinct from nav.collections
         .build();
 
     let data = state.hook_runner.run_before_render(data);

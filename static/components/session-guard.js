@@ -10,6 +10,8 @@
  * HTMX navigation (which may deliver fresh cookies from the server).
  */
 
+import { t } from './i18n.js';
+
 const WARNING_SECONDS = 5 * 60;
 
 // ── Web Component ────────────────────────────────────────────────────────
@@ -83,8 +85,8 @@ class CrapSessionDialog extends HTMLElement {
           <p></p>
         </div>
         <div class="actions">
-          <button class="logout" type="button">Log out</button>
-          <button class="stay" type="button">Stay logged in</button>
+          <button class="logout" type="button">${t('log_out')}</button>
+          <button class="stay" type="button">${t('stay_logged_in')}</button>
         </div>
       </dialog>
     `;
@@ -214,8 +216,8 @@ function scheduleWarning() {
  */
 function showWarning(secsLeft) {
   const mins = Math.max(1, Math.round(secsLeft / 60));
-  const unit = mins === 1 ? 'minute' : 'minutes';
-  const message = `Your session expires in ${mins} ${unit}. Would you like to stay logged in?`;
+  const unit = mins === 1 ? t('minute') : t('minutes');
+  const message = t('session_expiry_warning', { mins, unit });
 
   getDialog().show(message, {
     onStay: handleStay,

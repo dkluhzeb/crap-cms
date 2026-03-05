@@ -21,6 +21,7 @@
  */
 
 import { getDrawer } from './drawer.js';
+import { t } from './i18n.js';
 
 const DEBOUNCE_MS = 250;
 const MIN_QUERY_LENGTH = 0;
@@ -203,7 +204,7 @@ class CrapRelationshipSearch extends HTMLElement {
       if (results.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'relationship-search__empty';
-        empty.textContent = 'No results';
+        empty.textContent = t('no_results');
         dropdown.appendChild(empty);
       } else {
         let currentGroup = null;
@@ -365,7 +366,7 @@ class CrapRelationshipSearch extends HTMLElement {
       clearBtn.type = 'button';
       clearBtn.className = 'relationship-search__clear';
       clearBtn.textContent = '\u00d7';
-      clearBtn.title = 'Clear selection';
+      clearBtn.title = t('clear_selection');
       clearBtn.style.display = selected.length > 0 ? '' : 'none';
       clearBtn.addEventListener('click', () => {
         selected = [];
@@ -418,7 +419,7 @@ class CrapRelationshipSearch extends HTMLElement {
     const browseBtn = document.createElement('button');
     browseBtn.type = 'button';
     browseBtn.className = 'relationship-search__browse';
-    browseBtn.title = 'Browse';
+    browseBtn.title = t('browse');
     browseBtn.innerHTML = '<span style="' + ICON_STYLE + ' font-size: 18px;">folder_open</span>';
     row.appendChild(browseBtn);
 
@@ -436,7 +437,7 @@ class CrapRelationshipSearch extends HTMLElement {
    */
   _openDrawerPicker(collection, isUpload, hasMany) {
     const drawer = getDrawer();
-    const label = isUpload ? 'Browse Media' : 'Browse';
+    const label = isUpload ? t('browse_media') : t('browse');
     drawer.open({ title: label });
 
     const body = drawer.body;
@@ -489,7 +490,7 @@ class CrapRelationshipSearch extends HTMLElement {
     // Load more button
     const loadMore = document.createElement('button');
     loadMore.type = 'button';
-    loadMore.textContent = 'Load more';
+    loadMore.textContent = t('load_more');
     Object.assign(loadMore.style, {
       display: 'none',
       width: '100%',

@@ -1,9 +1,31 @@
 <header class="header">
   <div class="header__logo">
-    <span class="material-symbols-outlined">memory</span>
+    <svg class="header__logo-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+      <path fill="currentColor" d="M4.5 10 L12 4.8 L19.5 10 L17.8 10 L12 6.6 L6.2 10 Z"/>
+      <path fill="currentColor" d="M7.8 10 L16.2 10 L15 20 L9 20 Z M10 11.2 H14 V19 H10 Z" fill-rule="evenodd"/>
+      <mask id="heart-mask">
+        <rect width="24" height="24" fill="white"/>
+        <path d="M12 13.5 C12 13.1 11.5 12.8 11.2 13.2 C10.9 13.6 11.3 14.1 12 14.9 C12.7 14.1 13.1 13.6 12.8 13.2 C12.5 12.8 12 13.1 12 13.5 Z" fill="black"/>
+      </mask>
+      <path fill="currentColor" d="M10.3 11.5 H13.7 V18.7 H10.3 Z" mask="url(#heart-mask)"/>
+    </svg>
     Crap CMS
   </div>
   <div class="header__actions">
+    {{#if available_locales}}
+    <div class="locale-picker" data-locale-picker>
+      <button type="button" class="locale-picker__toggle" aria-label="Change language" data-locale-toggle>
+        <span class="material-symbols-outlined" style="font-size:18px">translate</span>
+      </button>
+      <div class="locale-picker__dropdown" data-locale-dropdown>
+        {{#each available_locales}}
+        <button type="button" class="locale-picker__option{{#if (eq this ../_locale)}} locale-picker__option--active{{/if}}" data-locale-value="{{this}}">
+          {{this}}
+        </button>
+        {{/each}}
+      </div>
+    </div>
+    {{/if}}
     <div class="theme-picker" data-theme-picker>
       <button type="button" class="theme-picker__toggle" aria-label="Change theme" data-theme-toggle>
         <span class="material-symbols-outlined" style="font-size:18px">palette</span>

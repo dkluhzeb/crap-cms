@@ -1,11 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{#if _locale}}{{_locale}}{{else}}en{{/if}}">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <script>
     (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
   </script>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
   <link href="/static/styles.css" rel="stylesheet" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
   <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
@@ -21,6 +22,32 @@
   <script type="module" src="/static/components/index.js"></script>
 
   <title>{{#if page.title}}{{page.title}}{{else}}{{title}}{{/if}} - Crap CMS</title>
+  <script type="application/json" id="crap-i18n">{
+    "filters": "{{t "filters"}}",
+    "columns": "{{t "columns"}}",
+    "save": "{{t "save"}}",
+    "apply": "{{t "apply"}}",
+    "clear_all": "{{t "clear_all"}}",
+    "add_condition": "{{t "add_condition"}}",
+    "yes": "{{t "yes"}}",
+    "no": "{{t "no"}}",
+    "value_placeholder": "{{t "value_placeholder"}}",
+    "cancel": "{{t "cancel"}}",
+    "confirm": "{{t "confirm"}}",
+    "unsaved_changes": "{{t "unsaved_changes"}}",
+    "leave": "{{t "leave"}}",
+    "stay": "{{t "stay"}}",
+    "stay_logged_in": "{{t "stay_logged_in"}}",
+    "log_out": "{{t "log_out"}}",
+    "minute": "{{t "minute"}}",
+    "minutes": "{{t "minutes"}}",
+    "session_expiry_warning": "{{t "session_expiry_warning"}}",
+    "no_results": "{{t "no_results"}}",
+    "clear_selection": "{{t "clear_selection"}}",
+    "browse": "{{t "browse"}}",
+    "browse_media": "{{t "browse_media"}}",
+    "load_more": "{{t "load_more"}}"
+  }</script>
 </head>
 
 <body>

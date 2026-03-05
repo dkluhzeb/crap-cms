@@ -42,6 +42,7 @@ pub(super) fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&c
     auth_user.as_ref().map(|Extension(au)| &au.user_doc)
 }
 
+
 /// Extract an EventUser from the AuthUser extension (for SSE event attribution).
 pub(super) fn get_event_user(auth_user: &Option<Extension<AuthUser>>) -> Option<crate::core::event::EventUser> {
     auth_user.as_ref().map(|Extension(au)| crate::core::event::EventUser {

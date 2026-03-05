@@ -8,9 +8,9 @@
     <div class="card__header">
       <span class="material-symbols-outlined">{{#if this.is_upload}}image{{else if this.is_auth}}person{{else}}folder{{/if}}</span>
       <h3>{{this.display_name}}</h3>
-      {{#if this.is_auth}}<span class="card__badge">auth</span>{{/if}}
-      {{#if this.is_upload}}<span class="card__badge">media</span>{{/if}}
-      {{#if this.has_versions}}<span class="card__badge">versions</span>{{/if}}
+      {{#if this.is_auth}}<span class="card__badge">{{t "badge_auth"}}</span>{{/if}}
+      {{#if this.is_upload}}<span class="card__badge">{{t "badge_media"}}</span>{{/if}}
+      {{#if this.has_versions}}<span class="card__badge">{{t "badge_versions"}}</span>{{/if}}
     </div>
     <div class="card__body">
       <p class="card__stat">{{this.count}} {{this.singular_name}}(s)</p>
@@ -29,7 +29,7 @@
     <div class="card__header">
       <span class="material-symbols-outlined">settings</span>
       <h3>{{this.display_name}}</h3>
-      {{#if this.has_versions}}<span class="card__badge">versions</span>{{/if}}
+      {{#if this.has_versions}}<span class="card__badge">{{t "badge_versions"}}</span>{{/if}}
     </div>
     {{#if this.last_updated}}
     <div class="card__body">
