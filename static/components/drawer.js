@@ -327,7 +327,7 @@ let instance = null;
  * @returns {CrapDrawer}
  */
 export function getDrawer() {
-  if (!instance) {
+  if (!instance || !instance.isConnected) {
     instance = /** @type {CrapDrawer} */ (document.createElement('crap-drawer'));
     document.body.appendChild(instance);
   }
