@@ -102,7 +102,7 @@ crap.collections.define("projects", {
     -- Content blocks
     crap.fields.blocks({
       name = "content",
-      admin = { picker = "card", row_label = "hooks.labels", init_collapsed = true },
+      admin = { picker = "card", row_label = "hooks.labels" },
       blocks = {
         {
           type = "richtext",
@@ -199,7 +199,7 @@ crap.collections.define("projects", {
     -- Publishing options (collapsible)
     crap.fields.collapsible({
       name = "publishing_options",
-      admin = { label = "Publishing Options", collapsed = true },
+      admin = { label = "Publishing Options" },
       fields = {
         crap.fields.date({ name = "published_at", picker_appearance = "dayAndTime" }),
         crap.fields.text({ name = "external_url", admin = { placeholder = "https://..." } }),

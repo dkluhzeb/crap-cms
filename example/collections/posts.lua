@@ -108,7 +108,7 @@ crap.collections.define("posts", {
     -- Publishing collapsible
     crap.fields.collapsible({
       name = "publishing",
-      admin = { label = "Publishing", collapsed = true },
+      admin = { label = "Publishing" },
       fields = {
         crap.fields.checkbox({ name = "featured", default_value = false }),
         crap.fields.checkbox({ name = "pinned", default_value = false }),

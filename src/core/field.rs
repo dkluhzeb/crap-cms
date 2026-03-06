@@ -237,7 +237,9 @@ pub struct BlockDefinition {
 }
 
 /// Admin UI display hints for a field (placeholder, description, visibility, width).
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+fn default_true() -> bool { true }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldAdmin {
     #[serde(default)]
     pub label: Option<LocalizedString>,
@@ -251,8 +253,8 @@ pub struct FieldAdmin {
     pub readonly: bool,
     #[serde(default)]
     pub width: Option<String>,
-    /// For group fields: start collapsed in the admin UI.
-    #[serde(default)]
+    /// Start collapsed in the admin UI (groups, collapsibles, array/block rows).
+    #[serde(default = "default_true")]
     pub collapsed: bool,
     /// Sub-field name to use as row label (arrays/blocks).
     #[serde(default)]
@@ -260,9 +262,6 @@ pub struct FieldAdmin {
     /// Lua function ref for computed row labels (arrays/blocks).
     #[serde(default)]
     pub row_label: Option<String>,
-    /// For array/blocks: render rows collapsed by default.
-    #[serde(default)]
-    pub init_collapsed: bool,
     /// Custom singular label for row items (e.g., "Slide" -> "Add Slide").
     #[serde(default)]
     pub labels_singular: Option<LocalizedString>,
@@ -305,6 +304,33 @@ pub struct FieldAdmin {
     /// Node names must be registered via `crap.richtext.register_node()`.
     #[serde(default)]
     pub nodes: Vec<String>,
+}
+
+impl Default for FieldAdmin {
+    fn default() -> Self {
+        Self {
+            label: None,
+            placeholder: None,
+            description: None,
+            hidden: false,
+            readonly: false,
+            width: None,
+            collapsed: true,
+            label_field: None,
+            row_label: None,
+            labels_singular: None,
+            labels_plural: None,
+            position: None,
+            condition: None,
+            step: None,
+            rows: None,
+            language: None,
+            features: Vec::new(),
+            picker: None,
+            richtext_format: None,
+            nodes: Vec::new(),
+        }
+    }
 }
 
 /// Lua function references for field-level access control (read/create/update).

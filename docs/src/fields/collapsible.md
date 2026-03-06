@@ -17,7 +17,8 @@ crap.fields.collapsible({
     name = "seo_section",
     admin = {
         label = "SEO Settings",
-        collapsed = true,  -- start collapsed in admin UI
+        -- collapsed defaults to true; set false to start expanded
+        -- collapsed = false,
     },
     fields = {
         crap.fields.text({ name = "meta_title" }),
@@ -56,7 +57,7 @@ Collapsible can be nested inside other layout wrappers (Tabs, Row) and inside Ar
 
 ## Admin Rendering
 
-Sub-fields are rendered inside a collapsible section with a toggle header. The section can start collapsed via `admin.collapsed = true`. Clicking the header toggles visibility. This is useful for grouping related fields that don't need to be visible at all times (e.g., SEO settings, advanced options).
+Sub-fields are rendered inside a collapsible section with a toggle header. The section starts collapsed by default (`admin.collapsed = true`). Set `admin.collapsed = false` to start expanded. Clicking the header toggles visibility. This is useful for grouping related fields that don't need to be visible at all times (e.g., SEO settings, advanced options).
 
 ## Comparison with Group and Row
 

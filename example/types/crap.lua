@@ -61,13 +61,12 @@ crap = {}
 --- @field hidden?      boolean  Hide from admin UI (default: false).
 --- @field readonly?    boolean  Non-editable in admin (default: false).
 --- @field width?       crap.FieldWidth  Field width: "full", "half", or "third".
---- @field collapsed?   boolean  For group fields: start collapsed in admin UI (default: false).
+--- @field collapsed?   boolean  Start collapsed in admin UI — groups, collapsibles, array/block rows (default: true). Set `false` to start expanded.
 --- @field position?    string   "main" or "sidebar".
 --- @field condition?   string   Lua function ref for conditional show/hide.
 --- @field components?  table    Override admin UI partials for this field.
 --- @field label_field? string   Sub-field name to use as row label in admin (arrays/blocks). The value of this sub-field is shown as the row title. For blocks, per-block `label_field` on `BlockDefinition` takes priority.
 --- @field row_label?   string   Lua function ref for computed row labels (arrays/blocks). Receives the row data table, returns a display string or nil. Takes priority over `label_field`. Signature: `fun(row: table): string?`.
---- @field init_collapsed? boolean  For array/blocks: render rows collapsed by default (default: false).
 --- @field labels?      crap.FieldAdminLabels  Custom singular/plural labels for row items (e.g., `{ singular = "Slide", plural = "Slides" }` → "Add Slide" button).
 --- @field step?        string   Step value for number inputs (default: "any"). Use "1" for integers, "0.01" for cents, etc.
 --- @field rows?        integer  Number of rows for textarea fields (default: 8).

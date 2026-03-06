@@ -647,7 +647,7 @@ Sub-field `name` is formatted as `group__subfield` (double underscore).
 | `label_field` | string/null | Sub-field name used for dynamic row labels (from `admin.label_field`) |
 | `max_rows` | integer/null | Maximum number of rows allowed (from `max_rows` on field definition) |
 | `min_rows` | integer/null | Minimum number of rows required (from `min_rows` on field definition) |
-| `init_collapsed` | boolean | Whether existing rows render collapsed by default (from `admin.init_collapsed`) |
+| `init_collapsed` | boolean | Whether existing rows render collapsed by default (from `admin.collapsed`, default: true) |
 | `add_label` | string/null | Custom singular label for the add button (from `admin.labels.singular`, e.g., "Slide" → "Add Slide") |
 
 Each row: `index` (integer), `sub_fields` (array of field contexts with indexed names like `items[0][title]`), `custom_label` (string/null — computed label from `row_label` or `label_field`).
@@ -665,7 +665,7 @@ The `<fieldset>` element includes a `data-label-field` attribute when `label_fie
 | `label_field` | string/null | Field-level `admin.label_field` (shared fallback for all block types) |
 | `max_rows` | integer/null | Maximum number of blocks allowed (from `max_rows` on field definition) |
 | `min_rows` | integer/null | Minimum number of blocks required (from `min_rows` on field definition) |
-| `init_collapsed` | boolean | Whether existing block rows render collapsed by default (from `admin.init_collapsed`) |
+| `init_collapsed` | boolean | Whether existing block rows render collapsed by default (from `admin.collapsed`, default: true) |
 | `add_label` | string/null | Custom singular label for the add button (from `admin.labels.singular`, e.g., "Section" → "Add Section") |
 
 Each block definition: `block_type`, `label`, `label_field` (string/null — per-block-type label field), `fields` (array of sub-field contexts).

@@ -5,7 +5,6 @@ local seo_fields = crap.fields.group({
   name = "seo",
   admin = {
     label = "SEO",
-    collapsed = true,
     position = "sidebar",
   },
   fields = {

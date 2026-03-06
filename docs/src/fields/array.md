@@ -180,15 +180,15 @@ crap.fields.array({
 
 Validation runs in `validate_fields()`, shared by admin handlers, gRPC, and Lua `crap.collections.create()`/`update()`.
 
-## Default Collapsed State (`init_collapsed`)
+## Default Collapsed State (`collapsed`)
 
-Render existing rows collapsed by default on page load. New rows added via the "Add" button are always expanded.
+Existing rows render collapsed by default on page load (`admin.collapsed = true`). Set `admin.collapsed = false` to start rows expanded. New rows added via the "Add" button are always expanded.
 
 ```lua
 crap.fields.array({
     name = "slides",
     admin = {
-        init_collapsed = true,
+        collapsed = false, -- start rows expanded (default is true)
     },
     fields = { ... },
 })
@@ -215,7 +215,7 @@ With this config, the add button reads "Add Slide" instead of "Add Row".
 Renders as a repeatable fieldset with:
 - Drag handle for drag-and-drop reordering
 - Row count badge showing the number of items
-- Collapse/expand all buttons
+- Toggle collapse/expand all button
 - Each row has expand/collapse toggle, move up/down, duplicate, and remove buttons
 - "No items yet" empty state when no rows exist
 - "Add Row" button (or custom label) to append new rows

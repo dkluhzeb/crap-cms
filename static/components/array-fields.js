@@ -252,18 +252,21 @@ function toggleArrayRow(header) {
 
 /**
  * Toggle all rows in an array/blocks fieldset.
+ * If any row is expanded → collapse all (icon → unfold_more).
+ * If all collapsed → expand all (icon → unfold_less).
  *
  * @param {HTMLButtonElement} btn
- * @param {boolean} collapse - true to collapse, false to expand.
  */
-function toggleAllRows(btn, collapse) {
+function toggleAllRows(btn) {
   const fieldset = btn.closest('.form__array');
   if (!fieldset) return;
-  fieldset.querySelectorAll(':scope > .form__array-rows > .form__array-row').forEach(
-    /** @param {HTMLElement} row */ (row) => {
-      row.classList.toggle('form__array-row--collapsed', collapse);
-    }
-  );
+  const rows = fieldset.querySelectorAll(':scope > .form__array-rows > .form__array-row');
+  const anyExpanded = [...rows].some((row) => !row.classList.contains('form__array-row--collapsed'));
+  rows.forEach(/** @param {HTMLElement} row */ (row) => {
+    row.classList.toggle('form__array-row--collapsed', anyExpanded);
+  });
+  const icon = btn.querySelector('.material-symbols-outlined');
+  if (icon) icon.textContent = anyExpanded ? 'unfold_more' : 'unfold_less';
 }
 
 /**
@@ -527,8 +530,7 @@ registerDrag({
 /* ── Action registrations ────────────────────────────────────── */
 
 registerAction('toggle-array-row', (el) => toggleArrayRow(el));
-registerAction('toggle-all-rows-collapse', (el) => toggleAllRows(el, true));
-registerAction('toggle-all-rows-expand', (el) => toggleAllRows(el, false));
+registerAction('toggle-all-rows', (el) => toggleAllRows(el));
 registerAction('move-row-up', (el) => moveRowUp(el));
 registerAction('move-row-down', (el) => moveRowDown(el));
 registerAction('duplicate-row', (el) => duplicateRow(el));

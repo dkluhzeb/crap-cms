@@ -201,9 +201,7 @@ fn build_single_field_context(
             if let Some(min) = field.min_rows {
                 ctx["min_rows"] = serde_json::json!(min);
             }
-            if field.admin.init_collapsed {
-                ctx["init_collapsed"] = serde_json::json!(true);
-            }
+            ctx["init_collapsed"] = serde_json::json!(field.admin.collapsed);
             if let Some(ref ls) = field.admin.labels_singular {
                 ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
@@ -243,9 +241,7 @@ fn build_single_field_context(
                 }).collect()
             };
             ctx["sub_fields"] = serde_json::json!(sub_fields);
-            if field.admin.collapsed {
-                ctx["collapsed"] = serde_json::json!(true);
-            }
+            ctx["collapsed"] = serde_json::json!(field.admin.collapsed);
         }
         FieldType::Row => {
             // Row is a layout-only container; sub-fields are promoted to top level.
@@ -279,9 +275,7 @@ fn build_single_field_context(
                 }).collect()
             };
             ctx["sub_fields"] = serde_json::json!(sub_fields);
-            if field.admin.collapsed {
-                ctx["collapsed"] = serde_json::json!(true);
-            }
+            ctx["collapsed"] = serde_json::json!(field.admin.collapsed);
         }
         FieldType::Tabs => {
             // Tabs is a layout-only container with multiple tab panels.
@@ -393,9 +387,7 @@ fn build_single_field_context(
             if let Some(min) = field.min_rows {
                 ctx["min_rows"] = serde_json::json!(min);
             }
-            if field.admin.init_collapsed {
-                ctx["init_collapsed"] = serde_json::json!(true);
-            }
+            ctx["init_collapsed"] = serde_json::json!(field.admin.collapsed);
             if let Some(ref ls) = field.admin.labels_singular {
                 ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
@@ -523,9 +515,7 @@ fn apply_field_type_extras(
             if let Some(min) = sf.min_rows {
                 sub_ctx["min_rows"] = serde_json::json!(min);
             }
-            if sf.admin.init_collapsed {
-                sub_ctx["init_collapsed"] = serde_json::json!(true);
-            }
+            sub_ctx["init_collapsed"] = serde_json::json!(sf.admin.collapsed);
             if let Some(ref ls) = sf.admin.labels_singular {
                 sub_ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
@@ -535,9 +525,7 @@ fn apply_field_type_extras(
                 build_single_field_context(nested, values, errors, name_prefix, non_default_locale, depth + 1)
             }).collect();
             sub_ctx["sub_fields"] = serde_json::json!(sub_fields);
-            if sf.admin.collapsed {
-                sub_ctx["collapsed"] = serde_json::json!(true);
-            }
+            sub_ctx["collapsed"] = serde_json::json!(sf.admin.collapsed);
         }
         FieldType::Row => {
             let sub_fields: Vec<_> = sf.fields.iter().map(|nested| {
@@ -550,9 +538,7 @@ fn apply_field_type_extras(
                 build_single_field_context(nested, values, errors, name_prefix, non_default_locale, depth + 1)
             }).collect();
             sub_ctx["sub_fields"] = serde_json::json!(sub_fields);
-            if sf.admin.collapsed {
-                sub_ctx["collapsed"] = serde_json::json!(true);
-            }
+            sub_ctx["collapsed"] = serde_json::json!(sf.admin.collapsed);
         }
         FieldType::Tabs => {
             let tabs_ctx: Vec<_> = sf.tabs.iter().map(|tab| {
@@ -605,9 +591,7 @@ fn apply_field_type_extras(
             if let Some(min) = sf.min_rows {
                 sub_ctx["min_rows"] = serde_json::json!(min);
             }
-            if sf.admin.init_collapsed {
-                sub_ctx["init_collapsed"] = serde_json::json!(true);
-            }
+            sub_ctx["init_collapsed"] = serde_json::json!(sf.admin.collapsed);
             if let Some(ref ls) = sf.admin.labels_singular {
                 sub_ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
@@ -816,8 +800,8 @@ fn build_enriched_children_from_data(
                     locale_locked, non_default_locale, depth + 1, errors,
                 );
                 child_ctx["sub_fields"] = serde_json::json!(sub_fields);
-                if child.field_type == FieldType::Collapsible && child.admin.collapsed {
-                    child_ctx["collapsed"] = serde_json::json!(true);
+                if child.field_type == FieldType::Collapsible {
+                    child_ctx["collapsed"] = serde_json::json!(child.admin.collapsed);
                 }
             }
             FieldType::Tabs => {
@@ -1030,9 +1014,7 @@ fn build_enriched_sub_field_context(
             if let Some(min) = sf.min_rows {
                 sub_ctx["min_rows"] = serde_json::json!(min);
             }
-            if sf.admin.init_collapsed {
-                sub_ctx["init_collapsed"] = serde_json::json!(true);
-            }
+            sub_ctx["init_collapsed"] = serde_json::json!(sf.admin.collapsed);
             if let Some(ref ls) = sf.admin.labels_singular {
                 sub_ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
@@ -1118,9 +1100,7 @@ fn build_enriched_sub_field_context(
             if let Some(min) = sf.min_rows {
                 sub_ctx["min_rows"] = serde_json::json!(min);
             }
-            if sf.admin.init_collapsed {
-                sub_ctx["init_collapsed"] = serde_json::json!(true);
-            }
+            sub_ctx["init_collapsed"] = serde_json::json!(sf.admin.collapsed);
             if let Some(ref ls) = sf.admin.labels_singular {
                 sub_ctx["add_label"] = serde_json::json!(ls.resolve_default());
             }
@@ -1165,9 +1145,7 @@ fn build_enriched_sub_field_context(
                 nested_ctx
             }).collect();
             sub_ctx["sub_fields"] = serde_json::json!(nested_sub_fields);
-            if sf.admin.collapsed {
-                sub_ctx["collapsed"] = serde_json::json!(true);
-            }
+            sub_ctx["collapsed"] = serde_json::json!(sf.admin.collapsed);
         }
         FieldType::Row | FieldType::Collapsible => {
             // Nested row/collapsible: use recursive helper that handles
@@ -1177,8 +1155,8 @@ fn build_enriched_sub_field_context(
                 locale_locked, non_default_locale, depth + 1, errors,
             );
             sub_ctx["sub_fields"] = serde_json::json!(nested_sub_fields);
-            if sf.field_type == FieldType::Collapsible && sf.admin.collapsed {
-                sub_ctx["collapsed"] = serde_json::json!(true);
+            if sf.field_type == FieldType::Collapsible {
+                sub_ctx["collapsed"] = serde_json::json!(sf.admin.collapsed);
             }
         }
         FieldType::Tabs => {
@@ -2617,13 +2595,21 @@ mod tests {
     }
 
     #[test]
-    fn build_field_contexts_array_init_collapsed() {
+    fn build_field_contexts_array_collapsed() {
         let mut arr = make_field("items", FieldType::Array);
         arr.fields = vec![make_field("title", FieldType::Text)];
-        arr.admin.init_collapsed = true;
+        // collapsed defaults to true, verify it's set in template context
         let fields = vec![arr];
         let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
         assert_eq!(result[0]["init_collapsed"], true);
+
+        // opt-out: collapsed = false
+        let mut arr2 = make_field("items", FieldType::Array);
+        arr2.fields = vec![make_field("title", FieldType::Text)];
+        arr2.admin.collapsed = false;
+        let fields2 = vec![arr2];
+        let result2 = build_field_contexts(&fields2, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result2[0]["init_collapsed"], false);
     }
 
     #[test]
@@ -2666,7 +2652,7 @@ mod tests {
     }
 
     #[test]
-    fn build_field_contexts_blocks_init_collapsed() {
+    fn build_field_contexts_blocks_collapsed() {
         let mut blocks = make_field("content", FieldType::Blocks);
         blocks.blocks = vec![BlockDefinition {
             block_type: "text".to_string(),
@@ -2674,7 +2660,7 @@ mod tests {
             fields: vec![make_field("body", FieldType::Text)],
             ..Default::default()
         }];
-        blocks.admin.init_collapsed = true;
+        // collapsed defaults to true
         let fields = vec![blocks];
         let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
         assert_eq!(result[0]["init_collapsed"], true);
@@ -2947,7 +2933,7 @@ mod tests {
         arr.fields = vec![make_field("name", FieldType::Text)];
         arr.min_rows = Some(1);
         arr.max_rows = Some(3);
-        arr.admin.init_collapsed = true;
+        arr.admin.collapsed = true;
         arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
         arr.admin.label_field = Some("name".to_string());
         let mut ctx = serde_json::json!({"name": "group__tags"});
@@ -2984,7 +2970,7 @@ mod tests {
         }];
         blk.min_rows = Some(0);
         blk.max_rows = Some(5);
-        blk.admin.init_collapsed = true;
+        blk.admin.collapsed = true;
         blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
         let mut ctx = serde_json::json!({"name": "group__sections"});
         apply_field_type_extras(&blk, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__sections", false, 0);
@@ -3152,7 +3138,7 @@ mod tests {
         assert_eq!(ctx["value"], "");
     }
 
-    // --- enriched_sub_field: array with min/max rows, init_collapsed, labels ---
+    // --- enriched_sub_field: array with min/max rows, collapsed, labels ---
 
     #[test]
     fn enriched_sub_field_array_with_options() {
@@ -3160,7 +3146,7 @@ mod tests {
         arr.fields = vec![make_field("name", FieldType::Text)];
         arr.min_rows = Some(1);
         arr.max_rows = Some(5);
-        arr.admin.init_collapsed = true;
+        arr.admin.collapsed = true;
         arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
         let ctx = build_enriched_sub_field_context(
             &arr, Some(&serde_json::json!([])), "items", 0,
@@ -3172,7 +3158,7 @@ mod tests {
         assert_eq!(ctx["add_label"], "Tag");
     }
 
-    // --- enriched_sub_field: blocks with min/max rows, init_collapsed, labels ---
+    // --- enriched_sub_field: blocks with min/max rows, collapsed, labels ---
 
     #[test]
     fn enriched_sub_field_blocks_with_options() {
@@ -3185,7 +3171,7 @@ mod tests {
         }];
         blk.min_rows = Some(0);
         blk.max_rows = Some(10);
-        blk.admin.init_collapsed = true;
+        blk.admin.collapsed = true;
         blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
         blk.admin.label_field = Some("body".to_string());
         let ctx = build_enriched_sub_field_context(

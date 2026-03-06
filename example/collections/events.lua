@@ -69,7 +69,7 @@ crap.collections.define("events", {
     -- Registration (collapsible)
     crap.fields.collapsible({
       name = "registration",
-      admin = { label = "Registration", collapsed = true },
+      admin = { label = "Registration" },
       fields = {
         crap.fields.text({ name = "registration_url", admin = { placeholder = "https://..." } }),
         crap.fields.number({ name = "max_attendees", min = 0, admin = { step = "1" } }),

@@ -4,11 +4,8 @@
     {{#if required}}<span class="required">*</span>{{/if}}
     <span class="form__array-count" id="array-count-{{template_id}}">{{row_count}}</span>
     <span class="form__array-legend-actions">
-      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows-collapse" title="{{t "collapse_all"}}">
+      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows" title="{{t "toggle_collapse"}}">
         <span class="material-symbols-outlined" style="font-size:14px">unfold_less</span>
-      </button>
-      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows-expand" title="{{t "expand_all"}}">
-        <span class="material-symbols-outlined" style="font-size:14px">unfold_more</span>
       </button>
     </span>
   </legend>

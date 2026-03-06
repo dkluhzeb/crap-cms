@@ -622,17 +622,13 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
             admin.set("width", w.as_str())?;
             has_any = true;
         }
-        if f.admin.collapsed { admin.set("collapsed", true)?; has_any = true; }
+        if !f.admin.collapsed { admin.set("collapsed", false)?; has_any = true; }
         if let Some(ref lf) = f.admin.label_field {
             admin.set("label_field", lf.as_str())?;
             has_any = true;
         }
         if let Some(ref rl) = f.admin.row_label {
             admin.set("row_label", rl.as_str())?;
-            has_any = true;
-        }
-        if f.admin.init_collapsed {
-            admin.set("init_collapsed", true)?;
             has_any = true;
         }
         if let Some(ref ls) = f.admin.labels_singular {
@@ -1546,7 +1542,7 @@ mod tests {
                 hidden: true,
                 readonly: true,
                 width: Some("50%".to_string()),
-                collapsed: true,
+                collapsed: false, // non-default, should be serialized
                 ..Default::default()
             },
             hooks: crate::core::field::FieldHooks {
@@ -1569,7 +1565,7 @@ mod tests {
         assert_eq!(admin.get::<bool>("hidden").unwrap(), true);
         assert_eq!(admin.get::<bool>("readonly").unwrap(), true);
         assert_eq!(admin.get::<String>("width").unwrap(), "50%");
-        assert_eq!(admin.get::<bool>("collapsed").unwrap(), true);
+        assert_eq!(admin.get::<bool>("collapsed").unwrap(), false);
 
         let hooks: mlua::Table = tbl.get("hooks").unwrap();
         let bv: mlua::Table = hooks.get("before_validate").unwrap();
@@ -1599,10 +1595,9 @@ mod tests {
                 hidden: false,
                 readonly: false,
                 width: Some("full".to_string()),
-                collapsed: true,
+                collapsed: false, // explicitly false to test serialization
                 label_field: Some("heading".to_string()),
                 row_label: Some("hooks.content_row_label".to_string()),
-                init_collapsed: true,
                 labels_singular: Some(crate::core::field::LocalizedString::Plain("Block".to_string())),
                 labels_plural: Some(crate::core::field::LocalizedString::Plain("Blocks".to_string())),
                 position: Some("main".to_string()),
@@ -1625,10 +1620,9 @@ mod tests {
         assert_eq!(admin.get::<String>("placeholder").unwrap(), "Add content...");
         assert_eq!(admin.get::<String>("description").unwrap(), "Main content area");
         assert_eq!(admin.get::<String>("width").unwrap(), "full");
-        assert_eq!(admin.get::<bool>("collapsed").unwrap(), true);
+        assert_eq!(admin.get::<bool>("collapsed").unwrap(), false);
         assert_eq!(admin.get::<String>("label_field").unwrap(), "heading");
         assert_eq!(admin.get::<String>("row_label").unwrap(), "hooks.content_row_label");
-        assert_eq!(admin.get::<bool>("init_collapsed").unwrap(), true);
         let labels: mlua::Table = admin.get("labels").unwrap();
         assert_eq!(labels.get::<String>("singular").unwrap(), "Block");
         assert_eq!(labels.get::<String>("plural").unwrap(), "Blocks");

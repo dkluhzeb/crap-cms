@@ -186,7 +186,7 @@ crap.collections.define("test_nesting", {
             -- Collapsible inside a block
             crap.fields.collapsible({
               name = "advanced_opts",
-              admin = { label = "Advanced Options", collapsed = true },
+              admin = { label = "Advanced Options" },
               fields = {
                 crap.fields.checkbox({ name = "open_first", default_value = true }),
                 crap.fields.checkbox({ name = "allow_multiple" }),
@@ -244,7 +244,7 @@ crap.collections.define("test_nesting", {
           fields = {
             crap.fields.collapsible({
               name = "advanced_settings",
-              admin = { label = "Advanced Settings", collapsed = true },
+              admin = { label = "Advanced Settings" },
               fields = {
                 crap.fields.json({ name = "custom_config", admin = { description = "Raw JSON config" } }),
                 crap.fields.code({ name = "custom_css", admin = { language = "css" } }),

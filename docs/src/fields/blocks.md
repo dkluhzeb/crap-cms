@@ -235,15 +235,15 @@ crap.fields.blocks({
 - **`min_rows`**: Minimum number of blocks. Validated on create/update (skipped for draft saves).
 - **`max_rows`**: Maximum number of blocks. Validated on create/update. The admin UI disables the "Add Block" button when the limit is reached.
 
-## Default Collapsed State (`init_collapsed`)
+## Default Collapsed State (`collapsed`)
 
-Render existing block rows collapsed by default on page load. New blocks added via the UI are always expanded.
+Existing block rows render collapsed by default on page load (`admin.collapsed = true`). Set `admin.collapsed = false` to start rows expanded. New blocks added via the UI are always expanded.
 
 ```lua
 crap.fields.blocks({
     name = "content",
     admin = {
-        init_collapsed = true,
+        collapsed = false, -- start rows expanded (default is true)
     },
     blocks = { ... },
 })
@@ -352,7 +352,7 @@ Blocks without an `image_url` show a generic widget icon. Both `group` and `imag
 Renders as a repeatable fieldset with:
 - Drag handle for drag-and-drop reordering
 - Row count badge showing the number of blocks
-- Collapse/expand all buttons
+- Toggle collapse/expand all button
 - Block type selector dropdown with "Add Block" button (or custom label)
 - Each row shows the block type label (or custom label), move up/down, duplicate, and remove buttons
 - "No items yet" empty state when no blocks exist

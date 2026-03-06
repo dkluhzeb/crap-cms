@@ -85,6 +85,7 @@
   "block": "Block",
   "collapse_all": "Collapse all",
   "expand_all": "Expand all",
+  "toggle_collapse": "Toggle collapse",
   "move_up": "Move up",
   "move_down": "Move down",
   "duplicate": "Duplicate",
