@@ -31,10 +31,24 @@ pub struct PaginationParams {
     pub sort: Option<String>,
 }
 
-/// Query parameters for locale selection on edit pages.
-#[derive(Debug, Deserialize)]
-pub struct LocaleParams {
-    pub locale: Option<String>,
+/// Extract the editor locale from the `crap_editor_locale` cookie.
+/// Falls back to the config's default locale if the cookie is absent or invalid.
+/// Returns `None` if locales are not enabled.
+pub(super) fn extract_editor_locale(headers: &axum::http::HeaderMap, config: &crate::config::LocaleConfig) -> Option<String> {
+    if !config.is_enabled() {
+        return None;
+    }
+    let cookie_str = headers.get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let raw = crate::admin::server::extract_cookie(cookie_str, "crap_editor_locale");
+    let locale = raw.unwrap_or(&config.default_locale);
+    // Validate against configured locales
+    if config.locales.contains(&locale.to_string()) {
+        Some(locale.to_string())
+    } else {
+        Some(config.default_locale.clone())
+    }
 }
 
 /// Extract the user document from AuthUser extension (for access checks).
@@ -831,5 +845,55 @@ mod tests {
     fn redirect_response_returns_303() {
         let resp = redirect_response("/admin/collections");
         assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+    }
+
+    // --- extract_editor_locale tests ---
+
+    fn locale_config_enabled() -> crate::config::LocaleConfig {
+        crate::config::LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string(), "fr".to_string()],
+            fallback: false,
+        }
+    }
+
+    #[test]
+    fn extract_editor_locale_from_cookie() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::COOKIE, "crap_editor_locale=de".parse().unwrap());
+        let result = extract_editor_locale(&headers, &locale_config_enabled());
+        assert_eq!(result, Some("de".to_string()));
+    }
+
+    #[test]
+    fn extract_editor_locale_falls_back_to_default() {
+        let headers = axum::http::HeaderMap::new();
+        let result = extract_editor_locale(&headers, &locale_config_enabled());
+        assert_eq!(result, Some("en".to_string()));
+    }
+
+    #[test]
+    fn extract_editor_locale_invalid_locale_falls_back() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::COOKIE, "crap_editor_locale=zz".parse().unwrap());
+        let result = extract_editor_locale(&headers, &locale_config_enabled());
+        assert_eq!(result, Some("en".to_string()));
+    }
+
+    #[test]
+    fn extract_editor_locale_disabled_returns_none() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::COOKIE, "crap_editor_locale=de".parse().unwrap());
+        let config = crate::config::LocaleConfig::default(); // empty locales = disabled
+        let result = extract_editor_locale(&headers, &config);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn extract_editor_locale_with_multiple_cookies() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(axum::http::header::COOKIE, "crap_session=abc; crap_editor_locale=fr; other=xyz".parse().unwrap());
+        let result = extract_editor_locale(&headers, &locale_config_enabled());
+        assert_eq!(result, Some("fr".to_string()));
     }
 }

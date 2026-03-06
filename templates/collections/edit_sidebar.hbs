@@ -61,28 +61,6 @@
   </div>
   {{/if}}
 
-  {{#if has_locales}}
-  {{!-- Locale selector panel --}}
-  <div class="edit-sidebar__panel">
-    <div class="edit-sidebar__panel-header">
-      <span class="material-symbols-outlined">translate</span>
-      {{t "locale"}}
-    </div>
-    <div class="edit-sidebar__panel-body">
-      <div class="locale-selector">
-        {{#each locales}}
-        <a class="locale-selector__item {{#if selected}}locale-selector__item--active{{/if}}"
-          href="?locale={{value}}"
-          hx-get="{{#if ../editing}}/admin/collections/{{../collection.slug}}/{{../document.id}}?locale={{value}}{{else}}/admin/collections/{{../collection.slug}}/create?locale={{value}}{{/if}}"
-          hx-target="body" hx-push-url="true">
-          {{label}}
-        </a>
-        {{/each}}
-      </div>
-    </div>
-  </div>
-  {{/if}}
-
   {{#if editing}}
   {{!-- Document meta panel --}}
   <div class="edit-sidebar__panel">

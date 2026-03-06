@@ -13,6 +13,7 @@ use crate::core::auth::{AuthUser, Claims};
 /// Render the admin dashboard with collection and global summary cards.
 pub async fn index(
     State(state): State<AdminState>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> Html<String> {
@@ -61,9 +62,11 @@ pub async fn index(
     collection_cards.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
     global_cards.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
 
+    let editor_locale = super::shared::extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::Dashboard, "Dashboard")
         .set("collection_cards", serde_json::Value::Array(collection_cards))
         .set("global_cards", serde_json::Value::Array(global_cards))

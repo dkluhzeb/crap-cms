@@ -2125,8 +2125,8 @@ async fn localized_global_edit_non_default_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::get("/admin/globals/l10n_settings?locale=de")
-                .header("cookie", &cookie)
+            Request::get("/admin/globals/l10n_settings")
+                .header("cookie", format!("{}; crap_editor_locale=de", &cookie))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -2603,8 +2603,8 @@ async fn create_form_with_locale_returns_200() {
     let resp = app
         .router
         .oneshot(
-            Request::get("/admin/collections/pages/create?locale=de")
-                .header("cookie", &cookie)
+            Request::get("/admin/collections/pages/create")
+                .header("cookie", format!("{}; crap_editor_locale=de", &cookie))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -2643,8 +2643,8 @@ async fn edit_form_with_non_default_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::get(format!("/admin/collections/pages/{}?locale=de", doc_id))
-                .header("cookie", &cookie)
+            Request::get(format!("/admin/collections/pages/{}", doc_id))
+                .header("cookie", format!("{}; crap_editor_locale=de", &cookie))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3897,8 +3897,8 @@ async fn create_form_with_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::get("/admin/collections/pages/create?locale=de")
-                .header("cookie", &cookie)
+            Request::get("/admin/collections/pages/create")
+                .header("cookie", format!("{}; crap_editor_locale=de", &cookie))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -3930,8 +3930,8 @@ async fn global_edit_with_locale() {
     let resp = app
         .router
         .oneshot(
-            Request::get("/admin/globals/l10n_settings?locale=de")
-                .header("cookie", &cookie)
+            Request::get("/admin/globals/l10n_settings")
+                .header("cookie", format!("{}; crap_editor_locale=de", &cookie))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -4065,13 +4065,13 @@ async fn update_localized_collection_redirects_with_locale() {
         "Localized update should succeed, got {}",
         status
     );
-    // If it's a 200 (HX-Redirect), check the redirect header has locale
+    // Locale is now cookie-based, so redirect should NOT contain ?locale= params
     if status == StatusCode::OK {
         if let Some(hx_redir) = resp.headers().get("HX-Redirect") {
             let redir = hx_redir.to_str().unwrap_or("");
             assert!(
-                redir.contains("locale=de"),
-                "HX-Redirect should contain locale=de, got {}",
+                !redir.contains("locale="),
+                "HX-Redirect should not contain locale= (cookie-based now), got {}",
                 redir
             );
         }

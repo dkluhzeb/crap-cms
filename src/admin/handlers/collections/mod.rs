@@ -20,9 +20,9 @@ use crate::db::{ops, query};
 use crate::db::query::{AccessResult, FindQuery, FilterOp, FilterClause, LocaleContext};
 
 use super::shared::{
-    PaginationParams, LocaleParams,
+    PaginationParams,
     get_user_doc, get_event_user, strip_denied_fields,
-    check_access_or_forbid, build_locale_template_data,
+    check_access_or_forbid, extract_editor_locale, build_locale_template_data,
     is_non_default_locale, auto_label_from_name, url_decode,
     parse_where_params, validate_sort, build_list_url, is_column_eligible,
     extract_where_params,
@@ -39,6 +39,7 @@ use forms::{extract_join_data_from_form, parse_multipart_form, transform_select_
 /// GET /admin/collections — list all registered collections
 pub async fn list_collections(
     State(state): State<AdminState>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
 ) -> impl IntoResponse {
     let mut collections = Vec::new();
@@ -51,8 +52,10 @@ pub async fn list_collections(
     }
     collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
 
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionList, "Collections")
         .set("collections", serde_json::json!(collections))
         .build();
@@ -400,6 +403,7 @@ pub async fn list_items(
     Path(slug): Path<String>,
     Query(params): Query<PaginationParams>,
     uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> impl IntoResponse {
@@ -456,7 +460,8 @@ pub async fn list_items(
         search: search.clone(),
     };
 
-    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
+    let locale_ctx = LocaleContext::from_locale_string(editor_locale.as_deref(), &state.config.locale);
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -618,6 +623,7 @@ pub async fn list_items(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionItems, def.display_name())
         .set("page_title", serde_json::json!(def.display_name()))
         .collection_def(&def)
@@ -717,7 +723,7 @@ fn collect_upload_hidden_fields(
 pub async fn create_form(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
-    Query(locale_params): Query<LocaleParams>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> impl IntoResponse {
@@ -735,7 +741,8 @@ pub async fn create_form(
         _ => {}
     }
 
-    let non_default_locale = is_non_default_locale(&state, locale_params.locale.as_deref());
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
+    let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
     let mut fields = build_field_contexts(&def.fields, &HashMap::new(), &HashMap::new(), true, non_default_locale);
 
     // Enrich relationship and array fields
@@ -759,11 +766,12 @@ pub async fn create_form(
     // Split fields into main and sidebar
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
 
-    let (_locale_ctx, locale_data) = build_locale_template_data(&state, locale_params.locale.as_deref());
+    let (_locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let mut data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
         .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
         .collection_def(&def)
@@ -1002,7 +1010,7 @@ pub async fn create_action(
 pub async fn edit_form(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
-    Query(locale_params): Query<LocaleParams>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> impl IntoResponse {
@@ -1022,7 +1030,8 @@ pub async fn edit_form(
         return forbidden(&state, "You don't have permission to view this item").into_response();
     }
 
-    let (locale_ctx, locale_data) = build_locale_template_data(&state, locale_params.locale.as_deref());
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
+    let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -1088,7 +1097,7 @@ pub async fn edit_form(
         })
         .collect();
 
-    let non_default_locale = is_non_default_locale(&state, locale_params.locale.as_deref());
+    let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
     let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), true, non_default_locale);
 
     // Enrich relationship and array fields with extra data
@@ -1149,6 +1158,7 @@ pub async fn edit_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let mut data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
         .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
         .collection_def(&def)
@@ -1422,11 +1432,6 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         result
     }).await;
 
-    let locale_suffix = form_locale
-        .as_ref()
-        .filter(|_| state.config.locale.is_enabled())
-        .map(|l| format!("?locale={}", l))
-        .unwrap_or_default();
     match result {
         Ok(Ok((doc, _req_context))) => {
             // If a new file was uploaded and old files exist, clean up old files
@@ -1450,7 +1455,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 slug.to_string(), id.to_string(), doc.fields.clone(),
                 get_event_user(auth_user),
             );
-            htmx_redirect(&format!("/admin/collections/{}/{}{}", slug, id, locale_suffix))
+            htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
         }
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
@@ -1492,6 +1497,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
 pub async fn delete_confirm(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> impl IntoResponse {
@@ -1519,9 +1525,11 @@ pub async fn delete_confirm(
         .and_then(|f| document.get_str(f))
         .map(|s| s.to_string());
 
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionDelete, format!("Delete {}", def.singular_name()))
         .set("page_title", serde_json::json!(format!("Delete {}", def.singular_name())))
         .collection_def(&def)
@@ -1656,6 +1664,7 @@ pub async fn list_versions_page(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
     Query(params): Query<PaginationParams>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> impl IntoResponse {
@@ -1710,9 +1719,11 @@ pub async fn list_versions_page(
         .map(version_to_json)
         .collect();
 
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionVersions, format!("Version History — {}", doc_title))
         .set("page_title", serde_json::json!(format!("Version History — {}", doc_title)))
         .collection_def(&def)

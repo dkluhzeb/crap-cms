@@ -1,21 +1,8 @@
 /**
- * Admin UI locale picker — saves preferred locale to server and reloads.
- *
- * Mirrors the theme picker pattern: toggle dropdown, select option, persist.
- * POSTs to /admin/api/locale, then reloads the page so the server renders
- * in the new language.
+ * Editor locale picker — sets crap_editor_locale cookie and reloads.
  */
 
 import { registerInit } from './actions.js';
-
-/**
- * Get the CSRF token from the crap_csrf cookie.
- * @returns {string|null}
- */
-function getCsrf() {
-  const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
-  return m ? m[1] : null;
-}
 
 /**
  * Initialize locale picker UI. Safe to call multiple times (idempotent).
@@ -34,34 +21,13 @@ function initLocalePicker() {
       dropdown.classList.toggle('locale-picker__dropdown--open');
     });
 
-    dropdown.addEventListener('click', async (e) => {
+    dropdown.addEventListener('click', (e) => {
       const btn = /** @type {HTMLElement} */ (e.target).closest('[data-locale-value]');
       if (!btn) return;
       const locale = /** @type {HTMLElement} */ (btn).dataset.localeValue;
       if (!locale) return;
-
-      dropdown.classList.remove('locale-picker__dropdown--open');
-
-      // POST to server
-      const csrf = getCsrf();
-      const body = new URLSearchParams({ locale });
-      if (csrf) body.append('_csrf', csrf);
-
-      try {
-        const resp = await fetch('/admin/api/locale', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            ...(csrf ? { 'X-CSRF-Token': csrf } : {}),
-          },
-          body,
-        });
-        if (resp.ok) {
-          location.reload();
-        }
-      } catch {
-        // Silently fail — user can retry
-      }
+      document.cookie = `crap_editor_locale=${locale};path=/;max-age=31536000;SameSite=Lax`;
+      location.reload();
     });
 
     // Close on outside click

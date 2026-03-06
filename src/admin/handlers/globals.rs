@@ -16,9 +16,9 @@ use crate::db::{ops, query};
 use crate::db::query::{AccessResult, LocaleContext};
 
 use super::shared::{
-    PaginationParams, LocaleParams,
+    PaginationParams,
     get_user_doc, get_event_user,
-    check_access_or_forbid, build_locale_template_data,
+    check_access_or_forbid, extract_editor_locale, build_locale_template_data,
     is_non_default_locale,
     build_field_contexts, enrich_field_contexts,
     apply_display_conditions, split_sidebar_fields,
@@ -31,7 +31,7 @@ use super::shared::{
 pub async fn edit_form(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
-    Query(locale_params): Query<LocaleParams>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> impl IntoResponse {
@@ -47,7 +47,8 @@ pub async fn edit_form(
         _ => {}
     }
 
-    let (locale_ctx, locale_data) = build_locale_template_data(&state, locale_params.locale.as_deref());
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
+    let (locale_ctx, locale_data) = build_locale_template_data(&state, editor_locale.as_deref());
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -96,7 +97,7 @@ pub async fn edit_form(
         })
         .collect();
 
-    let non_default_locale = is_non_default_locale(&state, locale_params.locale.as_deref());
+    let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
     let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), false, non_default_locale);
 
     // Enrich relationship fields with options
@@ -130,6 +131,7 @@ pub async fn edit_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::GlobalEdit, def.display_name())
         .breadcrumbs(vec![
             Breadcrumb::link("Dashboard", "/admin"),
@@ -233,11 +235,6 @@ pub async fn update_action(
         }
     }).await;
 
-    let locale_suffix = form_locale
-        .as_ref()
-        .filter(|_| state.config.locale.is_enabled())
-        .map(|l| format!("?locale={}", l))
-        .unwrap_or_default();
     match result {
         Ok(Ok((doc, _req_context))) => {
             state.hook_runner.publish_event(
@@ -247,7 +244,7 @@ pub async fn update_action(
                 slug.clone(), doc.id.clone(), doc.fields.clone(),
                 get_event_user(&auth_user),
             );
-            htmx_redirect(&format!("/admin/globals/{}{}", slug, locale_suffix))
+            htmx_redirect(&format!("/admin/globals/{}", slug))
         }
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
@@ -291,6 +288,7 @@ pub async fn list_versions_page(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     Query(params): Query<PaginationParams>,
+    headers: axum::http::HeaderMap,
     claims: Option<Extension<Claims>>,
     auth_user: Option<Extension<AuthUser>>,
 ) -> impl IntoResponse {
@@ -329,9 +327,11 @@ pub async fn list_versions_page(
         .map(version_to_json)
         .collect();
 
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::GlobalVersions, format!("Version History — {}", def.display_name()))
         .set("page_title", serde_json::json!(format!("Version History — {}", def.display_name())))
         .global_def(&def)

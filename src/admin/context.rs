@@ -267,6 +267,25 @@ impl ContextBuilder {
         self
     }
 
+    /// Set editor locale context (content locales from config, not UI translation locales).
+    pub fn editor_locale(mut self, editor_locale: Option<&str>, config: &crate::config::LocaleConfig) -> Self {
+        if !config.is_enabled() {
+            return self;
+        }
+        let current = editor_locale.unwrap_or(&config.default_locale);
+        let locales: Vec<Value> = config.locales.iter().map(|l| {
+            json!({
+                "value": l,
+                "label": l.to_uppercase(),
+                "selected": l == current,
+            })
+        }).collect();
+        self.data.insert("has_editor_locales".into(), json!(true));
+        self.data.insert("editor_locale".into(), Value::String(current.to_string()));
+        self.data.insert("editor_locales".into(), json!(locales));
+        self
+    }
+
     /// Merge all keys from a JSON object into the context (for locale data, etc.).
     pub fn merge(mut self, obj: Value) -> Self {
         if let Some(map) = obj.as_object() {
@@ -537,6 +556,50 @@ mod tests {
     fn build_fields_meta_empty_fields() {
         let meta = build_fields_meta(&[]);
         assert_eq!(meta, Value::Array(vec![]));
+    }
+
+    // --- ContextBuilder: editor_locale ---
+
+    #[test]
+    fn context_builder_editor_locale_sets_data() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let config = crate::config::LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+        let result = builder.editor_locale(Some("de"), &config).build();
+        assert_eq!(result["has_editor_locales"], true);
+        assert_eq!(result["editor_locale"], "de");
+        let locales = result["editor_locales"].as_array().unwrap();
+        assert_eq!(locales.len(), 2);
+        assert_eq!(locales[0]["value"], "en");
+        assert_eq!(locales[0]["selected"], false);
+        assert_eq!(locales[1]["value"], "de");
+        assert_eq!(locales[1]["selected"], true);
+    }
+
+    #[test]
+    fn context_builder_editor_locale_disabled_noop() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let config = crate::config::LocaleConfig::default(); // empty = disabled
+        let result = builder.editor_locale(Some("de"), &config).build();
+        assert!(result.get("has_editor_locales").is_none());
+    }
+
+    #[test]
+    fn context_builder_editor_locale_defaults_to_default() {
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let config = crate::config::LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+        let result = builder.editor_locale(None, &config).build();
+        assert_eq!(result["editor_locale"], "en");
     }
 
     // --- ContextBuilder: merge ---

@@ -37,8 +37,8 @@ import './live-events.js';
 import './time-format.js';
 import './scroll.js';
 import './theme.js';
-import './locale.js';
 import './locale-picker.js';
+import './ui-locale-picker.js';
 
 // ── Actions ──
 import './list-settings.js';

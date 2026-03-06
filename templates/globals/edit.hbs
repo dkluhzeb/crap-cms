@@ -13,8 +13,8 @@
       data-collection-slug="{{global.slug}}"
       data-global-slug="{{global.slug}}"
       {{#if user}}data-current-user-id="{{user.id}}"{{/if}}>
-  {{#if has_locales}}
-  <input type="hidden" name="_locale" value="{{current_locale}}" />
+  {{#if has_editor_locales}}
+  <input type="hidden" name="_locale" value="{{editor_locale}}" />
   {{/if}}
   <div class="edit-layout">
     <div class="edit-layout__content">
