@@ -20,7 +20,7 @@ crap = {}
 --- | "text"         # Single-line string
 --- | "number"       # Integer or float
 --- | "textarea"     # Multi-line text
---- | "richtext"     # Rich text (stored as JSON)
+--- | "richtext"     # Rich text (stored as HTML by default, or JSON with admin.format = "json")
 --- | "select"       # Single or multi select from options (has_many for multi)
 --- | "radio"        # Radio button group (same as select, renders as radio buttons)
 --- | "checkbox"     # Boolean (true/false)
@@ -73,6 +73,7 @@ crap = {}
 --- @field rows?        integer  Number of rows for textarea fields (default: 8).
 --- @field language?    string   Language mode for code fields (default: "json"). Options: "json", "javascript", "html", "css", "python", "plain".
 --- @field features?    string[] Enabled toolbar features for richtext fields. When absent, all features are enabled. Options: "bold", "italic", "code", "link", "heading", "blockquote", "orderedList", "bulletList", "codeBlock", "horizontalRule".
+--- @field format?      string   Storage format for richtext fields: "html" (default) or "json" (ProseMirror JSON). FTS extracts plain text from JSON automatically.
 --- @field picker?      string   Picker UI style. For blocks fields: "select" (default) uses a dropdown, "card" uses a visual card grid. For relationship/upload fields: "drawer" adds a browse button that opens a slide-in drawer panel (thumbnail grid for uploads, searchable list for relationships).
 
 --- Custom validation function type.
@@ -283,7 +284,7 @@ function crap.fields.number(config) end
 --- @return crap.FieldDefinition
 function crap.fields.textarea(config) end
 
---- Create a richtext field (Tiptap editor, stored as JSON).
+--- Create a richtext field (ProseMirror editor, stored as HTML by default or JSON).
 --- @param config crap.RichtextField
 --- @return crap.FieldDefinition
 function crap.fields.richtext(config) end

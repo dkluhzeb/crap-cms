@@ -298,6 +298,9 @@ pub struct FieldAdmin {
     /// "card" uses a visual card grid (shows images when image_url is set on blocks).
     #[serde(default)]
     pub picker: Option<String>,
+    /// For richtext fields: storage format. "html" (default) or "json" (ProseMirror JSON).
+    #[serde(default)]
+    pub richtext_format: Option<String>,
 }
 
 /// Lua function references for field-level access control (read/create/update).
@@ -849,5 +852,13 @@ mod tests {
         let flat = flatten_array_sub_fields(&fields);
         let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["x", "y"]);
+    }
+
+    // ── richtext_format tests ─────────────────────────────────────────────
+
+    #[test]
+    fn richtext_format_default_is_none() {
+        let admin = FieldAdmin::default();
+        assert!(admin.richtext_format.is_none());
     }
 }

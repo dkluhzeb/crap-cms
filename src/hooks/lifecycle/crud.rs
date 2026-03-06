@@ -1114,7 +1114,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                     .map_err(|e| mlua::Error::RuntimeError(format!("update error: {}", e)))?;
                 query::save_join_table_data(conn, &collection, &def.fields, &doc.id, &join_data, locale_ctx.as_ref())
                     .map_err(|e| mlua::Error::RuntimeError(format!("join data error: {}", e)))?;
-                query::fts::fts_upsert(conn, &collection, &updated)
+                query::fts::fts_upsert(conn, &collection, &updated, Some(&def))
                     .map_err(|e| mlua::Error::RuntimeError(format!("FTS upsert error: {}", e)))?;
                 modified += 1;
             }

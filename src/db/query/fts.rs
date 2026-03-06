@@ -136,19 +136,69 @@ pub fn sync_fts_table(
         .with_context(|| format!("Failed to create FTS table {}", fts_table))?;
 
     // Bulk populate from main table
-    let select_fields: Vec<String> = fts_fields
-        .iter()
-        .map(|f| format!("COALESCE({}, '')", f))
-        .collect();
-    let insert_sql = format!(
-        "INSERT INTO {}(id, {}) SELECT id, {} FROM {}",
-        fts_table,
-        field_list,
-        select_fields.join(", "),
-        slug
-    );
-    conn.execute_batch(&insert_sql)
-        .with_context(|| format!("Failed to populate FTS table {}", fts_table))?;
+    let json_rt_cols = json_richtext_columns(def);
+
+    if json_rt_cols.is_empty() {
+        // Fast path: no JSON richtext fields, pure SQL bulk insert
+        let select_fields: Vec<String> = fts_fields
+            .iter()
+            .map(|f| format!("COALESCE({}, '')", f))
+            .collect();
+        let insert_sql = format!(
+            "INSERT INTO {}(id, {}) SELECT id, {} FROM {}",
+            fts_table,
+            field_list,
+            select_fields.join(", "),
+            slug
+        );
+        conn.execute_batch(&insert_sql)
+            .with_context(|| format!("Failed to populate FTS table {}", fts_table))?;
+    } else {
+        // Slow path: read rows and extract plain text from JSON richtext fields
+        let select_fields: Vec<String> = fts_fields
+            .iter()
+            .map(|f| format!("COALESCE({}, '')", f))
+            .collect();
+        let select_sql = format!(
+            "SELECT id, {} FROM {}",
+            select_fields.join(", "),
+            slug
+        );
+        let mut stmt = conn.prepare(&select_sql)
+            .with_context(|| format!("Failed to prepare FTS population query for {}", slug))?;
+        let mut rows = stmt.query([])
+            .with_context(|| format!("Failed to query {} for FTS population", slug))?;
+
+        let placeholders: Vec<String> = (1..=fts_fields.len() + 1).map(|i| format!("?{}", i)).collect();
+        let insert_sql = format!(
+            "INSERT INTO {}(id, {}) VALUES ({})",
+            fts_table, field_list, placeholders.join(", ")
+        );
+
+        while let Some(row) = rows.next()? {
+            let id: String = row.get(0)?;
+            let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            params.push(Box::new(id));
+
+            for (i, col_name) in fts_fields.iter().enumerate() {
+                let raw: String = row.get(i + 1)?;
+                let is_json_rt = json_rt_cols.contains(col_name)
+                    || col_name.split("__").next()
+                        .map(|base| json_rt_cols.contains(base))
+                        .unwrap_or(false);
+                let text = if is_json_rt && !raw.is_empty() {
+                    extract_prosemirror_text(&raw)
+                } else {
+                    raw
+                };
+                params.push(Box::new(text));
+            }
+
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            conn.execute(&insert_sql, rusqlite::params_from_iter(param_refs.iter()))
+                .with_context(|| format!("FTS bulk insert in {}", fts_table))?;
+        }
+    }
 
     Ok(())
 }
@@ -176,15 +226,64 @@ fn get_fts_table_columns(conn: &rusqlite::Connection, fts_table: &str) -> Option
     if cols.is_empty() { None } else { Some(cols) }
 }
 
+/// Extract plain text from a ProseMirror JSON document.
+///
+/// Recursively walks the JSON tree collecting `{ "type": "text", "text": "..." }` nodes.
+/// Returns concatenated plain text with spaces between nodes.
+/// Returns an empty string for invalid input.
+pub fn extract_prosemirror_text(json_str: &str) -> String {
+    fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
+        let obj = match value.as_object() {
+            Some(o) => o,
+            None => return,
+        };
+        if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
+            if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
+                out.push(text.to_string());
+            }
+        }
+        if let Some(content) = obj.get("content").and_then(|c| c.as_array()) {
+            for child in content {
+                collect_text(child, out);
+            }
+        }
+    }
+
+    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    let mut parts = Vec::new();
+    collect_text(&parsed, &mut parts);
+    parts.join(" ")
+}
+
+/// Build a set of column names that are JSON-format richtext fields.
+/// Checks both bare field names and locale-expanded variants (`field__locale`).
+fn json_richtext_columns(def: &CollectionDefinition) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    for f in &def.fields {
+        if f.field_type == FieldType::Richtext
+            && f.admin.richtext_format.as_deref() == Some("json")
+        {
+            set.insert(f.name.clone());
+        }
+    }
+    set
+}
+
 /// Insert or update a document in the FTS index.
 ///
 /// Deletes the existing row (if any) then inserts fresh data.
 /// No-op if the FTS table doesn't exist. Column list is read from the FTS table
 /// at runtime, so callers don't need locale awareness.
+///
+/// If `def` is provided, JSON-format richtext fields are extracted to plain text.
 pub fn fts_upsert(
     conn: &rusqlite::Connection,
     slug: &str,
     doc: &Document,
+    def: Option<&CollectionDefinition>,
 ) -> Result<()> {
     let fts_table = fts_table_name(slug);
 
@@ -192,6 +291,9 @@ pub fn fts_upsert(
         Some(cols) => cols,
         None => return Ok(()),
     };
+
+    let json_rt_cols = def.map(|d| json_richtext_columns(d))
+        .unwrap_or_default();
 
     // Delete existing row
     conn.execute(
@@ -205,12 +307,24 @@ pub fn fts_upsert(
     values.push(Box::new(doc.id.clone()));
 
     for col_name in &fts_cols {
-        let text = doc
+        let raw = doc
             .fields
             .get(col_name)
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            .unwrap_or("");
+
+        // Check if this column is a JSON-format richtext field
+        // (either exact match or the base name before "__locale" suffix)
+        let is_json_rt = json_rt_cols.contains(col_name)
+            || col_name.split("__").next()
+                .map(|base| json_rt_cols.contains(base))
+                .unwrap_or(false);
+
+        let text = if is_json_rt && !raw.is_empty() {
+            extract_prosemirror_text(raw)
+        } else {
+            raw.to_string()
+        };
         values.push(Box::new(text));
     }
 
@@ -602,7 +716,7 @@ mod tests {
             created_at: None,
             updated_at: None,
         };
-        fts_upsert(&conn, "posts", &doc).unwrap();
+        fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let results = fts_search(&conn, "posts", "Unique", 10).unwrap();
         assert_eq!(results, vec!["new1"]);
@@ -625,7 +739,7 @@ mod tests {
             created_at: None,
             updated_at: None,
         };
-        fts_upsert(&conn, "posts", &doc).unwrap();
+        fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         // Old title should not match
         let old_results = fts_search(&conn, "posts", "Old", 10).unwrap();
@@ -661,7 +775,7 @@ mod tests {
             updated_at: None,
         };
         // Should be a no-op, no error (no FTS table exists)
-        fts_upsert(&conn, "posts", &doc).unwrap();
+        fts_upsert(&conn, "posts", &doc, None).unwrap();
     }
 
     #[test]
@@ -915,7 +1029,7 @@ mod tests {
             created_at: None,
             updated_at: None,
         };
-        fts_upsert(&conn, "posts", &doc).unwrap();
+        fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         // Both languages should be searchable
         let en_results = fts_search(&conn, "posts", "English", 10).unwrap();
@@ -953,5 +1067,80 @@ mod tests {
             .collect();
 
         assert_eq!(ids, vec!["1", "3"]);
+    }
+
+    // ── extract_prosemirror_text ──────────────────────────────────────────
+
+    #[test]
+    fn extract_prosemirror_text_simple() {
+        let json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello world"}]}]}"#;
+        assert_eq!(extract_prosemirror_text(json), "Hello world");
+    }
+
+    #[test]
+    fn extract_prosemirror_text_nested() {
+        let json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"},{"type":"text","text":" world","marks":[{"type":"strong"}]}]},{"type":"paragraph","content":[{"type":"text","text":"Second paragraph"}]}]}"#;
+        assert_eq!(extract_prosemirror_text(json), "Hello  world Second paragraph");
+    }
+
+    #[test]
+    fn extract_prosemirror_text_empty() {
+        let json = r#"{"type":"doc","content":[]}"#;
+        assert_eq!(extract_prosemirror_text(json), "");
+    }
+
+    #[test]
+    fn extract_prosemirror_text_invalid() {
+        assert_eq!(extract_prosemirror_text("not json"), "");
+        assert_eq!(extract_prosemirror_text(""), "");
+    }
+
+    // ── fts_upsert with JSON richtext ────────────────────────────────────
+
+    #[test]
+    fn fts_upsert_json_richtext() {
+        let conn = setup_db();
+        // Add a "content" richtext column to the posts table
+        conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT").unwrap();
+
+        let mut def = simple_def(vec![
+            text_field("title"),
+            FieldDefinition {
+                name: "content".to_string(),
+                field_type: FieldType::Richtext,
+                admin: FieldAdmin {
+                    richtext_format: Some("json".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ]);
+        def.admin.list_searchable_fields = vec!["title".into(), "content".into()];
+        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Searchable text inside JSON"}]}]}"#;
+        conn.execute(
+            "INSERT INTO posts (id, title, content, created_at, updated_at) VALUES ('1', 'Test', ?1, datetime('now'), datetime('now'))",
+            [pm_json],
+        ).unwrap();
+
+        let doc = Document {
+            id: "1".to_string(),
+            fields: HashMap::from([
+                ("title".into(), serde_json::json!("Test")),
+                ("content".into(), serde_json::json!(pm_json)),
+            ]),
+            created_at: None,
+            updated_at: None,
+        };
+        fts_upsert(&conn, "posts", &doc, Some(&def)).unwrap();
+
+        // Should find by extracted plain text
+        let results = fts_search(&conn, "posts", "Searchable", 10).unwrap();
+        assert_eq!(results, vec!["1"]);
+
+        // Should NOT find by JSON structure keywords
+        let results = fts_search(&conn, "posts", "paragraph", 10).unwrap();
+        assert!(results.is_empty());
     }
 }

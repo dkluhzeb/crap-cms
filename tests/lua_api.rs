@@ -5490,3 +5490,59 @@ fn lua_find_with_search_empty_returns_all() {
     "#);
     assert_eq!(result, "ok");
 }
+
+#[test]
+fn parse_richtext_format_json() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("pages.lua"),
+        r#"
+crap.collections.define("pages", {
+    fields = {
+        { name = "content", type = "richtext", admin = { format = "json" } },
+    },
+})
+        "#,
+    ).unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
+
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("pages").expect("pages should be registered");
+    let field = def.fields.iter().find(|f| f.name == "content").unwrap();
+    assert_eq!(field.admin.richtext_format.as_deref(), Some("json"));
+}
+
+#[test]
+fn parse_richtext_format_absent() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let collections_dir = tmp.path().join("collections");
+    std::fs::create_dir_all(&collections_dir).unwrap();
+
+    std::fs::write(
+        collections_dir.join("pages.lua"),
+        r#"
+crap.collections.define("pages", {
+    fields = {
+        { name = "content", type = "richtext" },
+    },
+})
+        "#,
+    ).unwrap();
+
+    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
+
+    let config = CrapConfig::default();
+    let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
+
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("pages").expect("pages should be registered");
+    let field = def.fields.iter().find(|f| f.name == "content").unwrap();
+    assert!(field.admin.richtext_format.is_none());
+}

@@ -880,7 +880,7 @@ impl ContentService {
             for doc in &docs {
                 let updated = query::update(&tx, &collection, &def_owned, &doc.id, &data, locale_ctx.as_ref())?;
                 query::save_join_table_data(&tx, &collection, &def_owned.fields, &doc.id, &join_data, locale_ctx.as_ref())?;
-                query::fts::fts_upsert(&tx, &collection, &updated)?;
+                query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))?;
                 count += 1;
             }
 

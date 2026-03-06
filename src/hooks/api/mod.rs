@@ -679,6 +679,10 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
             admin.set("picker", p.as_str())?;
             has_any = true;
         }
+        if let Some(ref fmt) = f.admin.richtext_format {
+            admin.set("format", fmt.as_str())?;
+            has_any = true;
+        }
         if has_any {
             tbl.set("admin", admin)?;
         }
@@ -1598,6 +1602,7 @@ mod tests {
                 language: Some("json".to_string()),
                 features: vec!["bold".to_string(), "italic".to_string()],
                 picker: Some("card".to_string()),
+                richtext_format: Some("json".to_string()),
             },
             ..Default::default()
         };
@@ -1625,6 +1630,7 @@ mod tests {
         assert_eq!(features.get::<String>(1).unwrap(), "bold");
         assert_eq!(features.get::<String>(2).unwrap(), "italic");
         assert_eq!(admin.get::<String>("picker").unwrap(), "card");
+        assert_eq!(admin.get::<String>("format").unwrap(), "json");
     }
 
     #[test]

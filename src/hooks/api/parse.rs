@@ -553,6 +553,7 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
                     Vec::new()
                 },
                 picker: get_string(&admin_tbl, "picker"),
+                richtext_format: get_string(&admin_tbl, "format"),
             }
         } else {
             FieldAdmin::default()

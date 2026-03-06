@@ -110,10 +110,24 @@ class CrapRichtext extends HTMLElement {
       marks: marksObj,
     });
 
-    // Parse existing HTML content into a ProseMirror document
-    const container = document.createElement('div');
-    container.innerHTML = textarea.value || '';
-    const doc = PM.DOMParser.fromSchema(schema).parse(container);
+    // Read storage format: "html" (default) or "json" (ProseMirror JSON)
+    const format = this.getAttribute('data-format') || 'html';
+
+    // Parse existing content into a ProseMirror document
+    let doc;
+    if (format === 'json' && textarea.value.trim()) {
+      try {
+        const parsed = JSON.parse(textarea.value);
+        doc = PM.Node.fromJSON(schema, parsed);
+      } catch {
+        // Fallback to empty doc on parse error
+        doc = schema.topNodeType.createAndFill();
+      }
+    } else {
+      const container = document.createElement('div');
+      container.innerHTML = textarea.value || '';
+      doc = PM.DOMParser.fromSchema(schema).parse(container);
+    }
 
     const isReadonly = textarea.hasAttribute('readonly');
 
@@ -214,12 +228,16 @@ class CrapRichtext extends HTMLElement {
         const newState = this._view.state.apply(tr);
         this._view.updateState(newState);
         if (tr.docChanged) {
-          const fragment = PM.DOMSerializer
-            .fromSchema(schema)
-            .serializeFragment(newState.doc.content);
-          const div = document.createElement('div');
-          div.appendChild(fragment);
-          textarea.value = div.innerHTML;
+          if (format === 'json') {
+            textarea.value = JSON.stringify(newState.doc.toJSON());
+          } else {
+            const fragment = PM.DOMSerializer
+              .fromSchema(schema)
+              .serializeFragment(newState.doc.content);
+            const div = document.createElement('div');
+            div.appendChild(fragment);
+            textarea.value = div.innerHTML;
+          }
         }
       },
     });

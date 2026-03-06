@@ -351,6 +351,8 @@ fn build_single_field_context(
             if !field.admin.features.is_empty() {
                 ctx["features"] = serde_json::json!(field.admin.features);
             }
+            let fmt = field.admin.richtext_format.as_deref().unwrap_or("html");
+            ctx["richtext_format"] = serde_json::json!(fmt);
         }
         FieldType::Blocks => {
             let block_defs: Vec<_> = field.blocks.iter().map(|bd| {
@@ -4207,5 +4209,24 @@ mod tests {
         let pro_fields = tabs[1]["sub_fields"].as_array().unwrap();
         assert_eq!(pro_fields[0]["name"], "team_members[0][job_title]");
         assert_eq!(pro_fields[0]["value"], "Dev");
+    }
+
+    // --- richtext_format context ---
+
+    #[test]
+    fn richtext_format_defaults_to_html() {
+        let field = make_field("body", FieldType::Richtext);
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["richtext_format"], "html");
+    }
+
+    #[test]
+    fn richtext_format_json() {
+        let mut field = make_field("body", FieldType::Richtext);
+        field.admin.richtext_format = Some("json".to_string());
+        let fields = vec![field];
+        let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+        assert_eq!(result[0]["richtext_format"], "json");
     }
 }

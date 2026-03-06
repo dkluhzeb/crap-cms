@@ -146,7 +146,7 @@ pub fn persist_create(
     }
 
     // Sync FTS index
-    query::fts::fts_upsert(conn, slug, &doc)?;
+    query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
 
     Ok(doc)
 }
@@ -182,7 +182,7 @@ pub fn persist_update(
     }
 
     // Sync FTS index
-    query::fts::fts_upsert(conn, slug, &doc)?;
+    query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
 
     Ok(doc)
 }
