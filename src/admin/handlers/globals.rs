@@ -72,10 +72,13 @@ pub async fn edit_form(
     let mut doc_fields = document.fields.clone();
     if def.fields.iter().any(|f| f.access.read.is_some()) {
         let user_doc = get_user_doc(&auth_user);
-        if let Ok(conn) = state.pool.get() {
-            let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &conn);
-            for name in &denied {
-                doc_fields.remove(name);
+        if let Ok(mut conn) = state.pool.get() {
+            if let Ok(tx) = conn.transaction() {
+                let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+                let _ = tx.commit();
+                for name in &denied {
+                    doc_fields.remove(name);
+                }
             }
         }
     }
@@ -182,10 +185,13 @@ pub async fn update_action(
     // Strip field-level update-denied fields (skip pool.get if no field-level access configured)
     if def.fields.iter().any(|f| f.access.update.is_some()) {
         let user_doc = get_user_doc(&auth_user);
-        if let Ok(conn) = state.pool.get() {
-            let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &conn);
-            for name in &denied {
-                form_data.remove(name);
+        if let Ok(mut conn) = state.pool.get() {
+            if let Ok(tx) = conn.transaction() {
+                let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
+                let _ = tx.commit();
+                for name in &denied {
+                    form_data.remove(name);
+                }
             }
         }
     }

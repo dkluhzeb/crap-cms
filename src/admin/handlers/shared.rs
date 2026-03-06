@@ -75,13 +75,18 @@ pub(super) fn check_access_or_forbid(
         return Ok(AccessResult::Allowed);
     }
     let user_doc = get_user_doc(auth_user);
-    let conn = state.pool.get()
+    let mut conn = state.pool.get()
         .map_err(|_| forbidden(state, "Database error").into_response())?;
-    state.hook_runner.check_access(access_ref, user_doc, id, data, &conn)
+    let tx = conn.transaction()
+        .map_err(|_| forbidden(state, "Database error").into_response())?;
+    let result = state.hook_runner.check_access(access_ref, user_doc, id, data, &tx)
         .map_err(|e| {
             tracing::error!("Access check error: {}", e);
             forbidden(state, "Access check failed").into_response()
-        })
+        })?;
+    tx.commit()
+        .map_err(|_| forbidden(state, "Database error").into_response())?;
+    Ok(result)
 }
 
 /// Build locale template context (selector data) from config + current locale.

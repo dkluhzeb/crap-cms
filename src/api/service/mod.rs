@@ -146,13 +146,18 @@ impl ContentService {
         data: Option<&HashMap<String, serde_json::Value>>,
     ) -> Result<AccessResult, Status> {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let conn = self
+        let mut conn = self
             .pool
             .get()
             .map_err(|_| Status::unavailable("Database connection pool exhausted (retryable)"))?;
-        self.hook_runner
-            .check_access(access_ref, user_doc, id, data, &conn)
-            .map_err(|e| Status::internal(format!("Access check error: {}", e)))
+        let tx = conn.transaction()
+            .map_err(|e| Status::internal(format!("Transaction error: {}", e)))?;
+        let result = self.hook_runner
+            .check_access(access_ref, user_doc, id, data, &tx)
+            .map_err(|e| Status::internal(format!("Access check error: {}", e)))?;
+        tx.commit()
+            .map_err(|e| Status::internal(format!("Transaction commit error: {}", e)))?;
+        Ok(result)
     }
 
     /// Extract an EventUser from the gRPC AuthUser (for SSE event attribution).
@@ -171,13 +176,18 @@ impl ContentService {
         auth_user: &Option<AuthUser>,
     ) {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let conn = match self.pool.get() {
+        let mut conn = match self.pool.get() {
             Ok(c) => c,
+            Err(_) => return,
+        };
+        let tx = match conn.transaction() {
+            Ok(t) => t,
             Err(_) => return,
         };
         let denied = self
             .hook_runner
-            .check_field_read_access(fields, user_doc, &conn);
+            .check_field_read_access(fields, user_doc, &tx);
+        let _ = tx.commit();
         if let Some(ref mut s) = doc.fields {
             for name in &denied {
                 s.fields.remove(name);

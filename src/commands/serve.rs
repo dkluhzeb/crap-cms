@@ -77,9 +77,11 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     // Run on_init hooks (synchronous — failure aborts startup)
     if !cfg.hooks.on_init.is_empty() {
         info!("Running on_init hooks...");
-        let conn = pool.get().context("DB connection for on_init")?;
-        hook_runner.run_system_hooks_with_conn(&cfg.hooks.on_init, &conn)
+        let mut conn = pool.get().context("DB connection for on_init")?;
+        let tx = conn.transaction().context("Transaction for on_init")?;
+        hook_runner.run_system_hooks_with_conn(&cfg.hooks.on_init, &tx)
             .context("on_init hooks failed")?;
+        tx.commit().context("Commit on_init transaction")?;
         info!("on_init hooks completed");
     }
 

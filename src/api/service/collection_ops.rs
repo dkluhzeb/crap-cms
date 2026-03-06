@@ -458,10 +458,12 @@ impl ContentService {
             // Strip field-level create-denied fields inside spawn_blocking
             // to avoid pool.get() on the async thread
             {
-                let conn = pool.get().context("DB connection for field access")?;
+                let mut conn = pool.get().context("DB connection for field access")?;
+                let tx = conn.transaction().context("Transaction for field access")?;
                 let denied = runner.check_field_write_access(
-                    &def_owned.fields, user_doc.as_ref(), "create", &conn,
+                    &def_owned.fields, user_doc.as_ref(), "create", &tx,
                 );
+                tx.commit().context("Commit field access transaction")?;
                 for name in &denied {
                     data.remove(name);
                 }
@@ -625,10 +627,12 @@ impl ContentService {
             // Strip field-level update-denied fields inside spawn_blocking
             // to avoid pool.get() on the async thread
             {
-                let conn = pool.get().context("DB connection for field access")?;
+                let mut conn = pool.get().context("DB connection for field access")?;
+                let tx = conn.transaction().context("Transaction for field access")?;
                 let denied = runner.check_field_write_access(
-                    &def_owned.fields, user_doc.as_ref(), "update", &conn,
+                    &def_owned.fields, user_doc.as_ref(), "update", &tx,
                 );
+                tx.commit().context("Commit field access transaction")?;
                 for name in &denied {
                     data.remove(name);
                 }

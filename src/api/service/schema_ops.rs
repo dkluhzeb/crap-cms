@@ -97,13 +97,16 @@ impl ContentService {
             .unwrap_or_default();
         {
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let conn = self
+            let mut conn = self
                 .pool
                 .get()
                 .map_err(|_| Status::internal("Database connection error"))?;
+            let tx = conn.transaction()
+                .map_err(|e| Status::internal(format!("Transaction error: {}", e)))?;
             let denied =
                 self.hook_runner
-                    .check_field_write_access(&def.fields, user_doc, "update", &conn);
+                    .check_field_write_access(&def.fields, user_doc, "update", &tx);
+            let _ = tx.commit();
             for name in &denied {
                 data.remove(name);
             }
@@ -317,10 +320,12 @@ impl ContentService {
                 req.collections
             };
 
-            let conn = self
+            let mut conn = self
                 .pool
                 .get()
                 .map_err(|e| Status::internal(format!("DB connection: {}", e)))?;
+            let tx = conn.transaction()
+                .map_err(|e| Status::internal(format!("Transaction error: {}", e)))?;
 
             for slug in &target_collections {
                 if let Some(def) = self.registry.get_collection(slug) {
@@ -329,7 +334,7 @@ impl ContentService {
                         user_doc,
                         None,
                         None,
-                        &conn,
+                        &tx,
                     ) {
                         Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
                             allowed_collections.insert(slug.clone());
@@ -352,7 +357,7 @@ impl ContentService {
                         user_doc,
                         None,
                         None,
-                        &conn,
+                        &tx,
                     ) {
                         Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
                             allowed_globals.insert(slug.clone());
@@ -361,6 +366,7 @@ impl ContentService {
                     }
                 }
             }
+            let _ = tx.commit();
         }
 
         if allowed_collections.is_empty() && allowed_globals.is_empty() {

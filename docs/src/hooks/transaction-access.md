@@ -58,7 +58,7 @@ with transaction context (before_change, before_delete, etc.)
 
 ## on_init Hooks
 
-The `[hooks] on_init` list in `crap.toml` runs at startup with CRUD access. These hooks can seed data, run migrations, or perform other initialization:
+The `[hooks] on_init` list in `crap.toml` runs at startup with CRUD access. All `on_init` hooks share a single database transaction — if any hook fails, all changes are rolled back. This makes seeding and startup migrations atomic:
 
 ```toml
 [hooks]
@@ -87,3 +87,11 @@ return M
 ```
 
 If an `on_init` hook fails, the server aborts startup.
+
+## Access Control Functions
+
+Access control functions (`access.read`, `access.create`, `access.update`, `access.delete` on collections/globals and `access.read`, `access.create`, `access.update` on fields) run with CRUD access inside their own transaction. Each access check gets a dedicated transaction that commits on success or rolls back on error.
+
+## Auth Strategies
+
+Custom auth strategy `authenticate` functions run with CRUD access inside a transaction. All strategies for a given request share a single transaction — if a strategy authenticates successfully, the transaction commits. If all strategies fail, the transaction rolls back.

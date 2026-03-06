@@ -364,14 +364,17 @@ async fn auth_middleware(
 
         // Try strategies in a blocking task (Lua + DB access)
         let strategy_result = tokio::task::spawn_blocking(move || {
-            let conn = pool.get().ok()?;
+            let mut conn = pool.get().ok()?;
+            let tx = conn.transaction().ok()?;
+            let mut result = None;
             for (slug, auth_config) in &auth_defs {
+                if result.is_some() { break; }
                 for strategy in &auth_config.strategies {
                     match hook_runner.run_auth_strategy(
                         &strategy.authenticate,
                         slug,
                         &headers,
-                        &conn,
+                        &tx,
                     ) {
                         Ok(Some(user)) => {
                             let user_email = user.fields.get("email")
@@ -385,7 +388,8 @@ async fn auth_middleware(
                                 email: user_email,
                                 exp: (chrono::Utc::now().timestamp() as u64) + expiry,
                             };
-                            return Some((claims, jwt_secret.clone()));
+                            result = Some((claims, jwt_secret.clone()));
+                            break;
                         }
                         Ok(None) => continue,
                         Err(e) => {
@@ -398,7 +402,8 @@ async fn auth_middleware(
                     }
                 }
             }
-            None
+            let _ = tx.commit();
+            result
         }).await;
 
         if let Ok(Some((claims, _secret))) = strategy_result {

@@ -77,11 +77,17 @@ async fn create_upload(
     // Check create access
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
     let access = {
-        let conn = match state.pool.get() {
+        let mut conn = match state.pool.get() {
             Ok(c) => c,
             Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
         };
-        state.hook_runner.check_access(def.access.create.as_deref(), user_doc, None, None, &conn)
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+        };
+        let result = state.hook_runner.check_access(def.access.create.as_deref(), user_doc, None, None, &tx);
+        let _ = tx.commit();
+        result
     };
     match access {
         Ok(AccessResult::Denied) => return json_error(StatusCode::FORBIDDEN, "Create access denied"),
@@ -118,10 +124,13 @@ async fn create_upload(
 
     // Strip field-level create-denied fields
     {
-        if let Ok(conn) = state.pool.get() {
-            let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "create", &conn);
-            for name in &denied {
-                form_data.remove(name);
+        if let Ok(mut conn) = state.pool.get() {
+            if let Ok(tx) = conn.transaction() {
+                let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "create", &tx);
+                let _ = tx.commit();
+                for name in &denied {
+                    form_data.remove(name);
+                }
             }
         }
     }
@@ -209,11 +218,17 @@ async fn update_upload(
     // Check update access
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
     let access = {
-        let conn = match state.pool.get() {
+        let mut conn = match state.pool.get() {
             Ok(c) => c,
             Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
         };
-        state.hook_runner.check_access(def.access.update.as_deref(), user_doc, Some(&id), None, &conn)
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+        };
+        let result = state.hook_runner.check_access(def.access.update.as_deref(), user_doc, Some(&id), None, &tx);
+        let _ = tx.commit();
+        result
     };
     match access {
         Ok(AccessResult::Denied) => return json_error(StatusCode::FORBIDDEN, "Update access denied"),
@@ -258,10 +273,13 @@ async fn update_upload(
 
     // Strip field-level update-denied fields
     {
-        if let Ok(conn) = state.pool.get() {
-            let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &conn);
-            for name in &denied {
-                form_data.remove(name);
+        if let Ok(mut conn) = state.pool.get() {
+            if let Ok(tx) = conn.transaction() {
+                let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
+                let _ = tx.commit();
+                for name in &denied {
+                    form_data.remove(name);
+                }
             }
         }
     }
@@ -351,11 +369,17 @@ async fn delete_upload(
     // Check delete access
     let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
     let access = {
-        let conn = match state.pool.get() {
+        let mut conn = match state.pool.get() {
             Ok(c) => c,
             Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
         };
-        state.hook_runner.check_access(def.access.delete.as_deref(), user_doc, Some(&id), None, &conn)
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
+        };
+        let result = state.hook_runner.check_access(def.access.delete.as_deref(), user_doc, Some(&id), None, &tx);
+        let _ = tx.commit();
+        result
     };
     match access {
         Ok(AccessResult::Denied) => return json_error(StatusCode::FORBIDDEN, "Delete access denied"),
