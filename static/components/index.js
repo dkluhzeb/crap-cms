@@ -26,6 +26,7 @@ import './drawer.js';
 import './relationship-search.js';
 
 // ── Behaviors ──
+import './sidebar-toggle.js';
 import './session-guard.js';
 import './dirty-form.js';
 import './uploads.js';

@@ -36,3 +36,9 @@
 .breadcrumb > ol > li > span {
   color: var(--text-primary);
 }
+
+@media (max-width: 768px) {
+  .breadcrumb > ol {
+    flex-wrap: wrap;
+  }
+}

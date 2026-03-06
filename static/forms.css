@@ -1258,3 +1258,39 @@ select[multiple] {
   color: var(--text-secondary);
   margin: var(--space-xs) 0 0;
 }
+
+@media (max-width: 768px) {
+  .form__field--half {
+    grid-column: span 12;
+  }
+
+  .form__row {
+    grid-template-columns: 1fr;
+  }
+
+  .form__actions {
+    flex-wrap: wrap;
+  }
+
+  .list-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .search-bar__form {
+    max-width: none;
+  }
+
+  .stale-warning {
+    flex-wrap: wrap;
+  }
+
+  .filter-builder__row {
+    flex-wrap: wrap;
+  }
+
+  .filter-builder__field,
+  .filter-builder__op {
+    min-width: 0;
+    flex: 1 1 100%;
+  }
+}

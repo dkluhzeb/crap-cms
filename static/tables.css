@@ -63,3 +63,11 @@
 .table__sort-icon--active {
   color: var(--color-primary);
 }
+
+@media (max-width: 768px) {
+  .card {
+    min-width: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
