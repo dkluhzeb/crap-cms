@@ -7,7 +7,7 @@
     (function(){var t=localStorage.getItem('crap-theme');if(t)document.documentElement.setAttribute('data-theme',t)})();
   </script>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg" />
-  <link href="/static/styles.css" rel="stylesheet" />
+  <link href="/static/styles.css?v={{crap.build_hash}}" rel="stylesheet" />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
   <script src="https://unpkg.com/htmx.org@1.9.12" integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2" crossorigin="anonymous"></script>
   <script>
@@ -17,9 +17,9 @@
       document.addEventListener('submit',function(e){var f=e.target;if(!f||f.tagName!=='FORM')return;var t=gc('crap_csrf');if(t&&!f.querySelector('input[name="_csrf"]')){var i=document.createElement('input');i.type='hidden';i.name='_csrf';i.value=t;f.appendChild(i)}},true);
     })();
   </script>
-  <script src="/static/prosemirror.js" defer></script>
-  <script src="/static/codemirror.js" defer></script>
-  <script type="module" src="/static/components/index.js"></script>
+  <script src="/static/prosemirror.js?v={{crap.build_hash}}" defer></script>
+  <script src="/static/codemirror.js?v={{crap.build_hash}}" defer></script>
+  <script type="module" src="/static/components/index.js?v={{crap.build_hash}}"></script>
 
   <title>{{#if page.title}}{{page.title}}{{else}}{{title}}{{/if}} - Crap CMS</title>
   <script type="application/json" id="crap-i18n">{

@@ -79,6 +79,7 @@ impl ContextBuilder {
         // crap metadata
         data.insert("crap".into(), json!({
             "version": env!("CARGO_PKG_VERSION"),
+            "build_hash": env!("BUILD_HASH"),
             "dev_mode": state.config.admin.dev_mode,
             "auth_enabled": has_auth_collections(state),
         }));
@@ -110,6 +111,7 @@ impl ContextBuilder {
         let mut data = Map::new();
         data.insert("crap".into(), json!({
             "version": env!("CARGO_PKG_VERSION"),
+            "build_hash": env!("BUILD_HASH"),
             "dev_mode": state.config.admin.dev_mode,
             "auth_enabled": true,
         }));
