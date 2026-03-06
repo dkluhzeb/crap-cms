@@ -21,7 +21,7 @@ Unified reference for querying documents across both the Lua API and gRPC API.
 
 ## Sorting
 
-Prefix a field name with `-` for descending order.
+Prefix a field name with `-` for descending order. When `order_by` is omitted, results are sorted by `created_at DESC` (newest first) for collections with timestamps, or `id ASC` otherwise. When sorting by a non-id field, an `id` tiebreaker is always appended for stable ordering.
 
 **Lua:**
 
@@ -40,17 +40,25 @@ grpcurl -plaintext -d '{
 
 ## Pagination
 
-Use `limit` and `offset` for pagination. The `total` field in the response gives the total count before pagination.
+Use `limit` and `page` for pagination. The response includes a nested `pagination` object with total count and page info.
 
 **Lua:**
 
 ```lua
 local result = crap.collections.find("posts", {
     limit = 10,
-    offset = 20,
+    page = 3,
 })
--- result.total = 150 (total matching documents)
--- result.documents = 10 (this page)
+-- result.pagination.totalDocs   = 150 (total matching documents)
+-- result.pagination.limit       = 10
+-- result.pagination.totalPages  = 15
+-- result.pagination.page        = 3   (1-based)
+-- result.pagination.pageStart   = 21  (1-based index of first doc on this page)
+-- result.pagination.hasNextPage = true
+-- result.pagination.hasPrevPage = true
+-- result.pagination.prevPage    = 2
+-- result.pagination.nextPage    = 4
+-- #result.documents             = 10  (this page)
 ```
 
 **gRPC:**
@@ -59,9 +67,73 @@ local result = crap.collections.find("posts", {
 grpcurl -plaintext -d '{
     "collection": "posts",
     "limit": "10",
-    "offset": "20"
+    "page": "3"
 }' localhost:50051 crap.ContentAPI/Find
 ```
+
+## Cursor-Based Pagination
+
+Cursor-based pagination is opt-in via `[pagination] mode = "cursor"` in `crap.toml`. When enabled, the `pagination` object includes opaque `startCursor` and `endCursor` tokens instead of `page`/`totalPages`. These represent the cursors of the first and last documents in the result set. Pass `after_cursor` (forward) or `before_cursor` (backward) on the next request to navigate from any cursor position.
+
+`after_cursor`/`before_cursor` and `page` are mutually exclusive. `after_cursor` and `before_cursor` are also mutually exclusive with each other.
+
+**Lua:**
+
+```lua
+-- First page
+local result = crap.collections.find("posts", {
+    order_by = "-created_at",
+    limit = 10,
+})
+-- result.pagination.hasNextPage  = true
+-- result.pagination.hasPrevPage  = false
+-- result.pagination.startCursor  = "eyJpZCI6ImFiYzEyMyJ9"  (cursor of first doc)
+-- result.pagination.endCursor    = "eyJpZCI6Inh5ejc4OSJ9"  (cursor of last doc)
+
+-- Next page (forward)
+local page2 = crap.collections.find("posts", {
+    order_by = "-created_at",
+    limit = 10,
+    after_cursor = result.pagination.endCursor,
+})
+
+-- Previous page (backward)
+local page1_again = crap.collections.find("posts", {
+    order_by = "-created_at",
+    limit = 10,
+    before_cursor = page2.pagination.startCursor,
+})
+```
+
+**gRPC:**
+
+```bash
+# First page
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "order_by": "-created_at",
+    "limit": "10"
+}' localhost:50051 crap.ContentAPI/Find
+# Response pagination includes start_cursor / end_cursor when cursor mode is active
+
+# Next page (forward)
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "order_by": "-created_at",
+    "limit": "10",
+    "after_cursor": "eyJpZCI6Inh5ejc4OSJ9"
+}' localhost:50051 crap.ContentAPI/Find
+
+# Previous page (backward)
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "order_by": "-created_at",
+    "limit": "10",
+    "before_cursor": "eyJpZCI6ImFiYzEyMyJ9"
+}' localhost:50051 crap.ContentAPI/Find
+```
+
+Cursors encode the position of a document in the sorted result set. They are opaque — do not parse or construct them manually. `startCursor` and `endCursor` are always present when the result set is non-empty.
 
 ## Combining Filters
 

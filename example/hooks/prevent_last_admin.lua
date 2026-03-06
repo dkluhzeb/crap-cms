@@ -11,7 +11,7 @@ return function(context)
     where = { role = "admin" },
   })
 
-  local admin_count = result and result.total or 0
+  local admin_count = result and result.pagination.totalDocs or 0
   if admin_count <= 1 then
     error("Cannot delete the last admin user")
   end

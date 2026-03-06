@@ -15,6 +15,17 @@ use super::{
 };
 use super::filter::{build_where_clause, resolve_filters, resolve_filter_column};
 
+/// Convert ISO 8601 timestamp back to SQLite storage format for cursor comparison.
+/// "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
+fn denormalize_timestamp(s: &str) -> String {
+    // Match the ISO format produced by normalize_timestamp in document.rs
+    if s.len() == 24 && s.as_bytes().get(10) == Some(&b'T') && s.ends_with(".000Z") {
+        format!("{} {}", &s[..10], &s[11..19])
+    } else {
+        s.to_string()
+    }
+}
+
 /// Find documents matching a query.
 pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition, query: &FindQuery, locale_ctx: Option<&LocaleContext>) -> Result<Vec<Document>> {
     validate_query_fields(def, query, locale_ctx)?;
@@ -41,14 +52,92 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
         sql.push_str(&where_clause);
     }
 
-    if let Some(ref order) = query.order_by {
-        let (col, dir) = if let Some(stripped) = order.strip_prefix('-') {
-            (stripped, "DESC")
+    // Cursor + offset mutual exclusion
+    let has_cursor = query.after_cursor.is_some() || query.before_cursor.is_some();
+    if has_cursor && query.offset.is_some() {
+        bail!("Cannot use both cursor and offset — they are mutually exclusive");
+    }
+    if query.after_cursor.is_some() && query.before_cursor.is_some() {
+        bail!("Cannot use both after_cursor and before_cursor — they are mutually exclusive");
+    }
+
+    // Parse sort column and direction from order_by
+    // Default: created_at DESC (newest first) if timestamps enabled, else id ASC
+    let (sort_col, sort_dir) = if let Some(ref order) = query.order_by {
+        if let Some(stripped) = order.strip_prefix('-') {
+            (stripped.to_string(), "DESC")
         } else {
-            (order.as_str(), "ASC")
+            (order.clone(), "ASC")
+        }
+    } else if def.timestamps {
+        ("created_at".to_string(), "DESC")
+    } else {
+        ("id".to_string(), "ASC")
+    };
+
+    // Determine active cursor (after or before) and compute keyset direction
+    let active_cursor = query.after_cursor.as_ref().or(query.before_cursor.as_ref());
+    let using_before = query.before_cursor.is_some();
+
+    // Cursor keyset WHERE condition
+    if let Some(cursor) = active_cursor {
+        if cursor.sort_col != sort_col {
+            bail!(
+                "Cursor sort_col '{}' does not match query order_by '{}'",
+                cursor.sort_col, sort_col
+            );
+        }
+        // Forward (after_cursor): ASC → >, DESC → <
+        // Backward (before_cursor): flip — ASC → <, DESC → >
+        let op = match (sort_dir, using_before) {
+            ("DESC", false) | ("ASC", true) => "<",
+            _ => ">",
         };
-        let resolved_col = resolve_filter_column(col, def, locale_ctx);
-        sql.push_str(&format!(" ORDER BY {} {}", resolved_col, dir));
+        let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
+        // Keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
+        let keyset = format!(
+            " AND (({col} {op} ?{p1}) OR ({col} = ?{p1} AND id {op} ?{p2}))",
+            col = resolved_col,
+            op = op,
+            p1 = params.len() + 1,
+            p2 = params.len() + 2,
+        );
+        // Convert sort_val to string for the parameter.
+        // Denormalize ISO timestamps back to SQLite format for comparison:
+        // "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
+        let sort_val_str = match &cursor.sort_val {
+            serde_json::Value::String(s) => denormalize_timestamp(s),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        };
+        params.push(Box::new(sort_val_str));
+        params.push(Box::new(cursor.id.clone()));
+        // Append to existing WHERE or start WHERE
+        if where_clause.is_empty() {
+            // Replace leading " AND " with " WHERE "
+            sql.push_str(&keyset.replacen(" AND ", " WHERE ", 1));
+        } else {
+            sql.push_str(&keyset);
+        }
+    }
+
+    // ORDER BY — for before_cursor, reverse the sort direction so the DB returns
+    // rows in the opposite order, then we reverse them after fetching.
+    let effective_dir: &str = if using_before {
+        if sort_dir == "DESC" { "ASC" } else { "DESC" }
+    } else if sort_dir == "DESC" {
+        "DESC"
+    } else {
+        "ASC"
+    };
+
+    let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
+    if sort_col != "id" {
+        // Stable ordering: primary sort + id tiebreaker
+        sql.push_str(&format!(" ORDER BY {} {}, id {}", resolved_col, effective_dir, effective_dir));
+    } else {
+        sql.push_str(&format!(" ORDER BY id {}", effective_dir));
     }
 
     if let Some(limit) = query.limit {
@@ -78,6 +167,11 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
             }
         }
         documents.push(doc);
+    }
+
+    // before_cursor: results were fetched in reversed order, restore correct sort order
+    if using_before {
+        documents.reverse();
     }
 
     Ok(documents)
@@ -726,5 +820,305 @@ mod tests {
         let result = find_by_ids(&conn, "posts", &def, &ids, None).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].id, doc1.id);
+    }
+
+    // ── Cursor pagination tests ─────────────────────────────────────────────
+
+    #[test]
+    fn cursor_and_offset_mutual_exclusion() {
+        let conn = setup_db();
+        let def = test_def();
+
+        let query = FindQuery {
+            after_cursor: Some(super::super::cursor::CursorData {
+                sort_col: "id".to_string(),
+                sort_dir: "ASC".to_string(),
+                sort_val: serde_json::json!("abc"),
+                id: "abc".to_string(),
+            }),
+            offset: Some(10),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &query, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn cursor_asc_pagination() {
+        let conn = setup_db();
+        let def = test_def();
+
+        // Insert 5 rows with deterministic titles
+        let mut ids = Vec::new();
+        for i in 1..=5 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Post {:02}", i));
+            let doc = create(&conn, "posts", &def, &data, None).unwrap();
+            ids.push(doc.id.clone());
+        }
+
+        // First page: limit=2, order by title ASC
+        let q1 = FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(2),
+            ..Default::default()
+        };
+        let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].get_str("title"), Some("Post 01"));
+        assert_eq!(page1[1].get_str("title"), Some("Post 02"));
+
+        // Second page via cursor from last doc of page 1
+        let last = &page1[1];
+        let cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!(last.get_str("title").unwrap()),
+            id: last.id.clone(),
+        };
+        let q2 = FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(2),
+            after_cursor: Some(cursor),
+            ..Default::default()
+        };
+        let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].get_str("title"), Some("Post 03"));
+        assert_eq!(page2[1].get_str("title"), Some("Post 04"));
+
+        // Third page
+        let last2 = &page2[1];
+        let cursor2 = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!(last2.get_str("title").unwrap()),
+            id: last2.id.clone(),
+        };
+        let q3 = FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(2),
+            after_cursor: Some(cursor2),
+            ..Default::default()
+        };
+        let page3 = find(&conn, "posts", &def, &q3, None).unwrap();
+        assert_eq!(page3.len(), 1);
+        assert_eq!(page3[0].get_str("title"), Some("Post 05"));
+    }
+
+    #[test]
+    fn cursor_desc_pagination() {
+        let conn = setup_db();
+        let def = test_def();
+
+        for i in 1..=4 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Post {:02}", i));
+            create(&conn, "posts", &def, &data, None).unwrap();
+        }
+
+        // First page DESC
+        let q1 = FindQuery {
+            order_by: Some("-title".to_string()),
+            limit: Some(2),
+            ..Default::default()
+        };
+        let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
+        assert_eq!(page1[0].get_str("title"), Some("Post 04"));
+        assert_eq!(page1[1].get_str("title"), Some("Post 03"));
+
+        // Second page via cursor
+        let last = &page1[1];
+        let cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "DESC".to_string(),
+            sort_val: serde_json::json!(last.get_str("title").unwrap()),
+            id: last.id.clone(),
+        };
+        let q2 = FindQuery {
+            order_by: Some("-title".to_string()),
+            limit: Some(2),
+            after_cursor: Some(cursor),
+            ..Default::default()
+        };
+        let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].get_str("title"), Some("Post 02"));
+        assert_eq!(page2[1].get_str("title"), Some("Post 01"));
+    }
+
+    #[test]
+    fn cursor_wrong_sort_col_errors() {
+        let conn = setup_db();
+        let def = test_def();
+
+        let query = FindQuery {
+            order_by: Some("title".to_string()),
+            after_cursor: Some(super::super::cursor::CursorData {
+                sort_col: "status".to_string(),
+                sort_dir: "ASC".to_string(),
+                sort_val: serde_json::json!("x"),
+                id: "abc".to_string(),
+            }),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &query, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("does not match"));
+    }
+
+    #[test]
+    fn before_cursor_asc_backward_pagination() {
+        let conn = setup_db();
+        let def = test_def();
+
+        let mut ids = Vec::new();
+        for i in 1..=5 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Post {:02}", i));
+            let doc = create(&conn, "posts", &def, &data, None).unwrap();
+            ids.push(doc.id.clone());
+        }
+
+        // Forward: get page 2 (Posts 03, 04) so we have a cursor to go backward from
+        let page1 = find(&conn, "posts", &def, &FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(2),
+            ..Default::default()
+        }, None).unwrap();
+        let last_p1 = &page1[1];
+        let fwd_cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!(last_p1.get_str("title").unwrap()),
+            id: last_p1.id.clone(),
+        };
+        let page2 = find(&conn, "posts", &def, &FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(2),
+            after_cursor: Some(fwd_cursor),
+            ..Default::default()
+        }, None).unwrap();
+        assert_eq!(page2[0].get_str("title"), Some("Post 03"));
+        assert_eq!(page2[1].get_str("title"), Some("Post 04"));
+
+        // Backward: from the first doc of page 2, go backward
+        let first_p2 = &page2[0];
+        let back_cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!(first_p2.get_str("title").unwrap()),
+            id: first_p2.id.clone(),
+        };
+        let back_page = find(&conn, "posts", &def, &FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(2),
+            before_cursor: Some(back_cursor),
+            ..Default::default()
+        }, None).unwrap();
+
+        // Should get Posts 01, 02 in correct ASC order
+        assert_eq!(back_page.len(), 2);
+        assert_eq!(back_page[0].get_str("title"), Some("Post 01"));
+        assert_eq!(back_page[1].get_str("title"), Some("Post 02"));
+    }
+
+    #[test]
+    fn before_cursor_desc_backward_pagination() {
+        let conn = setup_db();
+        let def = test_def();
+
+        for i in 1..=4 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Post {:02}", i));
+            create(&conn, "posts", &def, &data, None).unwrap();
+        }
+
+        // Forward DESC page 1: Posts 04, 03
+        let page1 = find(&conn, "posts", &def, &FindQuery {
+            order_by: Some("-title".to_string()),
+            limit: Some(2),
+            ..Default::default()
+        }, None).unwrap();
+        assert_eq!(page1[0].get_str("title"), Some("Post 04"));
+        assert_eq!(page1[1].get_str("title"), Some("Post 03"));
+
+        // Forward DESC page 2: Posts 02, 01
+        let last_p1 = &page1[1];
+        let fwd_cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "DESC".to_string(),
+            sort_val: serde_json::json!(last_p1.get_str("title").unwrap()),
+            id: last_p1.id.clone(),
+        };
+        let page2 = find(&conn, "posts", &def, &FindQuery {
+            order_by: Some("-title".to_string()),
+            limit: Some(2),
+            after_cursor: Some(fwd_cursor),
+            ..Default::default()
+        }, None).unwrap();
+        assert_eq!(page2[0].get_str("title"), Some("Post 02"));
+        assert_eq!(page2[1].get_str("title"), Some("Post 01"));
+
+        // Backward from page 2 first doc → should get page 1 back
+        let first_p2 = &page2[0];
+        let back_cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "DESC".to_string(),
+            sort_val: serde_json::json!(first_p2.get_str("title").unwrap()),
+            id: first_p2.id.clone(),
+        };
+        let back_page = find(&conn, "posts", &def, &FindQuery {
+            order_by: Some("-title".to_string()),
+            limit: Some(2),
+            before_cursor: Some(back_cursor),
+            ..Default::default()
+        }, None).unwrap();
+
+        // Should get Posts 04, 03 in DESC order
+        assert_eq!(back_page.len(), 2);
+        assert_eq!(back_page[0].get_str("title"), Some("Post 04"));
+        assert_eq!(back_page[1].get_str("title"), Some("Post 03"));
+    }
+
+    #[test]
+    fn after_and_before_cursor_mutual_exclusion() {
+        let conn = setup_db();
+        let def = test_def();
+
+        let cursor = super::super::cursor::CursorData {
+            sort_col: "id".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!("abc"),
+            id: "abc".to_string(),
+        };
+        let query = FindQuery {
+            after_cursor: Some(cursor.clone()),
+            before_cursor: Some(cursor),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &query, None);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn denormalize_timestamp_iso_to_sqlite() {
+        assert_eq!(
+            denormalize_timestamp("2026-03-01T19:13:04.000Z"),
+            "2026-03-01 19:13:04"
+        );
+    }
+
+    #[test]
+    fn denormalize_timestamp_passthrough() {
+        // Already in SQLite format — unchanged
+        assert_eq!(
+            denormalize_timestamp("2026-03-01 19:13:04"),
+            "2026-03-01 19:13:04"
+        );
+        // Non-timestamp string — unchanged
+        assert_eq!(denormalize_timestamp("hello"), "hello");
     }
 }

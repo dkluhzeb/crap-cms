@@ -71,7 +71,7 @@ fn find_override_access_true_returns_all() {
     let result = runner.eval_lua_with_conn(
         r#"
         local r = crap.collections.find("items")
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
         "#,
         &conn,
         None, // no user — doesn't matter when overrideAccess=true (default)
@@ -90,7 +90,7 @@ fn find_override_access_false_admin_returns_all() {
     let result = runner.eval_lua_with_conn(
         r#"
         local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
         "#,
         &conn,
         Some(&admin),
@@ -109,7 +109,7 @@ fn find_override_access_false_editor_sees_only_own() {
     let result = runner.eval_lua_with_conn(
         r#"
         local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
         "#,
         &conn,
         Some(&editor),
@@ -127,7 +127,7 @@ fn find_override_access_false_anonymous_denied() {
     let result = runner.eval_lua_with_conn(
         r#"
         local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
         "#,
         &conn,
         None, // anonymous
@@ -592,7 +592,7 @@ fn user_context_propagated_correctly() {
         crap.collections.create("items", { title = "Mine", owner = "editor-1" })
         crap.collections.create("items", { title = "Theirs", owner = "other-1" })
         local r = crap.collections.find("items", { overrideAccess = false })
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
         "#,
         &conn,
         Some(&editor),
@@ -613,7 +613,7 @@ fn default_override_access_is_true() {
     let result = runner.eval_lua_with_conn(
         r#"
         local r = crap.collections.find("items", {})
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
         "#,
         &conn,
         None, // no user, but default overrideAccess=true means no check
@@ -631,7 +631,7 @@ fn explicit_override_access_true_bypasses_all() {
     let result = runner.eval_lua_with_conn(
         r#"
         local r = crap.collections.find("items", { overrideAccess = true })
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
         "#,
         &conn,
         None,

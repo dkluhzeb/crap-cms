@@ -41,6 +41,11 @@ fallback = true
 enabled = true
 poll_interval = 5
 
+[pagination]
+# default_limit = 20
+# max_limit = 1000
+mode = "cursor"
+
 [cors]
 allowed_origins = ["http://localhost:3000", "http://localhost:5173"]
 allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]

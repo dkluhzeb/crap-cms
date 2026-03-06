@@ -425,8 +425,8 @@ fn lua_crud_create_and_find() {
         if doc.id == nil then return "NO_ID" end
 
         local result = crap.collections.find("articles", {})
-        if result.total ~= 1 then
-            return "WRONG_TOTAL:" .. tostring(result.total)
+        if result.pagination.totalDocs ~= 1 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
         end
         local found = result.documents[1]
         -- after_read field hook uppercases title
@@ -506,8 +506,8 @@ fn lua_crud_delete() {
         crap.collections.delete("articles", id)
 
         local result = crap.collections.find("articles", {})
-        if result.total ~= 0 then
-            return "NOT_DELETED:total=" .. tostring(result.total)
+        if result.pagination.totalDocs ~= 0 then
+            return "NOT_DELETED:total=" .. tostring(result.pagination.totalDocs)
         end
         return "ok"
     "#);
@@ -538,16 +538,16 @@ fn lua_crud_find_with_where() {
         local result = crap.collections.find("articles", {
             where = { status = "published" },
         })
-        if result.total ~= 2 then
-            return "WRONG_TOTAL:" .. tostring(result.total)
+        if result.pagination.totalDocs ~= 2 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
         end
 
         -- Filter by status = draft
         local drafts = crap.collections.find("articles", {
             where = { status = "draft" },
         })
-        if drafts.total ~= 1 then
-            return "WRONG_DRAFT_TOTAL:" .. tostring(drafts.total)
+        if drafts.pagination.totalDocs ~= 1 then
+            return "WRONG_DRAFT_TOTAL:" .. tostring(drafts.pagination.totalDocs)
         end
         -- after_read field hook uppercases title
         if drafts.documents[1].title ~= "BETA ARTICLE" then
@@ -1079,8 +1079,8 @@ fn lua_find_with_where_clause() {
         local result = crap.collections.find("articles", {
             where = { status = { equals = "published" } },
         })
-        if result.total ~= 1 then
-            return "WRONG_TOTAL:" .. tostring(result.total)
+        if result.pagination.totalDocs ~= 1 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
         end
         -- after_read field hook uppercases title
         if result.documents[1].title ~= "WHERE TEST ALPHA" then
@@ -1108,8 +1108,8 @@ fn lua_find_with_limit_offset() {
         if #result.documents ~= 2 then
             return "WRONG_COUNT:" .. tostring(#result.documents)
         end
-        if result.total ~= 5 then
-            return "WRONG_TOTAL:" .. tostring(result.total)
+        if result.pagination.totalDocs ~= 5 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
         end
         return "ok"
     "#);
@@ -2771,42 +2771,42 @@ fn lua_find_dot_notation_where() {
         local r1 = crap.collections.find("products", {
             where = { ["seo.meta_title"] = { contains = "Widget" } },
         })
-        if r1.total ~= 1 then return "GROUP:WRONG_TOTAL:" .. tostring(r1.total) end
+        if r1.pagination.totalDocs ~= 1 then return "GROUP:WRONG_TOTAL:" .. tostring(r1.pagination.totalDocs) end
         if r1.documents[1].name ~= "Widget" then return "GROUP:WRONG_NAME:" .. r1.documents[1].name end
 
         -- 2. Array sub-field: variants.color = "red"
         local r2 = crap.collections.find("products", {
             where = { ["variants.color"] = "red" },
         })
-        if r2.total ~= 1 then return "ARRAY:WRONG_TOTAL:" .. tostring(r2.total) end
+        if r2.pagination.totalDocs ~= 1 then return "ARRAY:WRONG_TOTAL:" .. tostring(r2.pagination.totalDocs) end
         if r2.documents[1].name ~= "Widget" then return "ARRAY:WRONG_NAME:" .. r2.documents[1].name end
 
         -- 3. Group-in-array: variants.dimensions.width = "10"
         local r3 = crap.collections.find("products", {
             where = { ["variants.dimensions.width"] = "10" },
         })
-        if r3.total ~= 1 then return "GIA:WRONG_TOTAL:" .. tostring(r3.total) end
+        if r3.pagination.totalDocs ~= 1 then return "GIA:WRONG_TOTAL:" .. tostring(r3.pagination.totalDocs) end
         if r3.documents[1].name ~= "Widget" then return "GIA:WRONG_NAME:" .. r3.documents[1].name end
 
         -- 4. Block sub-field: content.body contains "description"
         local r4 = crap.collections.find("products", {
             where = { ["content.body"] = { contains = "description" } },
         })
-        if r4.total ~= 1 then return "BLOCK:WRONG_TOTAL:" .. tostring(r4.total) end
+        if r4.pagination.totalDocs ~= 1 then return "BLOCK:WRONG_TOTAL:" .. tostring(r4.pagination.totalDocs) end
         if r4.documents[1].name ~= "Widget" then return "BLOCK:WRONG_NAME:" .. r4.documents[1].name end
 
         -- 5. Block type: content._block_type = "section"
         local r5 = crap.collections.find("products", {
             where = { ["content._block_type"] = "section" },
         })
-        if r5.total ~= 1 then return "BTYPE:WRONG_TOTAL:" .. tostring(r5.total) end
+        if r5.pagination.totalDocs ~= 1 then return "BTYPE:WRONG_TOTAL:" .. tostring(r5.pagination.totalDocs) end
         if r5.documents[1].name ~= "Gadget" then return "BTYPE:WRONG_NAME:" .. r5.documents[1].name end
 
         -- 6. Group-in-block: content.meta.author = "Alice"
         local r6 = crap.collections.find("products", {
             where = { ["content.meta.author"] = "Alice" },
         })
-        if r6.total ~= 1 then return "GIB:WRONG_TOTAL:" .. tostring(r6.total) end
+        if r6.pagination.totalDocs ~= 1 then return "GIB:WRONG_TOTAL:" .. tostring(r6.pagination.totalDocs) end
         if r6.documents[1].name ~= "Gadget" then return "GIB:WRONG_NAME:" .. r6.documents[1].name end
 
         return "ok"
@@ -2836,56 +2836,56 @@ fn lua_find_filter_operators() {
             where = { status = { not_equals = "red" } },
         })
         -- Delta has status="" stored as NULL — SQL NULL != 'red' is NULL (not true)
-        if r1.total ~= 3 and r1.total ~= 2 then return "NE:" .. tostring(r1.total) end
+        if r1.pagination.totalDocs ~= 3 and r1.pagination.totalDocs ~= 2 then return "NE:" .. tostring(r1.pagination.totalDocs) end
 
         -- greater_than (body is stored as text, but numeric comparison should work)
         local r2 = crap.collections.find("articles", {
             where = { body = { greater_than = "30" } },
         })
-        if r2.total ~= 2 then return "GT:" .. tostring(r2.total) end
+        if r2.pagination.totalDocs ~= 2 then return "GT:" .. tostring(r2.pagination.totalDocs) end
 
         -- less_than
         local r3 = crap.collections.find("articles", {
             where = { body = { less_than = "20" } },
         })
-        if r3.total ~= 1 then return "LT:" .. tostring(r3.total) end
+        if r3.pagination.totalDocs ~= 1 then return "LT:" .. tostring(r3.pagination.totalDocs) end
 
         -- greater_than_or_equal
         local r4 = crap.collections.find("articles", {
             where = { body = { greater_than_or_equal = "30" } },
         })
-        if r4.total ~= 3 then return "GTE:" .. tostring(r4.total) end
+        if r4.pagination.totalDocs ~= 3 then return "GTE:" .. tostring(r4.pagination.totalDocs) end
 
         -- less_than_or_equal
         local r5 = crap.collections.find("articles", {
             where = { body = { less_than_or_equal = "20" } },
         })
-        if r5.total ~= 2 then return "LTE:" .. tostring(r5.total) end
+        if r5.pagination.totalDocs ~= 2 then return "LTE:" .. tostring(r5.pagination.totalDocs) end
 
         -- in
         local r6 = crap.collections.find("articles", {
             where = { status = { ["in"] = { "red", "green" } } },
         })
-        if r6.total ~= 3 then return "IN:" .. tostring(r6.total) end
+        if r6.pagination.totalDocs ~= 3 then return "IN:" .. tostring(r6.pagination.totalDocs) end
 
         -- not_in
         local r7 = crap.collections.find("articles", {
             where = { status = { not_in = { "red", "green" } } },
         })
         -- Delta has status="" stored as NULL — SQL NOT IN excludes NULLs
-        if r7.total ~= 2 and r7.total ~= 1 then return "NIN:" .. tostring(r7.total) end
+        if r7.pagination.totalDocs ~= 2 and r7.pagination.totalDocs ~= 1 then return "NIN:" .. tostring(r7.pagination.totalDocs) end
 
         -- like
         local r8 = crap.collections.find("articles", {
             where = { title = { like = "%lph%" } },
         })
-        if r8.total ~= 1 then return "LIKE:" .. tostring(r8.total) end
+        if r8.pagination.totalDocs ~= 1 then return "LIKE:" .. tostring(r8.pagination.totalDocs) end
 
         -- contains
         local r9 = crap.collections.find("articles", {
             where = { title = { contains = "eta" } },
         })
-        if r9.total ~= 1 then return "CONTAINS:" .. tostring(r9.total) end
+        if r9.pagination.totalDocs ~= 1 then return "CONTAINS:" .. tostring(r9.pagination.totalDocs) end
 
         return "ok"
     "#);
@@ -3012,7 +3012,7 @@ fn lua_crud_with_locale() {
 
         -- Find with English locale
         local result = crap.collections.find("posts", { locale = "en" })
-        if result.total ~= 1 then return "TOTAL:" .. tostring(result.total) end
+        if result.pagination.totalDocs ~= 1 then return "TOTAL:" .. tostring(result.pagination.totalDocs) end
         if result.documents[1].title ~= "Hello" then
             return "TITLE:" .. tostring(result.documents[1].title)
         end
@@ -3039,7 +3039,7 @@ fn lua_crud_with_locale_fallback() {
 
         -- Find with German locale should fallback to English
         local result = crap.collections.find("posts", { locale = "de" })
-        if result.total ~= 1 then return "TOTAL:" .. tostring(result.total) end
+        if result.pagination.totalDocs ~= 1 then return "TOTAL:" .. tostring(result.pagination.totalDocs) end
         if result.documents[1].title ~= "English Only" then
             return "TITLE:" .. tostring(result.documents[1].title)
         end
@@ -3074,8 +3074,8 @@ fn lua_find_drafts_only() {
 
         -- Default find: only published (matches gRPC default)
         local published = crap.collections.find("articles", {})
-        if published.total ~= 1 then
-            return "DEFAULT_TOTAL:" .. tostring(published.total)
+        if published.pagination.totalDocs ~= 1 then
+            return "DEFAULT_TOTAL:" .. tostring(published.pagination.totalDocs)
         end
         if published.documents[1].title ~= "Published" then
             return "DEFAULT_TITLE:" .. tostring(published.documents[1].title)
@@ -3083,8 +3083,8 @@ fn lua_find_drafts_only() {
 
         -- find with draft=true: returns ALL docs (both published and draft)
         local all = crap.collections.find("articles", { draft = true })
-        if all.total ~= 2 then
-            return "DRAFT_ALL_TOTAL:" .. tostring(all.total)
+        if all.pagination.totalDocs ~= 2 then
+            return "DRAFT_ALL_TOTAL:" .. tostring(all.pagination.totalDocs)
         end
 
         -- Can still filter by _status explicitly within draft=true
@@ -3092,8 +3092,8 @@ fn lua_find_drafts_only() {
             draft = true,
             where = { _status = "draft" },
         })
-        if drafts.total ~= 1 then
-            return "DRAFT_ONLY_TOTAL:" .. tostring(drafts.total)
+        if drafts.pagination.totalDocs ~= 1 then
+            return "DRAFT_ONLY_TOTAL:" .. tostring(drafts.pagination.totalDocs)
         end
         if drafts.documents[1].title ~= "Draft Only" then
             return "DRAFT_TITLE:" .. tostring(drafts.documents[1].title)
@@ -3242,8 +3242,8 @@ return M
         local doc = crap.collections.create("notes", { title = "Test Note" })
         -- after_change hook should have created an audit doc
         local audits = crap.collections.find("audit", {})
-        if audits.total ~= 1 then
-            return "NO_AUDIT:" .. tostring(audits.total)
+        if audits.pagination.totalDocs ~= 1 then
+            return "NO_AUDIT:" .. tostring(audits.pagination.totalDocs)
         end
         if audits.documents[1].action ~= "create" then
             return "WRONG_ACTION:" .. tostring(audits.documents[1].action)
@@ -3358,8 +3358,8 @@ return M
 
         -- after_delete hook should have logged the deletion
         local logs = crap.collections.find("deletelog", {})
-        if logs.total ~= 1 then
-            return "NO_LOG:" .. tostring(logs.total)
+        if logs.pagination.totalDocs ~= 1 then
+            return "NO_LOG:" .. tostring(logs.pagination.totalDocs)
         end
         if logs.documents[1].deleted_id ~= id then
             return "WRONG_ID:" .. tostring(logs.documents[1].deleted_id) .. " expected:" .. id
@@ -3515,8 +3515,8 @@ return M
         -- another doc but hooks are skipped (depth >= max), so it stops.
         local result = crap.collections.find("recursive", {})
         -- The key thing is: this doesn't crash with infinite recursion
-        if result.total < 2 then
-            return "TOO_FEW:" .. tostring(result.total)
+        if result.pagination.totalDocs < 2 then
+            return "TOO_FEW:" .. tostring(result.pagination.totalDocs)
         end
         return "ok"
     "#, &conn, None).expect("eval");
@@ -3674,14 +3674,14 @@ fn lua_update_unpublish() {
 
         -- Find without draft flag should NOT find it (status is now "draft")
         local result = crap.collections.find("articles", {})
-        if result.total ~= 0 then
-            return "STILL_PUBLISHED:total=" .. tostring(result.total)
+        if result.pagination.totalDocs ~= 0 then
+            return "STILL_PUBLISHED:total=" .. tostring(result.pagination.totalDocs)
         end
 
         -- Find with draft flag should find it
         local drafts = crap.collections.find("articles", { draft = true })
-        if drafts.total ~= 1 then
-            return "NOT_IN_DRAFTS:total=" .. tostring(drafts.total)
+        if drafts.pagination.totalDocs ~= 1 then
+            return "NOT_IN_DRAFTS:total=" .. tostring(drafts.pagination.totalDocs)
         end
         if drafts.documents[1].id ~= id then
             return "WRONG_DOC"
@@ -3831,8 +3831,8 @@ crap.collections.define("media", {
     // find should assemble the sizes object
     let find_result = runner.eval_lua_with_conn(r#"
         local result = crap.collections.find("media", {})
-        if result.total ~= 1 then
-            return "WRONG_TOTAL:" .. tostring(result.total)
+        if result.pagination.totalDocs ~= 1 then
+            return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
         end
         local doc = result.documents[1]
         if doc.sizes == nil then
@@ -3995,7 +3995,7 @@ fn lua_find_or_filter() {
                 },
             },
         })
-        if r.total ~= 2 then return "WRONG_TOTAL:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 2 then return "WRONG_TOTAL:" .. tostring(r.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4019,7 +4019,7 @@ fn lua_find_or_filter_with_operator() {
             },
         })
         -- Should match Alpha (title) and Gamma (body > 25)
-        if r.total ~= 2 then return "WRONG_TOTAL:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 2 then return "WRONG_TOTAL:" .. tostring(r.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4042,7 +4042,7 @@ fn lua_find_or_filter_with_integer_values() {
                 },
             },
         })
-        if r.total ~= 2 then return "WRONG:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 2 then return "WRONG:" .. tostring(r.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4062,7 +4062,7 @@ fn lua_find_exists_filter() {
         local r = crap.collections.find("articles", {
             where = { body = { exists = true } },
         })
-        if r.total ~= 1 then return "EXISTS:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 1 then return "EXISTS:" .. tostring(r.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4080,7 +4080,7 @@ fn lua_find_not_exists_filter() {
         local r = crap.collections.find("articles", {
             where = { body = { not_exists = true } },
         })
-        if r.total ~= 1 then return "NOT_EXISTS:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 1 then return "NOT_EXISTS:" .. tostring(r.pagination.totalDocs) end
         -- after_read field hook uppercases title
         if r.documents[1].title ~= "WITHOUT BODY" then
             return "WRONG_DOC:" .. tostring(r.documents[1].title)
@@ -4103,7 +4103,7 @@ fn lua_find_integer_filter_value() {
         local r = crap.collections.find("articles", {
             where = { word_count = 42 },
         })
-        if r.total ~= 1 then return "WRONG:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 1 then return "WRONG:" .. tostring(r.pagination.totalDocs) end
         if r.documents[1].title ~= "A" then return "WRONG_DOC" end
         return "ok"
     "#);
@@ -4121,7 +4121,7 @@ fn lua_find_number_filter_value() {
         local r = crap.collections.find("articles", {
             where = { word_count = 3.14 },
         })
-        if r.total ~= 1 then return "WRONG:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 1 then return "WRONG:" .. tostring(r.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4177,7 +4177,7 @@ fn lua_find_with_select() {
         local r = crap.collections.find("articles", {
             select = { "title" },
         })
-        if r.total ~= 1 then return "WRONG_TOTAL" end
+        if r.pagination.totalDocs ~= 1 then return "WRONG_TOTAL" end
         local doc = r.documents[1]
         -- after_read field hook uppercases title
         if doc.title ~= "SEL TEST" then return "WRONG_TITLE" end
@@ -4236,7 +4236,7 @@ fn lua_filter_boolean_to_string() {
             where = { status = { not_equals = true } },
         })
         -- "true" as boolean converts to "true" string, should match Inactive
-        if r.total ~= 1 then return "WRONG:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 1 then return "WRONG:" .. tostring(r.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4292,7 +4292,7 @@ fn lua_delete_with_hooks_false() {
         local doc = crap.collections.create("articles", { title = "To Delete" })
         crap.collections.delete("articles", doc.id, { hooks = false })
         local r = crap.collections.find("articles", {})
-        return tostring(r.total)
+        return tostring(r.pagination.totalDocs)
     "#);
     assert_eq!(result, "0");
 }
@@ -4381,7 +4381,7 @@ fn lua_update_many_with_operator_filters() {
 
         -- Verify
         local all = crap.collections.find("articles", { where = { status = "archived" } })
-        if all.total ~= 2 then return "WRONG_ARCHIVED:" .. tostring(all.total) end
+        if all.pagination.totalDocs ~= 2 then return "WRONG_ARCHIVED:" .. tostring(all.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4405,7 +4405,7 @@ fn lua_delete_many_with_operator_filters() {
 
         -- Verify remaining
         local all = crap.collections.find("articles", {})
-        if all.total ~= 1 then return "WRONG_REMAINING:" .. tostring(all.total) end
+        if all.pagination.totalDocs ~= 1 then return "WRONG_REMAINING:" .. tostring(all.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");
@@ -4576,7 +4576,7 @@ fn lua_find_or_filter_number_value() {
                 },
             },
         })
-        if r.total ~= 2 then return "WRONG:" .. tostring(r.total) end
+        if r.pagination.totalDocs ~= 2 then return "WRONG:" .. tostring(r.pagination.totalDocs) end
         return "ok"
     "#);
     assert_eq!(result, "ok");

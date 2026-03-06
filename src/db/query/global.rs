@@ -55,7 +55,7 @@ pub fn update_global(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     let table_name = format!("_global_{}", slug);
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string();
 
     let mut set_clauses = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();

@@ -42,6 +42,8 @@ pub fn export(
             limit: None,
             offset: None,
             select: None,
+            after_cursor: None,
+            before_cursor: None,
         };
 
         let mut docs = crate::db::query::find(&conn, slug, def, &query, None)?;

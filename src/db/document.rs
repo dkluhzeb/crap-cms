@@ -15,10 +15,10 @@ pub fn row_to_document(row: &Row, column_names: &[String]) -> rusqlite::Result<D
         match name.as_str() {
             "id" => continue,
             "created_at" => {
-                created_at = row.get::<_, Option<String>>(name.as_str())?;
+                created_at = row.get::<_, Option<String>>(name.as_str())?.map(normalize_timestamp);
             }
             "updated_at" => {
-                updated_at = row.get::<_, Option<String>>(name.as_str())?;
+                updated_at = row.get::<_, Option<String>>(name.as_str())?.map(normalize_timestamp);
             }
             _ => {
                 let value = sqlite_value_to_json(row, name)?;
@@ -33,6 +33,16 @@ pub fn row_to_document(row: &Row, column_names: &[String]) -> rusqlite::Result<D
         created_at,
         updated_at,
     })
+}
+
+/// Normalize legacy "YYYY-MM-DD HH:MM:SS" timestamps to ISO 8601 "YYYY-MM-DDTHH:MM:SS.000Z".
+/// Already-normalized timestamps pass through unchanged.
+fn normalize_timestamp(ts: String) -> String {
+    if ts.len() == 19 && ts.as_bytes().get(10) == Some(&b' ') {
+        format!("{}T{}.000Z", &ts[..10], &ts[11..])
+    } else {
+        ts
+    }
 }
 
 /// Convert a SQLite column value to a JSON value.

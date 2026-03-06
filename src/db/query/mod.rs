@@ -11,6 +11,7 @@ pub mod global;
 pub mod versions;
 pub mod jobs;
 pub mod images;
+pub mod cursor;
 
 use anyhow::{Result, bail};
 use std::collections::HashSet;
@@ -115,6 +116,21 @@ pub struct FindQuery {
     /// Optional list of fields to return. `None` = all fields.
     /// Always includes `id`, `created_at`, `updated_at`.
     pub select: Option<Vec<String>>,
+    /// Forward cursor for keyset pagination. Mutually exclusive with `offset` and `before_cursor`.
+    pub after_cursor: Option<cursor::CursorData>,
+    /// Backward cursor for keyset pagination. Mutually exclusive with `offset` and `after_cursor`.
+    pub before_cursor: Option<cursor::CursorData>,
+}
+
+/// Clamp a requested limit to the configured default/max.
+///
+/// - `None` → `default_limit`
+/// - `Some(v)` → clamped to `[1, max_limit]`
+pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_limit: i64) -> i64 {
+    match requested {
+        None => default_limit,
+        Some(v) => v.max(1).min(max_limit),
+    }
 }
 
 /// Check that a string is a safe SQL identifier (alphanumeric + underscore).
@@ -1392,5 +1408,28 @@ mod tests {
         ], false);
         let valid = get_valid_filter_columns(&def, None);
         assert!(valid.contains("outer__inner__value"), "Group→Tabs→Group filter: outer__inner__value");
+    }
+
+    // ── apply_pagination_limits tests ───────────────────────────────────────
+
+    #[test]
+    fn pagination_limits_default_when_none() {
+        assert_eq!(apply_pagination_limits(None, 100, 1000), 100);
+    }
+
+    #[test]
+    fn pagination_limits_clamp_max() {
+        assert_eq!(apply_pagination_limits(Some(5000), 100, 1000), 1000);
+    }
+
+    #[test]
+    fn pagination_limits_minimum_one() {
+        assert_eq!(apply_pagination_limits(Some(0), 100, 1000), 1);
+        assert_eq!(apply_pagination_limits(Some(-5), 100, 1000), 1);
+    }
+
+    #[test]
+    fn pagination_limits_passthrough() {
+        assert_eq!(apply_pagination_limits(Some(50), 100, 1000), 50);
     }
 }

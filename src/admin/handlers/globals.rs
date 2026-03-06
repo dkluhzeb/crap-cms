@@ -306,7 +306,9 @@ pub async fn list_versions_page(
 
     let global_table = format!("_global_{}", slug);
     let page = params.page.unwrap_or(1).max(1);
-    let per_page = params.per_page.unwrap_or(20).min(100);
+    let per_page = params.per_page
+        .unwrap_or(state.config.pagination.default_limit)
+        .min(state.config.pagination.max_limit);
     let offset = (page - 1) * per_page;
 
     let conn = match state.pool.get() {

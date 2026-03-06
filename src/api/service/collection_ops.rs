@@ -86,12 +86,59 @@ impl ContentService {
             Some(req.select.clone())
         };
 
+        // Clamp limit to configured bounds
+        let clamped_limit = query::apply_pagination_limits(
+            req.limit, self.default_limit, self.max_limit,
+        );
+
+        // Convert page → internal offset (default page=1)
+        let page = req.page.unwrap_or(1).max(1);
+        let internal_offset = (page - 1) * clamped_limit;
+
+        // Cursor decoding and validation
+        let (after_cursor, before_cursor) = if self.cursor_enabled {
+            let ac = if let Some(ref s) = req.after_cursor {
+                if req.page.is_some() {
+                    return Err(Status::invalid_argument(
+                        "Cannot use both after_cursor and page — they are mutually exclusive"
+                    ));
+                }
+                Some(query::cursor::CursorData::decode(s)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid cursor: {}", e)))?)
+            } else {
+                None
+            };
+            let bc = if let Some(ref s) = req.before_cursor {
+                if req.page.is_some() {
+                    return Err(Status::invalid_argument(
+                        "Cannot use both before_cursor and page — they are mutually exclusive"
+                    ));
+                }
+                if ac.is_some() {
+                    return Err(Status::invalid_argument(
+                        "Cannot use both after_cursor and before_cursor — they are mutually exclusive"
+                    ));
+                }
+                Some(query::cursor::CursorData::decode(s)
+                    .map_err(|e| Status::invalid_argument(format!("Invalid cursor: {}", e)))?)
+            } else {
+                None
+            };
+            (ac, bc)
+        } else {
+            (None, None)
+        };
+
+        let has_cursor = after_cursor.is_some() || before_cursor.is_some();
+
         let find_query = FindQuery {
             filters: filters.clone(),
-            order_by: req.order_by,
-            limit: req.limit,
-            offset: req.offset,
+            order_by: req.order_by.clone(),
+            limit: Some(clamped_limit),
+            offset: if has_cursor { None } else { Some(internal_offset) },
             select: select.clone(),
+            after_cursor: after_cursor.clone(),
+            before_cursor: before_cursor.clone(),
         };
 
         let locale_ctx =
@@ -108,6 +155,7 @@ impl ContentService {
         let hooks = def.hooks.clone();
         let def_fields = def.fields.clone();
         let fields = def_fields.clone();
+        let has_timestamps = def.timestamps;
         let collection = req.collection.clone();
         let registry = self.registry.clone();
         let pop_cache = self.populate_cache.clone();
@@ -181,9 +229,65 @@ impl ContentService {
             self.strip_denied_read_fields(doc, &def_fields, &auth_user);
         }
 
+        // Build PaginationInfo
+        let pagination = if self.cursor_enabled {
+            let (sort_col, sort_dir) = if let Some(ref order) = req.order_by {
+                if let Some(stripped) = order.strip_prefix('-') {
+                    (stripped.to_string(), "DESC")
+                } else {
+                    (order.clone(), "ASC")
+                }
+            } else if has_timestamps {
+                ("created_at".to_string(), "DESC")
+            } else {
+                ("id".to_string(), "ASC")
+            };
+            let (start_cursor, end_cursor) = query::cursor::build_cursors(
+                &documents, &sort_col, &sort_dir,
+            );
+            // has_next_page / has_prev_page logic:
+            // - Forward (after_cursor or no cursor): has_next = docs.len() >= limit, has_prev = had cursor
+            // - Backward (before_cursor): has_next = true (we came from ahead), has_prev = docs.len() >= limit
+            let using_before = before_cursor.is_some();
+            let at_limit = documents.len() as i64 >= clamped_limit && !documents.is_empty();
+            let (has_next_page, has_prev_page) = if using_before {
+                (true, at_limit)
+            } else {
+                (at_limit, has_cursor)
+            };
+            content::PaginationInfo {
+                total_docs: total,
+                limit: clamped_limit,
+                total_pages: None,
+                page: None,
+                page_start: None,
+                has_prev_page,
+                has_next_page,
+                prev_page: None,
+                next_page: None,
+                start_cursor,
+                end_cursor,
+            }
+        } else {
+            let total_pages = if clamped_limit > 0 { (total + clamped_limit - 1) / clamped_limit } else { 0 };
+            content::PaginationInfo {
+                total_docs: total,
+                limit: clamped_limit,
+                total_pages: Some(total_pages),
+                page: Some(page),
+                page_start: Some(internal_offset + 1),
+                has_prev_page: page > 1,
+                has_next_page: page < total_pages,
+                prev_page: if page > 1 { Some(page - 1) } else { None },
+                next_page: if page < total_pages { Some(page + 1) } else { None },
+                start_cursor: None,
+                end_cursor: None,
+            }
+        };
+
         Ok(Response::new(content::FindResponse {
             documents: proto_docs,
-            total,
+            pagination: Some(pagination),
         }))
     }
 

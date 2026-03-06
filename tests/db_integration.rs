@@ -193,6 +193,8 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
         limit: None,
         offset: None,
         select: None,
+        after_cursor: None,
+        before_cursor: None,
     };
     let conn = pool.get().unwrap();
     let docs = query::find(&conn, "posts", &def, &find_query, None)

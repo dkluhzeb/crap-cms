@@ -105,6 +105,11 @@ max_depth = 10           # Hard cap on population depth (prevents abuse)
 # populate_cache = false           # Cross-request populate cache (opt-in)
 # populate_cache_max_age_secs = 0  # Periodic cache clear for external DB mutations
 
+[pagination]
+default_limit = 20      # Default limit for Find queries (when none is specified)
+max_limit = 1000         # Hard cap on limit — requests above this are clamped
+# mode = "page"          # "page" (offset) or "cursor" (keyset)
+
 [upload]
 max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB", etc.)
 
@@ -199,6 +204,14 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `max_depth` | integer | `10` | Maximum allowed depth for any request. Hard cap to prevent excessive queries. |
 | `populate_cache` | boolean | `false` | Enable cross-request populate cache. Caches populated documents in memory, cleared on any write through the API. Improves read performance for repeated deep population. **Opt-in** because external DB modifications can cause stale reads. |
 | `populate_cache_max_age_secs` | integer | `0` | Periodic full cache clear interval in seconds. `0` = disabled (only write-through invalidation). Set `> 0` to limit staleness when the database may be modified outside the API. Only used when `populate_cache = true`. |
+
+### `[pagination]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `default_limit` | integer | `20` | Default page size applied to `Find` queries when no `limit` is specified. |
+| `max_limit` | integer | `1000` | Hard cap on `limit`. Requests above this value are clamped to `max_limit`. |
+| `mode` | string | `"page"` | Pagination mode: `"page"` (offset-based with `page`/`totalPages`) or `"cursor"` (keyset-based with `startCursor`/`endCursor`). In cursor mode, pass `after_cursor` (forward) or `before_cursor` (backward) instead of `page`. |
 
 ### `[upload]`
 

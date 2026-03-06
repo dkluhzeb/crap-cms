@@ -231,6 +231,7 @@ pub struct CrapConfig {
     pub jobs: JobsConfig,
     pub cors: CorsConfig,
     pub access: AccessConfig,
+    pub pagination: PaginationConfig,
 }
 
 /// Controls relationship population depth defaults and limits.
@@ -265,6 +266,43 @@ impl Default for DepthConfig {
             populate_cache_max_age_secs: 0,
         }
     }
+}
+
+/// Controls default and maximum page sizes, and pagination mode.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PaginationConfig {
+    /// Default page size when request doesn't specify a limit.
+    pub default_limit: i64,
+    /// Maximum allowed limit. Requests above this are clamped.
+    pub max_limit: i64,
+    /// Pagination mode: `"page"` (offset-based, default) or `"cursor"` (keyset-based).
+    pub mode: PaginationMode,
+}
+
+impl Default for PaginationConfig {
+    fn default() -> Self {
+        Self {
+            default_limit: 20,
+            max_limit: 1000,
+            mode: PaginationMode::Page,
+        }
+    }
+}
+
+impl PaginationConfig {
+    /// Whether cursor-based pagination is active.
+    pub fn is_cursor(&self) -> bool {
+        matches!(self.mode, PaginationMode::Cursor)
+    }
+}
+
+/// Pagination strategy.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum PaginationMode {
+    Page,
+    Cursor,
 }
 
 /// Global upload settings (per-collection upload config is separate).
@@ -832,6 +870,9 @@ mod tests {
         assert!(config.admin.require_auth);
         assert!(config.admin.access.is_none());
         assert!(!config.access.default_deny);
+        assert_eq!(config.pagination.default_limit, 20);
+        assert_eq!(config.pagination.max_limit, 1000);
+        assert_eq!(config.pagination.mode, PaginationMode::Page);
     }
 
     #[test]

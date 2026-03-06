@@ -78,6 +78,8 @@ fn resolve_user(
             limit: None,
             offset: None,
             select: None,
+            after_cursor: None,
+            before_cursor: None,
         };
         let users = crate::db::query::find(&conn, collection, &def, &query, None)?;
         if users.is_empty() {
@@ -270,6 +272,8 @@ pub fn user_list(
         limit: None,
         offset: None,
         select: None,
+        after_cursor: None,
+        before_cursor: None,
     };
 
     let users = crate::db::query::find(&conn, collection, &def, &query, None)?;

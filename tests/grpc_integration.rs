@@ -170,6 +170,7 @@ fn setup_service(
         hook_runner,
         config.auth.secret.clone(),
         &config.depth,
+        &config.pagination,
         config.email.clone(),
         email_renderer,
         config.server.clone(),
@@ -200,7 +201,7 @@ async fn find_empty_collection() {
 
     let body = resp.into_inner();
     assert_eq!(body.documents.len(), 0);
-    assert_eq!(body.total, 0);
+    assert_eq!(body.pagination.as_ref().unwrap().total_docs, 0);
 }
 
 #[tokio::test]
@@ -236,7 +237,7 @@ async fn create_and_find() {
 
     let body = find_resp.into_inner();
     assert_eq!(body.documents.len(), 1);
-    assert_eq!(body.total, 1);
+    assert_eq!(body.pagination.as_ref().unwrap().total_docs, 1);
     assert_eq!(body.documents[0].id, doc.id);
 }
 
@@ -393,7 +394,7 @@ async fn find_with_where() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 2);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2);
     assert_eq!(resp.documents.len(), 2);
 }
 
@@ -425,7 +426,7 @@ async fn find_with_where_json() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 1);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
     assert_eq!(
         get_proto_field(&resp.documents[0], "title").as_deref(),
         Some("X")
@@ -461,7 +462,7 @@ async fn find_with_where_or() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 2);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2);
 }
 
 #[tokio::test]
@@ -485,7 +486,7 @@ async fn find_with_limit_and_offset() {
         .find(Request::new(content::FindRequest {
             collection: "posts".to_string(),
             limit: Some(2),
-            offset: Some(1),
+            page: Some(2),
             ..Default::default()
         }))
         .await
@@ -493,7 +494,7 @@ async fn find_with_limit_and_offset() {
         .into_inner();
 
     assert_eq!(resp.documents.len(), 2);
-    assert_eq!(resp.total, 5); // total is unaffected by limit/offset
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 5); // total is unaffected by limit/page
 }
 
 #[tokio::test]
@@ -1911,7 +1912,7 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "group sub-field filter");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "group sub-field filter");
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -1928,7 +1929,7 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "array sub-field filter");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "array sub-field filter");
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -1945,7 +1946,7 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "group-in-array filter");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "group-in-array filter");
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -1962,7 +1963,7 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "block sub-field filter");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "block sub-field filter");
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -1979,7 +1980,7 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "block type filter");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "block type filter");
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Gadget")
@@ -1996,7 +1997,7 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "group-in-block filter");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "group-in-block filter");
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Gadget")
@@ -2044,6 +2045,7 @@ fn setup_service_with_hook(
         hook_runner,
         config.auth.secret.clone(),
         &config.depth,
+        &config.pagination,
         config.email.clone(),
         email_renderer,
         config.server.clone(),
@@ -2107,7 +2109,7 @@ async fn before_change_hook_modifies_array_data() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "hook-injected variant should be findable");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "hook-injected variant should be findable");
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("HookTest")
@@ -2124,7 +2126,7 @@ async fn before_change_hook_modifies_array_data() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "original variant should still exist");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "original variant should still exist");
 }
 
 // ── Group 1: Filter Operators (gRPC) ──────────────────────────────────────
@@ -2203,7 +2205,7 @@ async fn find_with_where_operators() {
         .into_inner();
     // Delta has tag="" which may be stored as NULL — SQL NULL != 'red' is NULL (not true)
     // So we expect either 2 (excluding NULL) or 3 (if "" is stored as empty string)
-    assert!(resp.total >= 2 && resp.total <= 3, "not_equals: got {}", resp.total);
+    assert!(resp.pagination.as_ref().unwrap().total_docs >= 2 && resp.pagination.as_ref().unwrap().total_docs <= 3, "not_equals: got {}", resp.pagination.as_ref().unwrap().total_docs);
 
     // greater_than
     let resp = ts
@@ -2216,7 +2218,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 2, "greater_than 30 → Delta(40), Epsilon(50)");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2, "greater_than 30 → Delta(40), Epsilon(50)");
 
     // less_than
     let resp = ts
@@ -2229,7 +2231,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "less_than 20 → Alpha(10)");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "less_than 20 → Alpha(10)");
 
     // greater_than_or_equal
     let resp = ts
@@ -2242,7 +2244,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 3, "gte 30 → Gamma, Delta, Epsilon");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 3, "gte 30 → Gamma, Delta, Epsilon");
 
     // less_than_or_equal
     let resp = ts
@@ -2255,7 +2257,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 2, "lte 20 → Alpha, Beta");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2, "lte 20 → Alpha, Beta");
 
     // in
     let resp = ts
@@ -2268,7 +2270,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 3, "in [red, green] → Alpha, Gamma, Epsilon");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 3, "in [red, green] → Alpha, Gamma, Epsilon");
 
     // not_in
     let resp = ts
@@ -2282,7 +2284,7 @@ async fn find_with_where_operators() {
         .unwrap()
         .into_inner();
     // Delta has tag="" stored as NULL — SQL NOT IN excludes NULLs
-    assert!(resp.total >= 1 && resp.total <= 2, "not_in [red, green]: got {}", resp.total);
+    assert!(resp.pagination.as_ref().unwrap().total_docs >= 1 && resp.pagination.as_ref().unwrap().total_docs <= 2, "not_in [red, green]: got {}", resp.pagination.as_ref().unwrap().total_docs);
 
     // like
     let resp = ts
@@ -2295,7 +2297,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "like '%lph%' → Alpha");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "like '%lph%' → Alpha");
 
     // contains
     let resp = ts
@@ -2308,7 +2310,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "contains 'eta' → Beta");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "contains 'eta' → Beta");
 
     // exists (tag is non-empty)
     let resp = ts
@@ -2321,7 +2323,7 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert!(resp.total >= 3, "exists: at least the non-empty tags");
+    assert!(resp.pagination.as_ref().unwrap().total_docs >= 3, "exists: at least the non-empty tags");
 
     // not_exists (tag is empty/null)
     let resp = ts
@@ -2335,7 +2337,7 @@ async fn find_with_where_operators() {
         .unwrap()
         .into_inner();
     // Delta has tag="" which may or may not count as "not exists" depending on impl
-    assert!(resp.total <= 2, "not_exists: empty/null tags");
+    assert!(resp.pagination.as_ref().unwrap().total_docs <= 2, "not_exists: empty/null tags");
 }
 
 // ── Group 2: Unique Constraints (gRPC) ────────────────────────────────────
@@ -2478,7 +2480,7 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
@@ -2591,7 +2593,7 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
@@ -2683,7 +2685,7 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
@@ -2790,7 +2792,7 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
@@ -2888,7 +2890,7 @@ return M
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth,
+        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
         config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
@@ -2999,6 +3001,7 @@ fn setup_service_with_locale(
         hook_runner,
         config.auth.secret.clone(),
         &config.depth,
+        &config.pagination,
         config.email.clone(),
         email_renderer,
         config.server.clone(),
@@ -3043,7 +3046,7 @@ async fn create_and_find_with_locale() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 1);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
     assert_eq!(
         get_proto_field(&resp.documents[0], "title").as_deref(),
         Some("Hello"),
@@ -3082,7 +3085,7 @@ async fn create_and_find_with_locale_fallback() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 1);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
     assert_eq!(
         get_proto_field(&resp.documents[0], "title").as_deref(),
         Some("English Only"),
@@ -3138,7 +3141,7 @@ async fn create_and_find_with_locale_all() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 1);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
     let fields = resp.documents[0].fields.as_ref().unwrap();
     let title_val = fields.fields.get("title");
     assert!(title_val.is_some(), "title field should be present");
@@ -3231,7 +3234,7 @@ async fn create_draft_and_find() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "draft=true should find the draft");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "draft=true should find the draft");
 
     // Find without draft flag should NOT return drafts
     let resp = ts
@@ -3243,7 +3246,7 @@ async fn create_draft_and_find() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 0, "default find should not return drafts");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 0, "default find should not return drafts");
 }
 
 #[tokio::test]
@@ -3312,7 +3315,7 @@ async fn publish_draft() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "Published post should be findable");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "Published post should be findable");
 }
 
 // ── Group 8: Complex Globals (gRPC) ──────────────────────────────────────
@@ -3628,7 +3631,7 @@ async fn find_with_has_many_relationship_filter() {
         .unwrap()
         .into_inner();
     assert_eq!(
-        resp.total, 2,
+        resp.pagination.as_ref().unwrap().total_docs, 2,
         "Should find 2 posts with rust tag (Rust Post + Both Post)"
     );
 }
@@ -3983,13 +3986,13 @@ async fn find_with_pagination() {
             .unwrap();
     }
 
-    // Find with limit=2, offset=2 — should return the 3rd and 4th documents
+    // Find with limit=2, page=2 — should return the 3rd and 4th documents
     let resp = ts
         .service
         .find(Request::new(content::FindRequest {
             collection: "posts".to_string(),
             limit: Some(2),
-            offset: Some(2),
+            page: Some(2),
             ..Default::default()
         }))
         .await
@@ -3997,15 +4000,15 @@ async fn find_with_pagination() {
         .into_inner();
 
     assert_eq!(resp.documents.len(), 2, "Should return exactly 2 documents");
-    assert_eq!(resp.total, 5, "Total count should still be 5 regardless of pagination");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 5, "Total count should still be 5 regardless of pagination");
 
-    // Verify we can get the remaining page
+    // Verify we can get the remaining page (page 3)
     let resp2 = ts
         .service
         .find(Request::new(content::FindRequest {
             collection: "posts".to_string(),
             limit: Some(2),
-            offset: Some(4),
+            page: Some(3),
             ..Default::default()
         }))
         .await
@@ -4013,7 +4016,7 @@ async fn find_with_pagination() {
         .into_inner();
 
     assert_eq!(resp2.documents.len(), 1, "Last page should have 1 document");
-    assert_eq!(resp2.total, 5, "Total count should still be 5");
+    assert_eq!(resp2.pagination.as_ref().unwrap().total_docs, 5, "Total count should still be 5");
 }
 
 // ── Relationship Gaps ─────────────────────────────────────────────────────

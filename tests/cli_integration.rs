@@ -1040,8 +1040,8 @@ fn import_with_timestamps() {
     let found = query::find_by_id(&conn, "posts", def, "ts-post", None)
         .unwrap()
         .unwrap();
-    assert_eq!(found.created_at.as_deref(), Some("2024-01-01 00:00:00"));
-    assert_eq!(found.updated_at.as_deref(), Some("2024-06-15 12:30:00"));
+    assert_eq!(found.created_at.as_deref(), Some("2024-01-01T00:00:00.000Z"));
+    assert_eq!(found.updated_at.as_deref(), Some("2024-06-15T12:30:00.000Z"));
 }
 
 #[test]

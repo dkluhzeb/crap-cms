@@ -88,6 +88,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     }
 
     toml.push_str("\n# [depth]\n# default_depth = 1              # default relationship population depth for FindByID\n# max_depth = 10                 # hard cap on population depth\n");
+    toml.push_str("\n# [pagination]\n# default_limit = 20            # default page size when no limit specified\n# max_limit = 1000               # maximum allowed limit (requests above this are clamped)\n# mode = \"page\"                  # pagination mode: \"page\" (offset-based) or \"cursor\" (keyset-based)\n");
     toml.push_str("\n# [upload]\n# max_file_size = \"50MB\"         # global max upload size (integer bytes or \"50MB\", \"1GB\")\n");
     toml.push_str("\n# [email]\n# smtp_host = \"\"                 # SMTP server (empty = email disabled)\n# smtp_port = 587\n# smtp_user = \"\"\n# smtp_pass = \"\"\n# from_address = \"noreply@example.com\"\n# from_name = \"Crap CMS\"\n");
     toml.push_str("\n# [hooks]\n# on_init = []                   # hook functions to run at startup\n# max_depth = 3                  # max hook recursion depth (hook → CRUD → hook)\n# vm_pool_size = 8               # number of Lua VMs for concurrent hook execution (default: max(cpus, 4), cap 32)\n");
@@ -201,6 +202,7 @@ mod tests {
         assert!(content.contains("# [locale]"));
         // Commented config sections for discoverability
         assert!(content.contains("# [depth]"));
+        assert!(content.contains("# [pagination]"));
         assert!(content.contains("# [upload]"));
         assert!(content.contains("# [email]"));
         assert!(content.contains("# [hooks]"));

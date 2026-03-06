@@ -32,12 +32,12 @@ grpcurl -plaintext -d '{
 }' "$ADDR" crap.ContentAPI/Find
 }
 
-# List posts with pagination
+# List posts with pagination (page 1)
 find_posts_paginated() {
 grpcurl -plaintext -d '{
   "collection": "posts",
   "limit": "10",
-  "offset": "0"
+  "page": "1"
 }' "$ADDR" crap.ContentAPI/Find
 }
 
@@ -159,6 +159,37 @@ grpcurl -plaintext -d '{
   "collection": "posts",
   "select": ["title", "status"]
 }' "$ADDR" crap.ContentAPI/Find
+}
+
+# List posts with cursor-based pagination (requires [pagination] cursor = true)
+find_posts_cursor() {
+grpcurl -plaintext -d '{
+  "collection": "posts",
+  "limit": "2",
+  "order_by": "created_at"
+}' "$ADDR" crap.ContentAPI/Find
+}
+
+# Get next page using cursor from previous response's pagination.endCursor
+find_posts_cursor_next() {
+  local cursor="${1:?Usage: find_posts_cursor_next <after_cursor>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"limit\": \"2\",
+    \"order_by\": \"created_at\",
+    \"after_cursor\": \"$cursor\"
+  }" "$ADDR" crap.ContentAPI/Find
+}
+
+# Get previous page using cursor from response's pagination.startCursor
+find_posts_cursor_prev() {
+  local cursor="${1:?Usage: find_posts_cursor_prev <before_cursor>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"limit\": \"2\",
+    \"order_by\": \"created_at\",
+    \"before_cursor\": \"$cursor\"
+  }" "$ADDR" crap.ContentAPI/Find
 }
 
 # Find a post by ID with field selection

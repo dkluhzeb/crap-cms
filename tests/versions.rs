@@ -127,6 +127,7 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
         hook_runner.clone(),
         config.auth.secret.clone(),
         &config.depth,
+        &config.pagination,
         config.email.clone(),
         email_renderer,
         config.server.clone(),
@@ -1099,7 +1100,7 @@ async fn grpc_find_where_published_status() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 1);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
     assert_eq!(get_proto_field(&resp.documents[0], "title").as_deref(), Some("Published"));
 }
 
@@ -1138,7 +1139,7 @@ async fn grpc_find_with_draft_returns_all() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 2);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2);
 }
 
 #[tokio::test]
@@ -1611,7 +1612,7 @@ async fn grpc_versioned_no_drafts_does_not_filter_by_status() {
         .unwrap()
         .into_inner();
 
-    assert_eq!(resp.total, 2);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2);
 }
 
 #[tokio::test]
@@ -1720,7 +1721,7 @@ async fn grpc_full_draft_publish_workflow() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 0, "draft should not appear in regular find");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 0, "draft should not appear in regular find");
 
     // 3. Should appear with draft=true
     let resp = ts.service
@@ -1732,7 +1733,7 @@ async fn grpc_full_draft_publish_workflow() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "draft should appear with draft=true");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "draft should appear with draft=true");
 
     // 4. Make a draft update
     ts.service
@@ -1769,7 +1770,7 @@ async fn grpc_full_draft_publish_workflow() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1);
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
     assert_eq!(get_proto_field(&resp.documents[0], "title").as_deref(), Some("Final Article"));
 
     // 7. Should have 3 versions (create draft + draft update + publish)
@@ -1817,7 +1818,7 @@ async fn grpc_update_unpublish() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "should be visible as published");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "should be visible as published");
 
     // 2. Unpublish via update with unpublish=true
     let unpublished = ts.service
@@ -1845,7 +1846,7 @@ async fn grpc_update_unpublish() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 0, "unpublished doc should not appear in regular find");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 0, "unpublished doc should not appear in regular find");
 
     // 4. Should appear with draft=true
     let resp = ts.service
@@ -1857,7 +1858,7 @@ async fn grpc_update_unpublish() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.total, 1, "unpublished doc should appear with draft=true");
+    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "unpublished doc should appear with draft=true");
 
     // 5. Verify a draft version was created
     let versions = ts.service

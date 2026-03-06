@@ -51,7 +51,7 @@ See [Plugins](../plugins/overview.md) for patterns using these functions.
 
 ## crap.collections.find(collection, query?)
 
-Find documents matching a query. Returns a result table with `documents` and `total`.
+Find documents matching a query. Returns a result table with `documents` and `pagination`.
 
 **Only available inside hooks with transaction context.**
 
@@ -63,12 +63,22 @@ local result = crap.collections.find("posts", {
     },
     order_by = "-created_at",
     limit = 10,
-    offset = 0,
+    page = 1,
     depth = 1,
 })
 
--- result.documents = array of document tables
--- result.total = total count (before limit/offset)
+-- result.documents               = array of document tables
+-- result.pagination.totalDocs    = total count (before limit/page)
+-- result.pagination.limit        = applied limit
+-- result.pagination.totalPages   = total pages (offset mode only)
+-- result.pagination.page         = current page (offset mode only, 1-based)
+-- result.pagination.pageStart    = 1-based index of first doc on this page
+-- result.pagination.hasNextPage  = boolean
+-- result.pagination.hasPrevPage  = boolean
+-- result.pagination.prevPage     = previous page number (nil if first page)
+-- result.pagination.nextPage     = next page number (nil if last page)
+-- result.pagination.startCursor  = opaque cursor of first doc (cursor mode only)
+-- result.pagination.endCursor    = opaque cursor of last doc (cursor mode only)
 
 for _, doc in ipairs(result.documents) do
     print(doc.id, doc.title)
@@ -82,7 +92,10 @@ end
 | `where` | table | `{}` | Field filters. See [Filter Operators](filter-operators.md). Supports `["or"]` key for OR groups. |
 | `order_by` | string | `nil` | Sort field. Prefix with `-` for descending. |
 | `limit` | integer | `nil` | Max results to return. |
-| `offset` | integer | `nil` | Number of results to skip. |
+| `page` | integer | `1` | Page number (1-based). Converted to offset internally. |
+| `offset` | integer | `nil` | Number of results to skip (backward compat alias for `page`). |
+| `after_cursor` | string | `nil` | Forward cursor from a previous `result.pagination.endCursor`. Fetches the page after the cursor position. Mutually exclusive with `page`/`offset`/`before_cursor`. Only effective when `[pagination] mode = "cursor"` in `crap.toml`. |
+| `before_cursor` | string | `nil` | Backward cursor from a previous `result.pagination.startCursor`. Fetches the page before the cursor position. Mutually exclusive with `page`/`offset`/`after_cursor`. Only effective when `[pagination] mode = "cursor"` in `crap.toml`. |
 | `depth` | integer | `0` | Population depth for relationship fields. |
 | `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`, `created_at`, `updated_at`. |
 | `draft` | boolean | `false` | Include draft documents. Only affects versioned collections with `drafts = true`. |

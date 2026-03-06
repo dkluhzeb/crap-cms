@@ -148,7 +148,7 @@ fn create_lua_vm(
 
     // Register CRUD functions on crap.collections (find, find_by_id, create, update, delete).
     // These read the active transaction from Lua app_data when called inside hooks.
-    register_crud_functions(&lua, registry, &config.locale, config.hooks.max_depth)?;
+    register_crud_functions(&lua, registry, &config.locale, config.hooks.max_depth, &config.pagination)?;
 
     // Initialize hook depth tracking
     lua.set_app_data(HookDepth(0));

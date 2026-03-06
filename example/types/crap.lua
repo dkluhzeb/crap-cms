@@ -507,16 +507,32 @@ function crap.fields.join(config) end
 --- @field where?           table<string, crap.FilterValue>  Field filters. String values = equals, table values = operators. Use `["or"]` key for OR groups. Keys support dot notation for nested fields: `"seo.title"` (group), `"variants.color"` (array sub-field), `"content.body"` (block sub-field), `"content._block_type"` (block type), `"tags.id"` (has-many relationship).
 --- @field order_by?       string                 Sort field (prefix with "-" for desc).
 --- @field limit?          integer                Max results to return.
---- @field offset?         integer                Number of results to skip.
+--- @field page?           integer                Page number (1-based). Converted to offset internally.
+--- @field offset?         integer                Number of results to skip (backward compat alias for page).
 --- @field depth?          integer                Population depth for relationship fields (default: 0). 0 = IDs only.
 --- @field locale?         string                 Locale code for localized fields (e.g., "en", "de", "all"). Nil = default locale.
 --- @field select?         string[]               Fields to return. Nil/empty = all fields. Always includes id, created_at, updated_at.
 --- @field draft?          boolean                Include draft documents (versioned collections only). Default: false.
 --- @field overrideAccess? boolean                Skip access control checks (default: true). Set to false to enforce collection-level and field-level access for the current user.
+--- @field after_cursor?  string                 Forward cursor token for keyset pagination (from previous response's `endCursor`). Mutually exclusive with `page`/`offset`/`before_cursor`.
+--- @field before_cursor? string                 Backward cursor token for keyset pagination (from previous response's `startCursor`). Mutually exclusive with `page`/`offset`/`after_cursor`.
+
+--- @class crap.PaginationInfo
+--- @field totalDocs    integer   Total matching documents (before limit/page).
+--- @field limit        integer   Applied limit for this query.
+--- @field totalPages?  integer   Total number of pages (offset mode only).
+--- @field page?        integer   Current page number (offset mode only, 1-based).
+--- @field pageStart?   integer   1-based index of the first document on the current page (offset mode only).
+--- @field hasPrevPage  boolean   Whether a previous page exists.
+--- @field hasNextPage  boolean   Whether a next page exists.
+--- @field prevPage?    integer   Previous page number (offset mode only, nil if on first page).
+--- @field nextPage?    integer   Next page number (offset mode only, nil if on last page).
+--- @field startCursor? string    Opaque cursor of the first document in results (cursor mode only).
+--- @field endCursor?   string    Opaque cursor of the last document in results (cursor mode only).
 
 --- @class crap.FindResult
---- @field documents crap.Document[]  Matching documents.
---- @field total     integer          Total count (before limit/offset).
+--- @field documents  crap.Document[]     Matching documents.
+--- @field pagination crap.PaginationInfo  Pagination metadata.
 
 
 -- ── Hook Context Types ───────────────────────────────────────

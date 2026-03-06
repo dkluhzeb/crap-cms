@@ -5,7 +5,7 @@ local M = {}
 function M.api_key_auth(ctx)
     if ctx.headers["x-api-key"] == "valid-key" then
         local result = crap.collections.find("articles", { overrideAccess = true })
-        if result.total > 0 then
+        if result.pagination.totalDocs > 0 then
             return result.documents[1]
         end
     end

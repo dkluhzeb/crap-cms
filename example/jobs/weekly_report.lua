@@ -16,9 +16,9 @@ function M.run(context)
   crap.log.info(
     string.format(
       "[Weekly Report] Posts: %d, Projects: %d, Open inquiries: %d",
-      posts and posts.total or 0,
-      projects and projects.total or 0,
-      inquiries and inquiries.total or 0
+      posts and posts.pagination.totalDocs or 0,
+      projects and projects.pagination.totalDocs or 0,
+      inquiries and inquiries.pagination.totalDocs or 0
     )
   )
 end

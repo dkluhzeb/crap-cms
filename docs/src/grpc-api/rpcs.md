@@ -10,20 +10,40 @@ Find documents in a collection with filtering, sorting, and pagination.
 message FindRequest {
   string collection = 1;
   optional string where = 2;            // JSON where clause
-  optional string order_by = 3;          // "-field" for descending
+  optional string order_by = 3;         // "-field" for descending
   optional int64 limit = 4;
-  optional int64 offset = 5;
+  optional int64 page = 5;             // page number (1-based, default: 1)
   optional int32 depth = 6;             // population depth (default: 0)
   optional string locale = 7;           // locale code for localized fields
   repeated string select = 8;           // fields to return (empty = all)
-  optional bool draft = 9;             // true = include drafts (versioned collections)
+  optional bool draft = 9;              // true = include drafts (versioned collections)
+  optional string after_cursor = 10;    // opaque forward cursor for cursor-based pagination
+  optional string before_cursor = 11;   // opaque backward cursor for cursor-based pagination
+}
+
+message PaginationInfo {
+  int64 total_docs = 1;                 // total matching documents (before limit/page)
+  int64 limit = 2;                      // applied limit
+  optional int64 total_pages = 3;      // total pages (page mode only)
+  optional int64 page = 4;             // current page (page mode only, 1-based)
+  optional int64 page_start = 5;      // 1-based index of first doc on this page (page mode only)
+  bool has_prev_page = 6;              // whether a previous page exists
+  bool has_next_page = 7;              // whether a next page exists
+  optional int64 prev_page = 8;        // previous page number (nil if first page)
+  optional int64 next_page = 9;        // next page number (nil if last page)
+  optional string start_cursor = 10;   // opaque cursor of first doc in results (cursor mode only)
+  optional string end_cursor = 11;     // opaque cursor of last doc in results (cursor mode only)
 }
 
 message FindResponse {
   repeated Document documents = 1;
-  int64 total = 2;
+  PaginationInfo pagination = 2;
 }
 ```
+
+Pagination metadata is nested in a `PaginationInfo` message. In page mode (default), `page`, `total_pages`, `page_start`, `prev_page`, and `next_page` are computed. In cursor mode, `start_cursor` and `end_cursor` are provided instead — these are the cursors of the first and last documents in the result set. `has_prev_page` and `has_next_page` work in both modes.
+
+`after_cursor`/`before_cursor` and `page` are mutually exclusive. `after_cursor` and `before_cursor` are also mutually exclusive with each other. Cursors are only present in the response when `[pagination] mode = "cursor"` is set in `crap.toml`.
 
 ```bash
 grpcurl -plaintext -d '{

@@ -44,6 +44,9 @@ pub struct ContentService {
     /// Shared cross-request cache for populated relationship documents.
     /// None when disabled (default). Cleared on any write operation.
     populate_cache: Option<std::sync::Arc<query::PopulateCache>>,
+    default_limit: i64,
+    max_limit: i64,
+    cursor_enabled: bool,
 }
 
 /// Untestable as unit: helper methods require full pool + registry + hook_runner.
@@ -58,6 +61,7 @@ impl ContentService {
         hook_runner: HookRunner,
         jwt_secret: String,
         depth_config: &crate::config::DepthConfig,
+        pagination_config: &crate::config::PaginationConfig,
         email_config: EmailConfig,
         email_renderer: std::sync::Arc<EmailRenderer>,
         server_config: ServerConfig,
@@ -87,6 +91,9 @@ impl ContentService {
             } else {
                 None
             },
+            default_limit: pagination_config.default_limit,
+            max_limit: pagination_config.max_limit,
+            cursor_enabled: pagination_config.is_cursor(),
         }
     }
 

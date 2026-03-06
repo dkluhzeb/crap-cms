@@ -316,6 +316,7 @@ pub fn populate_relationships_cached(
         if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
             let mut populated = Vec::new();
             for mut matched_doc in matched_docs {
+                super::hydrate_document(conn, &jc.collection, &target_def.fields, &mut matched_doc, None, locale_ctx)?;
                 if let Some(ref uc) = target_def.upload {
                     if uc.enabled {
                         crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
@@ -739,6 +740,7 @@ pub fn populate_relationships_batch_cached(
                 if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
                     let mut populated = Vec::new();
                     for mut matched_doc in matched_docs {
+                        super::hydrate_document(conn, &jc.collection, &target_def.fields, &mut matched_doc, None, locale_ctx)?;
                         if let Some(ref uc) = target_def.upload {
                             if uc.enabled {
                                 crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);

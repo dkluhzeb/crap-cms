@@ -421,7 +421,9 @@ pub async fn list_items(
 
     let raw_query = uri.query().unwrap_or("");
     let page = params.page.unwrap_or(1).max(1);
-    let per_page = params.per_page.unwrap_or(20).min(100);
+    let per_page = params.per_page
+        .unwrap_or(state.config.pagination.default_limit)
+        .min(state.config.pagination.max_limit);
     let offset = (page - 1) * per_page;
     let search = params.search.filter(|s| !s.trim().is_empty());
 
@@ -475,6 +477,8 @@ pub async fn list_items(
         limit: Some(per_page),
         offset: Some(offset),
         select: None,
+        after_cursor: None,
+        before_cursor: None,
     };
 
     let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
@@ -1699,7 +1703,9 @@ pub async fn list_versions_page(
         .unwrap_or_else(|| document.id.clone());
 
     let page = params.page.unwrap_or(1).max(1);
-    let per_page = params.per_page.unwrap_or(20).min(100);
+    let per_page = params.per_page
+        .unwrap_or(state.config.pagination.default_limit)
+        .min(state.config.pagination.max_limit);
     let offset = (page - 1) * per_page;
 
     let conn = match state.pool.get() {
@@ -1789,7 +1795,9 @@ pub async fn search_collection(
     };
     let title_field = def.title_field().map(|s| s.to_string());
     let search_term = params.q.unwrap_or_default().to_lowercase();
-    let limit = params.limit.unwrap_or(20).min(100);
+    let limit = params.limit
+        .unwrap_or(state.config.pagination.default_limit as usize)
+        .min(state.config.pagination.max_limit as usize);
 
     let is_upload = def.upload.as_ref().is_some_and(|u| u.enabled);
     let admin_thumbnail = def.upload.as_ref()

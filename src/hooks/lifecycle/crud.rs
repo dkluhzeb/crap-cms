@@ -32,7 +32,7 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const rusqlite::Connection
 /// Untestable as unit: registers Lua closures that require TxContext + full DB.
 /// Covered by integration tests (hook CRUD operations in tests/).
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &LocaleConfig, _max_depth: u32) -> Result<()> {
+pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &LocaleConfig, _max_depth: u32, pagination_config: &crate::config::PaginationConfig) -> Result<()> {
     let crap: mlua::Table = lua.globals().get("crap")?;
     let collections: mlua::Table = crap.get("collections")?;
 
@@ -43,6 +43,9 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
     {
         let reg = registry.clone();
         let lc = locale_config.clone();
+        let pg_default = pagination_config.default_limit;
+        let pg_max = pagination_config.max_limit;
+        let pg_cursor = pagination_config.is_cursor();
         let find_fn = lua.create_function(move |lua, (collection, query_table): (String, Option<mlua::Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
             // Safety: pointer is valid while TxContext is in app_data
@@ -76,10 +79,27 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 .and_then(|qt| qt.get::<Option<bool>>("draft").ok().flatten())
                 .unwrap_or(false);
 
-            let mut find_query = match query_table {
+            let (mut find_query, lua_page) = match query_table {
                 Some(qt) => lua_table_to_find_query(&qt)?,
-                None => FindQuery::default(),
+                None => (FindQuery::default(), None),
             };
+
+            // Clamp limit to configured bounds
+            find_query.limit = Some(query::apply_pagination_limits(
+                find_query.limit, pg_default, pg_max,
+            ));
+
+            // Convert page → offset if page was provided
+            if let Some(p) = lua_page {
+                let clamped = find_query.limit.unwrap_or(pg_default);
+                find_query.offset = Some((p.max(1) - 1) * clamped);
+            }
+
+            // Ignore cursors if cursor pagination is disabled
+            if !pg_cursor {
+                find_query.after_cursor = None;
+                find_query.before_cursor = None;
+            }
 
             // Normalize dot notation: group dots → __, array/block/rel dots preserved
             normalize_filter_fields(&mut find_query.filters, &def.fields);
@@ -175,7 +195,66 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 .map(|doc| apply_after_read_inner(lua, &def.hooks, &def.fields, &collection, "find", doc))
                 .collect();
 
-            find_result_to_lua(lua, &docs, total)
+            let limit = find_query.limit.unwrap_or(pg_default);
+            let offset: i64 = find_query.offset.unwrap_or(0);
+
+            // Convert offset back to page for response (page from request, or computed from offset)
+            let page: i64 = lua_page.unwrap_or_else(|| if limit > 0 { offset / limit + 1 } else { 1 }).max(1);
+
+            // Build pagination table (camelCase, PayloadCMS-style)
+            let pagination = lua.create_table()?;
+            pagination.set("totalDocs", total)?;
+            pagination.set("limit", limit)?;
+
+            if pg_cursor {
+                let (sort_col, sort_dir) = if let Some(ref order) = find_query.order_by {
+                    if let Some(stripped) = order.strip_prefix('-') {
+                        (stripped.to_string(), "DESC")
+                    } else {
+                        (order.clone(), "ASC")
+                    }
+                } else if def.timestamps {
+                    ("created_at".to_string(), "DESC")
+                } else {
+                    ("id".to_string(), "ASC")
+                };
+                let (start_cursor, end_cursor) = query::cursor::build_cursors(
+                    &docs, &sort_col, &sort_dir,
+                );
+                let using_before = find_query.before_cursor.is_some();
+                let has_cursor = find_query.after_cursor.is_some() || using_before;
+                let at_limit = docs.len() as i64 >= limit && !docs.is_empty();
+                let (has_next, has_prev) = if using_before {
+                    (true, at_limit)
+                } else {
+                    (at_limit, has_cursor)
+                };
+                pagination.set("hasNextPage", has_next)?;
+                pagination.set("hasPrevPage", has_prev)?;
+                if let Some(sc) = start_cursor {
+                    pagination.set("startCursor", sc)?;
+                }
+                if let Some(ec) = end_cursor {
+                    pagination.set("endCursor", ec)?;
+                }
+            } else {
+                let total_pages = if limit > 0 { (total + limit - 1) / limit } else { 0 };
+                pagination.set("totalPages", total_pages)?;
+                pagination.set("page", page)?;
+                pagination.set("pageStart", offset + 1)?;
+                pagination.set("hasNextPage", page < total_pages)?;
+                pagination.set("hasPrevPage", page > 1)?;
+                if page > 1 {
+                    pagination.set("prevPage", page - 1)?;
+                }
+                if page < total_pages {
+                    pagination.set("nextPage", page + 1)?;
+                }
+            }
+
+            let result = find_result_to_lua(lua, &docs, pagination)?;
+
+            Ok(result)
         })?;
         collections.set("find", find_fn)?;
     }
@@ -908,7 +987,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 .unwrap_or(false);
 
             let mut filters = match query_table {
-                Some(ref qt) => lua_table_to_find_query(qt)?.filters,
+                Some(ref qt) => lua_table_to_find_query(qt)?.0.filters,
                 None => Vec::new(),
             };
 
@@ -976,7 +1055,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 .and_then(|o| o.get::<Option<bool>>("draft").ok().flatten())
                 .unwrap_or(false);
 
-            let mut find_query = lua_table_to_find_query(&query_table)?;
+            let (mut find_query, _) = lua_table_to_find_query(&query_table)?;
             normalize_filter_fields(&mut find_query.filters, &def.fields);
 
             // Draft-aware filtering (matches gRPC behavior)
@@ -1072,7 +1151,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 .and_then(|o| o.get::<Option<bool>>("draft").ok().flatten())
                 .unwrap_or(false);
 
-            let mut find_query = lua_table_to_find_query(&query_table)?;
+            let (mut find_query, _) = lua_table_to_find_query(&query_table)?;
             normalize_filter_fields(&mut find_query.filters, &def.fields);
 
             // Draft-aware filtering (matches gRPC behavior)
@@ -1264,7 +1343,7 @@ fn lua_table_to_json_map(lua: &Lua, tbl: &mlua::Table) -> mlua::Result<HashMap<S
 /// Convert a Lua query table to a FindQuery.
 /// Supports both simple filters (`{ status = "published" }`) and operator-based
 /// filters (`{ title = { contains = "hello" } }`).
-pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<FindQuery> {
+pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQuery, Option<i64>)> {
     let filters = if let Ok(filters_tbl) = tbl.get::<mlua::Table>("where") {
         let mut clauses = Vec::new();
         for pair in filters_tbl.pairs::<String, Value>() {
@@ -1360,11 +1439,29 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<FindQue
 
     let order_by: Option<String> = tbl.get("order_by").ok();
     let limit: Option<i64> = tbl.get("limit").ok();
-    let offset: Option<i64> = tbl.get("offset").ok();
+    // Accept `page` (primary) or `offset` (backward compat alias).
+    // page takes precedence; conversion to offset happens in the find closure.
+    let page: Option<i64> = tbl.get("page").ok();
+    let offset: Option<i64> = if page.is_some() {
+        None // page overrides offset
+    } else {
+        tbl.get("offset").ok()
+    };
     let select: Option<Vec<String>> = tbl.get::<mlua::Table>("select").ok()
         .map(|t| t.sequence_values::<String>().filter_map(|r| r.ok()).collect());
 
-    Ok(FindQuery { filters, order_by, limit, offset, select })
+    let after_cursor = match tbl.get::<Option<String>>("after_cursor").ok().flatten() {
+        Some(s) => Some(crate::db::query::cursor::CursorData::decode(&s)
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?),
+        None => None,
+    };
+    let before_cursor = match tbl.get::<Option<String>>("before_cursor").ok().flatten() {
+        Some(s) => Some(crate::db::query::cursor::CursorData::decode(&s)
+            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?),
+        None => None,
+    };
+
+    Ok((FindQuery { filters, order_by, limit, offset, select, after_cursor, before_cursor }, page))
 }
 
 /// Parse a Lua filter operator name + value into a FilterOp.
@@ -1481,14 +1578,14 @@ pub(crate) fn document_to_lua_table(lua: &Lua, doc: &crate::core::Document) -> m
 }
 
 /// Convert a find result (documents + total) to a Lua table.
-pub(crate) fn find_result_to_lua(lua: &Lua, docs: &[crate::core::Document], total: i64) -> mlua::Result<mlua::Table> {
+pub(crate) fn find_result_to_lua(lua: &Lua, docs: &[crate::core::Document], pagination: mlua::Table) -> mlua::Result<mlua::Table> {
     let tbl = lua.create_table()?;
     let docs_tbl = lua.create_table()?;
     for (i, doc) in docs.iter().enumerate() {
         docs_tbl.set(i + 1, document_to_lua_table(lua, doc)?)?;
     }
     tbl.set("documents", docs_tbl)?;
-    tbl.set("total", total)?;
+    tbl.set("pagination", pagination)?;
     Ok(tbl)
 }
 
@@ -1819,8 +1916,14 @@ mod tests {
             },
         ];
 
-        let tbl = find_result_to_lua(&lua, &docs, 10).unwrap();
-        let total: i64 = tbl.get("total").unwrap();
+        let pg = lua.create_table().unwrap();
+        pg.set("total", 10i64).unwrap();
+        pg.set("limit", 5i64).unwrap();
+        pg.set("has_next", true).unwrap();
+        pg.set("has_prev", false).unwrap();
+        let tbl = find_result_to_lua(&lua, &docs, pg).unwrap();
+        let pagination: mlua::Table = tbl.get("pagination").unwrap();
+        let total: i64 = pagination.get("total").unwrap();
         assert_eq!(total, 10);
         let docs_tbl: mlua::Table = tbl.get("documents").unwrap();
         assert_eq!(docs_tbl.raw_len(), 2);
@@ -1832,8 +1935,14 @@ mod tests {
     #[test]
     fn test_find_result_to_lua_empty() {
         let lua = Lua::new();
-        let tbl = find_result_to_lua(&lua, &[], 0).unwrap();
-        let total: i64 = tbl.get("total").unwrap();
+        let pg = lua.create_table().unwrap();
+        pg.set("total", 0i64).unwrap();
+        pg.set("limit", 10i64).unwrap();
+        pg.set("has_next", false).unwrap();
+        pg.set("has_prev", false).unwrap();
+        let tbl = find_result_to_lua(&lua, &[], pg).unwrap();
+        let pagination: mlua::Table = tbl.get("pagination").unwrap();
+        let total: i64 = pagination.get("total").unwrap();
         assert_eq!(total, 0);
         let docs_tbl: mlua::Table = tbl.get("documents").unwrap();
         assert_eq!(docs_tbl.raw_len(), 0);
@@ -1845,12 +1954,13 @@ mod tests {
     fn test_find_query_empty() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        let query = lua_table_to_find_query(&tbl).unwrap();
+        let (query, page) = lua_table_to_find_query(&tbl).unwrap();
         assert!(query.filters.is_empty());
         assert!(query.order_by.is_none());
         assert!(query.limit.is_none());
         assert!(query.offset.is_none());
         assert!(query.select.is_none());
+        assert!(page.is_none());
     }
 
     #[test]
@@ -1860,10 +1970,34 @@ mod tests {
         tbl.set("limit", 10i64).unwrap();
         tbl.set("offset", 20i64).unwrap();
         tbl.set("order_by", "-created_at").unwrap();
-        let query = lua_table_to_find_query(&tbl).unwrap();
+        let (query, page) = lua_table_to_find_query(&tbl).unwrap();
         assert_eq!(query.limit, Some(10));
         assert_eq!(query.offset, Some(20));
         assert_eq!(query.order_by.as_deref(), Some("-created_at"));
+        assert!(page.is_none());
+    }
+
+    #[test]
+    fn test_find_query_with_page() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("limit", 10i64).unwrap();
+        tbl.set("page", 3i64).unwrap();
+        let (query, page) = lua_table_to_find_query(&tbl).unwrap();
+        assert_eq!(query.limit, Some(10));
+        assert!(query.offset.is_none()); // page overrides offset
+        assert_eq!(page, Some(3));
+    }
+
+    #[test]
+    fn test_find_query_page_overrides_offset() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("page", 2i64).unwrap();
+        tbl.set("offset", 99i64).unwrap();
+        let (query, page) = lua_table_to_find_query(&tbl).unwrap();
+        assert!(query.offset.is_none()); // page takes precedence
+        assert_eq!(page, Some(2));
     }
 
     #[test]
@@ -1874,7 +2008,7 @@ mod tests {
         select.set(1, "title").unwrap();
         select.set(2, "slug").unwrap();
         tbl.set("select", select).unwrap();
-        let query = lua_table_to_find_query(&tbl).unwrap();
+        let (query, _) = lua_table_to_find_query(&tbl).unwrap();
         assert_eq!(query.select.as_ref().unwrap(), &["title", "slug"]);
     }
 
@@ -1885,7 +2019,7 @@ mod tests {
         let filters = lua.create_table().unwrap();
         filters.set("status", "published").unwrap();
         tbl.set("where", filters).unwrap();
-        let query = lua_table_to_find_query(&tbl).unwrap();
+        let (query, _) = lua_table_to_find_query(&tbl).unwrap();
         assert_eq!(query.filters.len(), 1);
         match &query.filters[0] {
             FilterClause::Single(f) => {
@@ -1905,7 +2039,7 @@ mod tests {
         op.set("contains", "hello").unwrap();
         filters.set("title", op).unwrap();
         tbl.set("where", filters).unwrap();
-        let query = lua_table_to_find_query(&tbl).unwrap();
+        let (query, _) = lua_table_to_find_query(&tbl).unwrap();
         assert_eq!(query.filters.len(), 1);
         match &query.filters[0] {
             FilterClause::Single(f) => {

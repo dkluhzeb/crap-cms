@@ -18,7 +18,7 @@ pub fn create(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     let id = nanoid::nanoid!();
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string();
 
     let mut columns = vec!["id".to_string()];
     let mut placeholders = vec!["?1".to_string()];
@@ -64,7 +64,7 @@ pub fn update(
     data: &HashMap<String, String>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string();
 
     let mut set_clauses = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
