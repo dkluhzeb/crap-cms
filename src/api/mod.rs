@@ -19,7 +19,8 @@ pub mod content {
         tonic::include_file_descriptor_set!("content_descriptor");
 }
 
-/// Start the gRPC server with reflection enabled.
+/// Start the gRPC server. Reflection is enabled by default but can be
+/// disabled via `config.server.grpc_reflection`.
 #[cfg(not(tarpaulin_include))]
 #[allow(clippy::too_many_arguments)]
 pub async fn start_server(
@@ -69,10 +70,6 @@ pub async fn start_server(
         }
     }
 
-    let reflection_service = tonic_reflection::server::Builder::configure()
-        .register_encoded_file_descriptor_set(content::FILE_DESCRIPTOR_SET)
-        .build_v1()?;
-
     let grpc_limiter = std::sync::Arc::new(
         crate::core::rate_limit::GrpcRateLimiter::new(
             config.server.grpc_rate_limit_requests,
@@ -81,21 +78,44 @@ pub async fn start_server(
     );
     let rate_limit_layer = rate_limit::GrpcRateLimitLayer::new(grpc_limiter);
 
-    if let Some(cors) = config.cors.build_layer() {
-        Server::builder()
-            .layer(cors)
-            .layer(rate_limit_layer)
-            .add_service(reflection_service)
-            .add_service(content::content_api_server::ContentApiServer::new(content_service))
-            .serve(addr)
-            .await?;
+    let content_svc = content::content_api_server::ContentApiServer::new(content_service);
+
+    if config.server.grpc_reflection {
+        let reflection_service = tonic_reflection::server::Builder::configure()
+            .register_encoded_file_descriptor_set(content::FILE_DESCRIPTOR_SET)
+            .build_v1()?;
+
+        if let Some(cors) = config.cors.build_layer() {
+            Server::builder()
+                .layer(cors)
+                .layer(rate_limit_layer)
+                .add_service(reflection_service)
+                .add_service(content_svc)
+                .serve(addr)
+                .await?;
+        } else {
+            Server::builder()
+                .layer(rate_limit_layer)
+                .add_service(reflection_service)
+                .add_service(content_svc)
+                .serve(addr)
+                .await?;
+        }
     } else {
-        Server::builder()
-            .layer(rate_limit_layer)
-            .add_service(reflection_service)
-            .add_service(content::content_api_server::ContentApiServer::new(content_service))
-            .serve(addr)
-            .await?;
+        if let Some(cors) = config.cors.build_layer() {
+            Server::builder()
+                .layer(cors)
+                .layer(rate_limit_layer)
+                .add_service(content_svc)
+                .serve(addr)
+                .await?;
+        } else {
+            Server::builder()
+                .layer(rate_limit_layer)
+                .add_service(content_svc)
+                .serve(addr)
+                .await?;
+        }
     }
 
     Ok(())

@@ -78,6 +78,7 @@ admin_port = 3000       # Admin UI port
 grpc_port = 50051       # gRPC API port
 host = "0.0.0.0"        # Bind address
 # compression = "off"   # "off" (default), "gzip", "br", "all"
+# grpc_reflection = true         # Enable gRPC server reflection (default: true)
 # grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled)
 # grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
 
@@ -166,6 +167,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `grpc_port` | integer | `50051` | Port for the Tonic gRPC API |
 | `host` | string | `"0.0.0.0"` | Bind address for both servers |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
+| `grpc_reflection` | boolean | `true` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disable in production to hide the API surface from unauthenticated probing. |
 | `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
 | `grpc_rate_limit_window` | integer/string | `60` (`"1m"`) | Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (`"1m"`, `"30s"`). |
 

@@ -6,6 +6,7 @@ use crate::config::CrapConfig;
 use crate::core::Registry;
 use super::protocol::{ResourceDefinition, ResourceContent};
 use super::schema::{CrudOp, collection_input_schema, global_input_schema};
+use super::tools::should_include;
 
 /// List all available MCP resources.
 pub fn list_resources() -> Vec<ResourceDefinition> {
@@ -37,6 +38,9 @@ pub fn read_resource(uri: &str, registry: &Registry, config: &CrapConfig) -> Opt
         "crap://schema/collections" => {
             let mut schemas = serde_json::Map::new();
             for (slug, def) in &registry.collections {
+                if !should_include(slug, &config.mcp) {
+                    continue;
+                }
                 let schema = collection_input_schema(def, CrudOp::Create);
                 schemas.insert(slug.clone(), json!({
                     "label": def.display_name(),

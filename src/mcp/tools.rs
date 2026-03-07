@@ -47,7 +47,7 @@ pub enum ToolOp {
 }
 
 /// Check if a collection should be exposed via MCP.
-fn should_include(slug: &str, config: &McpConfig) -> bool {
+pub fn should_include(slug: &str, config: &McpConfig) -> bool {
     if config.exclude_collections.contains(&slug.to_string()) {
         return false;
     }
@@ -256,8 +256,8 @@ pub fn execute_tool(
 ) -> Result<String> {
     // Static tools first
     match name {
-        "list_collections" => return exec_list_collections(registry),
-        "describe_collection" => return exec_describe_collection(args, registry),
+        "list_collections" => return exec_list_collections(registry, &config.mcp),
+        "describe_collection" => return exec_describe_collection(args, registry, &config.mcp),
         "list_field_types" => return exec_list_field_types(),
         "cli_reference" => return exec_cli_reference(args),
         "read_config_file" | "write_config_file" | "list_config_files" => {
@@ -290,9 +290,12 @@ pub fn execute_tool(
     bail!("Unknown tool: {}", name)
 }
 
-fn exec_list_collections(registry: &Registry) -> Result<String> {
+fn exec_list_collections(registry: &Registry, mcp_config: &McpConfig) -> Result<String> {
     let mut result = Vec::new();
     for (slug, def) in &registry.collections {
+        if !should_include(slug, mcp_config) {
+            continue;
+        }
         result.push(json!({
             "slug": slug,
             "label": def.display_name(),
@@ -313,11 +316,14 @@ fn exec_list_collections(registry: &Registry) -> Result<String> {
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-fn exec_describe_collection(args: &Value, registry: &Registry) -> Result<String> {
+fn exec_describe_collection(args: &Value, registry: &Registry, mcp_config: &McpConfig) -> Result<String> {
     let slug = args.get("slug").and_then(|v| v.as_str())
         .context("Missing 'slug' argument")?;
 
     if let Some(def) = registry.collections.get(slug) {
+        if !should_include(slug, mcp_config) {
+            bail!("Unknown collection or global: {}", slug);
+        }
         let schema = collection_input_schema(def, CrudOp::Create);
         let result = json!({
             "slug": slug,

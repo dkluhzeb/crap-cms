@@ -63,7 +63,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     // Build crap.toml dynamically from InitOptions
     let mut toml = String::new();
     toml.push_str(&format!(
-        "[server]\nadmin_port = {}\ngrpc_port = {}\nhost = \"0.0.0.0\"\n# compression = \"off\"             # \"off\" (default), \"gzip\", \"br\", \"all\"\n# grpc_rate_limit_requests = 0    # per-IP request limit (0 = disabled)\n# grpc_rate_limit_window = 60     # sliding window in seconds (or \"1m\")\n",
+        "[server]\nadmin_port = {}\ngrpc_port = {}\nhost = \"0.0.0.0\"\n# compression = \"off\"             # \"off\" (default), \"gzip\", \"br\", \"all\"\n# grpc_reflection = true           # enable gRPC server reflection (default: true)\n# grpc_rate_limit_requests = 0    # per-IP request limit (0 = disabled)\n# grpc_rate_limit_window = 60     # sliding window in seconds (or \"1m\")\n",
         opts.admin_port, opts.grpc_port
     ));
     toml.push_str("\n[database]\npath = \"data/crap.db\"\n# pool_max_size = 32             # max connections in pool\n# busy_timeout = \"30s\"          # SQLite busy timeout (ms or \"30s\", \"1m\")\n# connection_timeout = 5          # pool checkout timeout (seconds or \"5s\")\n");
