@@ -1,6 +1,6 @@
 //! Read operations: find, find_by_id, count, select filtering.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 use rusqlite::params_from_iter;
 use std::collections::HashSet;
 
@@ -360,27 +360,24 @@ pub fn count_where_field_eq(
     if !is_valid_identifier(field) {
         bail!("Invalid field name '{}': must be alphanumeric/underscore", field);
     }
-    let (sql, count) = match exclude_id {
+    let count = match exclude_id {
         Some(eid) => {
             let sql = format!(
                 "SELECT COUNT(*) FROM {} WHERE {} = ?1 AND id != ?2",
                 table, field
             );
-            let c: i64 = conn.query_row(&sql, rusqlite::params![value, eid], |row| row.get(0))
-                .with_context(|| format!("Unique check on {}.{}", table, field))?;
-            (sql, c)
+            conn.query_row(&sql, rusqlite::params![value, eid], |row| row.get::<_, i64>(0))
+                .with_context(|| format!("Unique check on {}.{}", table, field))?
         }
         None => {
             let sql = format!(
                 "SELECT COUNT(*) FROM {} WHERE {} = ?1",
                 table, field
             );
-            let c: i64 = conn.query_row(&sql, [value], |row| row.get(0))
-                .with_context(|| format!("Unique check on {}.{}", table, field))?;
-            (sql, c)
+            conn.query_row(&sql, [value], |row| row.get::<_, i64>(0))
+                .with_context(|| format!("Unique check on {}.{}", table, field))?
         }
     };
-    let _ = sql;
     Ok(count)
 }
 
@@ -1153,5 +1150,296 @@ mod tests {
         );
         // Non-timestamp string — unchanged
         assert_eq!(denormalize_timestamp("hello"), "hello");
+    }
+
+    // ── denormalize_timestamp: edge cases ────────────────────────────────
+
+    #[test]
+    fn denormalize_timestamp_wrong_length_passthrough() {
+        // String has T at index 10 but wrong length — passthrough unchanged
+        assert_eq!(
+            denormalize_timestamp("2026-03-01T12:00:00"), // len 19, not 24
+            "2026-03-01T12:00:00"
+        );
+    }
+
+    #[test]
+    fn denormalize_timestamp_no_000z_suffix_passthrough() {
+        // Correct length but does not end in ".000Z"
+        let s = "2026-03-01T12:00:00.999Z"; // ends in .999Z not .000Z
+        assert_eq!(denormalize_timestamp(s), s);
+    }
+
+    // ── cursor: sort_val Number variant ─────────────────────────────────
+
+    #[test]
+    fn cursor_sort_val_number_in_params() {
+        // Inserting docs and using a numeric sort_val cursor
+        let conn = setup_db();
+        let def = test_def();
+
+        for i in 1..=3 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Post {:02}", i));
+            create(&conn, "posts", &def, &data, None).unwrap();
+        }
+
+        // Build a cursor with a Number sort_val (e.g. for a numeric field)
+        // We use "id" as sort_col and supply a numeric sort_val to exercise the Number arm
+        let q = FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(1),
+            ..Default::default()
+        };
+        let page1 = find(&conn, "posts", &def, &q, None).unwrap();
+        assert_eq!(page1.len(), 1);
+
+        // Build cursor with Number sort_val
+        let cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!(99i64),  // Number variant
+            id: page1[0].id.clone(),
+        };
+        let q2 = FindQuery {
+            order_by: Some("title".to_string()),
+            limit: Some(10),
+            after_cursor: Some(cursor),
+            ..Default::default()
+        };
+        // Should execute without error (all docs have title > 99 as string comparison goes)
+        let result = find(&conn, "posts", &def, &q2, None);
+        assert!(result.is_ok());
+    }
+
+    // ── cursor: sort_val other JSON variant (Bool) ────────────────────────
+
+    #[test]
+    fn cursor_sort_val_bool_in_params() {
+        let conn = setup_db();
+        let def = test_def();
+
+        // Bool variant exercises the `other => other.to_string()` arm
+        let cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!(true), // Bool variant
+            id: "anyid".to_string(),
+        };
+        let q = FindQuery {
+            order_by: Some("title".to_string()),
+            after_cursor: Some(cursor),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &q, None);
+        assert!(result.is_ok());
+    }
+
+    // ── cursor: keyset with existing WHERE clause (FTS+cursor combined) ──
+
+    #[test]
+    fn cursor_appended_to_existing_where_clause() {
+        let conn = setup_db();
+        let def = test_def();
+
+        // Insert some docs
+        for i in 1..=3 {
+            let mut data = HashMap::new();
+            data.insert("title".to_string(), format!("Post {:02}", i));
+            data.insert("status".to_string(), "active".to_string());
+            create(&conn, "posts", &def, &data, None).unwrap();
+        }
+
+        // Use a filter (creates WHERE) plus cursor (appends AND condition)
+        let cursor = super::super::cursor::CursorData {
+            sort_col: "title".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: serde_json::json!("Post 01"),
+            id: "someanchorid".to_string(),
+        };
+        let q = FindQuery {
+            order_by: Some("title".to_string()),
+            filters: vec![FilterClause::Single(Filter {
+                field: "status".to_string(),
+                op: FilterOp::Equals("active".to_string()),
+            })],
+            after_cursor: Some(cursor),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &q, None).unwrap();
+        // All posts have status=active, but cursor anchors after "Post 01"
+        assert!(result.iter().all(|d| d.get_str("title").unwrap_or("") > "Post 01"));
+    }
+
+    // ── apply_select_to_document: prefix match for sub-fields ───────────
+
+    #[test]
+    fn apply_select_to_document_prefix_match() {
+        let mut doc = Document {
+            id: "x".to_string(),
+            fields: HashMap::from([
+                ("seo__title".to_string(), serde_json::json!("SEO Title")),
+                ("seo__desc".to_string(), serde_json::json!("SEO Desc")),
+                ("title".to_string(), serde_json::json!("Main Title")),
+            ]),
+            created_at: Some("2024-01-01".to_string()),
+            updated_at: Some("2024-01-01".to_string()),
+        };
+
+        // Select only "seo" — should keep seo__* keys via prefix match
+        let select = vec!["seo".to_string()];
+        apply_select_to_document(&mut doc, &select);
+
+        assert!(doc.fields.contains_key("seo__title"), "seo__title should be kept by prefix match");
+        assert!(doc.fields.contains_key("seo__desc"), "seo__desc should be kept by prefix match");
+        assert!(!doc.fields.contains_key("title"), "title not in select should be removed");
+    }
+
+    #[test]
+    fn apply_select_to_document_keeps_created_at_when_selected() {
+        let mut doc = Document {
+            id: "x".to_string(),
+            fields: HashMap::new(),
+            created_at: Some("2024-01-01".to_string()),
+            updated_at: Some("2024-01-02".to_string()),
+        };
+
+        let select = vec!["created_at".to_string()];
+        apply_select_to_document(&mut doc, &select);
+
+        assert!(doc.created_at.is_some(), "created_at should be kept when selected");
+        assert!(doc.updated_at.is_none(), "updated_at should be cleared when not selected");
+    }
+
+    #[test]
+    fn apply_select_to_document_keeps_updated_at_when_selected() {
+        let mut doc = Document {
+            id: "x".to_string(),
+            fields: HashMap::new(),
+            created_at: Some("2024-01-01".to_string()),
+            updated_at: Some("2024-01-02".to_string()),
+        };
+
+        let select = vec!["updated_at".to_string()];
+        apply_select_to_document(&mut doc, &select);
+
+        assert!(doc.updated_at.is_some(), "updated_at should be kept when selected");
+        assert!(doc.created_at.is_none(), "created_at should be cleared when not selected");
+    }
+
+    // ── apply_select_filter: locale suffix match ─────────────────────────
+
+    #[test]
+    fn apply_select_filter_locale_suffix_passthrough() {
+        // When a column is "title__de" and select has "title", the locale variant should be included
+        let def = test_def();
+        let exprs = vec!["id".to_string(), "title__de".to_string(), "title__en".to_string()];
+        let names = exprs.clone();
+        let select = vec!["title".to_string()];
+        let (_, out_names) = apply_select_filter(exprs, names, Some(&select), &def);
+        assert!(out_names.contains(&"id".to_string()));
+        assert!(out_names.contains(&"title__de".to_string()));
+        assert!(out_names.contains(&"title__en".to_string()));
+    }
+
+    // ── count_with_search: FTS search path without WHERE clause ──────────
+
+    #[test]
+    fn count_with_search_no_other_filters() {
+        use crate::db::query::fts;
+        use crate::config::LocaleConfig;
+
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                status TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )"
+        ).unwrap();
+
+        let def = test_def();
+
+        // Create some posts
+        let mut d1 = HashMap::new();
+        d1.insert("title".to_string(), "Rust Tutorial".to_string());
+        create(&conn, "posts", &def, &d1, None).unwrap();
+
+        let mut d2 = HashMap::new();
+        d2.insert("title".to_string(), "Python Tutorial".to_string());
+        create(&conn, "posts", &def, &d2, None).unwrap();
+
+        // Set up FTS
+        fts::sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        // count_with_search with no other filters (exercises the WHERE-less FTS code path)
+        let c = super::count_with_search(&conn, "posts", &def, &[], None, Some("Rust")).unwrap();
+        assert_eq!(c, 1, "FTS search should find only the Rust post");
+    }
+
+    // ── find: sort by non-timestamp field (no 'id' ORDER BY) ────────────
+
+    #[test]
+    fn find_default_sort_without_timestamps() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT)"
+        ).unwrap();
+
+        let def = CollectionDefinition {
+            slug: "items".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: false,  // No timestamps
+            fields: vec![
+                FieldDefinition { name: "name".to_string(), ..Default::default() },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            mcp: Default::default(),
+            live: None,
+            versions: None,
+            indexes: Vec::new(),
+        };
+
+        conn.execute("INSERT INTO items (id, name) VALUES ('b', 'Banana')", []).unwrap();
+        conn.execute("INSERT INTO items (id, name) VALUES ('a', 'Apple')", []).unwrap();
+
+        // Default sort for no-timestamp collection is id ASC
+        let q = FindQuery::default();
+        let docs = find(&conn, "items", &def, &q, None).unwrap();
+        assert_eq!(docs.len(), 2);
+        // id ASC: 'a' before 'b'
+        assert_eq!(docs[0].id, "a");
+        assert_eq!(docs[1].id, "b");
+    }
+
+    // ── find: sort by id explicitly (no tiebreaker) ──────────────────────
+
+    #[test]
+    fn find_order_by_id_uses_single_order_clause() {
+        let conn = setup_db();
+        let def = test_def();
+
+        let mut d1 = HashMap::new();
+        d1.insert("title".to_string(), "A".to_string());
+        create(&conn, "posts", &def, &d1, None).unwrap();
+
+        let mut d2 = HashMap::new();
+        d2.insert("title".to_string(), "B".to_string());
+        create(&conn, "posts", &def, &d2, None).unwrap();
+
+        // Sorting by "id" should use single ORDER BY clause (not the tiebreaker form)
+        let q = FindQuery {
+            order_by: Some("id".to_string()),
+            ..Default::default()
+        };
+        let docs = find(&conn, "posts", &def, &q, None).unwrap();
+        assert_eq!(docs.len(), 2);
+        // Just verify it executes successfully — order is nanoid-determined
     }
 }

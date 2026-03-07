@@ -1,6 +1,6 @@
 //! Email sending (SMTP via lettre) and email template rendering (Handlebars).
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use handlebars::Handlebars;
 use include_dir::{include_dir, Dir};
 use std::path::Path;

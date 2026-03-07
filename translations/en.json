@@ -27,6 +27,9 @@
   "upload_file": "Upload file",
   "replace_file": "Replace file",
   "login": "Sign in",
+  "login_page_title": "Login",
+  "forgot_password_page_title": "Forgot Password",
+  "reset_password_page_title": "Reset Password",
   "logout": "Logout",
   "email": "Email",
   "password": "Password",
@@ -81,6 +84,9 @@
   "value_placeholder": "Value...",
 
   "no_items_yet_generic": "No items yet",
+  "add": "Add",
+  "item": "item",
+  "items": "items",
   "row": "Row",
   "block": "Block",
   "collapse_all": "Collapse all",
@@ -131,5 +137,10 @@
   "browse_media": "Browse Media",
   "load_more": "Load more",
   "confirm": "Confirm",
-  "log_out": "Log out"
+  "log_out": "Log out",
+
+  "clear_search": "Clear search",
+  "sort": "Sort",
+  "sorted_ascending": "Sorted ascending",
+  "sorted_descending": "Sorted descending"
 }

@@ -36,8 +36,8 @@ grpcurl -plaintext -d '{
 find_posts_paginated() {
 grpcurl -plaintext -d '{
   "collection": "posts",
-  "limit": "10",
-  "page": "1"
+  "limit": 10,
+  "page": 1
 }' "$ADDR" crap.ContentAPI/Find
 }
 
@@ -731,6 +731,14 @@ subscribe_auth() {
   }" "$ADDR" crap.ContentAPI/Subscribe
 }
 
+# Subscribe to globals
+subscribe_globals() {
+  grpcurl -plaintext -d '{
+    "globals": ["site_settings"],
+    "token": "'"$TOKEN"'"
+  }' "$ADDR" crap.ContentAPI/Subscribe
+}
+
 # ── Versioning & Drafts ──────────────────────────────────────
 
 # Create a post as draft (requires collection with versions.drafts = true)
@@ -797,6 +805,16 @@ list_versions() {
   }" "$ADDR" crap.ContentAPI/ListVersions
 }
 
+# List versions with limit
+list_versions_limited() {
+  local id="${1:?Usage: list_versions_limited <id>}"
+  grpcurl -plaintext -d "{
+    \"collection\": \"posts\",
+    \"id\": \"$id\",
+    \"limit\": 5
+  }" "$ADDR" crap.ContentAPI/ListVersions
+}
+
 # Restore a specific version
 restore_version() {
   local doc_id="${1:?Usage: restore_version <document_id> <version_id>}"
@@ -833,6 +851,22 @@ grpcurl -plaintext -d '{
 }' "$ADDR" crap.ContentAPI/Count
 }
 
+# Count posts with locale
+count_posts_locale() {
+  grpcurl -plaintext -d '{
+    "collection": "posts",
+    "locale": "de"
+  }' "$ADDR" crap.ContentAPI/Count
+}
+
+# Count with draft filter
+count_posts_drafts() {
+  grpcurl -plaintext -d '{
+    "collection": "posts",
+    "draft": true
+  }' "$ADDR" crap.ContentAPI/Count
+}
+
 # Update many posts (bulk update)
 update_many_posts() {
 grpcurl -plaintext -d '{
@@ -849,6 +883,24 @@ grpcurl -plaintext -d '{
   "where": "{\"status\":{\"equals\":\"draft\"}}",
   "data": { "status": "published" }
 }' "$ADDR" crap.ContentAPI/UpdateMany
+}
+
+# Update many with locale
+update_many_posts_locale() {
+  grpcurl -plaintext -d '{
+    "collection": "posts",
+    "data": {"status": "reviewed"},
+    "locale": "de"
+  }' "$ADDR" crap.ContentAPI/UpdateMany
+}
+
+# Update many drafts
+update_many_posts_draft() {
+  grpcurl -plaintext -d '{
+    "collection": "posts",
+    "data": {"status": "reviewed"},
+    "draft": true
+  }' "$ADDR" crap.ContentAPI/UpdateMany
 }
 
 # Delete many posts (bulk delete)
@@ -917,4 +969,12 @@ list_job_runs() {
   fi
   grpcurl -plaintext -H "authorization: Bearer $token" -d "$json" \
     "$ADDR" crap.ContentAPI/ListJobRuns
+}
+
+# List job runs with pagination
+list_job_runs_paginated() {
+  grpcurl -plaintext -d '{
+    "limit": 10,
+    "offset": 0
+  }' "$ADDR" crap.ContentAPI/ListJobRuns
 }

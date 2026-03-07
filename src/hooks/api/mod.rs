@@ -11,7 +11,7 @@ mod jobs;
 mod config;
 pub(crate) mod richtext;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use mlua::{Lua, Table, Value, Function};
 use std::path::Path;
 
@@ -615,134 +615,18 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
     }
 
     // admin
-    {
-        let admin = lua.create_table()?;
-        let mut has_any = false;
-        if let Some(ref l) = f.admin.label {
-            admin.set("label", localized_string_to_lua(lua, l)?)?;
-            has_any = true;
-        }
-        if let Some(ref p) = f.admin.placeholder {
-            admin.set("placeholder", localized_string_to_lua(lua, p)?)?;
-            has_any = true;
-        }
-        if let Some(ref d) = f.admin.description {
-            admin.set("description", localized_string_to_lua(lua, d)?)?;
-            has_any = true;
-        }
-        if f.admin.hidden { admin.set("hidden", true)?; has_any = true; }
-        if f.admin.readonly { admin.set("readonly", true)?; has_any = true; }
-        if let Some(ref w) = f.admin.width {
-            admin.set("width", w.as_str())?;
-            has_any = true;
-        }
-        if !f.admin.collapsed { admin.set("collapsed", false)?; has_any = true; }
-        if let Some(ref lf) = f.admin.label_field {
-            admin.set("label_field", lf.as_str())?;
-            has_any = true;
-        }
-        if let Some(ref rl) = f.admin.row_label {
-            admin.set("row_label", rl.as_str())?;
-            has_any = true;
-        }
-        if let Some(ref ls) = f.admin.labels_singular {
-            let labels = lua.create_table()?;
-            labels.set("singular", localized_string_to_lua(lua, ls)?)?;
-            if let Some(ref lp) = f.admin.labels_plural {
-                labels.set("plural", localized_string_to_lua(lua, lp)?)?;
-            }
-            admin.set("labels", labels)?;
-            has_any = true;
-        } else if let Some(ref lp) = f.admin.labels_plural {
-            let labels = lua.create_table()?;
-            labels.set("plural", localized_string_to_lua(lua, lp)?)?;
-            admin.set("labels", labels)?;
-            has_any = true;
-        }
-        if let Some(ref pos) = f.admin.position {
-            admin.set("position", pos.as_str())?;
-            has_any = true;
-        }
-        if let Some(ref cond) = f.admin.condition {
-            admin.set("condition", cond.as_str())?;
-            has_any = true;
-        }
-        if let Some(ref s) = f.admin.step {
-            admin.set("step", s.as_str())?;
-            has_any = true;
-        }
-        if let Some(r) = f.admin.rows {
-            admin.set("rows", r)?;
-            has_any = true;
-        }
-        if let Some(ref lang) = f.admin.language {
-            admin.set("language", lang.as_str())?;
-            has_any = true;
-        }
-        if !f.admin.features.is_empty() {
-            let features = lua.create_table()?;
-            for (i, feat) in f.admin.features.iter().enumerate() {
-                features.set(i + 1, feat.as_str())?;
-            }
-            admin.set("features", features)?;
-            has_any = true;
-        }
-        if let Some(ref p) = f.admin.picker {
-            admin.set("picker", p.as_str())?;
-            has_any = true;
-        }
-        if let Some(ref fmt) = f.admin.richtext_format {
-            admin.set("format", fmt.as_str())?;
-            has_any = true;
-        }
-        if !f.admin.nodes.is_empty() {
-            let nodes_tbl = lua.create_table()?;
-            for (i, n) in f.admin.nodes.iter().enumerate() {
-                nodes_tbl.set(i + 1, n.as_str())?;
-            }
-            admin.set("nodes", nodes_tbl)?;
-            has_any = true;
-        }
-        if has_any {
-            tbl.set("admin", admin)?;
-        }
+    if let Some(admin) = field_admin_to_lua(lua, &f.admin)? {
+        tbl.set("admin", admin)?;
     }
 
     // hooks
-    {
-        let hooks = lua.create_table()?;
-        let mut has_any = false;
-        let pairs: &[(&str, &[String])] = &[
-            ("before_validate", &f.hooks.before_validate),
-            ("before_change", &f.hooks.before_change),
-            ("after_change", &f.hooks.after_change),
-            ("after_read", &f.hooks.after_read),
-        ];
-        for (key, list) in pairs {
-            if !list.is_empty() {
-                let arr = lua.create_table()?;
-                for (i, s) in list.iter().enumerate() {
-                    arr.set(i + 1, s.as_str())?;
-                }
-                hooks.set(*key, arr)?;
-                has_any = true;
-            }
-        }
-        if has_any {
-            tbl.set("hooks", hooks)?;
-        }
+    if let Some(hooks) = field_hooks_to_lua(lua, &f.hooks)? {
+        tbl.set("hooks", hooks)?;
     }
 
     // access
-    {
-        let access = lua.create_table()?;
-        let mut has_any = false;
-        if let Some(ref s) = f.access.read { access.set("read", s.as_str())?; has_any = true; }
-        if let Some(ref s) = f.access.create { access.set("create", s.as_str())?; has_any = true; }
-        if let Some(ref s) = f.access.update { access.set("update", s.as_str())?; has_any = true; }
-        if has_any {
-            tbl.set("access", access)?;
-        }
+    if let Some(access) = field_access_to_lua(lua, &f.access)? {
+        tbl.set("access", access)?;
     }
 
     // mcp
@@ -815,6 +699,131 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
     }
 
     Ok(tbl)
+}
+
+/// Convert a `FieldAdmin` to a Lua table. Returns `None` if no properties are set.
+fn field_admin_to_lua(lua: &Lua, admin: &crate::core::field::FieldAdmin) -> mlua::Result<Option<Table>> {
+    let tbl = lua.create_table()?;
+    let mut has_any = false;
+    if let Some(ref l) = admin.label {
+        tbl.set("label", localized_string_to_lua(lua, l)?)?;
+        has_any = true;
+    }
+    if let Some(ref p) = admin.placeholder {
+        tbl.set("placeholder", localized_string_to_lua(lua, p)?)?;
+        has_any = true;
+    }
+    if let Some(ref d) = admin.description {
+        tbl.set("description", localized_string_to_lua(lua, d)?)?;
+        has_any = true;
+    }
+    if admin.hidden { tbl.set("hidden", true)?; has_any = true; }
+    if admin.readonly { tbl.set("readonly", true)?; has_any = true; }
+    if let Some(ref w) = admin.width {
+        tbl.set("width", w.as_str())?;
+        has_any = true;
+    }
+    if !admin.collapsed { tbl.set("collapsed", false)?; has_any = true; }
+    if let Some(ref lf) = admin.label_field {
+        tbl.set("label_field", lf.as_str())?;
+        has_any = true;
+    }
+    if let Some(ref rl) = admin.row_label {
+        tbl.set("row_label", rl.as_str())?;
+        has_any = true;
+    }
+    if let Some(ref ls) = admin.labels_singular {
+        let labels = lua.create_table()?;
+        labels.set("singular", localized_string_to_lua(lua, ls)?)?;
+        if let Some(ref lp) = admin.labels_plural {
+            labels.set("plural", localized_string_to_lua(lua, lp)?)?;
+        }
+        tbl.set("labels", labels)?;
+        has_any = true;
+    } else if let Some(ref lp) = admin.labels_plural {
+        let labels = lua.create_table()?;
+        labels.set("plural", localized_string_to_lua(lua, lp)?)?;
+        tbl.set("labels", labels)?;
+        has_any = true;
+    }
+    if let Some(ref pos) = admin.position {
+        tbl.set("position", pos.as_str())?;
+        has_any = true;
+    }
+    if let Some(ref cond) = admin.condition {
+        tbl.set("condition", cond.as_str())?;
+        has_any = true;
+    }
+    if let Some(ref s) = admin.step {
+        tbl.set("step", s.as_str())?;
+        has_any = true;
+    }
+    if let Some(r) = admin.rows {
+        tbl.set("rows", r)?;
+        has_any = true;
+    }
+    if let Some(ref lang) = admin.language {
+        tbl.set("language", lang.as_str())?;
+        has_any = true;
+    }
+    if !admin.features.is_empty() {
+        let features = lua.create_table()?;
+        for (i, feat) in admin.features.iter().enumerate() {
+            features.set(i + 1, feat.as_str())?;
+        }
+        tbl.set("features", features)?;
+        has_any = true;
+    }
+    if let Some(ref p) = admin.picker {
+        tbl.set("picker", p.as_str())?;
+        has_any = true;
+    }
+    if let Some(ref fmt) = admin.richtext_format {
+        tbl.set("format", fmt.as_str())?;
+        has_any = true;
+    }
+    if !admin.nodes.is_empty() {
+        let nodes_tbl = lua.create_table()?;
+        for (i, n) in admin.nodes.iter().enumerate() {
+            nodes_tbl.set(i + 1, n.as_str())?;
+        }
+        tbl.set("nodes", nodes_tbl)?;
+        has_any = true;
+    }
+    Ok(if has_any { Some(tbl) } else { None })
+}
+
+/// Convert a `FieldHooks` to a Lua table. Returns `None` if no hooks are set.
+fn field_hooks_to_lua(lua: &Lua, hooks: &crate::core::field::FieldHooks) -> mlua::Result<Option<Table>> {
+    let tbl = lua.create_table()?;
+    let mut has_any = false;
+    let pairs: &[(&str, &[String])] = &[
+        ("before_validate", &hooks.before_validate),
+        ("before_change", &hooks.before_change),
+        ("after_change", &hooks.after_change),
+        ("after_read", &hooks.after_read),
+    ];
+    for (key, list) in pairs {
+        if !list.is_empty() {
+            let arr = lua.create_table()?;
+            for (i, s) in list.iter().enumerate() {
+                arr.set(i + 1, s.as_str())?;
+            }
+            tbl.set(*key, arr)?;
+            has_any = true;
+        }
+    }
+    Ok(if has_any { Some(tbl) } else { None })
+}
+
+/// Convert a `FieldAccess` to a Lua table. Returns `None` if no access rules are set.
+fn field_access_to_lua(lua: &Lua, access: &crate::core::field::FieldAccess) -> mlua::Result<Option<Table>> {
+    let tbl = lua.create_table()?;
+    let mut has_any = false;
+    if let Some(ref s) = access.read { tbl.set("read", s.as_str())?; has_any = true; }
+    if let Some(ref s) = access.create { tbl.set("create", s.as_str())?; has_any = true; }
+    if let Some(ref s) = access.update { tbl.set("update", s.as_str())?; has_any = true; }
+    Ok(if has_any { Some(tbl) } else { None })
 }
 
 /// Convert a Lua value to a serde_json::Value.
@@ -1835,5 +1844,381 @@ mod tests {
         assert_eq!(parsed[0].field_type, crate::core::field::FieldType::Select);
         assert_eq!(parsed[0].options.len(), 1);
         assert_eq!(parsed[0].options[0].value, "draft");
+    }
+
+    // --- field_config_to_lua: tabs, sub-fields, mcp, localized, picker_appearance ---
+
+    #[test]
+    fn test_field_config_to_lua_with_tabs() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "content".to_string(),
+            field_type: crate::core::field::FieldType::Tabs,
+            tabs: vec![
+                crate::core::field::FieldTab {
+                    label: "General".to_string(),
+                    description: Some("General settings".to_string()),
+                    fields: vec![crate::core::field::FieldDefinition {
+                        name: "title".to_string(),
+                        ..Default::default()
+                    }],
+                },
+                crate::core::field::FieldTab {
+                    label: "Advanced".to_string(),
+                    description: None,
+                    fields: vec![],
+                },
+            ],
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let tabs: mlua::Table = tbl.get("tabs").unwrap();
+        assert_eq!(tabs.raw_len(), 2);
+        let t1: mlua::Table = tabs.get(1).unwrap();
+        assert_eq!(t1.get::<String>("label").unwrap(), "General");
+        assert_eq!(t1.get::<String>("description").unwrap(), "General settings");
+        let tf: mlua::Table = t1.get("fields").unwrap();
+        assert_eq!(tf.raw_len(), 1);
+        let t2: mlua::Table = tabs.get(2).unwrap();
+        assert_eq!(t2.get::<String>("label").unwrap(), "Advanced");
+        // description absent when None
+        let desc_val: Value = t2.get("description").unwrap();
+        assert!(matches!(desc_val, Value::Nil));
+    }
+
+    #[test]
+    fn test_field_config_to_lua_with_sub_fields() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "address".to_string(),
+            field_type: crate::core::field::FieldType::Group,
+            fields: vec![
+                crate::core::field::FieldDefinition {
+                    name: "street".to_string(),
+                    field_type: crate::core::field::FieldType::Text,
+                    ..Default::default()
+                },
+                crate::core::field::FieldDefinition {
+                    name: "city".to_string(),
+                    field_type: crate::core::field::FieldType::Text,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let sub: mlua::Table = tbl.get("fields").unwrap();
+        assert_eq!(sub.raw_len(), 2);
+        let sf1: mlua::Table = sub.get(1).unwrap();
+        assert_eq!(sf1.get::<String>("name").unwrap(), "street");
+        let sf2: mlua::Table = sub.get(2).unwrap();
+        assert_eq!(sf2.get::<String>("name").unwrap(), "city");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_mcp_description() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "title".to_string(),
+            mcp: crate::core::field::McpFieldConfig {
+                description: Some("The post title".to_string()),
+            },
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let mcp: mlua::Table = tbl.get("mcp").unwrap();
+        assert_eq!(mcp.get::<String>("description").unwrap(), "The post title");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_localized_and_picker_appearance() {
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "body".to_string(),
+            localized: true,
+            picker_appearance: Some("drawer".to_string()),
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        assert_eq!(tbl.get::<bool>("localized").unwrap(), true);
+        assert_eq!(tbl.get::<String>("picker_appearance").unwrap(), "drawer");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_admin_labels_plural_only() {
+        // When labels_singular is None but labels_plural is Some, the else branch runs
+        let lua = Lua::new();
+        let f = crate::core::field::FieldDefinition {
+            name: "items".to_string(),
+            admin: crate::core::field::FieldAdmin {
+                labels_singular: None,
+                labels_plural: Some(crate::core::field::LocalizedString::Plain("Items".to_string())),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+        let admin: mlua::Table = tbl.get("admin").unwrap();
+        let labels: mlua::Table = admin.get("labels").unwrap();
+        assert_eq!(labels.get::<String>("plural").unwrap(), "Items");
+        // singular should not be present
+        let singular_val: Value = labels.get("singular").unwrap();
+        assert!(matches!(singular_val, Value::Nil));
+    }
+
+    // --- collection_config_to_lua: mcp, upload simple, upload avif, ImageFit, auth disabled ---
+
+    #[test]
+    fn test_collection_config_to_lua_mcp_description() {
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "posts".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: false,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            mcp: crate::core::collection::McpCollectionConfig {
+                description: Some("Manages blog posts".to_string()),
+            },
+            live: None,
+            versions: None,
+            indexes: Vec::new(),
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let mcp: mlua::Table = tbl.get("mcp").unwrap();
+        assert_eq!(mcp.get::<String>("description").unwrap(), "Manages blog posts");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_auth_disabled_not_emitted() {
+        // auth.enabled = false should not emit any auth key
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "items".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: false,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: Some(crate::core::collection::CollectionAuth {
+                enabled: false,
+                ..Default::default()
+            }),
+            upload: None,
+            access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
+            live: None,
+            versions: None,
+            indexes: Vec::new(),
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let auth_val: Value = tbl.get("auth").unwrap();
+        assert!(matches!(auth_val, Value::Nil), "auth = None when disabled");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_upload_simple_true() {
+        // upload with no extra config should serialize as `upload = true`
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "media".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: false,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: Some(crate::core::upload::CollectionUpload {
+                enabled: true,
+                mime_types: vec![],
+                max_file_size: None,
+                image_sizes: vec![],
+                admin_thumbnail: None,
+                format_options: crate::core::upload::FormatOptions { webp: None, avif: None },
+            }),
+            access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
+            live: None,
+            versions: None,
+            indexes: Vec::new(),
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let upload_val: bool = tbl.get("upload").unwrap();
+        assert!(upload_val, "Simple upload should serialize as true");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_upload_avif_only() {
+        // format_options with only avif (no webp)
+        let lua = Lua::new();
+        let def = crate::core::CollectionDefinition {
+            slug: "media".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            timestamps: false,
+            fields: Vec::new(),
+            admin: crate::core::collection::CollectionAdmin::default(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            auth: None,
+            upload: Some(crate::core::upload::CollectionUpload {
+                enabled: true,
+                mime_types: vec![],
+                max_file_size: None,
+                image_sizes: vec![],
+                admin_thumbnail: None,
+                format_options: crate::core::upload::FormatOptions {
+                    webp: None,
+                    avif: Some(crate::core::upload::FormatQuality { quality: 60, queue: false }),
+                },
+            }),
+            access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
+            live: None,
+            versions: None,
+            indexes: Vec::new(),
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let upload: mlua::Table = tbl.get("upload").unwrap();
+        let fo: mlua::Table = upload.get("format_options").unwrap();
+        let avif: mlua::Table = fo.get("avif").unwrap();
+        assert_eq!(avif.get::<u8>("quality").unwrap(), 60);
+        // webp should not be present
+        let webp_val: Value = fo.get("webp").unwrap();
+        assert!(matches!(webp_val, Value::Nil));
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_image_fit_variants() {
+        // All ImageFit variants: Contain, Inside, Fill (Cover already tested)
+        use crate::core::upload::{CollectionUpload, FormatOptions, ImageFit, ImageSize};
+        let lua = Lua::new();
+
+        let fits = [
+            (ImageFit::Contain, "contain"),
+            (ImageFit::Inside, "inside"),
+            (ImageFit::Fill, "fill"),
+        ];
+
+        for (fit, expected_str) in fits {
+            let def = crate::core::CollectionDefinition {
+                slug: "media".to_string(),
+                labels: crate::core::collection::CollectionLabels::default(),
+                timestamps: false,
+                fields: Vec::new(),
+                admin: crate::core::collection::CollectionAdmin::default(),
+                hooks: crate::core::collection::CollectionHooks::default(),
+                auth: None,
+                upload: Some(CollectionUpload {
+                    enabled: true,
+                    mime_types: vec![],
+                    max_file_size: None,
+                    image_sizes: vec![ImageSize {
+                        name: "thumb".to_string(),
+                        width: 100,
+                        height: 100,
+                        fit,
+                    }],
+                    admin_thumbnail: None,
+                    format_options: FormatOptions { webp: None, avif: None },
+                }),
+                access: crate::core::collection::CollectionAccess::default(),
+                mcp: Default::default(),
+                live: None,
+                versions: None,
+                indexes: Vec::new(),
+            };
+            let tbl = collection_config_to_lua(&lua, &def).unwrap();
+            let upload: mlua::Table = tbl.get("upload").unwrap();
+            let sizes: mlua::Table = upload.get("image_sizes").unwrap();
+            let s1: mlua::Table = sizes.get(1).unwrap();
+            assert_eq!(
+                s1.get::<String>("fit").unwrap(),
+                expected_str,
+                "Expected fit='{}' for {:?}",
+                expected_str,
+                expected_str
+            );
+        }
+    }
+
+    // --- global_config_to_lua: mcp, live Function ---
+
+    #[test]
+    fn test_global_config_to_lua_mcp_description() {
+        let lua = Lua::new();
+        let def = crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            fields: Vec::new(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            access: crate::core::collection::CollectionAccess::default(),
+            mcp: crate::core::collection::McpCollectionConfig {
+                description: Some("Global site settings".to_string()),
+            },
+            live: None,
+            versions: None,
+        };
+        let tbl = global_config_to_lua(&lua, &def).unwrap();
+        let mcp: mlua::Table = tbl.get("mcp").unwrap();
+        assert_eq!(mcp.get::<String>("description").unwrap(), "Global site settings");
+    }
+
+    #[test]
+    fn test_global_config_to_lua_live_function() {
+        let lua = Lua::new();
+        let def = crate::core::collection::GlobalDefinition {
+            slug: "settings".to_string(),
+            labels: crate::core::collection::CollectionLabels::default(),
+            fields: Vec::new(),
+            hooks: crate::core::collection::CollectionHooks::default(),
+            access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
+            live: Some(crate::core::collection::LiveSetting::Function("hooks.live.settings".to_string())),
+            versions: None,
+        };
+        let tbl = global_config_to_lua(&lua, &def).unwrap();
+        assert_eq!(tbl.get::<String>("live").unwrap(), "hooks.live.settings");
+    }
+
+    // --- register_hooks: remove with no existing list ---
+
+    #[test]
+    fn test_register_hooks_remove_nonexistent_event_is_noop() {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        register_hooks(&lua, &crap).unwrap();
+        let hooks: Table = crap.get("hooks").unwrap();
+        let remove_fn: Function = hooks.get("remove").unwrap();
+        let dummy_fn = lua.create_function(|_, ()| Ok(())).unwrap();
+        // Removing from an event that has no registered hooks should not error
+        let result: mlua::Result<()> = remove_fn.call(("before_change", dummy_fn));
+        assert!(result.is_ok(), "remove on nonexistent event should be a noop");
+    }
+
+    #[test]
+    fn test_register_hooks_register_and_remove() {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        register_hooks(&lua, &crap).unwrap();
+        let hooks: Table = crap.get("hooks").unwrap();
+        let register_fn: Function = hooks.get("register").unwrap();
+        let remove_fn: Function = hooks.get("remove").unwrap();
+
+        // Register a hook
+        let hook_fn = lua.create_function(|_, ()| Ok(())).unwrap();
+        let _: () = register_fn.call(("after_change", hook_fn.clone())).unwrap();
+
+        // Verify it was registered
+        let event_hooks: Table = lua.globals().get("_crap_event_hooks").unwrap();
+        let list: Table = event_hooks.get("after_change").unwrap();
+        assert_eq!(list.raw_len(), 1);
+
+        // Remove the hook
+        let _: () = remove_fn.call(("after_change", hook_fn)).unwrap();
+        let list_after: Table = event_hooks.get("after_change").unwrap();
+        assert_eq!(list_after.raw_len(), 0);
     }
 }

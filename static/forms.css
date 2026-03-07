@@ -775,7 +775,7 @@ crap-relationship-search {
 .relationship-search__input:focus {
   outline: none;
   border-color: var(--color-primary);
-  box-shadow: 0 0 0 2px rgba(var(--color-primary-rgb, 99, 102, 241), 0.15);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 15%, transparent);
 }
 
 .relationship-search__clear {
@@ -1026,6 +1026,15 @@ select[multiple] {
   margin-top: var(--space-sm);
 }
 
+.auth-card__subtitle {
+  margin: 0 0 var(--space-sm) 0;
+  font-size: var(--text-lg);
+}
+
+.auth-card__logout-form {
+  margin-top: var(--space-md);
+}
+
 /* Header user info */
 .header__user {
   display: flex;
@@ -1039,6 +1048,10 @@ select[multiple] {
 }
 
 .header__logout-form {
+  margin: 0;
+}
+
+.form--inline {
   margin: 0;
 }
 

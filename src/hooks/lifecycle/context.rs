@@ -57,11 +57,9 @@ pub(super) fn context_to_lua_table(lua: &Lua, context: &HookContext) -> mlua::Re
 pub(super) fn read_context_back(lua: &Lua, tbl: &mlua::Table, existing: &mut HashMap<String, serde_json::Value>) {
     if let Ok(context_tbl) = tbl.get::<mlua::Table>("context") {
         existing.clear();
-        for pair in context_tbl.pairs::<String, Value>() {
-            if let Ok((k, v)) = pair {
-                if let Ok(json_val) = crate::hooks::api::lua_to_json(lua, &v) {
-                    existing.insert(k, json_val);
-                }
+        for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
+            if let Ok(json_val) = crate::hooks::api::lua_to_json(lua, &v) {
+                existing.insert(k, json_val);
             }
         }
     }

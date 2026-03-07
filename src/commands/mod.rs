@@ -13,7 +13,7 @@ pub mod templates;
 pub mod typegen;
 pub mod mcp;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use std::path::{Path, PathBuf};
 
@@ -453,6 +453,53 @@ pub enum ImagesAction {
         #[arg(long, default_value = "7d")]
         older_than: String,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_key_val;
+
+    #[test]
+    fn happy_path() {
+        assert_eq!(
+            parse_key_val("key=value"),
+            Ok(("key".to_string(), "value".to_string()))
+        );
+    }
+
+    #[test]
+    fn missing_equals_returns_error() {
+        let result = parse_key_val("noequals");
+        assert!(result.is_err());
+        let msg = result.unwrap_err();
+        assert!(msg.contains("no `=` found"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn multiple_equals_splits_on_first() {
+        // Everything after the first `=` is the value, including additional `=` characters.
+        assert_eq!(
+            parse_key_val("key=val=ue"),
+            Ok(("key".to_string(), "val=ue".to_string()))
+        );
+    }
+
+    #[test]
+    fn empty_value() {
+        assert_eq!(
+            parse_key_val("key="),
+            Ok(("key".to_string(), String::new()))
+        );
+    }
+
+    #[test]
+    fn empty_key() {
+        // The implementation does not reject an empty key; it returns ("", value).
+        assert_eq!(
+            parse_key_val("=value"),
+            Ok((String::new(), "value".to_string()))
+        );
+    }
 }
 
 /// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.

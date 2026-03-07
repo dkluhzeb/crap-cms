@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context as _, Result, bail};
 
 /// RAII guard that deletes written files if the upload process fails.
 /// Call `commit()` on success to prevent cleanup.

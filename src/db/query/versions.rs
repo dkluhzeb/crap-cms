@@ -1,6 +1,6 @@
 //! Version-specific database operations for the `_versions_{slug}` table.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 

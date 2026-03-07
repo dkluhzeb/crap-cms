@@ -1,6 +1,6 @@
 //! `make job` command — generate job Lua files.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::fs;
 use std::path::Path;
 

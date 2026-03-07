@@ -1,6 +1,6 @@
 //! Configuration types loaded from `crap.toml`.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -307,7 +307,7 @@ pub enum PaginationMode {
 }
 
 /// MCP (Model Context Protocol) server configuration.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct McpConfig {
     /// Enable MCP server (default: false).
@@ -324,18 +324,6 @@ pub struct McpConfig {
     pub exclude_collections: Vec<String>,
 }
 
-impl Default for McpConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            http: false,
-            config_tools: false,
-            api_key: String::new(),
-            include_collections: Vec::new(),
-            exclude_collections: Vec::new(),
-        }
-    }
-}
 
 /// Global upload settings (per-collection upload config is separate).
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -588,7 +576,7 @@ impl CorsConfig {
 /// Access control defaults.
 /// When `default_deny` is true, collections/globals without explicit access functions
 /// deny all operations instead of allowing them. Default: false (backward compatible).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct AccessConfig {
     /// When true, operations on collections/globals without an explicit access function
@@ -596,13 +584,6 @@ pub struct AccessConfig {
     pub default_deny: bool,
 }
 
-impl Default for AccessConfig {
-    fn default() -> Self {
-        Self {
-            default_deny: false,
-        }
-    }
-}
 
 /// Live event streaming configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -642,7 +623,7 @@ impl Default for HooksConfig {
             on_init: Vec::new(),
             max_depth: 3,
             vm_pool_size: std::thread::available_parallelism()
-                .map(|n| n.get().max(4).min(32))
+                .map(|n| n.get().clamp(4, 32))
                 .unwrap_or(8),
         }
     }

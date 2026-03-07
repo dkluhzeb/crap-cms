@@ -1,6 +1,6 @@
 //! `export` and `import` commands — collection data import/export as JSON.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 

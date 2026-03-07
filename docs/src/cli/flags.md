@@ -455,6 +455,24 @@ crap-cms backup ./my-project
 crap-cms backup ./my-project -o /tmp/backups -i
 ```
 
+### `restore` — Restore from backup
+
+```bash
+crap-cms restore <CONFIG> <BACKUP> [-i] [-y]
+```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--include-uploads` | `-i` | Also restore uploads from `uploads.tar.gz` if present |
+| `--confirm` | `-y` | Required — confirms the destructive operation |
+
+Replaces the current database with a backup snapshot. Cleans up stale WAL/SHM files.
+
+```bash
+crap-cms restore ./my-project ./my-project/backups/backup-2026-03-07T10-00-00 -y
+crap-cms restore ./my-project /tmp/backups/backup-2026-03-07T10-00-00 -i -y
+```
+
 ### `templates` — List and extract default admin templates
 
 Extract the compiled-in admin templates and static files into your config directory for customization.

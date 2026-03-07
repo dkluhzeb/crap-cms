@@ -1,6 +1,6 @@
 //! Handlebars template loading with overlay (config dir overrides compiled defaults).
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use handlebars::{Handlebars, RenderError, RenderContext, Helper, HelperDef, ScopedJson};
 use include_dir::{include_dir, Dir};
 use std::cmp::Ordering;

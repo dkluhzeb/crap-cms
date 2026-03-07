@@ -181,24 +181,6 @@ impl ContextBuilder {
         self
     }
 
-    /// Set the document context (for edit pages).
-    #[allow(dead_code)]
-    pub fn document(mut self, doc: &crate::core::Document) -> Self {
-        let mut doc_json = json!({
-            "id": doc.id,
-            "created_at": doc.created_at,
-            "updated_at": doc.updated_at,
-        });
-        // Add status if present
-        if let Some(status) = doc.fields.get("_status").and_then(|v| v.as_str()) {
-            doc_json["status"] = json!(status);
-        }
-        // Add raw data
-        doc_json["data"] = json!(doc.fields);
-        self.data.insert("document".into(), doc_json);
-        self
-    }
-
     /// Set a minimal document context (e.g., for error re-renders with just ID).
     pub fn document_stub(mut self, id: &str) -> Self {
         self.data.insert("document".into(), json!({ "id": id }));
@@ -767,43 +749,4 @@ mod tests {
         assert_eq!(result["document"]["updated_at"], "2026-01-02");
     }
 
-    // --- ContextBuilder: document ---
-
-    #[test]
-    fn context_builder_document_includes_status_from_fields() {
-        let doc = crate::core::Document {
-            id: "doc2".to_string(),
-            fields: std::collections::HashMap::from([
-                ("_status".to_string(), json!("published")),
-                ("title".to_string(), json!("Test")),
-            ]),
-            created_at: Some("2026-01-01".to_string()),
-            updated_at: Some("2026-01-02".to_string()),
-        };
-        let data = Map::new();
-        let builder = ContextBuilder { data };
-        let builder = builder.document(&doc);
-        let result = builder.build();
-        assert_eq!(result["document"]["id"], "doc2");
-        assert_eq!(result["document"]["status"], "published");
-    }
-
-    #[test]
-    fn context_builder_document_no_status() {
-        let doc = crate::core::Document {
-            id: "doc3".to_string(),
-            fields: std::collections::HashMap::from([
-                ("title".to_string(), json!("No Status")),
-            ]),
-            created_at: Some("2026-01-01".to_string()),
-            updated_at: Some("2026-01-02".to_string()),
-        };
-        let data = Map::new();
-        let builder = ContextBuilder { data };
-        let builder = builder.document(&doc);
-        let result = builder.build();
-        assert_eq!(result["document"]["id"], "doc3");
-        // No status field means no status key in the document context
-        assert!(result["document"].get("status").is_none() || result["document"]["status"].is_null());
-    }
 }

@@ -1,6 +1,6 @@
 //! `typegen` and `proto` commands.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::path::Path;
 
 /// Handle the `typegen` subcommand — loads the Lua registry and generates types.

@@ -318,4 +318,81 @@ mod tests {
         let node = reg.get_richtext_node("alert").unwrap();
         assert_eq!(node.attrs[0].options.len(), 2);
     }
+
+    #[test]
+    fn register_node_empty_name_invalid() {
+        let (lua, _) = setup_lua();
+        let result = lua.load(r#"
+            crap.richtext.register_node("", { label = "Empty" })
+        "#).exec();
+        assert!(result.is_err());
+    }
+
+    // render() with a registered node that has NO render function — should return
+    // the <crap-node> passthrough (the `entry.get("render")` Err branch, line 107).
+    #[test]
+    fn render_json_node_without_render_function_passthrough() {
+        let (lua, _) = setup_lua();
+        // Register a node without a render function.
+        lua.load(r#"
+            crap.richtext.register_node("badge", {
+                label = "Badge",
+                attrs = { { name = "text", type = "text" } },
+            })
+        "#).exec().unwrap();
+
+        // The render closure will find the node entry but no `render` key → return None
+        // → rendered as <crap-node> passthrough.
+        let result: String = lua.load(r#"
+            return crap.richtext.render('{"type":"doc","content":[{"type":"badge","attrs":{"text":"hi"}}]}')
+        "#).eval().unwrap();
+        assert!(result.contains("crap-node"), "expected crap-node passthrough, got: {}", result);
+        assert!(result.contains("data-type=\"badge\""));
+    }
+
+    // render() with a node type that was never registered at all — the
+    // `storage.get(node_type)` Err branch (line 103) is exercised.
+    #[test]
+    fn render_json_unregistered_node_passthrough() {
+        let (lua, _) = setup_lua();
+        // No nodes registered at all.
+        let result: String = lua.load(r#"
+            return crap.richtext.render('{"type":"doc","content":[{"type":"mystery","attrs":{"x":"y"}}]}')
+        "#).eval().unwrap();
+        assert!(result.contains("crap-node"), "expected crap-node passthrough, got: {}", result);
+        assert!(result.contains("data-type=\"mystery\""));
+    }
+
+    // render() where the Lua render function itself raises an error — the
+    // `render_fn.call` Err branch (lines 116-119) is exercised.
+    // The failing renderer returns None → passthrough <crap-node>.
+    #[test]
+    fn render_json_render_function_error_falls_back_to_passthrough() {
+        let (lua, _) = setup_lua();
+        lua.load(r#"
+            crap.richtext.register_node("boom", {
+                label = "Boom",
+                render = function(attrs)
+                    error("intentional render error")
+                end,
+            })
+        "#).exec().unwrap();
+
+        let result: String = lua.load(r#"
+            return crap.richtext.render('{"type":"doc","content":[{"type":"boom","attrs":{}}]}')
+        "#).eval().unwrap();
+        // Render function failed → None → passthrough as <crap-node>
+        assert!(result.contains("crap-node"), "expected crap-node passthrough, got: {}", result);
+        assert!(result.contains("data-type=\"boom\""));
+    }
+
+    // render() with an invalid JSON string starting with '{' → RuntimeError
+    #[test]
+    fn render_invalid_json_returns_error() {
+        let (lua, _) = setup_lua();
+        let result = lua.load(r#"
+            return crap.richtext.render("{not valid json")
+        "#).exec();
+        assert!(result.is_err());
+    }
 }

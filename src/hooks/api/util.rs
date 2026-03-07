@@ -1,7 +1,7 @@
 //! `crap.util` namespace — slugify, nanoid, JSON encode/decode, date helpers,
 //! and pure Lua table/string utilities loaded after the namespace is set.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use mlua::{Lua, Table, Function};
 
 /// Pure Lua table and string helpers, loaded onto `crap.util` after the table is set.

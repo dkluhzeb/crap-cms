@@ -107,7 +107,7 @@
       {{t "actions"}}
     </div>
     <div class="edit-sidebar__panel-body">
-      <button type="button" class="button button--danger" style="width: 100%;"
+      <button type="button" class="button button--danger button--full"
         hx-delete="/admin/collections/{{collection.slug}}/{{document.id}}"
         hx-target="body"
         hx-confirm="{{t "confirm_delete_sidebar" name=collection.singular_name}}">

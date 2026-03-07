@@ -1,6 +1,6 @@
 //! Migration tracking: list, record, remove, and manage migration files.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 
 use super::helpers::table_exists;

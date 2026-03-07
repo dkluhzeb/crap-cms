@@ -1,6 +1,6 @@
 //! Shared helpers for migration: table introspection, join tables, versions tables.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 
 use crate::config::LocaleConfig;

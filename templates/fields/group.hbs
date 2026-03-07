@@ -1,7 +1,8 @@
 <fieldset class="form__group {{#if collapsed}}form__group--collapsed{{/if}}" data-collapsible data-group-name="{{name}}">
   <legend>
-    <button type="button" class="form__group-toggle" data-action="toggle-group">
-      <span class="form__group-chevron material-symbols-outlined">expand_more</span>
+    <button type="button" class="form__group-toggle" data-action="toggle-group"
+            aria-expanded="{{#if collapsed}}false{{else}}true{{/if}}">
+      <span class="form__group-chevron material-symbols-outlined" aria-hidden="true">expand_more</span>
       {{label}}
       {{#if required}}<span class="required">*</span>{{/if}}
     </button>

@@ -209,7 +209,7 @@ pub fn generate_tools(registry: &Registry, config: &McpConfig) -> Vec<ToolDefini
 }
 
 /// Parse a tool name like "find_posts" into (op, slug).
-pub fn parse_tool_name<'a>(name: &'a str, registry: &Registry) -> Option<ParsedTool> {
+pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
     // Try collection CRUD patterns
     for prefix in &["find_by_id_", "find_", "create_", "update_", "delete_"] {
         if let Some(slug) = name.strip_prefix(prefix) {
@@ -956,7 +956,7 @@ fn exec_find(
     let order_by = args.get("order_by").and_then(|v| v.as_str()).map(|s| s.to_string());
     let search = args.get("search").and_then(|v| v.as_str()).map(|s| s.to_string());
     let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
-    let depth = depth.min(config.depth.max_depth as i32);
+    let depth = depth.min(config.depth.max_depth);
     let filters = parse_where_filters(args);
 
     let fq = FindQuery {
@@ -973,7 +973,11 @@ fn exec_find(
     let total = query::count(&conn, slug, def, &fq.filters, None)?;
 
     if depth > 0 {
-        query::populate_relationships_batch(&conn, registry, slug, def, &mut docs, depth, None, None)?;
+        let pop_ctx = query::PopulateContext {
+            conn: &conn, registry, collection_slug: slug, def,
+        };
+        let pop_opts = query::PopulateOpts { depth, select: None, locale_ctx: None };
+        query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)?;
     }
 
     let result = json!({
@@ -1001,7 +1005,7 @@ fn exec_find_by_id(
 
     let depth = args.get("depth").and_then(|v| v.as_i64())
         .unwrap_or(config.depth.default_depth as i64) as i32;
-    let depth = depth.min(config.depth.max_depth as i32);
+    let depth = depth.min(config.depth.max_depth);
 
     let mut doc = match query::find_by_id(&conn, slug, def, id, None)? {
         Some(d) => d,
@@ -1010,7 +1014,11 @@ fn exec_find_by_id(
 
     if depth > 0 {
         let mut visited = std::collections::HashSet::new();
-        query::populate_relationships(&conn, registry, slug, def, &mut doc, depth, &mut visited, None, None)?;
+        let pop_ctx = query::PopulateContext {
+            conn: &conn, registry, collection_slug: slug, def,
+        };
+        let pop_opts = query::PopulateOpts { depth, select: None, locale_ctx: None };
+        query::populate_relationships(&pop_ctx, &mut doc, &mut visited, &pop_opts)?;
     }
 
     Ok(serde_json::to_string_pretty(&doc_to_json(&doc))?)
@@ -1495,5 +1503,538 @@ mod tests {
             }
             other => panic!("Expected Single, got {:?}", other),
         }
+    }
+
+    // ── parse_where_filters: scalar field values ───────────────────────────
+
+    #[test]
+    fn parse_where_string_shorthand() {
+        // { "field": "value" } → Equals
+        let args = json!({ "where": { "title": "hello" } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            query::FilterClause::Single(f) => {
+                assert_eq!(f.field, "title");
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "hello"));
+            }
+            other => panic!("Expected Single, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_where_number_shorthand() {
+        let args = json!({ "where": { "count": 5 } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            query::FilterClause::Single(f) => {
+                assert_eq!(f.field, "count");
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "5"));
+            }
+            other => panic!("Expected Single, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_where_bool_shorthand_true() {
+        let args = json!({ "where": { "active": true } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            query::FilterClause::Single(f) => {
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "1"));
+            }
+            other => panic!("Expected Single, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_where_bool_shorthand_false() {
+        let args = json!({ "where": { "active": false } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            query::FilterClause::Single(f) => {
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "0"));
+            }
+            other => panic!("Expected Single, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_where_scalar_operators() {
+        for (op_name, expected_variant) in &[
+            ("not_equals", "not_equals"),
+            ("contains", "contains"),
+            ("greater_than", "greater_than"),
+            ("greater_than_equal", "greater_than_equal"),
+            ("less_than", "less_than"),
+            ("less_than_equal", "less_than_equal"),
+            ("like", "like"),
+        ] {
+            let args = {
+                let mut where_field = serde_json::Map::new();
+                where_field.insert(op_name.to_string(), json!("val"));
+                let mut where_obj = serde_json::Map::new();
+                where_obj.insert("field".to_string(), serde_json::Value::Object(where_field));
+                let mut root = serde_json::Map::new();
+                root.insert("where".to_string(), serde_json::Value::Object(where_obj));
+                serde_json::Value::Object(root)
+            };
+            let clauses = parse_where_filters(&args);
+            assert_eq!(clauses.len(), 1, "operator {} produced wrong clause count", op_name);
+            match &clauses[0] {
+                query::FilterClause::Single(f) => {
+                    match (&f.op, *expected_variant) {
+                        (query::FilterOp::NotEquals(_), "not_equals") => {}
+                        (query::FilterOp::Contains(_), "contains") => {}
+                        (query::FilterOp::GreaterThan(_), "greater_than") => {}
+                        (query::FilterOp::GreaterThanOrEqual(_), "greater_than_equal") => {}
+                        (query::FilterOp::LessThan(_), "less_than") => {}
+                        (query::FilterOp::LessThanOrEqual(_), "less_than_equal") => {}
+                        (query::FilterOp::Like(_), "like") => {}
+                        _ => panic!("Wrong op variant for operator {}: got {:?}", op_name, f.op),
+                    }
+                }
+                other => panic!("Expected Single for {}, got {:?}", op_name, other),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_where_scalar_op_with_number() {
+        let args = json!({ "where": { "age": { "greater_than": 18 } } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            query::FilterClause::Single(f) => {
+                assert!(matches!(&f.op, query::FilterOp::GreaterThan(v) if v == "18"));
+            }
+            other => panic!("Expected Single, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_where_scalar_op_with_bool() {
+        let args = json!({ "where": { "active": { "equals": true } } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 1);
+        match &clauses[0] {
+            query::FilterClause::Single(f) => {
+                assert!(matches!(&f.op, query::FilterOp::Equals(v) if v == "1"));
+            }
+            other => panic!("Expected Single, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_where_unknown_op_skipped() {
+        // Unknown operator name → clause is skipped (no panic)
+        let args = json!({ "where": { "field": { "unknown_op": "val" } } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 0);
+    }
+
+    #[test]
+    fn parse_where_null_value_skipped() {
+        // Null field value → skipped
+        let args = json!({ "where": { "field": null } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 0);
+    }
+
+    #[test]
+    fn parse_where_null_op_value_skipped() {
+        // Op value is null → skipped (neither scalar nor array)
+        let args = json!({ "where": { "field": { "equals": null } } });
+        let clauses = parse_where_filters(&args);
+        assert_eq!(clauses.len(), 0);
+    }
+
+    #[test]
+    fn parse_where_no_where_key() {
+        let args = json!({ "limit": 10 });
+        let clauses = parse_where_filters(&args);
+        assert!(clauses.is_empty());
+    }
+
+    #[test]
+    fn parse_where_non_object_where() {
+        let args = json!({ "where": "not-an-object" });
+        let clauses = parse_where_filters(&args);
+        assert!(clauses.is_empty());
+    }
+
+    // ── exec_list_collections ──────────────────────────────────────────────
+
+    #[test]
+    fn exec_list_collections_returns_all() {
+        let reg = make_registry();
+        let config = McpConfig::default();
+        let result = super::exec_list_collections(&reg, &config).unwrap();
+        let items: Vec<Value> = serde_json::from_str(&result).unwrap();
+        // posts, users (collections) + settings (global)
+        assert!(items.len() >= 3);
+        let slugs: Vec<&str> = items.iter()
+            .map(|i| i["slug"].as_str().unwrap_or(""))
+            .collect();
+        assert!(slugs.contains(&"posts"));
+        assert!(slugs.contains(&"settings"));
+    }
+
+    #[test]
+    fn exec_list_collections_respects_exclude() {
+        let reg = make_registry();
+        let config = McpConfig {
+            exclude_collections: vec!["users".to_string()],
+            ..Default::default()
+        };
+        let result = super::exec_list_collections(&reg, &config).unwrap();
+        let items: Vec<Value> = serde_json::from_str(&result).unwrap();
+        let slugs: Vec<&str> = items.iter()
+            .map(|i| i["slug"].as_str().unwrap_or(""))
+            .collect();
+        assert!(!slugs.contains(&"users"));
+        assert!(slugs.contains(&"posts"));
+    }
+
+    #[test]
+    fn exec_list_collections_empty_registry() {
+        let reg = Registry::new();
+        let config = McpConfig::default();
+        let result = super::exec_list_collections(&reg, &config).unwrap();
+        let items: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert!(items.is_empty());
+    }
+
+    // ── exec_describe_collection ───────────────────────────────────────────
+
+    #[test]
+    fn exec_describe_collection_for_collection() {
+        let reg = make_registry();
+        let config = McpConfig::default();
+        let args = json!({ "slug": "posts" });
+        let result = super::exec_describe_collection(&args, &reg, &config).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["slug"], "posts");
+        assert_eq!(parsed["type"], "collection");
+        assert!(parsed["schema"].is_object());
+    }
+
+    #[test]
+    fn exec_describe_collection_for_global() {
+        let reg = make_registry();
+        let config = McpConfig::default();
+        let args = json!({ "slug": "settings" });
+        let result = super::exec_describe_collection(&args, &reg, &config).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["slug"], "settings");
+        assert_eq!(parsed["type"], "global");
+        assert!(parsed["schema"].is_object());
+    }
+
+    #[test]
+    fn exec_describe_collection_unknown_slug_errors() {
+        let reg = make_registry();
+        let config = McpConfig::default();
+        let args = json!({ "slug": "nonexistent" });
+        let err = super::exec_describe_collection(&args, &reg, &config).unwrap_err();
+        assert!(err.to_string().contains("Unknown"));
+    }
+
+    #[test]
+    fn exec_describe_collection_missing_slug_errors() {
+        let reg = make_registry();
+        let config = McpConfig::default();
+        let args = json!({});
+        let err = super::exec_describe_collection(&args, &reg, &config).unwrap_err();
+        assert!(err.to_string().contains("slug"));
+    }
+
+    #[test]
+    fn exec_describe_collection_excluded_errors() {
+        let reg = make_registry();
+        let config = McpConfig {
+            exclude_collections: vec!["posts".to_string()],
+            ..Default::default()
+        };
+        let args = json!({ "slug": "posts" });
+        let err = super::exec_describe_collection(&args, &reg, &config).unwrap_err();
+        assert!(err.to_string().contains("Unknown"));
+    }
+
+    // ── config file tools ──────────────────────────────────────────────────
+
+    #[test]
+    fn exec_read_config_file_success() {
+        let dir = tempfile::tempdir().unwrap();
+        // Write a test file
+        std::fs::write(dir.path().join("hello.txt"), "world").unwrap();
+        let args = json!({ "path": "hello.txt" });
+        let result = super::exec_read_config_file(&args, dir.path()).unwrap();
+        assert_eq!(result, "world");
+    }
+
+    #[test]
+    fn exec_read_config_file_missing_path_arg_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = json!({});
+        let err = super::exec_read_config_file(&args, dir.path()).unwrap_err();
+        assert!(err.to_string().contains("path"));
+    }
+
+    #[test]
+    fn exec_read_config_file_nonexistent_file_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = json!({ "path": "does_not_exist.txt" });
+        let err = super::exec_read_config_file(&args, dir.path()).unwrap_err();
+        assert!(err.to_string().contains("does_not_exist"));
+    }
+
+    #[test]
+    fn exec_write_config_file_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = json!({ "path": "output.txt", "content": "hello" });
+        let result = super::exec_write_config_file(&args, dir.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["written"], "output.txt");
+        let written = std::fs::read_to_string(dir.path().join("output.txt")).unwrap();
+        assert_eq!(written, "hello");
+    }
+
+    #[test]
+    fn exec_write_config_file_creates_parent_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = json!({ "path": "subdir/nested/file.txt", "content": "data" });
+        let result = super::exec_write_config_file(&args, dir.path()).unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(parsed["written"], "subdir/nested/file.txt");
+        let content = std::fs::read_to_string(dir.path().join("subdir/nested/file.txt")).unwrap();
+        assert_eq!(content, "data");
+    }
+
+    #[test]
+    fn exec_write_config_file_missing_path_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = json!({ "content": "data" });
+        let err = super::exec_write_config_file(&args, dir.path()).unwrap_err();
+        assert!(err.to_string().contains("path"));
+    }
+
+    #[test]
+    fn exec_write_config_file_missing_content_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = json!({ "path": "file.txt" });
+        let err = super::exec_write_config_file(&args, dir.path()).unwrap_err();
+        assert!(err.to_string().contains("content"));
+    }
+
+    #[test]
+    fn exec_list_config_files_root() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.txt"), "").unwrap();
+        std::fs::write(dir.path().join("b.lua"), "").unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+
+        let args = json!({});
+        let result = super::exec_list_config_files(&args, dir.path()).unwrap();
+        let files: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert!(files.len() >= 3);
+        let names: Vec<&str> = files.iter()
+            .map(|f| f["name"].as_str().unwrap_or(""))
+            .collect();
+        assert!(names.contains(&"a.txt"));
+        assert!(names.contains(&"b.lua"));
+        assert!(names.contains(&"sub"));
+        // Check types
+        let sub = files.iter().find(|f| f["name"] == "sub").unwrap();
+        assert_eq!(sub["type"], "directory");
+        let a = files.iter().find(|f| f["name"] == "a.txt").unwrap();
+        assert_eq!(a["type"], "file");
+    }
+
+    #[test]
+    fn exec_list_config_files_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("collections")).unwrap();
+        std::fs::write(dir.path().join("collections/posts.lua"), "").unwrap();
+
+        let args = json!({ "path": "collections" });
+        let result = super::exec_list_config_files(&args, dir.path()).unwrap();
+        let files: Vec<Value> = serde_json::from_str(&result).unwrap();
+        let names: Vec<&str> = files.iter()
+            .map(|f| f["name"].as_str().unwrap_or(""))
+            .collect();
+        assert!(names.contains(&"posts.lua"));
+    }
+
+    #[test]
+    fn exec_list_config_files_nonexistent_dir_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        // Subdir does not exist → safe_config_path succeeds (no traversal),
+        // but the dir is not a directory so files is empty
+        let args = json!({ "path": "nonexistent" });
+        let result = super::exec_list_config_files(&args, dir.path()).unwrap();
+        let files: Vec<Value> = serde_json::from_str(&result).unwrap();
+        assert!(files.is_empty());
+    }
+
+    // ── doc_to_json ────────────────────────────────────────────────────────
+
+    #[test]
+    fn doc_to_json_includes_all_fields() {
+        use crate::core::document::Document;
+        use std::collections::HashMap;
+        let mut fields = HashMap::new();
+        fields.insert("title".to_string(), json!("Hello"));
+        fields.insert("count".to_string(), json!(42));
+        let doc = Document {
+            id: "abc123".to_string(),
+            fields,
+            created_at: Some("2024-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2024-06-01T00:00:00Z".to_string()),
+        };
+        let val = super::doc_to_json(&doc);
+        assert_eq!(val["id"], "abc123");
+        assert_eq!(val["title"], "Hello");
+        assert_eq!(val["count"], 42);
+        assert_eq!(val["created_at"], "2024-01-01T00:00:00Z");
+        assert_eq!(val["updated_at"], "2024-06-01T00:00:00Z");
+    }
+
+    #[test]
+    fn doc_to_json_without_timestamps() {
+        use crate::core::document::Document;
+        use std::collections::HashMap;
+        let doc = Document {
+            id: "xyz".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        let val = super::doc_to_json(&doc);
+        assert_eq!(val["id"], "xyz");
+        assert!(val.get("created_at").is_none() || val["created_at"].is_null());
+        assert!(val.get("updated_at").is_none() || val["updated_at"].is_null());
+    }
+
+    // ── execute_tool: config_tools guard ──────────────────────────────────
+
+    #[test]
+    fn execute_tool_config_tools_disabled_returns_error() {
+        use crate::db::{migrate, pool};
+        use crate::hooks::lifecycle::HookRunner;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = crate::config::CrapConfig::default();
+        config.database.path = "test.db".to_string();
+        // config_tools is false by default
+        assert!(!config.mcp.config_tools);
+
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        let shared = Registry::shared();
+        migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+        let registry = Registry::snapshot(&shared);
+        let runner = HookRunner::new(tmp.path(), shared, &config).unwrap();
+
+        let err = execute_tool(
+            "read_config_file",
+            &json!({ "path": "init.lua" }),
+            &db_pool,
+            &registry,
+            &runner,
+            tmp.path(),
+            &config,
+        ).unwrap_err();
+        assert!(err.to_string().contains("config_tools"));
+    }
+
+    #[test]
+    fn execute_tool_unknown_tool_errors() {
+        use crate::db::{migrate, pool};
+        use crate::hooks::lifecycle::HookRunner;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = crate::config::CrapConfig::default();
+        config.database.path = "test.db".to_string();
+
+        let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+        let shared = Registry::shared();
+        migrate::sync_all(&db_pool, &shared, &config.locale).unwrap();
+        let registry = Registry::snapshot(&shared);
+        let runner = HookRunner::new(tmp.path(), shared, &config).unwrap();
+
+        let err = execute_tool(
+            "completely_unknown",
+            &json!({}),
+            &db_pool,
+            &registry,
+            &runner,
+            tmp.path(),
+            &config,
+        ).unwrap_err();
+        assert!(err.to_string().contains("Unknown tool"));
+    }
+
+    // ── parse_tool_name: update and delete ops ────────────────────────────
+
+    #[test]
+    fn parse_tool_name_create() {
+        let reg = make_registry();
+        let parsed = parse_tool_name("create_posts", &reg).unwrap();
+        assert_eq!(parsed.op, ToolOp::Create);
+        assert_eq!(parsed.slug, "posts");
+    }
+
+    #[test]
+    fn parse_tool_name_update() {
+        let reg = make_registry();
+        let parsed = parse_tool_name("update_posts", &reg).unwrap();
+        assert_eq!(parsed.op, ToolOp::Update);
+        assert_eq!(parsed.slug, "posts");
+    }
+
+    #[test]
+    fn parse_tool_name_delete() {
+        let reg = make_registry();
+        let parsed = parse_tool_name("delete_posts", &reg).unwrap();
+        assert_eq!(parsed.op, ToolOp::Delete);
+        assert_eq!(parsed.slug, "posts");
+    }
+
+    #[test]
+    fn parse_tool_name_global_update() {
+        let reg = make_registry();
+        let parsed = parse_tool_name("global_update_settings", &reg).unwrap();
+        assert_eq!(parsed.op, ToolOp::UpdateGlobal);
+        assert_eq!(parsed.slug, "settings");
+    }
+
+    #[test]
+    fn should_include_basic() {
+        let config = McpConfig::default();
+        assert!(should_include("posts", &config));
+        assert!(should_include("users", &config));
+    }
+
+    #[test]
+    fn should_include_with_include_list() {
+        let config = McpConfig {
+            include_collections: vec!["posts".to_string()],
+            ..Default::default()
+        };
+        assert!(should_include("posts", &config));
+        assert!(!should_include("users", &config));
+    }
+
+    #[test]
+    fn should_include_with_exclude_list() {
+        let config = McpConfig {
+            exclude_collections: vec!["users".to_string()],
+            ..Default::default()
+        };
+        assert!(should_include("posts", &config));
+        assert!(!should_include("users", &config));
     }
 }

@@ -248,6 +248,11 @@ function toggleArrayRow(header) {
   const row = header.closest('.form__array-row');
   if (!row) return;
   row.classList.toggle('form__array-row--collapsed');
+  const collapsed = row.classList.contains('form__array-row--collapsed');
+  const toggleBtn = row.querySelector('.form__array-row-toggle');
+  if (toggleBtn) {
+    toggleBtn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
 }
 
 /**
@@ -264,6 +269,10 @@ function toggleAllRows(btn) {
   const anyExpanded = [...rows].some((row) => !row.classList.contains('form__array-row--collapsed'));
   rows.forEach(/** @param {HTMLElement} row */ (row) => {
     row.classList.toggle('form__array-row--collapsed', anyExpanded);
+    const toggleBtn = row.querySelector('.form__array-row-toggle');
+    if (toggleBtn) {
+      toggleBtn.setAttribute('aria-expanded', anyExpanded ? 'false' : 'true');
+    }
   });
   const icon = btn.querySelector('.material-symbols-outlined');
   if (icon) icon.textContent = anyExpanded ? 'unfold_more' : 'unfold_less';

@@ -240,7 +240,7 @@ impl CollectionDefinition {
 }
 
 /// Global definitions are simpler — single-document collections.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalDefinition {
     pub slug: String,
     #[serde(default)]
@@ -308,20 +308,6 @@ impl Default for CollectionDefinition {
     }
 }
 
-impl Default for GlobalDefinition {
-    fn default() -> Self {
-        Self {
-            slug: String::new(),
-            labels: CollectionLabels::default(),
-            fields: Vec::new(),
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: McpCollectionConfig::default(),
-            live: None,
-            versions: None,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

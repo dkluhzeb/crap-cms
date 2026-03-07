@@ -215,16 +215,15 @@ impl ContentService {
                     Some(shared) => &**shared,
                     None => { local_cache = query::PopulateCache::new(); &local_cache }
                 };
+                let pop_ctx = query::PopulateContext {
+                    conn: &conn, registry: &registry,
+                    collection_slug: &collection, def: &def_owned,
+                };
+                let pop_opts = query::PopulateOpts {
+                    depth, select: select_slice, locale_ctx: locale_ctx.as_ref(),
+                };
                 query::populate_relationships_batch_cached(
-                    &conn,
-                    &registry,
-                    &collection,
-                    &def_owned,
-                    &mut docs,
-                    depth,
-                    select_slice,
-                    cache_ref,
-                    locale_ctx.as_ref(),
+                    &pop_ctx, &mut docs, &pop_opts, cache_ref,
                 )?;
                 return Ok((docs, total));
             }
@@ -258,7 +257,7 @@ impl ContentService {
                 ("id".to_string(), "ASC")
             };
             let (start_cursor, end_cursor) = query::cursor::build_cursors(
-                &documents, &sort_col, &sort_dir,
+                &documents, &sort_col, sort_dir,
             );
             // has_next_page / has_prev_page logic:
             // - Forward (after_cursor or no cursor): has_next = docs.len() >= limit, has_prev = had cursor
@@ -384,17 +383,15 @@ impl ContentService {
                         Some(shared) => &**shared,
                         None => { local_cache = query::PopulateCache::new(); &local_cache }
                     };
+                    let pop_ctx = query::PopulateContext {
+                        conn: &conn, registry: &registry,
+                        collection_slug: &collection, def: &def_owned,
+                    };
+                    let pop_opts = query::PopulateOpts {
+                        depth, select: select_slice, locale_ctx: locale_ctx.as_ref(),
+                    };
                     query::populate_relationships_cached(
-                        &conn,
-                        &registry,
-                        &collection,
-                        &def_owned,
-                        d,
-                        depth,
-                        &mut visited,
-                        select_slice,
-                        cache_ref,
-                        locale_ctx.as_ref(),
+                        &pop_ctx, d, &mut visited, &pop_opts, cache_ref,
                     )?;
                 }
             }

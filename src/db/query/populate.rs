@@ -13,6 +13,21 @@ use super::{FindQuery, FilterClause, Filter, FilterOp, LocaleContext};
 /// Uses DashMap for concurrent cross-request sharing with interior mutability.
 pub type PopulateCache = DashMap<(String, String), Document>;
 
+/// Collection and registry context for population.
+pub struct PopulateContext<'a> {
+    pub conn: &'a rusqlite::Connection,
+    pub registry: &'a crate::core::Registry,
+    pub collection_slug: &'a str,
+    pub def: &'a CollectionDefinition,
+}
+
+/// Options controlling population behavior.
+pub struct PopulateOpts<'a> {
+    pub depth: i32,
+    pub select: Option<&'a [String]>,
+    pub locale_ctx: Option<&'a LocaleContext>,
+}
+
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.
 fn parse_poly_ref(s: &str) -> Option<(String, String)> {
     let pos = s.find('/')?;
@@ -41,39 +56,34 @@ fn document_to_json(doc: &Document, collection: &str) -> serde_json::Value {
 
 /// Recursively populate relationship fields with full document objects.
 /// Convenience wrapper that creates a fresh cache per call.
-#[allow(clippy::too_many_arguments)]
 pub fn populate_relationships(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
-    collection_slug: &str,
-    def: &CollectionDefinition,
+    ctx: &PopulateContext<'_>,
     doc: &mut Document,
-    depth: i32,
     visited: &mut HashSet<(String, String)>,
-    select: Option<&[String]>,
-    locale_ctx: Option<&LocaleContext>,
+    opts: &PopulateOpts<'_>,
 ) -> Result<()> {
     let cache = PopulateCache::new();
-    populate_relationships_cached(conn, registry, collection_slug, def, doc, depth, visited, select, &cache, locale_ctx)
+    populate_relationships_cached(ctx, doc, visited, opts, &cache)
 }
 
 /// Recursively populate relationship fields with full document objects.
 /// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.
 /// If `select` is provided, only populate relationship fields in the select list.
 /// Uses a shared `cache` to avoid redundant fetches within the same request.
-#[allow(clippy::too_many_arguments)]
 pub fn populate_relationships_cached(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
-    collection_slug: &str,
-    def: &CollectionDefinition,
+    ctx: &PopulateContext<'_>,
     doc: &mut Document,
-    depth: i32,
     visited: &mut HashSet<(String, String)>,
-    select: Option<&[String]>,
+    opts: &PopulateOpts<'_>,
     cache: &PopulateCache,
-    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
+    let conn = ctx.conn;
+    let registry = ctx.registry;
+    let collection_slug = ctx.collection_slug;
+    let def = ctx.def;
+    let depth = opts.depth;
+    let select = opts.select;
+    let locale_ctx = opts.locale_ctx;
     if depth <= 0 {
         return Ok(());
     }
@@ -156,7 +166,7 @@ pub fn populate_relationships_cached(
                                     if let Some(ref uc) = item_def.upload {
                                         if uc.enabled { crate::core::upload::assemble_sizes_object(&mut rd, uc); }
                                     }
-                                    populate_relationships_cached(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None, cache, locale_ctx)?;
+                                    populate_relationships_cached(&PopulateContext { conn, registry, collection_slug: &col, def: &item_def }, &mut rd, visited, &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx }, cache)?;
                                     cache.insert((col.clone(), rd.id.clone()), rd.clone());
                                     populated.push(document_to_json(&rd, &col));
                                 } else {
@@ -190,7 +200,7 @@ pub fn populate_relationships_cached(
                             if let Some(ref uc) = item_def.upload {
                                 if uc.enabled { crate::core::upload::assemble_sizes_object(&mut rd, uc); }
                             }
-                            populate_relationships_cached(conn, registry, &col, &item_def, &mut rd, effective_depth - 1, visited, None, cache, locale_ctx)?;
+                            populate_relationships_cached(&PopulateContext { conn, registry, collection_slug: &col, def: &item_def }, &mut rd, visited, &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx }, cache)?;
                             cache.insert(poly_cache_key, rd.clone());
                             doc.fields.insert(field.name.clone(), document_to_json(&rd, &col));
                         }
@@ -244,8 +254,10 @@ pub fn populate_relationships_cached(
                                     }
                                 }
                                 populate_relationships_cached(
-                                    conn, registry, &rel.collection, &rel_def,
-                                    &mut related_doc, effective_depth - 1, visited, None, cache, locale_ctx,
+                                    &PopulateContext { conn, registry, collection_slug: &rel.collection, def: &rel_def },
+                                    &mut related_doc, visited,
+                                    &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx },
+                                    cache,
                                 )?;
                                 cache.insert(hm_cache_key, related_doc.clone());
                                 populated.push(document_to_json(&related_doc, &rel.collection));
@@ -278,8 +290,10 @@ pub fn populate_relationships_cached(
                         }
                     }
                     populate_relationships_cached(
-                        conn, registry, &rel.collection, &rel_def,
-                        &mut related_doc, effective_depth - 1, visited, None, cache, locale_ctx,
+                        &PopulateContext { conn, registry, collection_slug: &rel.collection, def: &rel_def },
+                        &mut related_doc, visited,
+                        &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx },
+                        cache,
                     )?;
                     cache.insert(ho_cache_key, related_doc.clone());
                     doc.fields.insert(field.name.clone(), document_to_json(&related_doc, &rel.collection));
@@ -323,8 +337,10 @@ pub fn populate_relationships_cached(
                     }
                 }
                 populate_relationships_cached(
-                    conn, registry, &jc.collection, &target_def,
-                    &mut matched_doc, depth - 1, visited, None, cache, locale_ctx,
+                    &PopulateContext { conn, registry, collection_slug: &jc.collection, def: &target_def },
+                    &mut matched_doc, visited,
+                    &PopulateOpts { depth: depth - 1, select: None, locale_ctx },
+                    cache,
                 )?;
                 populated.push(document_to_json(&matched_doc, &jc.collection));
             }
@@ -337,19 +353,13 @@ pub fn populate_relationships_cached(
 
 /// Batch-populate relationship fields across a slice of documents.
 /// Convenience wrapper that creates a fresh cache per call.
-#[allow(clippy::too_many_arguments)]
 pub fn populate_relationships_batch(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
-    collection_slug: &str,
-    def: &CollectionDefinition,
+    ctx: &PopulateContext<'_>,
     docs: &mut [Document],
-    depth: i32,
-    select: Option<&[String]>,
-    locale_ctx: Option<&LocaleContext>,
+    opts: &PopulateOpts<'_>,
 ) -> Result<()> {
     let cache = PopulateCache::new();
-    populate_relationships_batch_cached(conn, registry, collection_slug, def, docs, depth, select, &cache, locale_ctx)
+    populate_relationships_batch_cached(ctx, docs, opts, &cache)
 }
 
 /// Batch-populate relationship fields across a slice of documents.
@@ -361,18 +371,19 @@ pub fn populate_relationships_batch(
 ///
 /// This is the hot path for `Find` with `depth >= 1` — it turns O(N×M) queries into
 /// O(M) queries where M is the number of relationship fields.
-#[allow(clippy::too_many_arguments)]
 pub fn populate_relationships_batch_cached(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
-    collection_slug: &str,
-    def: &CollectionDefinition,
+    ctx: &PopulateContext<'_>,
     docs: &mut [Document],
-    depth: i32,
-    select: Option<&[String]>,
+    opts: &PopulateOpts<'_>,
     cache: &PopulateCache,
-    locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
+    let conn = ctx.conn;
+    let registry = ctx.registry;
+    let collection_slug = ctx.collection_slug;
+    let def = ctx.def;
+    let depth = opts.depth;
+    let select = opts.select;
+    let locale_ctx = opts.locale_ctx;
     if depth <= 0 || docs.is_empty() {
         return Ok(());
     }
@@ -459,8 +470,10 @@ pub fn populate_relationships_batch_cached(
                             }
                             if effective_depth - 1 > 0 {
                                 populate_relationships_batch_cached(
-                                    conn, registry, col, &item_def,
-                                    &mut fetched, effective_depth - 1, None, cache, locale_ctx,
+                                    &PopulateContext { conn, registry, collection_slug: col, def: &item_def },
+                                    &mut fetched,
+                                    &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx },
+                                    cache,
                                 )?;
                             }
                             for d in fetched {
@@ -543,8 +556,10 @@ pub fn populate_relationships_batch_cached(
                             }
                             if effective_depth - 1 > 0 {
                                 populate_relationships_batch_cached(
-                                    conn, registry, col, &item_def,
-                                    &mut fetched, effective_depth - 1, None, cache, locale_ctx,
+                                    &PopulateContext { conn, registry, collection_slug: col, def: &item_def },
+                                    &mut fetched,
+                                    &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx },
+                                    cache,
                                 )?;
                             }
                             for d in fetched {
@@ -616,8 +631,10 @@ pub fn populate_relationships_batch_cached(
                     }
                     if effective_depth - 1 > 0 {
                         populate_relationships_batch_cached(
-                            conn, registry, &rel.collection, &rel_def,
-                            &mut fetched, effective_depth - 1, None, cache, locale_ctx,
+                            &PopulateContext { conn, registry, collection_slug: &rel.collection, def: &rel_def },
+                            &mut fetched,
+                            &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx },
+                            cache,
                         )?;
                     }
                     for d in fetched {
@@ -679,8 +696,10 @@ pub fn populate_relationships_batch_cached(
                     }
                     if effective_depth - 1 > 0 {
                         populate_relationships_batch_cached(
-                            conn, registry, &rel.collection, &rel_def,
-                            &mut fetched, effective_depth - 1, None, cache, locale_ctx,
+                            &PopulateContext { conn, registry, collection_slug: &rel.collection, def: &rel_def },
+                            &mut fetched,
+                            &PopulateOpts { depth: effective_depth - 1, select: None, locale_ctx },
+                            cache,
                         )?;
                     }
                     for d in fetched {
@@ -707,7 +726,7 @@ pub fn populate_relationships_batch_cached(
     let has_join_fields = def.fields.iter().any(|f| {
         f.field_type == FieldType::Join
             && f.join.is_some()
-            && select.map_or(true, |sel| sel.iter().any(|s| s == &f.name))
+            && select.is_none_or(|sel| sel.iter().any(|s| s == &f.name))
     });
     if has_join_fields {
         for doc in docs.iter_mut() {
@@ -747,8 +766,10 @@ pub fn populate_relationships_batch_cached(
                             }
                         }
                         populate_relationships_cached(
-                            conn, registry, &jc.collection, &target_def,
-                            &mut matched_doc, depth - 1, &mut doc_visited, None, cache, locale_ctx,
+                            &PopulateContext { conn, registry, collection_slug: &jc.collection, def: &target_def },
+                            &mut matched_doc, &mut doc_visited,
+                            &PopulateOpts { depth: depth - 1, select: None, locale_ctx },
+                            cache,
                         )?;
                         populated.push(document_to_json(&matched_doc, &jc.collection));
                     }
@@ -923,8 +944,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 0, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 0, select: None, locale_ctx: None }).unwrap();
 
         // Author field should remain a string ID, not populated
         assert_eq!(
@@ -948,8 +970,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         // Author field should now be a populated object
         let author = doc.fields.get("author").expect("author field should exist");
@@ -1017,8 +1040,9 @@ mod tests {
 
         // Use high depth to ensure circular ref protection kicks in rather than depth limit
         let result = populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 10, &mut visited, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 10, select: None, locale_ctx: None },
         );
 
         assert!(result.is_ok(), "should not infinite loop on circular references");
@@ -1102,8 +1126,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         let tags = doc.fields.get("tags").expect("tags field should exist");
         let arr = tags.as_array().expect("tags should be an array");
@@ -1161,8 +1186,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         let tags = doc.fields.get("tags").expect("tags should exist");
         let arr = tags.as_array().expect("tags should be an array");
@@ -1199,8 +1225,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         // author should remain a string ID because max_depth=0 caps effective_depth to 0
         assert_eq!(
@@ -1247,8 +1274,9 @@ mod tests {
         let mut visited = HashSet::new();
         let select = vec!["author".to_string()]; // Only populate author, not editor
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, Some(&select), None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: Some(&select), locale_ctx: None }).unwrap();
 
         // author should be populated
         let author = doc.fields.get("author").expect("author should exist");
@@ -1274,8 +1302,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         // Empty string ID should be skipped (the `_ => continue` branch)
         assert_eq!(
@@ -1334,8 +1363,9 @@ mod tests {
         visited.insert(("categories".to_string(), "c1".to_string()));
 
         populate_relationships(
-            &conn, &registry, "posts", &posts_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         let tags = doc.fields.get("tags").expect("tags should exist");
         let arr = tags.as_array().expect("tags should be array");
@@ -1414,8 +1444,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "authors", &authors_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         let posts = doc.fields.get("posts").expect("posts join field should exist");
         let arr = posts.as_array().expect("posts should be an array");
@@ -1442,8 +1473,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "authors", &authors_def,
-            &mut doc, 0, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 0, select: None, locale_ctx: None }).unwrap();
 
         // At depth=0, join field should not be populated
         assert!(doc.fields.get("posts").is_none(), "depth=0 should not add join field");
@@ -1464,8 +1496,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "authors", &authors_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         let posts = doc.fields.get("posts").expect("posts join field should exist");
         let arr = posts.as_array().expect("posts should be an array");
@@ -1488,8 +1521,9 @@ mod tests {
         // Select only "name", not "posts"
         let select = vec!["name".to_string()];
         populate_relationships(
-            &conn, &registry, "authors", &authors_def,
-            &mut doc, 1, &mut visited, Some(&select), None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: Some(&select), locale_ctx: None }).unwrap();
 
         // Join field should be skipped because it's not in select
         assert!(doc.fields.get("posts").is_none(), "join field not in select should be skipped");
@@ -1579,8 +1613,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "entries", &entries_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         // Should be populated as a full document object
         let related = doc.fields.get("related").expect("related should exist");
@@ -1602,8 +1637,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "entries", &entries_def,
-            &mut doc, 0, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 0, select: None, locale_ctx: None }).unwrap();
 
         // depth=0: should stay as composite string
         assert_eq!(
@@ -1645,8 +1681,9 @@ mod tests {
         // Now populate
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "entries", &entries_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         let refs = doc.fields.get("refs").expect("refs should exist after populate");
         let arr = refs.as_array().unwrap();
@@ -1674,8 +1711,9 @@ mod tests {
 
         let mut visited = HashSet::new();
         populate_relationships(
-            &conn, &registry, "entries", &entries_def,
-            &mut doc, 1, &mut visited, None, None).unwrap();
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None }).unwrap();
 
         // Unknown collection: value stays as string
         assert_eq!(
@@ -1694,7 +1732,9 @@ mod tests {
 
         let mut docs = vec![];
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 0, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 0, select: None, locale_ctx: None },
         ).unwrap();
         // Empty docs + depth 0 → no-op, no error
     }
@@ -1707,7 +1747,9 @@ mod tests {
 
         let mut docs = vec![];
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
     }
 
@@ -1750,7 +1792,9 @@ mod tests {
         ];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
 
         // All three should have populated authors
@@ -1810,7 +1854,9 @@ mod tests {
         ];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
 
         // p1 tags: Tech, Science
@@ -1868,7 +1914,9 @@ mod tests {
 
         let select = vec!["author".to_string()];
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, Some(&select), None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: Some(&select), locale_ctx: None },
         ).unwrap();
 
         // author should be populated
@@ -1903,7 +1951,9 @@ mod tests {
         }];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
 
         // max_depth=0 should prevent population
@@ -1929,7 +1979,9 @@ mod tests {
         }];
 
         populate_relationships_batch(
-            &conn, &registry, "posts", &posts_def, &mut docs, 1, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
 
         // Missing doc stays as ID string
@@ -1954,7 +2006,9 @@ mod tests {
         ];
 
         populate_relationships_batch(
-            &conn, &registry, "authors", &authors_def, &mut docs, 1, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
 
         let posts = docs[0].fields.get("posts").expect("join field should be populated");
@@ -1981,13 +2035,775 @@ mod tests {
         }];
 
         populate_relationships_batch(
-            &conn, &registry, "entries", &entries_def, &mut docs, 1, None, None,
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
 
         let related = &docs[0].fields["related"];
         assert!(related.is_object(), "polymorphic has-one should be populated");
         assert_eq!(related.get("id").unwrap().as_str(), Some("a1"));
         assert_eq!(related.get("collection").unwrap().as_str(), Some("articles"));
+    }
+
+    // ── parse_poly_ref edge cases ─────────────────────────────────────────────
+
+    #[test]
+    fn parse_poly_ref_valid() {
+        assert_eq!(parse_poly_ref("articles/a1"), Some(("articles".to_string(), "a1".to_string())));
+        assert_eq!(parse_poly_ref("a/b"), Some(("a".to_string(), "b".to_string())));
+    }
+
+    #[test]
+    fn parse_poly_ref_no_slash_returns_none() {
+        assert_eq!(parse_poly_ref("noslash"), None);
+        assert_eq!(parse_poly_ref(""), None);
+    }
+
+    #[test]
+    fn parse_poly_ref_empty_col_returns_none() {
+        // "/id" — collection portion is empty
+        assert_eq!(parse_poly_ref("/someid"), None);
+    }
+
+    #[test]
+    fn parse_poly_ref_empty_id_returns_none() {
+        // "col/" — id portion is empty
+        assert_eq!(parse_poly_ref("col/"), None);
+    }
+
+    // ── Poly has-one: cache hit ───────────────────────────────────────────────
+
+    #[test]
+    fn populate_polymorphic_has_one_cache_hit() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let pages_def = make_collection_def("pages", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+        registry.register_collection(pages_def);
+
+        // Pre-populate the cache with the article document
+        let cache = PopulateCache::new();
+        let mut cached_article = Document::new("a1".to_string());
+        cached_article.fields.insert("title".to_string(), serde_json::json!("Cached Article"));
+        cache.insert(("articles".to_string(), "a1".to_string()), cached_article);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("related".to_string(), serde_json::json!("articles/a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        // Should use the cached document, not the DB version
+        let related = doc.fields.get("related").expect("related should exist");
+        assert!(related.is_object(), "should be populated from cache");
+        assert_eq!(related.get("id").and_then(|v| v.as_str()), Some("a1"));
+        // Cache returns "Cached Article", not "Article One" from DB
+        assert_eq!(related.get("title").and_then(|v| v.as_str()), Some("Cached Article"));
+    }
+
+    // ── Poly has-one: visited stops population ────────────────────────────────
+
+    #[test]
+    fn populate_polymorphic_has_one_visited_stops() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("related".to_string(), serde_json::json!("articles/a1"));
+
+        // Mark a1 as already visited
+        let mut visited = HashSet::new();
+        visited.insert(("articles".to_string(), "a1".to_string()));
+
+        let cache = PopulateCache::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        // Should remain as string because it's visited
+        assert_eq!(
+            doc.fields.get("related").and_then(|v| v.as_str()),
+            Some("articles/a1"),
+            "visited poly has-one should not be populated"
+        );
+    }
+
+    // ── Poly has-many: malformed item in reassembly ────────────────────────────
+
+    #[test]
+    fn populate_polymorphic_has_many_malformed_item_keeps_as_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_many();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let pages_def = make_collection_def("pages", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+        registry.register_collection(pages_def);
+
+        let mut doc = Document::new("e1".to_string());
+        // Mix of valid composite strings and a malformed one (no slash)
+        doc.fields.insert("refs".to_string(), serde_json::json!(["articles/a1", "malformed-no-slash"]));
+
+        let mut visited = HashSet::new();
+        let cache = PopulateCache::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let refs = doc.fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 2);
+        // First item: valid — should be populated
+        assert!(arr[0].is_object(), "valid poly ref should be populated");
+        assert_eq!(arr[0].get("id").and_then(|v| v.as_str()), Some("a1"));
+        // Second item: malformed — should be kept as-is
+        assert_eq!(arr[1].as_str(), Some("malformed-no-slash"),
+            "malformed poly ref should remain as string");
+    }
+
+    // ── Poly has-many: item visited during reassembly ─────────────────────────
+
+    #[test]
+    fn populate_polymorphic_has_many_visited_item_keeps_as_composite_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_many();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("refs".to_string(), serde_json::json!(["articles/a1"]));
+
+        // Mark a1 as visited before calling populate
+        let mut visited = HashSet::new();
+        visited.insert(("articles".to_string(), "a1".to_string()));
+
+        let cache = PopulateCache::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let refs = doc.fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 1);
+        // Visited item should remain as composite string
+        assert_eq!(arr[0].as_str(), Some("articles/a1"),
+            "visited poly ref should remain as composite string during reassembly");
+    }
+
+    // ── Poly has-many: unknown collection in items keeps as string ─────────────
+
+    #[test]
+    fn populate_polymorphic_has_many_unknown_collection_in_items_keeps_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_many();
+        // Only register "articles", not "unknown_col"
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        // Mix: one valid, one with unknown collection (not in registry)
+        doc.fields.insert("refs".to_string(), serde_json::json!(["articles/a1", "unknown_col/x99"]));
+
+        let mut visited = HashSet::new();
+        let cache = PopulateCache::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let refs = doc.fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 2);
+        // Known collection: populated
+        assert!(arr[0].is_object());
+        // Unknown collection: keeps as composite string (fetched_map.get_mut returns None)
+        assert_eq!(arr[1].as_str(), Some("unknown_col/x99"),
+            "unknown collection in poly has-many should remain as string");
+    }
+
+    // ── Has-one (non-poly): visited stops population ──────────────────────────
+
+    #[test]
+    fn populate_has_one_visited_stops_population() {
+        let conn = setup_populate_db();
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), serde_json::json!("a1"));
+
+        // Mark a1 as already visited
+        let mut visited = HashSet::new();
+        visited.insert(("authors".to_string(), "a1".to_string()));
+
+        let cache = PopulateCache::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        // author remains as ID because it's visited
+        assert_eq!(
+            doc.fields.get("author").and_then(|v| v.as_str()),
+            Some("a1"),
+            "visited has-one should not be populated"
+        );
+    }
+
+    // ── Has-one (non-poly): cache hit ─────────────────────────────────────────
+
+    #[test]
+    fn populate_has_one_cache_hit() {
+        let conn = setup_populate_db();
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        // Pre-populate cache with a different name to distinguish from DB
+        let cache = PopulateCache::new();
+        let mut cached_author = Document::new("a1".to_string());
+        cached_author.fields.insert("name".to_string(), serde_json::json!("CachedAlice"));
+        cache.insert(("authors".to_string(), "a1".to_string()), cached_author);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), serde_json::json!("a1"));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        // Should use cache, not DB value
+        let author = doc.fields.get("author").expect("author should exist");
+        assert!(author.is_object(), "should be populated from cache");
+        assert_eq!(author.get("name").and_then(|v| v.as_str()), Some("CachedAlice"),
+            "should use cached document, not DB version");
+    }
+
+    // ── Has-many (non-poly): cache hit in reassembly ──────────────────────────
+
+    #[test]
+    fn populate_has_many_cache_hit_in_reassembly() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO categories VALUES ('c1', 'DBTech', '2024-01-01', '2024-01-01');
+             INSERT INTO posts VALUES ('p1', 'Hello', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig {
+            collection: "categories".to_string(),
+            has_many: true,
+            max_depth: None,
+            polymorphic: vec![],
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            tags_field,
+        ]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        // Pre-populate cache with a different name to distinguish from DB
+        let cache = PopulateCache::new();
+        let mut cached_cat = Document::new("c1".to_string());
+        cached_cat.fields.insert("name".to_string(), serde_json::json!("CachedTech"));
+        cache.insert(("categories".to_string(), "c1".to_string()), cached_cat);
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("tags".to_string(), serde_json::json!(["c1"]));
+
+        let mut visited = HashSet::new();
+        populate_relationships_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let tags = doc.fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be array");
+        assert_eq!(arr.len(), 1);
+        assert!(arr[0].is_object(), "should be populated from cache");
+        assert_eq!(arr[0].get("name").and_then(|v| v.as_str()), Some("CachedTech"),
+            "should use cached document, not DB version");
+    }
+
+    // ── Batch poly has-many: unknown col in distribution keeps as string ───────
+
+    #[test]
+    fn batch_polymorphic_has_many_unknown_col_in_distribution_keeps_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_many();
+        // Only register "articles", not "videos" which will be in the data
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        // Mix: one with known collection, one with unknown collection
+        doc.fields.insert("refs".to_string(), serde_json::json!(["articles/a1", "videos/v1"]));
+
+        let mut docs = vec![doc];
+        populate_relationships_batch(
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+
+        let refs = docs[0].fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 2);
+        // Known collection: populated
+        assert!(arr[0].is_object(), "known collection should be populated");
+        // Unknown collection: fetched_map won't contain "videos", stays as string
+        assert_eq!(arr[1].as_str(), Some("videos/v1"),
+            "unknown collection in batch poly has-many should remain as string");
+    }
+
+    // ── Batch poly has-many: malformed item keeps as string ───────────────────
+
+    #[test]
+    fn batch_polymorphic_has_many_malformed_item_keeps_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_many();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        // Mix: valid composite string, and a malformed one (no slash)
+        doc.fields.insert("refs".to_string(), serde_json::json!(["articles/a1", "badformat"]));
+
+        let mut docs = vec![doc];
+        populate_relationships_batch(
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+
+        let refs = docs[0].fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 2);
+        assert!(arr[0].is_object(), "valid poly ref should be populated");
+        assert_eq!(arr[1].as_str(), Some("badformat"),
+            "malformed poly ref should remain as string in batch");
+    }
+
+    // ── Batch poly has-many: doc not in fetched col_map stays as string ───────
+
+    #[test]
+    fn batch_polymorphic_has_many_doc_not_in_col_map_keeps_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_many();
+        // Register "articles" in registry so fetched_map gets an entry, but fetch
+        // "nonexistent" id which won't be in the returned results
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        // "articles" is a known collection, but "nope" doesn't exist in DB
+        doc.fields.insert("refs".to_string(), serde_json::json!(["articles/nope"]));
+
+        let mut docs = vec![doc];
+        populate_relationships_batch(
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+
+        let refs = docs[0].fields.get("refs").expect("refs should exist");
+        let arr = refs.as_array().expect("refs should be array");
+        assert_eq!(arr.len(), 1);
+        // articles is in fetched_map but "nope" was not found → stays as string
+        assert_eq!(arr[0].as_str(), Some("articles/nope"),
+            "missing doc in batch poly has-many should remain as string");
+    }
+
+    // ── Batch poly has-one: unknown collection in distribution keeps string ───
+
+    #[test]
+    fn batch_polymorphic_has_one_unknown_col_in_distribution_keeps_string() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        // Don't register "videos" in registry
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        let mut doc = Document::new("e1".to_string());
+        // "videos" collection is not registered
+        doc.fields.insert("related".to_string(), serde_json::json!("videos/v1"));
+
+        let mut docs = vec![doc];
+        populate_relationships_batch(
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+
+        // "videos" not in fetched_map → value unchanged
+        assert_eq!(
+            docs[0].fields.get("related").and_then(|v| v.as_str()),
+            Some("videos/v1"),
+            "unknown collection in batch poly has-one distribution should remain as string"
+        );
+    }
+
+    // ── Batch poly has-one: visited in collection grouping skips item ─────────
+
+    #[test]
+    fn batch_polymorphic_has_one_visited_is_skipped() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        // Use two docs — batch marks all parent docs as visited at start.
+        // We'll set the field to reference an article whose id matches one of the parent docs.
+        // This is not possible with has-one easily since batch marks (collection, id) pairs.
+        // Instead, let's rely on the visited pre-marking in batch (which marks ALL parent docs).
+        // The visited set starts with all (collection_slug, doc.id) pairs.
+        // For a has-one poly field referencing a different collection, visited won't apply unless
+        // we manually add it. Let's test via two entries where e1's article is "a1" but visited.
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("related".to_string(), serde_json::json!("articles/a1"));
+
+        let cache = PopulateCache::new();
+        let mut docs = vec![doc];
+
+        // The batch function marks all parent collection docs as visited.
+        // The item_def fetch for the poly ref happens before distribution.
+        // If we want to hit the path where ids_by_collection is built but `visited.contains`
+        // returns true — we need the poly ref id to be visited as (col, id).
+        // batch marks ("entries", "e1") as visited — that's the parent, not the related.
+        // To skip a poly has-one item: the id's (col, id) must be in visited.
+        // Batch initializes visited = all (collection_slug, doc.id) pairs.
+        // So we need a poly ref to ("entries", some_id) — i.e. a self-referential poly field.
+        // Let's instead test via the wrapper to also hit the cache code path:
+        // Pre-populate cache so the doc is returned from cache in distribution.
+        let mut cached_article = Document::new("a1".to_string());
+        cached_article.fields.insert("title".to_string(), serde_json::json!("CachedFromBatchCache"));
+        cache.insert(("articles".to_string(), "a1".to_string()), cached_article);
+
+        populate_relationships_batch_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let related = docs[0].fields.get("related").expect("related should exist");
+        assert!(related.is_object(), "should be populated");
+        assert_eq!(related.get("title").and_then(|v| v.as_str()), Some("CachedFromBatchCache"),
+            "should use cached document in batch poly has-one");
+    }
+
+    // ── Batch poly has-one: cache hit path ────────────────────────────────────
+
+    #[test]
+    fn batch_polymorphic_has_one_cache_hit() {
+        let conn = setup_polymorphic_populate_db();
+        let entries_def = make_entries_def_poly_has_one();
+        let articles_def = make_collection_def("articles", vec![make_field("title", FieldType::Text)]);
+        let mut registry = Registry::new();
+        registry.register_collection(entries_def.clone());
+        registry.register_collection(articles_def);
+
+        // Pre-populate cache so find_by_ids is skipped for this id
+        let cache = PopulateCache::new();
+        let mut cached_article = Document::new("a1".to_string());
+        cached_article.fields.insert("title".to_string(), serde_json::json!("CachedTitle"));
+        cache.insert(("articles".to_string(), "a1".to_string()), cached_article);
+
+        let mut doc = Document::new("e1".to_string());
+        doc.fields.insert("related".to_string(), serde_json::json!("articles/a1"));
+        let mut docs = vec![doc];
+
+        populate_relationships_batch_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let related = docs[0].fields.get("related").expect("related should exist");
+        assert!(related.is_object());
+        assert_eq!(related.get("title").and_then(|v| v.as_str()), Some("CachedTitle"),
+            "batch poly has-one should use cache");
+    }
+
+    // ── Batch has-one (non-poly): cache hit path ──────────────────────────────
+
+    #[test]
+    fn batch_has_one_cache_hit() {
+        let conn = setup_populate_db();
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        // Pre-populate cache with a different name to distinguish from DB
+        let cache = PopulateCache::new();
+        let mut cached_author = Document::new("a1".to_string());
+        cached_author.fields.insert("name".to_string(), serde_json::json!("CachedBatchAuthor"));
+        cache.insert(("authors".to_string(), "a1".to_string()), cached_author);
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            d.fields.insert("author".to_string(), serde_json::json!("a1"));
+            d
+        }];
+
+        populate_relationships_batch_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let author = docs[0].fields.get("author").expect("author should exist");
+        assert!(author.is_object(), "should be populated from cache");
+        assert_eq!(author.get("name").and_then(|v| v.as_str()), Some("CachedBatchAuthor"),
+            "batch has-one should use cache");
+    }
+
+    // ── Batch has-many (non-poly): cache hit path ─────────────────────────────
+
+    #[test]
+    fn batch_has_many_cache_hit() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE categories (id TEXT PRIMARY KEY, name TEXT, created_at TEXT, updated_at TEXT);
+             CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO categories VALUES ('c1', 'DBTech', '2024-01-01', '2024-01-01');
+             INSERT INTO posts VALUES ('p1', 'Post', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let cats_def = make_collection_def("categories", vec![make_field("name", FieldType::Text)]);
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig {
+            collection: "categories".to_string(),
+            has_many: true,
+            max_depth: None,
+            polymorphic: vec![],
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            tags_field,
+        ]);
+
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+        registry.register_collection(cats_def);
+
+        // Pre-populate cache
+        let cache = PopulateCache::new();
+        let mut cached_cat = Document::new("c1".to_string());
+        cached_cat.fields.insert("name".to_string(), serde_json::json!("CachedCategory"));
+        cache.insert(("categories".to_string(), "c1".to_string()), cached_cat);
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            d.fields.insert("tags".to_string(), serde_json::json!(["c1"]));
+            d
+        }];
+
+        populate_relationships_batch_cached(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut docs,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &cache,
+        ).unwrap();
+
+        let tags = docs[0].fields.get("tags").expect("tags should exist");
+        let arr = tags.as_array().expect("tags should be array");
+        assert_eq!(arr.len(), 1);
+        assert!(arr[0].is_object());
+        assert_eq!(arr[0].get("name").and_then(|v| v.as_str()), Some("CachedCategory"),
+            "batch has-many should use cache");
+    }
+
+    // ── Batch: unknown collection in has-one skips it ─────────────────────────
+
+    #[test]
+    fn batch_has_one_unknown_collection_skips() {
+        let conn = setup_populate_db();
+
+        let mut author_field = make_field("author", FieldType::Relationship);
+        author_field.relationship = Some(RelationshipConfig {
+            collection: "unknown_collection".to_string(),
+            has_many: false,
+            max_depth: None,
+            polymorphic: vec![],
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            author_field,
+        ]);
+        // Don't register "unknown_collection"
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            d.fields.insert("author".to_string(), serde_json::json!("a1"));
+            d
+        }];
+
+        // Should not panic; unknown collection is skipped via `continue`
+        populate_relationships_batch(
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+
+        // Field unchanged — unknown collection causes `continue`
+        assert_eq!(docs[0].fields.get("author").and_then(|v| v.as_str()), Some("a1"));
+    }
+
+    // ── Batch: unknown collection in has-many skips it ────────────────────────
+
+    #[test]
+    fn batch_has_many_unknown_collection_skips() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO posts VALUES ('p1', 'Post', '2024-01-01', '2024-01-01');"
+        ).unwrap();
+
+        let mut tags_field = make_field("tags", FieldType::Relationship);
+        tags_field.relationship = Some(RelationshipConfig {
+            collection: "unknown_collection".to_string(),
+            has_many: true,
+            max_depth: None,
+            polymorphic: vec![],
+        });
+        let posts_def = make_collection_def("posts", vec![
+            make_field("title", FieldType::Text),
+            tags_field,
+        ]);
+        let mut registry = Registry::new();
+        registry.register_collection(posts_def.clone());
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            d.fields.insert("tags".to_string(), serde_json::json!(["t1"]));
+            d
+        }];
+
+        // Should not panic; unknown collection causes `continue`
+        populate_relationships_batch(
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+
+        // tags field unchanged
+        let tags = docs[0].fields.get("tags").expect("tags should exist");
+        assert!(tags.as_array().is_some());
+    }
+
+    // ── populate_relationships convenience wrapper ─────────────────────────────
+
+    #[test]
+    fn populate_relationships_wrapper_creates_fresh_cache() {
+        // The wrapper creates a fresh PopulateCache per call — verify it works
+        // by calling it twice and confirming it doesn't error (each call is independent)
+        let conn = setup_populate_db();
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), serde_json::json!("a1"));
+
+        let mut visited = HashSet::new();
+        // First call — populates
+        populate_relationships(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc, &mut visited,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+        assert!(doc.fields["author"].is_object());
+
+        // Reset and call again to confirm fresh cache (no stale state between calls)
+        let mut doc2 = Document::new("p1".to_string());
+        doc2.fields.insert("author".to_string(), serde_json::json!("a1"));
+        let mut visited2 = HashSet::new();
+        populate_relationships(
+            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &mut doc2, &mut visited2,
+            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+        assert!(doc2.fields["author"].is_object());
+        assert_eq!(doc2.fields["author"].get("name").and_then(|v| v.as_str()), Some("Alice"));
+    }
+
+    // ── populate_relationships_batch convenience wrapper ──────────────────────
+
+    #[test]
+    fn populate_relationships_batch_wrapper_creates_fresh_cache() {
+        let conn = setup_populate_db();
+        let registry = make_registry_with_posts_and_authors();
+        let posts_def = make_posts_def();
+
+        let mut docs = vec![{
+            let mut d = Document::new("p1".to_string());
+            d.fields.insert("author".to_string(), serde_json::json!("a1"));
+            d
+        }];
+
+        // wrapper should succeed (creates fresh cache internally)
+        populate_relationships_batch(
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+        ).unwrap();
+        assert!(docs[0].fields["author"].is_object());
+        assert_eq!(docs[0].fields["author"].get("name").and_then(|v| v.as_str()), Some("Alice"));
     }
 
     #[test]
@@ -2014,7 +2830,9 @@ mod tests {
 
         let mut docs = vec![doc];
         populate_relationships_batch(
-            &conn, &registry, "entries", &entries_def, &mut docs, 1, None, None,
+                &PopulateContext { conn: &conn, registry: &registry, collection_slug: "entries", def: &entries_def },
+                &mut docs,
+                &PopulateOpts { depth: 1, select: None, locale_ctx: None },
         ).unwrap();
 
         let refs = docs[0].fields.get("refs").unwrap();

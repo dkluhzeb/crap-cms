@@ -22,7 +22,7 @@
     {{#if has_editor_locales}}
     <div class="locale-picker" data-locale-picker>
       <button type="button" class="locale-picker__toggle" aria-label="Change content language" data-locale-toggle>
-        <span style="font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:0.05em">{{editor_locale}}</span>
+        <span class="locale-picker__badge">{{editor_locale}}</span>
       </button>
       <div class="locale-picker__dropdown" data-locale-dropdown>
         {{#each editor_locales}}
@@ -36,7 +36,7 @@
     {{#if available_locales}}
     <div class="locale-picker" data-ui-locale-picker>
       <button type="button" class="locale-picker__toggle" aria-label="Change UI language" data-ui-locale-toggle>
-        <span class="material-symbols-outlined" style="font-size:18px">translate</span>
+        <span class="material-symbols-outlined icon--md">translate</span>
       </button>
       <div class="locale-picker__dropdown" data-ui-locale-dropdown>
         {{#each available_locales}}
@@ -49,7 +49,7 @@
     {{/if}}
     <div class="theme-picker" data-theme-picker>
       <button type="button" class="theme-picker__toggle" aria-label="Change theme" data-theme-toggle>
-        <span class="material-symbols-outlined" style="font-size:18px">palette</span>
+        <span class="material-symbols-outlined icon--md">palette</span>
       </button>
       <div class="theme-picker__dropdown" data-theme-dropdown>
         <button type="button" class="theme-picker__option" data-theme-value="">

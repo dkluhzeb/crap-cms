@@ -165,7 +165,7 @@ fn parse_composite_form_data(
         }
     }
 
-    rows.into_iter().map(|(_idx, entries)| {
+    rows.into_values().map(|entries| {
         let mut obj = serde_json::Map::new();
 
         // Separate leaf entries from nested entries

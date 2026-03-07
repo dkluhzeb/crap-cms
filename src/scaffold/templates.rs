@@ -1,6 +1,6 @@
 //! Template/static file listing, extraction, and proto export.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::fs;
 use std::io::Write;
 use std::path::Path;

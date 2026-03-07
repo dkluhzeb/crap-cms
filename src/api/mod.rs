@@ -120,23 +120,21 @@ pub async fn start_server(
                 .serve_with_shutdown(addr, shutdown_signal)
                 .await?;
         }
+    } else if let Some(cors) = config.cors.build_layer() {
+        Server::builder()
+            .layer(cors)
+            .layer(rate_limit_layer)
+            .add_service(health_service)
+            .add_service(content_svc)
+            .serve_with_shutdown(addr, shutdown_signal)
+            .await?;
     } else {
-        if let Some(cors) = config.cors.build_layer() {
-            Server::builder()
-                .layer(cors)
-                .layer(rate_limit_layer)
-                .add_service(health_service)
-                .add_service(content_svc)
-                .serve_with_shutdown(addr, shutdown_signal)
-                .await?;
-        } else {
-            Server::builder()
-                .layer(rate_limit_layer)
-                .add_service(health_service)
-                .add_service(content_svc)
-                .serve_with_shutdown(addr, shutdown_signal)
-                .await?;
-        }
+        Server::builder()
+            .layer(rate_limit_layer)
+            .add_service(health_service)
+            .add_service(content_svc)
+            .serve_with_shutdown(addr, shutdown_signal)
+            .await?;
     }
 
     Ok(())

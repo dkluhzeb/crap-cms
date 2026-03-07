@@ -482,6 +482,23 @@ impl Default for FieldDefinition {
     }
 }
 
+/// Convert a snake_case identifier to Title Case.
+///
+/// Examples: `"my_field"` → `"My Field"`, `"site_settings"` → `"Site Settings"`.
+/// Used to auto-generate human-readable labels from field and collection names.
+pub fn to_title_case(s: &str) -> String {
+    s.split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Recursively flatten layout wrappers (Row, Collapsible, Tabs) to extract leaf fields.
 /// Used by Array join table DDL, read, write, and form parsing — layout wrappers are
 /// transparent inside arrays, so their children should be promoted as individual columns.
@@ -761,23 +778,6 @@ mod tests {
         assert!(f.has_parent_column(), "has-one upload should have parent column");
     }
 
-    // ── FieldHooks tests ──────────────────────────────────────────────────
-
-    #[test]
-    fn field_hooks_is_empty_default() {
-        let hooks = FieldHooks::default();
-        assert!(hooks.is_empty());
-    }
-
-    #[test]
-    fn field_hooks_is_empty_with_hooks() {
-        let hooks = FieldHooks {
-            before_validate: vec!["validate_slug".to_string()],
-            ..Default::default()
-        };
-        assert!(!hooks.is_empty());
-    }
-
     // ── FieldDefinition default tests ─────────────────────────────────────
 
     #[test]
@@ -901,5 +901,33 @@ mod tests {
     fn richtext_format_default_is_none() {
         let admin = FieldAdmin::default();
         assert!(admin.richtext_format.is_none());
+    }
+
+    // ── to_title_case tests ───────────────────────────────────────────────
+
+    #[test]
+    fn to_title_case_single_word() {
+        assert_eq!(to_title_case("posts"), "Posts");
+    }
+
+    #[test]
+    fn to_title_case_multi_word() {
+        assert_eq!(to_title_case("site_settings"), "Site Settings");
+    }
+
+    #[test]
+    fn to_title_case_three_words() {
+        assert_eq!(to_title_case("my_cool_thing"), "My Cool Thing");
+    }
+
+    #[test]
+    fn to_title_case_empty() {
+        assert_eq!(to_title_case(""), "");
+    }
+
+    #[test]
+    fn to_title_case_double_underscore() {
+        // Double underscore produces an empty segment → two spaces
+        assert_eq!(to_title_case("seo__title"), "Seo  Title");
     }
 }

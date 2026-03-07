@@ -1,6 +1,6 @@
 //! CRUD query functions for the `_crap_jobs` table.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use crate::core::job::{JobRun, JobStatus};
 
 /// Insert a new pending job run.

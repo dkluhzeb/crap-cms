@@ -1,6 +1,6 @@
 //! FTS5 full-text search helpers: index management, search, sync on writes.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::config::LocaleConfig;
 use crate::core::CollectionDefinition;
@@ -386,7 +386,7 @@ pub fn fts_upsert_with_registry(
         None => return Ok(()),
     };
 
-    let json_rt_cols = def.map(|d| json_richtext_columns(d))
+    let json_rt_cols = def.map(json_richtext_columns)
         .unwrap_or_default();
 
     // Build searchable attrs map for custom richtext nodes
@@ -1272,6 +1272,269 @@ mod tests {
 
         // Should NOT find by JSON structure keywords
         let results = fts_search(&conn, "posts", "paragraph", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── sync_fts_table: slow path (JSON richtext bulk populate) ──────────
+
+    #[test]
+    fn sync_fts_table_slow_path_json_richtext_bulk_populate() {
+        // When there is a JSON richtext field, sync uses the slow path (row-by-row extraction)
+        let conn = setup_db();
+        conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT").unwrap();
+
+        let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Extracted content"}]}]}"#;
+        conn.execute(
+            "INSERT INTO posts (id, title, content, created_at, updated_at) VALUES ('1', 'Test', ?1, datetime('now'), datetime('now'))",
+            [pm_json],
+        ).unwrap();
+
+        let def = CollectionDefinition {
+            admin: CollectionAdmin {
+                list_searchable_fields: vec!["title".into(), "content".into()],
+                ..Default::default()
+            },
+            ..simple_def(vec![
+                text_field("title"),
+                FieldDefinition {
+                    name: "content".to_string(),
+                    field_type: FieldType::Richtext,
+                    admin: FieldAdmin {
+                        richtext_format: Some("json".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ])
+        };
+
+        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        // Should find via extracted plain text
+        let results = fts_search(&conn, "posts", "Extracted", 10).unwrap();
+        assert_eq!(results, vec!["1"]);
+
+        // Should NOT find via JSON structure keywords
+        let results = fts_search(&conn, "posts", "paragraph", 10).unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── sync_fts_table slow path: locale-expanded richtext columns ────────
+
+    #[test]
+    fn sync_fts_table_slow_path_locale_richtext() {
+        // Localized JSON richtext field — column name is `content__en`, which should be
+        // matched by the `col_name.split("__").next()` check in the slow path.
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello locale"}]}]}"#;
+        conn.execute_batch(&format!(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY, content__en TEXT, content__de TEXT, created_at TEXT, updated_at TEXT);
+             INSERT INTO posts (id, content__en, content__de) VALUES ('1', '{pm}', '');"
+            , pm = pm_json.replace('\'', "''")
+        )).unwrap();
+
+        let def = CollectionDefinition {
+            admin: CollectionAdmin {
+                list_searchable_fields: vec!["content".into()],
+                ..Default::default()
+            },
+            ..simple_def(vec![
+                FieldDefinition {
+                    name: "content".to_string(),
+                    field_type: FieldType::Richtext,
+                    localized: true,
+                    admin: FieldAdmin {
+                        richtext_format: Some("json".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ])
+        };
+
+        let locale_config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: false,
+        };
+
+        sync_fts_table(&conn, "posts", &def, &locale_config).unwrap();
+
+        // Should find via extracted plain text in en locale column
+        let results = fts_search(&conn, "posts", "locale", 10).unwrap();
+        assert_eq!(results, vec!["1"]);
+    }
+
+    // ── extract_prosemirror_text_with_nodes: invalid JSON ─────────────────
+
+    #[test]
+    fn extract_prosemirror_text_with_nodes_invalid_json() {
+        let node_searchable = std::collections::HashMap::new();
+        let result = extract_prosemirror_text_with_nodes("not valid json", &node_searchable);
+        assert_eq!(result, "", "invalid JSON should return empty string");
+    }
+
+    #[test]
+    fn extract_prosemirror_text_with_nodes_empty_string() {
+        let node_searchable = std::collections::HashMap::new();
+        let result = extract_prosemirror_text_with_nodes("", &node_searchable);
+        assert_eq!(result, "");
+    }
+
+    // ── fts_upsert_with_registry: node searchable attrs ──────────────────
+
+    #[test]
+    fn fts_upsert_with_registry_extracts_node_attrs() {
+        use crate::core::{Registry, richtext::RichtextNodeDef};
+
+        let conn = setup_db();
+        conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT").unwrap();
+
+        let def = CollectionDefinition {
+            admin: CollectionAdmin {
+                list_searchable_fields: vec!["title".into(), "content".into()],
+                ..Default::default()
+            },
+            ..simple_def(vec![
+                text_field("title"),
+                FieldDefinition {
+                    name: "content".to_string(),
+                    field_type: FieldType::Richtext,
+                    admin: FieldAdmin {
+                        richtext_format: Some("json".to_string()),
+                        nodes: vec!["cta".to_string()],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ])
+        };
+
+        let mut registry = Registry::new();
+        registry.register_richtext_node(RichtextNodeDef {
+            name: "cta".to_string(),
+            label: "Call to Action".to_string(),
+            inline: false,
+            attrs: vec![],
+            searchable_attrs: vec!["button_text".to_string()],
+            has_render: false,
+        });
+
+        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        // ProseMirror JSON with a custom cta node containing a searchable attr
+        let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]},{"type":"cta","attrs":{"button_text":"Click Here","url":"/go"}}]}"#;
+
+        let doc = Document {
+            id: "rg1".to_string(),
+            fields: HashMap::from([
+                ("title".into(), serde_json::json!("Registry Test")),
+                ("content".into(), serde_json::json!(pm_json)),
+            ]),
+            created_at: None,
+            updated_at: None,
+        };
+
+        fts_upsert_with_registry(&conn, "posts", &doc, Some(&def), Some(&registry)).unwrap();
+
+        // Should find by extracted inline text
+        let results = fts_search(&conn, "posts", "Hello", 10).unwrap();
+        assert_eq!(results, vec!["rg1"]);
+
+        // Should find by custom node attr text
+        let results = fts_search(&conn, "posts", "Click", 10).unwrap();
+        assert_eq!(results, vec!["rg1"]);
+
+        // Should NOT find by non-searchable attr
+        let results = fts_search(&conn, "posts", "go", 10).unwrap();
+        assert!(results.is_empty() || !results.contains(&"rg1".to_string()));
+    }
+
+    // ── fts_upsert: richtext with no FTS table (no-op path) ──────────────
+
+    #[test]
+    fn fts_upsert_with_registry_noop_no_fts_table() {
+        use crate::core::Registry;
+
+        let conn = setup_db();
+        // No FTS table created — should be a no-op
+        let doc = Document {
+            id: "1".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        let registry = Registry::new();
+        let result = fts_upsert_with_registry(&conn, "posts", &doc, None, Some(&registry));
+        assert!(result.is_ok(), "should be a no-op when no FTS table exists");
+    }
+
+    // ── build_node_searchable_map: None inputs return empty map ───────────
+
+    #[test]
+    fn fts_upsert_with_registry_nil_inputs_use_plain_extraction() {
+        // When def=None or registry=None, build_node_searchable_map returns empty map
+        // and fts_upsert_with_registry falls back to plain extraction
+        let conn = setup_db();
+        let def = simple_def(vec![text_field("title")]);
+        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        let doc = Document {
+            id: "plain1".to_string(),
+            fields: HashMap::from([
+                ("title".into(), serde_json::json!("Plain text")),
+            ]),
+            created_at: None,
+            updated_at: None,
+        };
+
+        // def=None → build_node_searchable_map returns empty, no JSON richtext extraction
+        fts_upsert_with_registry(&conn, "posts", &doc, None, None).unwrap();
+
+        let results = fts_search(&conn, "posts", "Plain", 10).unwrap();
+        assert_eq!(results, vec!["plain1"]);
+    }
+
+    // ── get_fts_table_columns: nonexistent table returns None ─────────────
+
+    #[test]
+    fn get_fts_table_columns_nonexistent_returns_none() {
+        let conn = setup_db();
+        // The function is private but we can test it indirectly via fts_upsert behavior:
+        // no FTS table = None from get_fts_table_columns = no-op in fts_upsert
+        let doc = Document {
+            id: "x".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        };
+        // If get_fts_table_columns returned Some when table doesn't exist,
+        // this would error with "no such table" — proving it returns None correctly
+        fts_upsert(&conn, "posts", &doc, None).unwrap();
+    }
+
+    // ── fts_upsert: field value is non-string JSON (exercises unwrap_or path) ──
+
+    #[test]
+    fn fts_upsert_field_with_non_string_value_uses_empty() {
+        // If doc.fields has a non-string JSON value for an FTS column,
+        // the `.and_then(|v| v.as_str()).unwrap_or("")` path returns ""
+        let conn = setup_db();
+        let def = simple_def(vec![text_field("title")]);
+        sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
+
+        let doc = Document {
+            id: "obj1".to_string(),
+            fields: HashMap::from([
+                ("title".into(), serde_json::json!({"nested": "object"})),  // not a string
+            ]),
+            created_at: None,
+            updated_at: None,
+        };
+        fts_upsert(&conn, "posts", &doc, None).unwrap();
+
+        // Non-string value → empty string indexed → shouldn't find anything
+        let results = fts_search(&conn, "posts", "nested", 10).unwrap();
         assert!(results.is_empty());
     }
 }

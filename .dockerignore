@@ -1,0 +1,6 @@
+target/
+.git/
+docs/book/
+node_modules/
+*.md
+!Dockerfile*

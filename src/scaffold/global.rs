@@ -1,6 +1,6 @@
 //! `make global` command — generate global Lua files.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::fs;
 use std::path::Path;
 

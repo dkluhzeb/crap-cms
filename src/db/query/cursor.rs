@@ -209,4 +209,122 @@ mod tests {
         let decoded = CursorData::decode(&encoded).unwrap();
         assert_eq!(decoded.sort_val, serde_json::Value::Null);
     }
+
+    // ── decode: empty id field ───────────────────────────────────────────
+
+    #[test]
+    fn decode_empty_id_field_errors() {
+        // sort_col is non-empty but id is empty — should fail missing required fields
+        let json = r#"{"sort_col":"title","sort_dir":"ASC","sort_val":"x","id":""}"#;
+        let encoded = B64.encode(json.as_bytes());
+        let result = CursorData::decode(&encoded);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing required fields"));
+    }
+
+    // ── decode: invalid UTF-8 bytes ──────────────────────────────────────
+
+    #[test]
+    fn decode_invalid_utf8() {
+        // Encode raw bytes that are not valid UTF-8
+        let bad_bytes: &[u8] = &[0xFF, 0xFE, 0xFD];
+        let encoded = B64.encode(bad_bytes);
+        let result = CursorData::decode(&encoded);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid cursor UTF-8"));
+    }
+
+    // ── cursor_from_doc: updated_at branch ──────────────────────────────
+
+    #[test]
+    fn build_cursors_sort_by_updated_at_with_value() {
+        let docs = vec![Document {
+            id: "doc1".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: Some("2024-06-15".to_string()),
+        }];
+        let (start, end) = build_cursors(&docs, "updated_at", "DESC");
+        let decoded_start = CursorData::decode(&start.unwrap()).unwrap();
+        let decoded_end = CursorData::decode(&end.unwrap()).unwrap();
+        assert_eq!(decoded_start.sort_col, "updated_at");
+        assert_eq!(decoded_start.sort_val, serde_json::Value::String("2024-06-15".to_string()));
+        assert_eq!(decoded_end.sort_col, "updated_at");
+    }
+
+    #[test]
+    fn build_cursors_sort_by_updated_at_none() {
+        // updated_at is None — sort_val should be Null
+        let docs = vec![Document {
+            id: "doc1".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        }];
+        let (start, _end) = build_cursors(&docs, "updated_at", "ASC");
+        let decoded = CursorData::decode(&start.unwrap()).unwrap();
+        assert_eq!(decoded.sort_val, serde_json::Value::Null);
+    }
+
+    #[test]
+    fn build_cursors_sort_by_created_at_none() {
+        // created_at is None — sort_val should be Null
+        let docs = vec![Document {
+            id: "doc2".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        }];
+        let (start, _end) = build_cursors(&docs, "created_at", "ASC");
+        let decoded = CursorData::decode(&start.unwrap()).unwrap();
+        assert_eq!(decoded.sort_val, serde_json::Value::Null);
+    }
+
+    // ── cursor_from_doc: sort by id ──────────────────────────────────────
+
+    #[test]
+    fn build_cursors_sort_by_id() {
+        let docs = vec![Document {
+            id: "the-id".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        }];
+        let (start, _end) = build_cursors(&docs, "id", "ASC");
+        let decoded = CursorData::decode(&start.unwrap()).unwrap();
+        assert_eq!(decoded.sort_col, "id");
+        assert_eq!(decoded.sort_val, serde_json::Value::String("the-id".to_string()));
+    }
+
+    // ── cursor_from_doc: arbitrary field branch ──────────────────────────
+
+    #[test]
+    fn build_cursors_sort_by_arbitrary_field_present() {
+        let docs = vec![Document {
+            id: "doc3".to_string(),
+            fields: HashMap::from([
+                ("score".to_string(), serde_json::json!(42)),
+            ]),
+            created_at: None,
+            updated_at: None,
+        }];
+        let (start, _end) = build_cursors(&docs, "score", "ASC");
+        let decoded = CursorData::decode(&start.unwrap()).unwrap();
+        assert_eq!(decoded.sort_col, "score");
+        assert_eq!(decoded.sort_val, serde_json::json!(42));
+    }
+
+    #[test]
+    fn build_cursors_sort_by_arbitrary_field_missing() {
+        // Field not in doc.fields — sort_val should be Null
+        let docs = vec![Document {
+            id: "doc4".to_string(),
+            fields: HashMap::new(),
+            created_at: None,
+            updated_at: None,
+        }];
+        let (start, _end) = build_cursors(&docs, "nonexistent", "ASC");
+        let decoded = CursorData::decode(&start.unwrap()).unwrap();
+        assert_eq!(decoded.sort_val, serde_json::Value::Null);
+    }
 }

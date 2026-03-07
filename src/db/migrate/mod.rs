@@ -10,7 +10,7 @@ pub use tracking::{
     get_pending_migrations, record_migration, remove_migration, drop_all_tables,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::config::LocaleConfig;
 use crate::core::SharedRegistry;

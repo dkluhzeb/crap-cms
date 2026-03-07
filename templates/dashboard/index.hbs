@@ -13,7 +13,7 @@
       {{#if this.has_versions}}<span class="card__badge">{{t "badge_versions"}}</span>{{/if}}
     </div>
     <div class="card__body">
-      <p class="card__stat">{{this.count}} {{this.singular_name}}(s)</p>
+      <p class="card__stat">{{this.count}} {{#if (eq this.count 1)}}{{this.singular_name}}{{else}}{{this.display_name}}{{/if}}</p>
       {{#if this.last_updated}}<p class="card__meta">{{t "last_updated"}} <time datetime="{{this.last_updated}}">{{this.last_updated}}</time></p>{{/if}}
     </div>
   </a>
@@ -21,7 +21,7 @@
 </div>
 
 {{#if global_cards}}
-<h2 style="margin-top: var(--space-xl);">{{t "globals"}}</h2>
+<h2 class="dashboard__section-title">{{t "globals"}}</h2>
 <div class="cards">
   {{#each global_cards}}
   <a class="card" href="/admin/globals/{{this.slug}}"

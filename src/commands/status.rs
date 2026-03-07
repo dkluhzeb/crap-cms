@@ -1,6 +1,6 @@
 //! `status` command — show project status (collections, globals, migrations, jobs, uploads).
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::path::Path;
 
 /// Format a byte count as a human-readable string (e.g., "1.5 MB").

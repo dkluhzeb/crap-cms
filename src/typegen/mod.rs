@@ -135,6 +135,12 @@ pub(crate) fn is_optional(field: &FieldDefinition) -> bool {
     !field.required || field.field_type == FieldType::Checkbox
 }
 
+/// Whether a field's relationship config marks it as has-many.
+/// Returns `false` when there is no `RelationshipConfig` (i.e. defaults to has-one).
+pub(crate) fn rel_has_many(field: &FieldDefinition) -> bool {
+    field.relationship.as_ref().is_some_and(|rc| rc.has_many)
+}
+
 /// Get sorted collection slugs from the registry.
 pub(crate) fn sorted_collection_slugs(registry: &Registry) -> Vec<&String> {
     let mut slugs: Vec<&String> = registry.collections.keys().collect();
@@ -177,6 +183,48 @@ mod tests {
     #[test]
     fn to_pascal_case_three_words() {
         assert_eq!(to_pascal_case("my_cool_thing"), "MyCoolThing");
+    }
+
+    #[test]
+    fn rel_has_many_with_has_many_config() {
+        use crate::core::field::RelationshipConfig;
+        let f = FieldDefinition {
+            field_type: crate::core::field::FieldType::Upload,
+            relationship: Some(RelationshipConfig {
+                collection: "media".to_string(),
+                has_many: true,
+                max_depth: None,
+                polymorphic: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(rel_has_many(&f));
+    }
+
+    #[test]
+    fn rel_has_many_with_has_one_config() {
+        use crate::core::field::RelationshipConfig;
+        let f = FieldDefinition {
+            field_type: crate::core::field::FieldType::Upload,
+            relationship: Some(RelationshipConfig {
+                collection: "media".to_string(),
+                has_many: false,
+                max_depth: None,
+                polymorphic: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(!rel_has_many(&f));
+    }
+
+    #[test]
+    fn rel_has_many_with_no_config() {
+        let f = FieldDefinition {
+            field_type: crate::core::field::FieldType::Upload,
+            relationship: None,
+            ..Default::default()
+        };
+        assert!(!rel_has_many(&f));
     }
 
     #[test]

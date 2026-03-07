@@ -1,6 +1,6 @@
 //! `jobs` command — manage background jobs.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 /// Handle the `jobs` subcommand.
 // Excluded from coverage: requires full Lua + DB setup (init_lua, create_pool, sync_all)

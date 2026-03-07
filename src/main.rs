@@ -4,7 +4,7 @@
 //! `migrate`, `backup`, `export`, `import`, `init`, `templates`, `jobs`, `images`.
 //! Running bare `crap-cms` prints help.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -110,6 +110,23 @@ enum Command {
         /// Also compress the uploads directory
         #[arg(short, long)]
         include_uploads: bool,
+    },
+
+    /// Restore database (and optionally uploads) from a backup directory
+    Restore {
+        /// Path to the config directory
+        config: PathBuf,
+
+        /// Path to the backup directory (e.g. backups/backup-2026-03-07T10-00-00)
+        backup: PathBuf,
+
+        /// Also restore uploads from uploads.tar.gz if present
+        #[arg(short, long)]
+        include_uploads: bool,
+
+        /// Confirm destructive operation (required)
+        #[arg(short = 'y', long)]
+        confirm: bool,
     },
 
     /// Database tools
@@ -260,6 +277,9 @@ async fn main() -> Result<()> {
         Command::Migrate { config, action } => commands::db::migrate(&config, action),
         Command::Backup { config, output, include_uploads } => {
             commands::db::backup(&config, output, include_uploads)
+        }
+        Command::Restore { config, backup, include_uploads, confirm } => {
+            commands::db::restore(&config, &backup, include_uploads, confirm)
         }
         Command::Db { action } => match action {
             DbAction::Console { config } => commands::db::console(&config),

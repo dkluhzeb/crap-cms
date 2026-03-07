@@ -1,6 +1,6 @@
 //! `init` command — scaffold a new config directory with interactive survey.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::path::PathBuf;
 
 /// Handle the `init` subcommand — scaffold directory, then optionally create collections

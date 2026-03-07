@@ -4,8 +4,8 @@
     {{#if required}}<span class="required">*</span>{{/if}}
     <span class="form__array-count" id="array-count-{{template_id}}">{{row_count}}</span>
     <span class="form__array-legend-actions">
-      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows" title="{{t "toggle_collapse"}}">
-        <span class="material-symbols-outlined" style="font-size:14px">unfold_less</span>
+      <button type="button" class="form__array-legend-btn" data-action="toggle-all-rows" aria-label="{{t "toggle_collapse"}}">
+        <span class="material-symbols-outlined icon--xs" aria-hidden="true">unfold_less</span>
       </button>
     </span>
   </legend>
@@ -14,23 +14,26 @@
     {{#each rows}}
     <div class="form__array-row{{#if ../init_collapsed}}{{#unless this.has_errors}} form__array-row--collapsed{{/unless}}{{/if}}{{#if this.has_errors}} form__array-row--has-errors{{/if}}" data-row-index="{{this.index}}">
       <div class="form__array-row-header" data-action="toggle-array-row">
-        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="{{t "drag_to_reorder"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">drag_indicator</span>
+        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="{{t "drag_to_reorder"}}" aria-hidden="true">
+          <span class="material-symbols-outlined icon--sm">drag_indicator</span>
         </span>
-        <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
-        <span class="form__array-row-title">{{#if this.custom_label}}{{this.custom_label}}{{else}}{{this.block_label}} {{this.index}}{{/if}}</span>
-        {{#if this.has_errors}}<span class="form__array-row-error-badge" title="{{t "validation_errors"}}"><span class="material-symbols-outlined" style="font-size:16px">error</span></span>{{/if}}
-        <button type="button" class="form__array-row-btn" data-action="move-row-up" title="{{t "move_up"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">arrow_upward</span>
+        <button type="button" class="form__array-row-toggle" data-action="toggle-array-row"
+                aria-expanded="{{#if ../init_collapsed}}{{#if this.has_errors}}true{{else}}false{{/if}}{{else}}true{{/if}}">
+          <span class="form__array-row-chevron material-symbols-outlined" aria-hidden="true">expand_more</span>
+          <span class="form__array-row-title">{{#if this.custom_label}}{{this.custom_label}}{{else}}{{this.block_label}} {{this.index}}{{/if}}</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="move-row-down" title="{{t "move_down"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">arrow_downward</span>
+        {{#if this.has_errors}}<span class="form__array-row-error-badge" title="{{t "validation_errors"}}"><span class="material-symbols-outlined icon--sm" aria-hidden="true">error</span></span>{{/if}}
+        <button type="button" class="form__array-row-btn" data-action="move-row-up" aria-label="{{t "move_up"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">arrow_upward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="duplicate-row" title="{{t "duplicate"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">content_copy</span>
+        <button type="button" class="form__array-row-btn" data-action="move-row-down" aria-label="{{t "move_down"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">arrow_downward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="remove-array-row" title="{{t "remove"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">close</span>
+        <button type="button" class="form__array-row-btn" data-action="duplicate-row" aria-label="{{t "duplicate"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">content_copy</span>
+        </button>
+        <button type="button" class="form__array-row-btn" data-action="remove-array-row" aria-label="{{t "remove"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">close</span>
         </button>
       </div>
       <div class="form__array-row-body">
@@ -53,22 +56,24 @@
   <template id="block-template-{{../template_id}}-{{this.block_type}}"{{#if this.label_field}} data-label-field="{{this.label_field}}"{{/if}}>
     <div class="form__array-row" data-row-index="__INDEX__">
       <div class="form__array-row-header" data-action="toggle-array-row">
-        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="{{t "drag_to_reorder"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">drag_indicator</span>
+        <span class="form__array-row-drag" draggable="true" data-drag data-action="noop" title="{{t "drag_to_reorder"}}" aria-hidden="true">
+          <span class="material-symbols-outlined icon--sm">drag_indicator</span>
         </span>
-        <span class="form__array-row-chevron material-symbols-outlined">expand_more</span>
-        <span class="form__array-row-title">{{this.label}} __INDEX__</span>
-        <button type="button" class="form__array-row-btn" data-action="move-row-up" title="{{t "move_up"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">arrow_upward</span>
+        <button type="button" class="form__array-row-toggle" data-action="toggle-array-row" aria-expanded="true">
+          <span class="form__array-row-chevron material-symbols-outlined" aria-hidden="true">expand_more</span>
+          <span class="form__array-row-title">{{this.label}} __INDEX__</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="move-row-down" title="{{t "move_down"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">arrow_downward</span>
+        <button type="button" class="form__array-row-btn" data-action="move-row-up" aria-label="{{t "move_up"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">arrow_upward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="duplicate-row" title="{{t "duplicate"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">content_copy</span>
+        <button type="button" class="form__array-row-btn" data-action="move-row-down" aria-label="{{t "move_down"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">arrow_downward</span>
         </button>
-        <button type="button" class="form__array-row-btn" data-action="remove-array-row" title="{{t "remove"}}">
-          <span class="material-symbols-outlined" style="font-size:16px">close</span>
+        <button type="button" class="form__array-row-btn" data-action="duplicate-row" aria-label="{{t "duplicate"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">content_copy</span>
+        </button>
+        <button type="button" class="form__array-row-btn" data-action="remove-array-row" aria-label="{{t "remove"}}">
+          <span class="material-symbols-outlined icon--sm" aria-hidden="true">close</span>
         </button>
       </div>
       <div class="form__array-row-body">
@@ -94,8 +99,8 @@
     <button type="button" class="button button--ghost button--small"
         data-action="add-block-row" data-template-id="{{template_id}}"
         {{#if max_rows}}data-max-rows="{{max_rows}}"{{/if}}>
-      <span class="material-symbols-outlined" style="font-size:16px">add</span>
-      Add {{#if add_label}}{{add_label}}{{else}}{{t "block"}}{{/if}}
+      <span class="material-symbols-outlined icon--sm">add</span>
+      {{t "add"}} {{#if add_label}}{{add_label}}{{else}}{{t "block"}}{{/if}}
     </button>
   </div>
 

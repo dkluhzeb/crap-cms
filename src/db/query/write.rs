@@ -1,6 +1,6 @@
 //! Write operations: create, update, delete.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 

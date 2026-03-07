@@ -158,6 +158,10 @@ h1 {
   margin: 0;
 }
 
+.dashboard__section-title {
+  margin-top: var(--space-xl);
+}
+
 /* Empty state */
 .empty-state {
   display: flex;
@@ -177,6 +181,16 @@ h1 {
 
 .empty-state .button {
   margin-top: var(--space-sm);
+}
+
+.empty-state__icon {
+  font-size: 48px;
+  color: var(--text-tertiary);
+}
+
+.empty-state__hint {
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
 }
 
 /* Error page */
@@ -218,6 +232,13 @@ h1 {
 /* Locale picker */
 .locale-picker {
   position: relative;
+}
+
+.locale-picker__badge {
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .locale-picker__toggle {

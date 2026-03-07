@@ -2,7 +2,7 @@
 
 use std::sync::LazyLock;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use argon2::{
     password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
@@ -140,5 +140,58 @@ mod tests {
         };
         let token = create_token(&claims, "correct-secret").unwrap();
         assert!(validate_token(&token, "wrong-secret").is_err());
+    }
+
+    #[test]
+    fn verify_password_with_invalid_hash_returns_error() {
+        // A corrupted or non-Argon2 string should return Err, not panic.
+        let result = verify_password("password", "not-a-valid-hash");
+        assert!(result.is_err());
+
+        // Looks like a hash but is truncated/corrupted.
+        let result = verify_password("password", "$argon2id$v=19$m=19456,t=2,p=1$AAAA$CORRUPT");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn validate_token_with_malformed_jwt_returns_error() {
+        // Completely non-JWT string.
+        assert!(validate_token("not-a-jwt", "secret").is_err());
+
+        // Wrong number of segments (JWT requires exactly 3 base64url parts).
+        assert!(validate_token("aaa.bbb", "secret").is_err());
+
+        // Four segments instead of three.
+        assert!(validate_token("aaa.bbb.ccc.ddd", "secret").is_err());
+
+        // Correct segment count but invalid base64 content.
+        assert!(validate_token("!!!.???.$$$", "secret").is_err());
+    }
+
+    #[test]
+    fn hash_password_empty_string_succeeds() {
+        // An empty password is technically valid and should produce a usable hash.
+        let hash = hash_password("").unwrap();
+        assert!(hash.starts_with("$argon2"));
+        // And we can round-trip verify it.
+        assert!(verify_password("", &hash).unwrap());
+        assert!(!verify_password("notempty", &hash).unwrap());
+    }
+
+    #[test]
+    fn create_and_validate_token_all_claims_match() {
+        let exp = (chrono::Utc::now().timestamp() as u64) + 7200;
+        let claims = Claims {
+            sub: "abc-123".to_string(),
+            collection: "admins".to_string(),
+            email: "admin@example.com".to_string(),
+            exp,
+        };
+        let token = create_token(&claims, "roundtrip-secret").unwrap();
+        let decoded = validate_token(&token, "roundtrip-secret").unwrap();
+        assert_eq!(decoded.sub, claims.sub);
+        assert_eq!(decoded.collection, claims.collection);
+        assert_eq!(decoded.email, claims.email);
+        assert_eq!(decoded.exp, claims.exp);
     }
 }

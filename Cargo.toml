@@ -55,12 +55,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 webp = "0.3"
 
 # HTTP client (blocking — used in Lua spawn_blocking context)
-ureq = "2"
+ureq = "3"
 
 # Crypto
 ring = "0.17"
 base64 = "0.22"
-rand = "0.8"
+rand = "0.9"
 aes-gcm = "0.10"
 
 # Cron scheduling
@@ -70,7 +70,7 @@ cron = "0.12"
 tower = { version = "0.5", features = ["util"] }
 
 # Utilities
-rpassword = "5"
+rpassword = "7"
 nanoid = "0.4"
 dirs = "6"
 chrono = { version = "0.4", features = ["serde"] }

@@ -1,6 +1,6 @@
 //! `make` command — scaffold collections, globals, hooks, and jobs.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::path::Path;
 
 /// Dispatch the `make` subcommand.
@@ -308,7 +308,7 @@ fn make_hook_command(
                 };
                 let selection = Select::new()
                     .with_prompt(prompt)
-                    .items(&positions.to_vec())
+                    .items(positions)
                     .default(0)
                     .interact()
                     .context("Failed to read position selection")?;

@@ -32,7 +32,7 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const rusqlite::Connection
 /// Untestable as unit: registers Lua closures that require TxContext + full DB.
 /// Covered by integration tests (hook CRUD operations in tests/).
 #[cfg(not(tarpaulin_include))]
-pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &LocaleConfig, _max_depth: u32, pagination_config: &crate::config::PaginationConfig) -> Result<()> {
+pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, locale_config: &LocaleConfig, pagination_config: &crate::config::PaginationConfig) -> Result<()> {
     let crap: mlua::Table = lua.globals().get("crap")?;
     let collections: mlua::Table = crap.get("collections")?;
 
@@ -156,8 +156,14 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                 let r = reg.read().map_err(|e| mlua::Error::RuntimeError(
                     format!("Registry lock: {}", e)
                 ))?;
+                let pop_ctx = query::PopulateContext {
+                    conn, registry: &r, collection_slug: &collection, def: &def,
+                };
+                let pop_opts = query::PopulateOpts {
+                    depth, select: select_slice, locale_ctx: locale_ctx.as_ref(),
+                };
                 query::populate_relationships_batch(
-                    conn, &r, &collection, &def, &mut docs, depth, select_slice, locale_ctx.as_ref(),
+                    &pop_ctx, &mut docs, &pop_opts,
                 ).map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
             }
             // Assemble sizes for upload collections
@@ -219,7 +225,7 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                     ("id".to_string(), "ASC")
                 };
                 let (start_cursor, end_cursor) = query::cursor::build_cursors(
-                    &docs, &sort_col, &sort_dir,
+                    &docs, &sort_col, sort_dir,
                 );
                 let using_before = find_query.before_cursor.is_some();
                 let has_cursor = find_query.after_cursor.is_some() || using_before;
@@ -344,8 +350,14 @@ pub(crate) fn register_crud_functions(lua: &Lua, registry: SharedRegistry, local
                         format!("Registry lock: {}", e)
                     ))?;
                     let mut visited = std::collections::HashSet::new();
+                    let pop_ctx = query::PopulateContext {
+                        conn, registry: &r, collection_slug: &collection, def: &def,
+                    };
+                    let pop_opts = query::PopulateOpts {
+                        depth, select: select_slice, locale_ctx: locale_ctx.as_ref(),
+                    };
                     query::populate_relationships(
-                        conn, &r, &collection, &def, d, depth, &mut visited, select_slice, locale_ctx.as_ref(),
+                        &pop_ctx, d, &mut visited, &pop_opts,
                     ).map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
                 }
                 // Assemble sizes for upload collections

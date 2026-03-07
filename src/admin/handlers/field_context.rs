@@ -1226,9 +1226,7 @@ fn enrich_polymorphic_selected(
             _ => Vec::new(),
         }
     } else {
-        match doc_fields.get(field_name)
-            .or_else(|| None) // fall through to value in ctx
-        {
+        match doc_fields.get(field_name) {
             Some(serde_json::Value::String(s)) if !s.is_empty() => {
                 if let Some(pos) = s.find('/') {
                     let col = &s[..pos];
@@ -1302,7 +1300,7 @@ pub(super) fn enrich_field_contexts(
                     if rc.is_polymorphic() {
                         // Polymorphic: values are "collection/id" composites
                         let selected_items = enrich_polymorphic_selected(
-                            rc, &field_def.name, doc_fields, &reg, &conn, rel_locale_ctx.as_ref(),
+                            rc, &field_def.name, doc_fields, reg, &conn, rel_locale_ctx.as_ref(),
                         );
                         ctx["selected_items"] = serde_json::json!(selected_items);
                     } else if let Some(related_def) = reg.get_collection(&rc.collection) {
@@ -1395,13 +1393,13 @@ pub(super) fn enrich_field_contexts(
                 if let Some(rows_arr) = ctx.get_mut("rows").and_then(|v| v.as_array_mut()) {
                     for row_ctx in rows_arr.iter_mut() {
                         if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                            enrich_nested_fields(sub_arr, &field_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                            enrich_nested_fields(sub_arr, &field_def.fields, &conn, reg, rel_locale_ctx.as_ref());
                         }
                     }
                 }
                 // Enrich the <template> sub-fields so new rows added via JS have upload/relationship options
                 if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                    enrich_nested_fields(sub_arr, &field_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                    enrich_nested_fields(sub_arr, &field_def.fields, &conn, reg, rel_locale_ctx.as_ref());
                 }
             }
             FieldType::Upload => {
@@ -1563,7 +1561,7 @@ pub(super) fn enrich_field_contexts(
                             .unwrap_or("");
                         if let Some(block_def) = field_def.blocks.iter().find(|bd| bd.block_type == block_type) {
                             if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                                enrich_nested_fields(sub_arr, &block_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                                enrich_nested_fields(sub_arr, &block_def.fields, &conn, reg, rel_locale_ctx.as_ref());
                             }
                         }
                     }
@@ -1573,7 +1571,7 @@ pub(super) fn enrich_field_contexts(
                 if let Some(defs_arr) = ctx.get_mut("block_definitions").and_then(|v| v.as_array_mut()) {
                     for (def_ctx, block_def) in defs_arr.iter_mut().zip(field_def.blocks.iter()) {
                         if let Some(sub_arr) = def_ctx.get_mut("fields").and_then(|v| v.as_array_mut()) {
-                            enrich_nested_fields(sub_arr, &block_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                            enrich_nested_fields(sub_arr, &block_def.fields, &conn, reg, rel_locale_ctx.as_ref());
                         }
                     }
                 }
@@ -1587,7 +1585,7 @@ pub(super) fn enrich_field_contexts(
             FieldType::Group => {
                 // Groups use prefixed columns — nested enrichment is sufficient
                 if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                    enrich_nested_fields(sub_arr, &field_def.fields, &conn, &reg, rel_locale_ctx.as_ref());
+                    enrich_nested_fields(sub_arr, &field_def.fields, &conn, reg, rel_locale_ctx.as_ref());
                 }
             }
             FieldType::Tabs => {
@@ -1681,7 +1679,7 @@ pub(super) fn enrich_field_contexts(
 /// Called for sub-fields inside layout containers (Row, Collapsible, Tabs, Group) and
 /// composite fields (Array, Blocks) that can't be enriched during initial context building.
 fn enrich_nested_fields(
-    sub_fields: &mut Vec<serde_json::Value>,
+    sub_fields: &mut [serde_json::Value],
     field_defs: &[crate::core::field::FieldDefinition],
     conn: &rusqlite::Connection,
     reg: &crate::core::Registry,
@@ -2732,10 +2730,10 @@ mod tests {
         assert_eq!(block_defs[0]["image_url"], "/static/blocks/hero.svg");
 
         assert_eq!(block_defs[1]["group"], "Content");
-        assert!(block_defs[1].get("image_url").map_or(true, |v| v.is_null()));
+        assert!(block_defs[1].get("image_url").is_none_or(|v| v.is_null()));
 
-        assert!(block_defs[2].get("group").map_or(true, |v| v.is_null()));
-        assert!(block_defs[2].get("image_url").map_or(true, |v| v.is_null()));
+        assert!(block_defs[2].get("group").is_none_or(|v| v.is_null()));
+        assert!(block_defs[2].get("image_url").is_none_or(|v| v.is_null()));
     }
 
     #[test]

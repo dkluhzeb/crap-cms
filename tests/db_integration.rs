@@ -1683,8 +1683,11 @@ fn populate_depth_0_leaves_ids() {
     // Populate at depth 0 — should be a no-op
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 0, &mut visited, None, None)
-        .expect("Populate failed");
+    query::populate_relationships(
+        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
+        &mut post, &mut visited,
+        &query::PopulateOpts { depth: 0, select: None, locale_ctx: None },
+    ).expect("Populate failed");
 
     // category should still be an ID string
     assert_eq!(post.get_str("category"), Some(cat.id.as_str()));
@@ -1708,8 +1711,11 @@ fn populate_depth_1_hydrates_has_one() {
 
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None, None)
-        .expect("Populate failed");
+    query::populate_relationships(
+        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
+        &mut post, &mut visited,
+        &query::PopulateOpts { depth: 1, select: None, locale_ctx: None },
+    ).expect("Populate failed");
 
     // category should be a full document object
     let cat_val = post.get("category").expect("category should exist");
@@ -1746,8 +1752,11 @@ fn populate_depth_1_hydrates_has_many() {
         .expect("Hydrate failed");
 
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None, None)
-        .expect("Populate failed");
+    query::populate_relationships(
+        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
+        &mut post, &mut visited,
+        &query::PopulateOpts { depth: 1, select: None, locale_ctx: None },
+    ).expect("Populate failed");
 
     let sec_cats = post.get("secondary_categories").expect("should exist");
     assert!(sec_cats.is_array());
@@ -1784,8 +1793,11 @@ fn populate_circular_ref_stops() {
     // Populate at depth 10 — should not infinite loop
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "categories", &cats_def, &mut cat_a, 10, &mut visited, None, None)
-        .expect("Populate should not loop");
+    query::populate_relationships(
+        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "categories", def: &cats_def },
+        &mut cat_a, &mut visited,
+        &query::PopulateOpts { depth: 10, select: None, locale_ctx: None },
+    ).expect("Populate should not loop");
     // Should complete without panic
 }
 
@@ -1803,8 +1815,11 @@ fn populate_missing_related_doc() {
 
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 1, &mut visited, None, None)
-        .expect("Populate should handle missing");
+    query::populate_relationships(
+        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
+        &mut post, &mut visited,
+        &query::PopulateOpts { depth: 1, select: None, locale_ctx: None },
+    ).expect("Populate should handle missing");
 
     // Category should remain as a string ID (not populated)
     assert_eq!(post.get_str("category"), Some("nonexistent-cat-id"));
@@ -1830,8 +1845,11 @@ fn populate_respects_field_max_depth() {
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     // Even with depth=5, the limited_cat field has max_depth=0, so it shouldn't populate
-    query::populate_relationships(&conn, &registry.read().unwrap(), "posts_v2", &posts_def, &mut post, 5, &mut visited, None, None)
-        .expect("Populate failed");
+    query::populate_relationships(
+        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
+        &mut post, &mut visited,
+        &query::PopulateOpts { depth: 5, select: None, locale_ctx: None },
+    ).expect("Populate failed");
 
     // limited_cat should remain as string ID (max_depth=0 prevents population)
     assert_eq!(post.get_str("limited_cat"), Some(cat.id.as_str()));
@@ -1940,8 +1958,9 @@ fn populate_with_localized_related_collection() {
     let conn = pool.get().expect("conn");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &conn, &shared_registry.read().unwrap(), "articles", &articles_def,
-        &mut article, 1, &mut visited, None, Some(&locale_ctx),
+        &query::PopulateContext { conn: &conn, registry: &shared_registry.read().unwrap(), collection_slug: "articles", def: &articles_def },
+        &mut article, &mut visited,
+        &query::PopulateOpts { depth: 1, select: None, locale_ctx: Some(&locale_ctx) },
     ).expect("Populate with localized related collection should succeed");
 
     // image should be populated as a full object

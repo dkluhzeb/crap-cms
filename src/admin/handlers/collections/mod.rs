@@ -339,7 +339,7 @@ fn build_filter_pills(
             "_status" => "Status".to_string(),
             name => def.fields.iter()
                 .find(|f| f.name == name)
-                .map(|f| field_label(f))
+                .map(field_label)
                 .unwrap_or_else(|| auto_label_from_name(name)),
         };
 
@@ -1353,7 +1353,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
                 Err(e) => {
                     tracing::error!("Upload processing error: {}", e);
                     let mut fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
-                    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new(), Some(&id));
+                    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new(), Some(id));
                     let form_json = serde_json::json!(form_data.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
                     apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
@@ -1379,11 +1379,11 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         let user_doc = get_user_doc(auth_user);
         let mut conn = match state.pool.get() {
             Ok(c) => c,
-            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(state, "Database error").into_response(); }
         };
         let tx = match conn.transaction() {
             Ok(t) => t,
-            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(state, "Database error").into_response(); }
         };
         let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
@@ -1409,7 +1409,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
     if let Some(ref pw) = password {
         if !pw.is_empty() {
             if let Err(e) = state.config.auth.password_policy.validate(pw) {
-                return html_with_toast(&state, "collections/edit_form", &serde_json::json!({}), &e.to_string()).into_response();
+                return html_with_toast(state, "collections/edit_form", &serde_json::json!({}), &e.to_string()).into_response();
             }
         }
     }
@@ -1495,7 +1495,7 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let error_map = ve.to_field_map();
                 let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, state, true, false, &error_map, Some(&id));
+                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, state, true, false, &error_map, Some(id));
                 let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
                 apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);

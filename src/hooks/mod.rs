@@ -3,7 +3,7 @@
 pub mod api;
 pub mod lifecycle;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use mlua::Lua;
 use std::path::Path;
 

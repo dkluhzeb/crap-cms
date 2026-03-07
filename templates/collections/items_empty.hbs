@@ -1,10 +1,10 @@
 <div class="empty-state">
-  <span class="material-symbols-outlined" style="font-size: 48px; color: var(--text-tertiary);">folder_open</span>
+  <span class="material-symbols-outlined empty-state__icon">folder_open</span>
   <p>{{t "no_items_yet" name=collection.display_name}}</p>
-  <p style="font-size: var(--text-sm); color: var(--text-tertiary);">{{t "create_first_item"}}</p>
+  <p class="empty-state__hint">{{t "create_first_item"}}</p>
   <a class="button button--primary" href="/admin/collections/{{collection.slug}}/create"
     hx-get="/admin/collections/{{collection.slug}}/create" hx-target="body" hx-push-url="true">
-    <span class="material-symbols-outlined" style="font-size: 18px;">add</span>
+    <span class="material-symbols-outlined">add</span>
     {{t "create"}} {{collection.singular_name}}
   </a>
 </div>

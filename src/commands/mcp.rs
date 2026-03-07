@@ -1,6 +1,6 @@
 //! `mcp` command — start the MCP stdio server.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::path::Path;
 use tracing::info;
 

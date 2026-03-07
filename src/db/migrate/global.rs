@@ -1,6 +1,6 @@
 //! Global table sync: create and alter global tables from Lua definitions.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::config::LocaleConfig;
 

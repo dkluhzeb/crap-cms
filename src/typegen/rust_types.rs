@@ -6,7 +6,7 @@ use crate::core::collection::{CollectionDefinition, GlobalDefinition};
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::Registry;
 
-use super::{is_optional, sorted_collection_slugs, sorted_global_slugs, to_pascal_case};
+use super::{is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case};
 
 pub(super) fn render(registry: &Registry) -> String {
     let mut out = String::new();
@@ -129,7 +129,7 @@ fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
         FieldType::Textarea | FieldType::Email | FieldType::Date
         | FieldType::Richtext | FieldType::Code => "String".to_string(),
         FieldType::Upload => {
-            if field.relationship.as_ref().map_or(false, |rc| rc.has_many) {
+            if rel_has_many(field) {
                 "Vec<String>".to_string()
             } else {
                 "String".to_string()
@@ -526,5 +526,83 @@ mod tests {
         assert!(out.contains("pub date: String,"));
         assert!(out.contains("pub body: String,"));
         assert!(out.contains("pub notes: String,"));
+    }
+
+    #[test]
+    fn rust_code_join_radio_fields() {
+        let col = make_col("items", vec![
+            FieldDefinition { name: "snippet".to_string(), field_type: FieldType::Code, required: true, ..Default::default() },
+            FieldDefinition { name: "refs".to_string(), field_type: FieldType::Join, ..Default::default() },
+            FieldDefinition { name: "color".to_string(), field_type: FieldType::Radio, required: true, ..Default::default() },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub snippet: String,"), "code field should map to String: {}", out);
+        assert!(out.contains("Option<Vec<serde_json::Value>>"), "join field should map to Vec<serde_json::Value>: {}", out);
+        assert!(out.contains("pub color: String,"), "radio without options should be String: {}", out);
+    }
+
+    #[test]
+    fn rust_select_has_many() {
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "tags".to_string(),
+                field_type: FieldType::Select,
+                has_many: true,
+                required: true,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "sizes".to_string(),
+                field_type: FieldType::Radio,
+                has_many: true,
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(out.contains("pub tags: Vec<String>,"), "required select has-many should be Vec<String>: {}", out);
+        assert!(out.contains("Option<Vec<String>>"), "optional radio has-many should be Option<Vec<String>>: {}", out);
+    }
+
+    #[test]
+    fn rust_row_collapsible_tabs_promote_subfields() {
+        use crate::core::field::FieldTab;
+        let col = make_col("items", vec![
+            FieldDefinition {
+                name: "layout_row".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![text_field("first_name", true), text_field("last_name", false)],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "details".to_string(),
+                field_type: FieldType::Collapsible,
+                fields: vec![text_field("bio", false)],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "sections".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![FieldTab {
+                    label: "Tab1".to_string(),
+                    description: None,
+                    fields: vec![text_field("tab_field", true)],
+                }],
+                ..Default::default()
+            },
+        ]);
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Row sub-fields promoted — layout_row should not appear as a field
+        assert!(!out.contains("layout_row"), "row field name should not appear as a struct field: {}", out);
+        assert!(out.contains("pub first_name: String,"), "row required sub-field promoted: {}", out);
+        assert!(out.contains("pub last_name: Option<String>,"), "row optional sub-field promoted: {}", out);
+        // Collapsible sub-fields promoted
+        assert!(!out.contains("details"), "collapsible field name should not appear: {}", out);
+        assert!(out.contains("pub bio: Option<String>,"), "collapsible sub-field promoted: {}", out);
+        // Tabs sub-fields promoted
+        assert!(!out.contains("sections"), "tabs field name should not appear: {}", out);
+        assert!(out.contains("pub tab_field: String,"), "tabs sub-field promoted: {}", out);
     }
 }

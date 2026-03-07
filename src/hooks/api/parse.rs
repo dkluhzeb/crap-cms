@@ -315,6 +315,81 @@ fn parse_field_access(access_tbl: &Table) -> FieldAccess {
     }
 }
 
+/// Parse the `admin` subtable of a field Lua definition into a `FieldAdmin`.
+fn parse_field_admin(admin_tbl: &Table) -> mlua::Result<FieldAdmin> {
+    let (labels_singular, labels_plural) = if let Ok(labels_tbl) = get_table(admin_tbl, "labels") {
+        (get_localized_string(&labels_tbl, "singular"), get_localized_string(&labels_tbl, "plural"))
+    } else {
+        (None, None)
+    };
+    Ok(FieldAdmin {
+        label: get_localized_string(admin_tbl, "label"),
+        placeholder: get_localized_string(admin_tbl, "placeholder"),
+        description: get_localized_string(admin_tbl, "description"),
+        hidden: get_bool(admin_tbl, "hidden", false),
+        readonly: get_bool(admin_tbl, "readonly", false),
+        width: get_string(admin_tbl, "width"),
+        collapsed: get_bool(admin_tbl, "collapsed", true),
+        label_field: get_string(admin_tbl, "label_field"),
+        row_label: get_string(admin_tbl, "row_label"),
+        labels_singular,
+        labels_plural,
+        position: get_string(admin_tbl, "position"),
+        condition: get_string(admin_tbl, "condition"),
+        step: get_string(admin_tbl, "step"),
+        rows: admin_tbl.get::<Option<u32>>("rows").ok().flatten(),
+        language: get_string(admin_tbl, "language"),
+        features: if let Ok(tbl) = get_table(admin_tbl, "features") {
+            tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
+        } else {
+            Vec::new()
+        },
+        picker: get_string(admin_tbl, "picker"),
+        richtext_format: get_string(admin_tbl, "format"),
+        nodes: if let Ok(tbl) = get_table(admin_tbl, "nodes") {
+            tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
+        } else {
+            Vec::new()
+        },
+    })
+}
+
+/// Parse the relationship config for a field, handling both `Relationship` and `Upload` field types.
+/// Returns `None` for field types that don't have a relationship config.
+fn parse_field_relationship(field_tbl: &Table, field_type: &FieldType) -> mlua::Result<Option<crate::core::field::RelationshipConfig>> {
+    use crate::core::field::RelationshipConfig;
+    if *field_type == FieldType::Relationship {
+        if let Ok(rel_tbl) = get_table(field_tbl, "relationship") {
+            let (collection, polymorphic) = parse_relationship_collection(&rel_tbl);
+            let has_many = get_bool(&rel_tbl, "has_many", false);
+            let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
+            Ok(Some(RelationshipConfig { collection, has_many, max_depth, polymorphic }))
+        } else {
+            // Legacy flat syntax: relation_to + has_many on the field itself
+            Ok(get_string(field_tbl, "relation_to").map(|collection| {
+                let has_many = get_bool(field_tbl, "has_many", false);
+                RelationshipConfig { collection, has_many, max_depth: None, polymorphic: vec![] }
+            }))
+        }
+    } else if *field_type == FieldType::Upload {
+        // Upload: relationship config from relation_to or relationship table
+        if let Ok(rel_tbl) = get_table(field_tbl, "relationship") {
+            let collection = get_string(&rel_tbl, "collection").unwrap_or_default();
+            let has_many = get_bool(&rel_tbl, "has_many", false);
+            let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
+            Ok(Some(RelationshipConfig { collection, has_many, max_depth, polymorphic: vec![] }))
+        } else {
+            let collection = get_string(field_tbl, "relation_to");
+            let has_many = get_bool(field_tbl, "has_many", false);
+            Ok(collection.map(|collection| {
+                RelationshipConfig { collection, has_many, max_depth: None, polymorphic: vec![] }
+            }))
+        }
+    } else {
+        Ok(None)
+    }
+}
+
 fn parse_collection_auth(config: &Table) -> Option<CollectionAuth> {
     let val: Value = config.get("auth").ok()?;
     match val {
@@ -544,41 +619,7 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         };
 
         let admin = if let Ok(admin_tbl) = get_table(&field_tbl, "admin") {
-            let (labels_singular, labels_plural) = if let Ok(labels_tbl) = get_table(&admin_tbl, "labels") {
-                (get_localized_string(&labels_tbl, "singular"), get_localized_string(&labels_tbl, "plural"))
-            } else {
-                (None, None)
-            };
-            FieldAdmin {
-                label: get_localized_string(&admin_tbl, "label"),
-                placeholder: get_localized_string(&admin_tbl, "placeholder"),
-                description: get_localized_string(&admin_tbl, "description"),
-                hidden: get_bool(&admin_tbl, "hidden", false),
-                readonly: get_bool(&admin_tbl, "readonly", false),
-                width: get_string(&admin_tbl, "width"),
-                collapsed: get_bool(&admin_tbl, "collapsed", true),
-                label_field: get_string(&admin_tbl, "label_field"),
-                row_label: get_string(&admin_tbl, "row_label"),
-                labels_singular,
-                labels_plural,
-                position: get_string(&admin_tbl, "position"),
-                condition: get_string(&admin_tbl, "condition"),
-                step: get_string(&admin_tbl, "step"),
-                rows: admin_tbl.get::<Option<u32>>("rows").ok().flatten(),
-                language: get_string(&admin_tbl, "language"),
-                features: if let Ok(tbl) = get_table(&admin_tbl, "features") {
-                    tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
-                } else {
-                    Vec::new()
-                },
-                picker: get_string(&admin_tbl, "picker"),
-                richtext_format: get_string(&admin_tbl, "format"),
-                nodes: if let Ok(tbl) = get_table(&admin_tbl, "nodes") {
-                    tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
-                } else {
-                    Vec::new()
-                },
-            }
+            parse_field_admin(&admin_tbl)?
         } else {
             FieldAdmin::default()
         };
@@ -596,36 +637,7 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         };
 
         // Parse relationship config
-        let relationship = if field_type == FieldType::Relationship {
-            if let Ok(rel_tbl) = get_table(&field_tbl, "relationship") {
-                let (collection, polymorphic) = parse_relationship_collection(&rel_tbl);
-                let has_many = get_bool(&rel_tbl, "has_many", false);
-                let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
-                Some(crate::core::field::RelationshipConfig { collection, has_many, max_depth, polymorphic })
-            } else {
-                // Legacy flat syntax: relation_to + has_many on the field itself
-                get_string(&field_tbl, "relation_to").map(|collection| {
-                    let has_many = get_bool(&field_tbl, "has_many", false);
-                    crate::core::field::RelationshipConfig { collection, has_many, max_depth: None, polymorphic: vec![] }
-                })
-            }
-        } else if field_type == FieldType::Upload {
-            // Upload: relationship config from relation_to or relationship table
-            if let Ok(rel_tbl) = get_table(&field_tbl, "relationship") {
-                let collection = get_string(&rel_tbl, "collection").unwrap_or_default();
-                let has_many = get_bool(&rel_tbl, "has_many", false);
-                let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
-                Some(crate::core::field::RelationshipConfig { collection, has_many, max_depth, polymorphic: vec![] })
-            } else {
-                let collection = get_string(&field_tbl, "relation_to");
-                let has_many = get_bool(&field_tbl, "has_many", false);
-                collection.map(|collection| {
-                    crate::core::field::RelationshipConfig { collection, has_many, max_depth: None, polymorphic: vec![] }
-                })
-            }
-        } else {
-            None
-        };
+        let relationship = parse_field_relationship(&field_tbl, &field_type)?;
 
         // Parse sub-fields for Array, Group, Row, and Collapsible types (recursive)
         let sub_fields = if field_type == FieldType::Array || field_type == FieldType::Group || field_type == FieldType::Row || field_type == FieldType::Collapsible {
@@ -1676,5 +1688,975 @@ mod tests {
         let config = lua.create_table().unwrap();
         let indexes = parse_indexes(&config);
         assert!(indexes.is_empty(), "Missing indexes key should return empty");
+    }
+
+    // --- parse_collection_upload: max_file_size branches ---
+
+    #[test]
+    fn test_parse_collection_upload_max_file_size_integer() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        // Integer value — triggers the Integer branch in max_file_size matching
+        upload_tbl.set("max_file_size", 1048576i64).unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap();
+        assert_eq!(upload.max_file_size, Some(1048576));
+    }
+
+    #[test]
+    fn test_parse_collection_upload_max_file_size_string() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        // String value like "10MB" — triggers the String branch via parse_filesize_string
+        upload_tbl.set("max_file_size", "10MB").unwrap();
+        tbl.set("upload", upload_tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap();
+        assert_eq!(upload.max_file_size, Some(10 * 1024 * 1024));
+    }
+
+    #[test]
+    fn test_parse_collection_upload_other_value_returns_none() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        // A table value for upload (not bool true/false or Table config) triggers `_ => None`
+        let func = lua.create_function(|_, ()| Ok(())).unwrap();
+        tbl.set("upload", func).unwrap();
+        assert!(parse_collection_upload(&tbl).is_none());
+    }
+
+    // --- parse_collection_auth: other Lua type ---
+
+    #[test]
+    fn test_parse_collection_auth_other_value_returns_none() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        // Function value triggers `_ => None`
+        let func = lua.create_function(|_, ()| Ok(())).unwrap();
+        tbl.set("auth", func).unwrap();
+        assert!(parse_collection_auth(&tbl).is_none());
+    }
+
+    // --- parse_versions_config: other Lua type ---
+
+    #[test]
+    fn test_parse_versions_config_other_value_returns_none() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        // Integer is not bool or table — triggers `_ => None`
+        tbl.set("versions", 42i64).unwrap();
+        assert!(parse_versions_config(&tbl).is_none());
+    }
+
+    // --- parse_live_setting: other Lua type ---
+
+    #[test]
+    fn test_parse_live_setting_other_value_returns_none() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        // Integer triggers `_ => None`
+        tbl.set("live", 42i64).unwrap();
+        assert!(parse_live_setting(&tbl).is_none());
+    }
+
+    // --- parse_relationship_collection: missing/other type ---
+
+    #[test]
+    fn test_parse_relationship_collection_missing() {
+        let lua = Lua::new();
+        let rel_tbl = lua.create_table().unwrap();
+        // No "collection" key — triggers `_ => (String::new(), vec![])`
+        let (col, poly) = parse_relationship_collection(&rel_tbl);
+        assert_eq!(col, "");
+        assert!(poly.is_empty());
+    }
+
+    #[test]
+    fn test_parse_relationship_collection_array() {
+        let lua = Lua::new();
+        let rel_tbl = lua.create_table().unwrap();
+        let arr = lua.create_table().unwrap();
+        arr.set(1, "posts").unwrap();
+        arr.set(2, "pages").unwrap();
+        rel_tbl.set("collection", arr).unwrap();
+        let (col, poly) = parse_relationship_collection(&rel_tbl);
+        assert_eq!(col, "posts"); // first slug
+        assert_eq!(poly, vec!["posts", "pages"]);
+    }
+
+    #[test]
+    fn test_parse_relationship_collection_array_empty() {
+        let lua = Lua::new();
+        let rel_tbl = lua.create_table().unwrap();
+        // Empty array — first() returns None, so col is ""
+        let arr = lua.create_table().unwrap();
+        rel_tbl.set("collection", arr).unwrap();
+        let (col, poly) = parse_relationship_collection(&rel_tbl);
+        assert_eq!(col, "");
+        assert!(poly.is_empty());
+    }
+
+    // --- parse_fields: default_value branches ---
+
+    #[test]
+    fn test_parse_fields_default_value_boolean() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "active").unwrap();
+        field.set("type", "checkbox").unwrap();
+        field.set("default_value", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].default_value, Some(serde_json::Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_parse_fields_default_value_integer() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "count").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("default_value", 42i64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].default_value, Some(serde_json::Value::Number(42.into())));
+    }
+
+    #[test]
+    fn test_parse_fields_default_value_float() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "ratio").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("default_value", 3.14f64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let dv = fields[0].default_value.as_ref().unwrap();
+        assert!(dv.is_number());
+    }
+
+    #[test]
+    fn test_parse_fields_default_value_table_ignored() {
+        // Table-type default_value falls through to `_ => None`
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "data").unwrap();
+        field.set("type", "json").unwrap();
+        let inner = lua.create_table().unwrap();
+        field.set("default_value", inner).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(fields[0].default_value.is_none());
+    }
+
+    // --- parse_fields: relationship types ---
+
+    #[test]
+    fn test_parse_fields_relationship_table_syntax() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "author").unwrap();
+        field.set("type", "relationship").unwrap();
+        let rel = lua.create_table().unwrap();
+        rel.set("collection", "users").unwrap();
+        rel.set("has_many", false).unwrap();
+        rel.set("max_depth", 2i32).unwrap();
+        field.set("relationship", rel).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let rel = fields[0].relationship.as_ref().unwrap();
+        assert_eq!(rel.collection, "users");
+        assert!(!rel.has_many);
+        assert_eq!(rel.max_depth, Some(2));
+    }
+
+    #[test]
+    fn test_parse_fields_relationship_legacy_flat_syntax() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "author").unwrap();
+        field.set("type", "relationship").unwrap();
+        field.set("relation_to", "users").unwrap();
+        field.set("has_many", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let rel = fields[0].relationship.as_ref().unwrap();
+        assert_eq!(rel.collection, "users");
+        assert!(rel.has_many);
+        assert!(rel.max_depth.is_none());
+    }
+
+    #[test]
+    fn test_parse_fields_relationship_no_relation_to_returns_none() {
+        // Legacy flat syntax with no relation_to → relationship is None
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "ref").unwrap();
+        field.set("type", "relationship").unwrap();
+        // No relation_to, no relationship table
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(fields[0].relationship.is_none());
+    }
+
+    #[test]
+    fn test_parse_fields_upload_relationship_table_syntax() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "avatar").unwrap();
+        field.set("type", "upload").unwrap();
+        let rel = lua.create_table().unwrap();
+        rel.set("collection", "media").unwrap();
+        rel.set("has_many", false).unwrap();
+        rel.set("max_depth", 1i32).unwrap();
+        field.set("relationship", rel).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let r = fields[0].relationship.as_ref().unwrap();
+        assert_eq!(r.collection, "media");
+        assert_eq!(r.max_depth, Some(1));
+    }
+
+    #[test]
+    fn test_parse_fields_upload_relationship_flat_syntax() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "avatar").unwrap();
+        field.set("type", "upload").unwrap();
+        field.set("relation_to", "media").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let r = fields[0].relationship.as_ref().unwrap();
+        assert_eq!(r.collection, "media");
+    }
+
+    #[test]
+    fn test_parse_fields_upload_no_relation_to() {
+        // Upload with no relation_to and no relationship table → relationship is None
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "doc").unwrap();
+        field.set("type", "upload").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(fields[0].relationship.is_none());
+    }
+
+    // --- parse_fields: sub-fields for Group, Row, Collapsible ---
+
+    #[test]
+    fn test_parse_fields_group_with_subfields() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "meta").unwrap();
+        field.set("type", "group").unwrap();
+        let sub = lua.create_table().unwrap();
+        let sf = lua.create_table().unwrap();
+        sf.set("name", "title").unwrap();
+        sf.set("type", "text").unwrap();
+        sub.set(1, sf).unwrap();
+        field.set("fields", sub).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].fields.len(), 1);
+        assert_eq!(fields[0].fields[0].name, "title");
+    }
+
+    #[test]
+    fn test_parse_fields_row_with_subfields() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "layout_row").unwrap();
+        field.set("type", "row").unwrap();
+        let sub = lua.create_table().unwrap();
+        let sf = lua.create_table().unwrap();
+        sf.set("name", "first_name").unwrap();
+        sf.set("type", "text").unwrap();
+        sub.set(1, sf).unwrap();
+        field.set("fields", sub).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].fields.len(), 1);
+        assert_eq!(fields[0].fields[0].name, "first_name");
+    }
+
+    #[test]
+    fn test_parse_fields_collapsible_with_subfields() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "advanced").unwrap();
+        field.set("type", "collapsible").unwrap();
+        let sub = lua.create_table().unwrap();
+        let sf = lua.create_table().unwrap();
+        sf.set("name", "notes").unwrap();
+        sf.set("type", "textarea").unwrap();
+        sub.set(1, sf).unwrap();
+        field.set("fields", sub).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].fields.len(), 1);
+        assert_eq!(fields[0].fields[0].name, "notes");
+    }
+
+    // --- parse_fields: picker_appearance for Date ---
+
+    #[test]
+    fn test_parse_fields_date_picker_appearance() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "published_at").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "datetime").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].picker_appearance.as_deref(), Some("datetime"));
+    }
+
+    #[test]
+    fn test_parse_fields_non_date_picker_appearance_ignored() {
+        // picker_appearance is only parsed for Date fields; ignored for Text
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("picker_appearance", "datetime").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(fields[0].picker_appearance.is_none());
+    }
+
+    // --- parse_fields: Blocks type ---
+
+    #[test]
+    fn test_parse_fields_blocks_type() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "content").unwrap();
+        field.set("type", "blocks").unwrap();
+        let blocks = lua.create_table().unwrap();
+        let block = lua.create_table().unwrap();
+        block.set("type", "paragraph").unwrap();
+        block.set("label", "Paragraph").unwrap();
+        let bfields = lua.create_table().unwrap();
+        let bf = lua.create_table().unwrap();
+        bf.set("name", "text").unwrap();
+        bf.set("type", "textarea").unwrap();
+        bfields.set(1, bf).unwrap();
+        block.set("fields", bfields).unwrap();
+        blocks.set(1, block).unwrap();
+        field.set("blocks", blocks).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].blocks.len(), 1);
+        assert_eq!(fields[0].blocks[0].block_type, "paragraph");
+        assert_eq!(fields[0].blocks[0].fields.len(), 1);
+        assert_eq!(fields[0].blocks[0].fields[0].name, "text");
+    }
+
+    #[test]
+    fn test_parse_block_definitions_optional_fields() {
+        // Block with label_field, group, image_url
+        let lua = Lua::new();
+        let blocks_tbl = lua.create_table().unwrap();
+        let block = lua.create_table().unwrap();
+        block.set("type", "hero").unwrap();
+        block.set("label_field", "headline").unwrap();
+        block.set("group", "Layout").unwrap();
+        block.set("image_url", "https://example.com/hero.png").unwrap();
+        blocks_tbl.set(1, block).unwrap();
+        let blocks = parse_block_definitions(&blocks_tbl).unwrap();
+        assert_eq!(blocks[0].label_field.as_deref(), Some("headline"));
+        assert_eq!(blocks[0].group.as_deref(), Some("Layout"));
+        assert_eq!(blocks[0].image_url.as_deref(), Some("https://example.com/hero.png"));
+    }
+
+    #[test]
+    fn test_parse_block_definitions_missing_type_error() {
+        let lua = Lua::new();
+        let blocks_tbl = lua.create_table().unwrap();
+        let block = lua.create_table().unwrap();
+        // No "type" key
+        blocks_tbl.set(1, block).unwrap();
+        let result = parse_block_definitions(&blocks_tbl);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing 'type'"));
+    }
+
+    // --- parse_fields: Tabs type ---
+
+    #[test]
+    fn test_parse_fields_tabs_type() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "tabbed_section").unwrap();
+        field.set("type", "tabs").unwrap();
+        let tabs = lua.create_table().unwrap();
+        let tab = lua.create_table().unwrap();
+        tab.set("label", "General").unwrap();
+        tab.set("description", "General settings").unwrap();
+        let tfields = lua.create_table().unwrap();
+        let tf = lua.create_table().unwrap();
+        tf.set("name", "bio").unwrap();
+        tf.set("type", "textarea").unwrap();
+        tfields.set(1, tf).unwrap();
+        tab.set("fields", tfields).unwrap();
+        tabs.set(1, tab).unwrap();
+        field.set("tabs", tabs).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].tabs.len(), 1);
+        assert_eq!(fields[0].tabs[0].label, "General");
+        assert_eq!(fields[0].tabs[0].description.as_deref(), Some("General settings"));
+        assert_eq!(fields[0].tabs[0].fields.len(), 1);
+    }
+
+    // --- parse_fields: min/max for Number ---
+
+    #[test]
+    fn test_parse_fields_min_max_float() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "score").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("min", 0.0f64).unwrap();
+        field.set("max", 100.0f64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].min, Some(0.0));
+        assert_eq!(fields[0].max, Some(100.0));
+    }
+
+    #[test]
+    fn test_parse_fields_min_max_integer() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "qty").unwrap();
+        field.set("type", "number").unwrap();
+        // Integer values trigger the Integer branch in min/max matching
+        field.set("min", 1i64).unwrap();
+        field.set("max", 99i64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].min, Some(1.0));
+        assert_eq!(fields[0].max, Some(99.0));
+    }
+
+    // --- parse_fields: Join type ---
+
+    #[test]
+    fn test_parse_fields_join_type() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "authored_posts").unwrap();
+        field.set("type", "join").unwrap();
+        field.set("collection", "posts").unwrap();
+        field.set("on", "author").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let join = fields[0].join.as_ref().unwrap();
+        assert_eq!(join.collection, "posts");
+        assert_eq!(join.on, "author");
+    }
+
+    // --- parse_fields: mcp field config ---
+
+    #[test]
+    fn test_parse_fields_mcp_config() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "summary").unwrap();
+        field.set("type", "text").unwrap();
+        let mcp_tbl = lua.create_table().unwrap();
+        mcp_tbl.set("description", "A short summary").unwrap();
+        field.set("mcp", mcp_tbl).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].mcp.description.as_deref(), Some("A short summary"));
+    }
+
+    // --- parse_collection_definition: admin.list_searchable_fields + mcp ---
+
+    #[test]
+    fn test_parse_collection_definition_admin_list_searchable_fields() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let admin_tbl = lua.create_table().unwrap();
+        admin_tbl.set("use_as_title", "title").unwrap();
+        let lsf = lua.create_table().unwrap();
+        lsf.set(1, "title").unwrap();
+        lsf.set(2, "body").unwrap();
+        admin_tbl.set("list_searchable_fields", lsf).unwrap();
+        config.set("admin", admin_tbl).unwrap();
+        let def = parse_collection_definition(&lua, "posts", &config).unwrap();
+        assert_eq!(def.admin.use_as_title.as_deref(), Some("title"));
+        assert_eq!(def.admin.list_searchable_fields, vec!["title", "body"]);
+    }
+
+    #[test]
+    fn test_parse_collection_definition_mcp_config() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let mcp_tbl = lua.create_table().unwrap();
+        mcp_tbl.set("description", "A collection of posts").unwrap();
+        config.set("mcp", mcp_tbl).unwrap();
+        let def = parse_collection_definition(&lua, "posts", &config).unwrap();
+        assert_eq!(def.mcp.description.as_deref(), Some("A collection of posts"));
+    }
+
+    // --- parse_global_definition: mcp config + global index/unique warnings ---
+
+    #[test]
+    fn test_parse_global_definition_mcp_config() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let mcp_tbl = lua.create_table().unwrap();
+        mcp_tbl.set("description", "Site settings").unwrap();
+        config.set("mcp", mcp_tbl).unwrap();
+        let def = parse_global_definition(&lua, "site_settings", &config).unwrap();
+        assert_eq!(def.mcp.description.as_deref(), Some("Site settings"));
+    }
+
+    #[test]
+    fn test_parse_global_definition_warns_index_unique() {
+        // index = true and unique = true on global fields trigger warnings (don't error)
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "slug").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("index", true).unwrap();
+        field.set("unique", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        config.set("fields", fields_tbl).unwrap();
+        // Should not error — warnings are emitted via tracing
+        let def = parse_global_definition(&lua, "settings", &config).unwrap();
+        assert!(def.fields[0].index);
+        assert!(def.fields[0].unique);
+    }
+
+    // --- parse_format_options: queue field + avif-only ---
+
+    #[test]
+    fn test_parse_format_options_queue_flag() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let fo_tbl = lua.create_table().unwrap();
+        let webp = lua.create_table().unwrap();
+        webp.set("quality", 85u8).unwrap();
+        webp.set("queue", true).unwrap();
+        fo_tbl.set("webp", webp).unwrap();
+        let avif = lua.create_table().unwrap();
+        avif.set("quality", 65u8).unwrap();
+        avif.set("queue", true).unwrap();
+        fo_tbl.set("avif", avif).unwrap();
+        tbl.set("format_options", fo_tbl).unwrap();
+        let fo = parse_format_options(&tbl);
+        assert!(fo.webp.as_ref().unwrap().queue);
+        assert_eq!(fo.webp.as_ref().unwrap().quality, 85);
+        assert!(fo.avif.as_ref().unwrap().queue);
+        assert_eq!(fo.avif.as_ref().unwrap().quality, 65);
+    }
+
+    #[test]
+    fn test_parse_format_options_avif_only() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let fo_tbl = lua.create_table().unwrap();
+        let avif = lua.create_table().unwrap();
+        avif.set("quality", 55u8).unwrap();
+        fo_tbl.set("avif", avif).unwrap();
+        tbl.set("format_options", fo_tbl).unwrap();
+        let fo = parse_format_options(&tbl);
+        assert!(fo.webp.is_none());
+        assert_eq!(fo.avif.as_ref().unwrap().quality, 55);
+    }
+
+    // --- parse_image_sizes: height == 0 skip ---
+
+    #[test]
+    fn test_parse_image_sizes_skips_zero_height() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let s1 = lua.create_table().unwrap();
+        s1.set("name", "bad_h").unwrap();
+        s1.set("width", 200u32).unwrap();
+        s1.set("height", 0u32).unwrap();
+        tbl.set(1, s1).unwrap();
+        let sizes = parse_image_sizes(&tbl);
+        assert!(sizes.is_empty());
+    }
+
+    // --- parse_image_sizes: default fit (unknown string) ---
+
+    #[test]
+    fn test_parse_image_sizes_unknown_fit_defaults_to_cover() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let s = lua.create_table().unwrap();
+        s.set("name", "banner").unwrap();
+        s.set("width", 1200u32).unwrap();
+        s.set("height", 400u32).unwrap();
+        s.set("fit", "stretch").unwrap(); // unknown — defaults to Cover
+        tbl.set(1, s).unwrap();
+        let sizes = parse_image_sizes(&tbl);
+        assert_eq!(sizes.len(), 1);
+        assert!(matches!(sizes[0].fit, crate::core::upload::ImageFit::Cover));
+    }
+
+    // --- parse_job_definition: 7-field cron (no normalization needed) ---
+
+    #[test]
+    fn test_parse_job_definition_7_field_cron() {
+        // 7-field cron (already has seconds) should NOT get "0 " prepended
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        tbl.set("handler", "jobs.hourly.run").unwrap();
+        tbl.set("schedule", "0 0 * * * * *").unwrap();
+        let job = parse_job_definition("hourly", &tbl).unwrap();
+        assert_eq!(job.schedule.as_deref(), Some("0 0 * * * * *"));
+    }
+
+    // --- parse_auth_strategies: strategy missing name or authenticate is skipped ---
+
+    #[test]
+    fn test_parse_auth_strategies_incomplete_strategy_skipped() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let auth_tbl = lua.create_table().unwrap();
+        let strats = lua.create_table().unwrap();
+
+        // Strategy with only name, missing authenticate — should be skipped
+        let s1 = lua.create_table().unwrap();
+        s1.set("name", "incomplete").unwrap();
+        strats.set(1, s1).unwrap();
+
+        // Valid strategy
+        let s2 = lua.create_table().unwrap();
+        s2.set("name", "oauth").unwrap();
+        s2.set("authenticate", "hooks.auth.oauth").unwrap();
+        strats.set(2, s2).unwrap();
+
+        auth_tbl.set("strategies", strats).unwrap();
+        tbl.set("auth", auth_tbl).unwrap();
+        let auth = parse_collection_auth(&tbl).unwrap();
+        // Only the complete strategy should be included
+        assert_eq!(auth.strategies.len(), 1);
+        assert_eq!(auth.strategies[0].name, "oauth");
+    }
+
+    // --- parse_indexes: missing fields key skipped ---
+
+    #[test]
+    fn test_parse_indexes_missing_fields_key_skipped() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let indexes_tbl = lua.create_table().unwrap();
+        let idx = lua.create_table().unwrap();
+        // No "fields" key — should be skipped
+        idx.set("unique", true).unwrap();
+        indexes_tbl.set(1, idx).unwrap();
+        config.set("indexes", indexes_tbl).unwrap();
+        let indexes = parse_indexes(&config);
+        assert!(indexes.is_empty());
+    }
+
+    // --- parse_fields: field missing name returns error ---
+
+    #[test]
+    fn test_parse_fields_missing_name_returns_error() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        // No "name" set
+        field.set("type", "text").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let result = parse_fields(&fields_tbl);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing 'name'"));
+    }
+
+    // --- parse_fields: min_rows, max_rows, min_length, max_length, min_date, max_date ---
+
+    #[test]
+    fn test_parse_fields_array_min_max_rows() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "images").unwrap();
+        field.set("type", "array").unwrap();
+        field.set("min_rows", 1usize).unwrap();
+        field.set("max_rows", 10usize).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].min_rows, Some(1));
+        assert_eq!(fields[0].max_rows, Some(10));
+    }
+
+    #[test]
+    fn test_parse_fields_text_min_max_length() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "slug").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("min_length", 3usize).unwrap();
+        field.set("max_length", 64usize).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].min_length, Some(3));
+        assert_eq!(fields[0].max_length, Some(64));
+    }
+
+    #[test]
+    fn test_parse_fields_date_min_max_date() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "birth_date").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("min_date", "1900-01-01").unwrap();
+        field.set("max_date", "2100-12-31").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert_eq!(fields[0].min_date.as_deref(), Some("1900-01-01"));
+        assert_eq!(fields[0].max_date.as_deref(), Some("2100-12-31"));
+    }
+
+    // --- parse_fields: admin table with labels, features, nodes ---
+
+    #[test]
+    fn test_parse_fields_admin_labels_features_nodes() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "body").unwrap();
+        field.set("type", "richtext").unwrap();
+        let admin_tbl = lua.create_table().unwrap();
+        let labels_tbl = lua.create_table().unwrap();
+        labels_tbl.set("singular", "Item").unwrap();
+        labels_tbl.set("plural", "Items").unwrap();
+        admin_tbl.set("labels", labels_tbl).unwrap();
+        let features = lua.create_table().unwrap();
+        features.set(1, "bold").unwrap();
+        features.set(2, "italic").unwrap();
+        admin_tbl.set("features", features).unwrap();
+        let nodes = lua.create_table().unwrap();
+        nodes.set(1, "paragraph").unwrap();
+        admin_tbl.set("nodes", nodes).unwrap();
+        admin_tbl.set("format", "lexical").unwrap();
+        admin_tbl.set("language", "en").unwrap();
+        admin_tbl.set("rows", 5u32).unwrap();
+        field.set("admin", admin_tbl).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let admin = &fields[0].admin;
+        assert!(admin.labels_singular.is_some());
+        assert!(admin.labels_plural.is_some());
+        assert_eq!(admin.features, vec!["bold", "italic"]);
+        assert_eq!(admin.nodes, vec!["paragraph"]);
+        assert_eq!(admin.richtext_format.as_deref(), Some("lexical"));
+        assert_eq!(admin.language.as_deref(), Some("en"));
+        assert_eq!(admin.rows, Some(5));
+    }
+
+    // --- parse_field_hooks: all hook event lists ---
+
+    #[test]
+    fn test_parse_field_hooks_all_events() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        let hooks_tbl = lua.create_table().unwrap();
+        let bv = lua.create_table().unwrap();
+        bv.set(1, "hooks.validate_title").unwrap();
+        hooks_tbl.set("before_validate", bv).unwrap();
+        let bc = lua.create_table().unwrap();
+        bc.set(1, "hooks.transform_title").unwrap();
+        hooks_tbl.set("before_change", bc).unwrap();
+        let ac = lua.create_table().unwrap();
+        ac.set(1, "hooks.after_title_change").unwrap();
+        hooks_tbl.set("after_change", ac).unwrap();
+        let ar = lua.create_table().unwrap();
+        ar.set(1, "hooks.format_title").unwrap();
+        hooks_tbl.set("after_read", ar).unwrap();
+        field.set("hooks", hooks_tbl).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        let hooks = &fields[0].hooks;
+        assert_eq!(hooks.before_validate, vec!["hooks.validate_title"]);
+        assert_eq!(hooks.before_change, vec!["hooks.transform_title"]);
+        assert_eq!(hooks.after_change, vec!["hooks.after_title_change"]);
+        assert_eq!(hooks.after_read, vec!["hooks.format_title"]);
+    }
+
+    // --- parse_hooks (collection-level): before_broadcast ---
+
+    #[test]
+    fn test_parse_collection_hooks_before_broadcast() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let hooks_tbl = lua.create_table().unwrap();
+        let bb = lua.create_table().unwrap();
+        bb.set(1, "hooks.filter_broadcast").unwrap();
+        hooks_tbl.set("before_broadcast", bb).unwrap();
+        config.set("hooks", hooks_tbl).unwrap();
+        let def = parse_collection_definition(&lua, "posts", &config).unwrap();
+        assert_eq!(def.hooks.before_broadcast, vec!["hooks.filter_broadcast"]);
+    }
+
+    // --- max_field_nesting: deep nesting via blocks and tabs ---
+
+    #[test]
+    fn test_max_field_nesting_via_blocks() {
+        use crate::core::field::{BlockDefinition, FieldDefinition, FieldType};
+        let inner = FieldDefinition {
+            name: "text".to_string(),
+            field_type: FieldType::Text,
+            ..Default::default()
+        };
+        let block = BlockDefinition {
+            block_type: "para".to_string(),
+            fields: vec![inner],
+            label: None,
+            label_field: None,
+            group: None,
+            image_url: None,
+        };
+        let outer = FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            blocks: vec![block],
+            ..Default::default()
+        };
+        // depth at current=0: sub current+1=1, block fields at depth 1+1=2 → max is 2
+        let depth = max_field_nesting(&[outer], 0);
+        assert_eq!(depth, 2);
+    }
+
+    #[test]
+    fn test_max_field_nesting_via_tabs() {
+        use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+        let inner = FieldDefinition {
+            name: "bio".to_string(),
+            field_type: FieldType::Textarea,
+            ..Default::default()
+        };
+        let tab = FieldTab {
+            label: "General".to_string(),
+            description: None,
+            fields: vec![inner],
+        };
+        let outer = FieldDefinition {
+            name: "tabs".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![tab],
+            ..Default::default()
+        };
+        let depth = max_field_nesting(&[outer], 0);
+        assert_eq!(depth, 2);
+    }
+
+    // --- warn_deep_nesting: exercises the > ADMIN_MAX_FIELD_DEPTH branch ---
+
+    #[test]
+    fn test_warn_deep_nesting_triggers_for_deep_fields() {
+        use crate::core::field::{FieldDefinition, FieldType};
+
+        // Build a chain of 6 nested groups (exceeds ADMIN_MAX_FIELD_DEPTH = 5)
+        fn nest(depth: usize) -> FieldDefinition {
+            if depth == 0 {
+                FieldDefinition {
+                    name: "leaf".to_string(),
+                    field_type: FieldType::Text,
+                    ..Default::default()
+                }
+            } else {
+                FieldDefinition {
+                    name: format!("level_{}", depth),
+                    field_type: FieldType::Group,
+                    fields: vec![nest(depth - 1)],
+                    ..Default::default()
+                }
+            }
+        }
+
+        let deep_field = nest(6);
+        // warn_deep_nesting is a tracing::warn! — just ensure it doesn't panic
+        warn_deep_nesting("Collection", "test", &[deep_field]);
+    }
+
+    // --- parse_collection_definition: auth email injection when email field already exists ---
+
+    #[test]
+    fn test_parse_collection_definition_auth_no_email_injection_when_email_exists() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        config.set("auth", true).unwrap();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "email").unwrap();
+        field.set("type", "email").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        config.set("fields", fields_tbl).unwrap();
+        let def = parse_collection_definition(&lua, "users", &config).unwrap();
+        // Email should only appear once (not injected since it already exists)
+        let email_count = def.fields.iter().filter(|f| f.name == "email").count();
+        assert_eq!(email_count, 1);
+    }
+
+    // --- parse_collection_upload: table with no mime_types ---
+
+    #[test]
+    fn test_parse_collection_upload_table_no_mime_types() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let upload_tbl = lua.create_table().unwrap();
+        // No mime_types key — should default to empty vec
+        tbl.set("upload", upload_tbl).unwrap();
+        let upload = parse_collection_upload(&tbl).unwrap();
+        assert!(upload.mime_types.is_empty());
+        assert!(upload.max_file_size.is_none());
+    }
+
+    // --- parse_global_definition: labels parsing ---
+
+    #[test]
+    fn test_parse_global_definition_with_labels() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let labels_tbl = lua.create_table().unwrap();
+        labels_tbl.set("singular", "Settings").unwrap();
+        labels_tbl.set("plural", "Settings").unwrap();
+        config.set("labels", labels_tbl).unwrap();
+        let def = parse_global_definition(&lua, "site_settings", &config).unwrap();
+        match def.labels.singular {
+            Some(LocalizedString::Plain(s)) => assert_eq!(s, "Settings"),
+            other => panic!("Expected Plain label, got {:?}", other),
+        }
     }
 }

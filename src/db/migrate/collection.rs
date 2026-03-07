@@ -1,6 +1,6 @@
 //! Collection table sync: create and alter collection tables from Lua definitions.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 
 use crate::config::LocaleConfig;

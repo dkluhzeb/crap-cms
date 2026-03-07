@@ -25,6 +25,9 @@ pub use self::blueprint::{
 };
 pub use self::templates::{templates_list, templates_extract, proto_export};
 
+// Re-export the shared title-case helper so submodules can call `super::to_title_case`.
+pub(crate) use crate::core::field::to_title_case;
+
 /// Validate a slug: lowercase alphanumeric + underscores, not empty.
 pub fn validate_slug(slug: &str) -> Result<()> {
     if slug.is_empty() {
@@ -40,20 +43,6 @@ pub fn validate_slug(slug: &str) -> Result<()> {
         anyhow::bail!("Slug cannot start with underscore");
     }
     Ok(())
-}
-
-/// Convert "snake_case" to "Title Case".
-pub(crate) fn to_title_case(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 #[cfg(test)]

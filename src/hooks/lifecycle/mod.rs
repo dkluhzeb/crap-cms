@@ -14,7 +14,7 @@ use validation::validate_fields_inner;
 use context::{context_to_lua_table, read_context_back};
 use vm_pool::VmPool;
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use mlua::{Lua, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -148,7 +148,7 @@ fn create_lua_vm(
 
     // Register CRUD functions on crap.collections (find, find_by_id, create, update, delete).
     // These read the active transaction from Lua app_data when called inside hooks.
-    register_crud_functions(&lua, registry, &config.locale, config.hooks.max_depth, &config.pagination)?;
+    register_crud_functions(&lua, registry, &config.locale, &config.pagination)?;
 
     // Initialize hook depth tracking
     lua.set_app_data(HookDepth(0));
@@ -1500,10 +1500,8 @@ pub(super) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::F
     let require: mlua::Function = lua.globals().get("require")?;
 
     // Try file-per-hook: require("hooks.posts.auto_slug") → function
-    if let Ok(value) = require.call::<Value>(hook_ref) {
-        if let Value::Function(f) = value {
-            return Ok(f);
-        }
+    if let Ok(Value::Function(f)) = require.call::<Value>(hook_ref) {
+        return Ok(f);
     }
 
     // Fallback: module.function pattern

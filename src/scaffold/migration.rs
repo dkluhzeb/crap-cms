@@ -1,6 +1,6 @@
 //! `make migration` command — generate migration Lua files.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::fs;
 use std::path::Path;
 
@@ -21,8 +21,7 @@ pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
     let filename = format!("{}_{}.lua", timestamp, name);
     let file_path = migrations_dir.join(&filename);
 
-    let lua = format!(
-        r#"local M = {{}}
+    let lua = r#"local M = {}
 
 function M.up()
     -- TODO: implement migration
@@ -34,8 +33,7 @@ function M.down()
 end
 
 return M
-"#,
-    );
+"#.to_string();
 
     fs::write(&file_path, &lua)
         .with_context(|| format!("Failed to write {}", file_path.display()))?;

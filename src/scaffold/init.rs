@@ -1,6 +1,6 @@
 //! `init` command — scaffold a new config directory.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::fs;
 use std::path::PathBuf;
 

@@ -133,16 +133,7 @@ pub(super) fn build_locale_template_data(
 
 /// Auto-generate a label from a field name (e.g. "my_field" -> "My Field").
 pub(super) fn auto_label_from_name(name: &str) -> String {
-    name.split('_')
-        .map(|w| {
-            let mut c = w.chars();
-            match c.next() {
-                None => String::new(),
-                Some(f) => f.to_uppercase().chain(c).collect(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+    crate::core::field::to_title_case(name)
 }
 
 /// Parse `where[field][op]=value` parameters from a raw query string.

@@ -18,7 +18,7 @@
         <td><time datetime="{{this.created_at}}">{{this.created_at}}</time></td>
         <td>
           {{#unless this.latest}}
-          <form method="post" action="{{../restore_url_prefix}}/versions/{{this.id}}/restore" style="margin:0;">
+          <form method="post" action="{{../restore_url_prefix}}/versions/{{this.id}}/restore" class="form--inline">
             <button type="submit" class="button button--ghost button--small">{{t "restore"}}</button>
           </form>
           {{/unless}}

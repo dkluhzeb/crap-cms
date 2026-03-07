@@ -1,7 +1,8 @@
 <div class="form__collapsible{{#if collapsed}} form__collapsible--collapsed{{/if}}"
      data-collapsible data-group-name="{{name}}" data-field-name="{{name}}">
-  <button type="button" class="form__collapsible-toggle" data-action="toggle-group">
-    <span class="form__group-chevron material-symbols-outlined">expand_more</span>
+  <button type="button" class="form__collapsible-toggle" data-action="toggle-group"
+          aria-expanded="{{#if collapsed}}false{{else}}true{{/if}}">
+    <span class="form__group-chevron material-symbols-outlined" aria-hidden="true">expand_more</span>
     {{label}}
   </button>
   <div class="form__collapsible-body">

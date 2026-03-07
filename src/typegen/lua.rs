@@ -7,7 +7,7 @@ use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::Registry;
 use crate::db::query::get_column_names;
 
-use super::{is_optional, to_pascal_case};
+use super::{is_optional, rel_has_many, to_pascal_case};
 
 /// Render all Lua type definitions.
 pub(super) fn render(registry: &Registry) -> String {
@@ -318,7 +318,7 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
         FieldType::Collapsible => "table".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "table".to_string(), // layout-only; sub-fields are promoted
         FieldType::Upload => {
-            if field.relationship.as_ref().map_or(false, |rc| rc.has_many) {
+            if rel_has_many(field) {
                 "string[]".to_string()
             } else {
                 "string".to_string()
@@ -902,5 +902,168 @@ mod tests {
         assert!(out.contains("---@class crap.array_row.Items"));
         assert!(out.contains("---@field label string"));
         assert!(out.contains("---@field desc? string"));
+    }
+
+    #[test]
+    fn lua_code_join_radio_fields() {
+        // Code maps to string, Join maps to table[], Radio maps to string/union
+        let f_code = FieldDefinition {
+            name: "snippet".to_string(),
+            field_type: FieldType::Code,
+            ..Default::default()
+        };
+        let f_join = FieldDefinition {
+            name: "refs".to_string(),
+            field_type: FieldType::Join,
+            ..Default::default()
+        };
+        let f_radio = FieldDefinition {
+            name: "color".to_string(),
+            field_type: FieldType::Radio,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f_code), "string");
+        assert_eq!(field_to_lua_type(&f_join), "table[]");
+        assert_eq!(field_to_lua_type(&f_radio), "string");
+    }
+
+    #[test]
+    fn lua_select_has_many_with_and_without_options() {
+        use crate::core::field::SelectOption;
+        // has_many with options → (opt1 | opt2|string)[]
+        let f_with_opts = FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Select,
+            has_many: true,
+            options: vec![
+                SelectOption { label: LocalizedString::Plain("A".into()), value: "a".into() },
+                SelectOption { label: LocalizedString::Plain("B".into()), value: "b".into() },
+            ],
+            ..Default::default()
+        };
+        let result = field_to_lua_type(&f_with_opts);
+        assert!(result.contains("\"a\""), "should include option 'a': {}", result);
+        assert!(result.contains("\"b\""), "should include option 'b': {}", result);
+        assert!(result.ends_with("[]"), "should be an array type: {}", result);
+
+        // has_many without options → string[]
+        let f_no_opts = FieldDefinition {
+            name: "cats".to_string(),
+            field_type: FieldType::Select,
+            has_many: true,
+            ..Default::default()
+        };
+        assert_eq!(field_to_lua_type(&f_no_opts), "string[]");
+    }
+
+    #[test]
+    fn lua_row_collapsible_tabs_promote_subfields() {
+        use crate::core::field::FieldTab;
+        let col = CollectionDefinition {
+            slug: "items".to_string(),
+            labels: CollectionLabels::default(),
+            timestamps: false,
+            fields: vec![
+                FieldDefinition {
+                    name: "layout_row".to_string(),
+                    field_type: FieldType::Row,
+                    fields: vec![text_field("first_name", true), text_field("last_name", false)],
+                    ..Default::default()
+                },
+                FieldDefinition {
+                    name: "details".to_string(),
+                    field_type: FieldType::Collapsible,
+                    fields: vec![text_field("bio", false)],
+                    ..Default::default()
+                },
+                FieldDefinition {
+                    name: "sections".to_string(),
+                    field_type: FieldType::Tabs,
+                    tabs: vec![FieldTab {
+                        label: "Tab1".to_string(),
+                        description: None,
+                        fields: vec![text_field("tab_field", true)],
+                    }],
+                    ..Default::default()
+                },
+            ],
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None, upload: None,
+            access: CollectionAccess::default(),
+            mcp: Default::default(),
+            live: None, versions: None,
+            indexes: Vec::new(),
+        };
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        // Row sub-fields promoted — "layout_row" should not appear as a @field
+        assert!(!out.contains("@field layout_row"), "row field name should not appear: {}", out);
+        assert!(out.contains("---@field first_name string"), "row required sub-field promoted: {}", out);
+        assert!(out.contains("---@field last_name? string"), "row optional sub-field promoted: {}", out);
+        // Collapsible sub-fields promoted
+        assert!(!out.contains("@field details"), "collapsible field name should not appear: {}", out);
+        assert!(out.contains("---@field bio? string"), "collapsible sub-field promoted: {}", out);
+        // Tabs sub-fields promoted
+        assert!(!out.contains("@field sections"), "tabs field name should not appear: {}", out);
+        assert!(out.contains("---@field tab_field string"), "tabs sub-field promoted: {}", out);
+    }
+
+    #[test]
+    fn collect_array_fields_inside_row_and_tabs() {
+        use crate::core::field::FieldTab;
+        // Arrays nested inside Row, Group, and Tabs containers should be discovered
+        let fields = vec![
+            FieldDefinition {
+                name: "row_container".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![
+                    FieldDefinition {
+                        name: "row_items".to_string(),
+                        field_type: FieldType::Array,
+                        fields: vec![text_field("val", true)],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "tab_container".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![FieldTab {
+                    label: "T".to_string(),
+                    description: None,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "tab_items".to_string(),
+                            field_type: FieldType::Array,
+                            fields: vec![text_field("name", true)],
+                            ..Default::default()
+                        },
+                    ],
+                }],
+                ..Default::default()
+            },
+            // Nested array inside an array (recursion)
+            FieldDefinition {
+                name: "outer".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![
+                    FieldDefinition {
+                        name: "inner".to_string(),
+                        field_type: FieldType::Array,
+                        fields: vec![text_field("x", true)],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+        let result = collect_array_fields(&fields);
+        let names: Vec<&str> = result.iter().map(|f| f.name.as_str()).collect();
+        assert!(names.contains(&"row_items"), "array inside Row should be found: {:?}", names);
+        assert!(names.contains(&"tab_items"), "array inside Tabs should be found: {:?}", names);
+        assert!(names.contains(&"outer"), "top-level array should be found: {:?}", names);
+        assert!(names.contains(&"inner"), "nested array inside array should be found: {:?}", names);
     }
 }

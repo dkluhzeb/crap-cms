@@ -20,7 +20,7 @@
   <div class="upload-field__actions">
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
       hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined" style="font-size: 16px;">upload</span>
+      <span class="material-symbols-outlined icon--sm">upload</span>
       {{t "upload_new"}}
     </a>
   </div>
@@ -35,7 +35,7 @@
   </div>
   <div class="upload-field__info" {{#unless selected_filename}}style="display: none;"{{/unless}}>
     {{#if selected_filename}}
-    <span class="material-symbols-outlined" style="font-size: 16px;">description</span>
+    <span class="material-symbols-outlined icon--sm">description</span>
     <span class="upload-field__filename">{{selected_filename}}</span>
     {{/if}}
   </div>
@@ -62,7 +62,7 @@
   <div class="upload-field__actions">
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
       hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
-      <span class="material-symbols-outlined" style="font-size: 16px;">upload</span>
+      <span class="material-symbols-outlined icon--sm">upload</span>
       {{t "upload_new"}}
     </a>
   </div>

@@ -1,6 +1,6 @@
 //! Auth-related query functions: email lookup, password, reset tokens, verification.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::core::{CollectionDefinition, Document};
 use crate::db::document::row_to_document;

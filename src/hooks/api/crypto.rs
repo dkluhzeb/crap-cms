@@ -50,7 +50,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
             .map_err(|e| mlua::Error::RuntimeError(format!("cipher init: {}", e)))?;
 
         let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        rand::rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
         let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
@@ -92,7 +92,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     let random_bytes_fn = lua.create_function(|_, n: usize| -> mlua::Result<String> {
         use rand::RngCore;
         let mut buf = vec![0u8; n];
-        rand::thread_rng().fill_bytes(&mut buf);
+        rand::rng().fill_bytes(&mut buf);
         Ok(hex_encode(&buf))
     })?;
     crypto_table.set("random_bytes", random_bytes_fn)?;
@@ -104,4 +104,245 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
 /// Encode bytes as lowercase hex string.
 pub(super) fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_lua(secret: &str) -> Lua {
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        register_crypto(&lua, &crap, secret).unwrap();
+        lua.globals().set("crap", crap).unwrap();
+        lua
+    }
+
+    // --- hex_encode ---
+
+    #[test]
+    fn hex_encode_empty() {
+        assert_eq!(hex_encode(&[]), "");
+    }
+
+    #[test]
+    fn hex_encode_known_input() {
+        assert_eq!(hex_encode(&[0x00, 0xff, 0x0a, 0xab]), "00ff0aab");
+    }
+
+    #[test]
+    fn hex_encode_single_byte() {
+        assert_eq!(hex_encode(&[0x42]), "42");
+    }
+
+    // --- AES-GCM roundtrip ---
+
+    #[test]
+    fn aes_gcm_roundtrip() {
+        let lua = setup_lua("test-secret-key");
+        let result: String = lua
+            .load(r#"
+                local ct = crap.crypto.encrypt("hello, world")
+                return crap.crypto.decrypt(ct)
+            "#)
+            .eval()
+            .unwrap();
+        assert_eq!(result, "hello, world");
+    }
+
+    #[test]
+    fn aes_gcm_roundtrip_empty_plaintext() {
+        let lua = setup_lua("test-secret-key");
+        let result: String = lua
+            .load(r#"
+                local ct = crap.crypto.encrypt("")
+                return crap.crypto.decrypt(ct)
+            "#)
+            .eval()
+            .unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn aes_gcm_two_encryptions_differ() {
+        // Same plaintext encrypted twice should produce different ciphertext (random nonce).
+        let lua = setup_lua("test-secret-key");
+        let result: bool = lua
+            .load(r#"
+                local ct1 = crap.crypto.encrypt("same plaintext")
+                local ct2 = crap.crypto.encrypt("same plaintext")
+                return ct1 ~= ct2
+            "#)
+            .eval()
+            .unwrap();
+        assert!(result);
+    }
+
+    #[test]
+    fn aes_gcm_decrypt_wrong_key_fails() {
+        let lua_enc = setup_lua("key-one");
+        let lua_dec = setup_lua("key-two");
+
+        let ciphertext: String = lua_enc
+            .load(r#"return crap.crypto.encrypt("secret")"#)
+            .eval()
+            .unwrap();
+
+        // Decrypting with a different key should fail.
+        let result = lua_dec
+            .load(&format!(r#"return crap.crypto.decrypt("{}")"#, ciphertext))
+            .eval::<String>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn aes_gcm_decrypt_short_ciphertext_fails() {
+        let lua = setup_lua("test-secret-key");
+        // base64("tooshort") has fewer than 12 decoded bytes.
+        let result = lua
+            .load(r#"return crap.crypto.decrypt("dG9vc2hvcnQ=")"#)
+            .eval::<String>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn aes_gcm_decrypt_invalid_base64_fails() {
+        let lua = setup_lua("test-secret-key");
+        let result = lua
+            .load(r#"return crap.crypto.decrypt("not valid base64!!!")"#)
+            .eval::<String>();
+        assert!(result.is_err());
+    }
+
+    // --- base64 ---
+
+    #[test]
+    fn base64_roundtrip() {
+        let lua = setup_lua("s");
+        let result: String = lua
+            .load(r#"
+                local encoded = crap.crypto.base64_encode("hello base64")
+                return crap.crypto.base64_decode(encoded)
+            "#)
+            .eval()
+            .unwrap();
+        assert_eq!(result, "hello base64");
+    }
+
+    #[test]
+    fn base64_encode_known_value() {
+        let lua = setup_lua("s");
+        let result: String = lua
+            .load(r#"return crap.crypto.base64_encode("Man")"#)
+            .eval()
+            .unwrap();
+        // "Man" encodes to "TWFu" in standard base64.
+        assert_eq!(result, "TWFu");
+    }
+
+    #[test]
+    fn base64_decode_invalid_input_fails() {
+        let lua = setup_lua("s");
+        let result = lua
+            .load(r#"return crap.crypto.base64_decode("not!valid base64@@")"#)
+            .eval::<String>();
+        assert!(result.is_err());
+    }
+
+    // --- SHA-256 ---
+
+    #[test]
+    fn sha256_known_hash() {
+        let lua = setup_lua("s");
+        let result: String = lua
+            .load(r#"return crap.crypto.sha256("hello")"#)
+            .eval()
+            .unwrap();
+        // SHA-256("hello") = 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        assert_eq!(
+            result,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+    }
+
+    #[test]
+    fn sha256_empty_string() {
+        let lua = setup_lua("s");
+        let result: String = lua
+            .load(r#"return crap.crypto.sha256("")"#)
+            .eval()
+            .unwrap();
+        // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+        assert_eq!(
+            result,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    // --- HMAC-SHA256 ---
+
+    #[test]
+    fn hmac_sha256_known_output() {
+        let lua = setup_lua("s");
+        let result: String = lua
+            .load(r#"return crap.crypto.hmac_sha256("message", "key")"#)
+            .eval()
+            .unwrap();
+        // HMAC-SHA256("message", "key") — verified via standard test vectors.
+        assert_eq!(
+            result,
+            "6e9ef29b75fffc5b7abae527d58fdadb2fe42e7219011976917343065f58ed4a"
+        );
+    }
+
+    #[test]
+    fn hmac_sha256_different_keys_differ() {
+        let lua = setup_lua("s");
+        let result: bool = lua
+            .load(r#"
+                local h1 = crap.crypto.hmac_sha256("data", "key1")
+                local h2 = crap.crypto.hmac_sha256("data", "key2")
+                return h1 ~= h2
+            "#)
+            .eval()
+            .unwrap();
+        assert!(result);
+    }
+
+    // --- random_bytes ---
+
+    #[test]
+    fn random_bytes_correct_length() {
+        let lua = setup_lua("s");
+        // Each byte encodes to 2 hex chars.
+        let result: String = lua
+            .load(r#"return crap.crypto.random_bytes(16)"#)
+            .eval()
+            .unwrap();
+        assert_eq!(result.len(), 32);
+    }
+
+    #[test]
+    fn random_bytes_zero_length() {
+        let lua = setup_lua("s");
+        let result: String = lua
+            .load(r#"return crap.crypto.random_bytes(0)"#)
+            .eval()
+            .unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn random_bytes_two_calls_differ() {
+        let lua = setup_lua("s");
+        let result: bool = lua
+            .load(r#"
+                local a = crap.crypto.random_bytes(32)
+                local b = crap.crypto.random_bytes(32)
+                return a ~= b
+            "#)
+            .eval()
+            .unwrap();
+        assert!(result);
+    }
 }

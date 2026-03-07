@@ -1530,6 +1530,125 @@ mod tests {
         assert_eq!(result, "title");
     }
 
+    // ── resolve_filter_column: Row/Collapsible sub-field localization ────
+
+    #[test]
+    fn resolve_column_row_sub_field_localized() {
+        // Sub-field inside a Row wrapper is localized
+        let mut row_field = make_field("layout", FieldType::Row, false);
+        let localized_sub = make_field("slug", FieldType::Text, true);
+        row_field.fields = vec![localized_sub];
+
+        let def = make_collection(vec![row_field]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        };
+        // Filtering by "slug" should resolve to "slug__de" because it's localized inside a Row
+        let result = resolve_filter_column("slug", &def, Some(&ctx));
+        assert_eq!(result, "slug__de");
+    }
+
+    #[test]
+    fn resolve_column_row_sub_field_non_localized_passthrough() {
+        // Sub-field inside a Row wrapper is NOT localized — should pass through unchanged
+        let mut row_field = make_field("layout", FieldType::Row, false);
+        let non_localized_sub = make_field("slug", FieldType::Text, false);
+        row_field.fields = vec![non_localized_sub];
+
+        let def = make_collection(vec![row_field]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        };
+        let result = resolve_filter_column("slug", &def, Some(&ctx));
+        assert_eq!(result, "slug");
+    }
+
+    #[test]
+    fn resolve_column_collapsible_sub_field_localized() {
+        // Sub-field inside a Collapsible wrapper is localized
+        let mut collapsible = make_field("advanced", FieldType::Collapsible, false);
+        let localized_sub = make_field("summary", FieldType::Textarea, true);
+        collapsible.fields = vec![localized_sub];
+
+        let def = make_collection(vec![collapsible]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        };
+        let result = resolve_filter_column("summary", &def, Some(&ctx));
+        assert_eq!(result, "summary__de");
+    }
+
+    #[test]
+    fn resolve_column_tabs_sub_field_localized() {
+        // Sub-field inside a Tabs wrapper is localized
+        use crate::core::field::FieldTab;
+        let tabs_field = FieldDefinition {
+            name: "page_tabs".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![
+                FieldTab {
+                    label: "Content".to_string(),
+                    description: None,
+                    fields: vec![make_field("description", FieldType::Textarea, true)],
+                },
+            ],
+            ..Default::default()
+        };
+        let def = make_collection(vec![tabs_field]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        };
+        let result = resolve_filter_column("description", &def, Some(&ctx));
+        assert_eq!(result, "description__de");
+    }
+
+    #[test]
+    fn resolve_column_tabs_sub_field_non_localized_passthrough() {
+        // Sub-field inside a Tabs wrapper is NOT localized
+        use crate::core::field::FieldTab;
+        let tabs_field = FieldDefinition {
+            name: "page_tabs".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![
+                FieldTab {
+                    label: "Content".to_string(),
+                    description: None,
+                    fields: vec![make_field("description", FieldType::Textarea, false)],
+                },
+            ],
+            ..Default::default()
+        };
+        let def = make_collection(vec![tabs_field]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: locale_config_en_de(),
+        };
+        let result = resolve_filter_column("description", &def, Some(&ctx));
+        assert_eq!(result, "description");
+    }
+
+    // ── resolve_filter_column: locale disabled passthrough ──────────────
+
+    #[test]
+    fn resolve_column_locale_disabled_passthrough() {
+        // Even with a ctx, if config.is_enabled() is false, passthrough
+        let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".into()),
+            config: LocaleConfig {
+                default_locale: "en".to_string(),
+                locales: vec![], // empty = disabled
+                fallback: false,
+            },
+        };
+        let result = resolve_filter_column("title", &def, Some(&ctx));
+        assert_eq!(result, "title");
+    }
+
     // ── where clause with single-item OR ────────────────────────────────
 
     #[test]

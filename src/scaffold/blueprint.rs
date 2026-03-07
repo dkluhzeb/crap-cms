@@ -1,6 +1,6 @@
 //! Blueprint management — save, use, list, remove reusable config directory templates.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -335,6 +335,10 @@ fn validate_blueprint_name(name: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
+
+    /// Mutex to serialize tests that mutate XDG_CONFIG_HOME.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_validate_blueprint_name() {
@@ -676,5 +680,285 @@ mod tests {
         let manifest: BlueprintManifest = toml::from_str(content).unwrap();
         assert_eq!(manifest.crap_version, "0.1.0");
         assert!(manifest.created_at.is_none());
+    }
+
+    #[test]
+    fn test_read_manifest_invalid_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Write a file with invalid TOML content
+        fs::write(tmp.path().join(MANIFEST_FILENAME), "not valid toml [[[").unwrap();
+        let result = read_manifest(tmp.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Failed to parse manifest"), "got: {}", err);
+    }
+
+    /// Helper: run a closure with XDG_CONFIG_HOME set to a temp path,
+    /// then restore the original value. Serialized via ENV_LOCK.
+    fn with_temp_config_dir<F>(f: F)
+    where
+        F: FnOnce(&std::path::Path),
+    {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let orig = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        f(tmp.path());
+        match orig {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
+    #[test]
+    fn test_list_blueprint_names_empty() {
+        with_temp_config_dir(|_| {
+            // blueprints dir doesn't exist yet
+            let names = list_blueprint_names().unwrap();
+            assert!(names.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_list_blueprint_names_with_entries() {
+        with_temp_config_dir(|config_home| {
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            fs::create_dir_all(bp_dir.join("alpha")).unwrap();
+            fs::create_dir_all(bp_dir.join("beta")).unwrap();
+            // A regular file should be ignored (only dirs are listed)
+            fs::write(bp_dir.join("not-a-dir.txt"), "ignored").unwrap();
+
+            let names = list_blueprint_names().unwrap();
+            assert_eq!(names, vec!["alpha", "beta"]);
+        });
+    }
+
+    #[test]
+    fn test_blueprint_list_no_blueprints_dir() {
+        with_temp_config_dir(|_| {
+            // blueprints dir doesn't exist — should print a "none saved" message and succeed
+            let result = blueprint_list();
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_blueprint_list_empty_blueprints_dir() {
+        with_temp_config_dir(|config_home| {
+            // blueprints dir exists but is empty
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            fs::create_dir_all(&bp_dir).unwrap();
+            let result = blueprint_list();
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_blueprint_list_with_blueprints() {
+        with_temp_config_dir(|config_home| {
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+
+            // Create two blueprints with collections/globals and manifests
+            let bp1 = bp_dir.join("blog");
+            fs::create_dir_all(bp1.join("collections")).unwrap();
+            fs::create_dir_all(bp1.join("globals")).unwrap();
+            fs::write(bp1.join("collections/posts.lua"), "").unwrap();
+            fs::write(bp1.join("globals/settings.lua"), "").unwrap();
+            write_manifest(&bp1).unwrap();
+
+            let bp2 = bp_dir.join("shop");
+            fs::create_dir_all(bp2.join("collections")).unwrap();
+            fs::write(bp2.join("collections/products.lua"), "").unwrap();
+            fs::write(bp2.join("collections/orders.lua"), "").unwrap();
+            // No manifest (backward compat)
+
+            let result = blueprint_list();
+            assert!(result.is_ok());
+        });
+    }
+
+    #[test]
+    fn test_blueprint_save_already_exists_no_force() {
+        with_temp_config_dir(|config_home| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+
+            // Create a valid config dir
+            fs::write(tmp.path().join("crap.toml"), "").unwrap();
+
+            // Pre-create the blueprint target so it "already exists"
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            let bp_target = bp_dir.join("my-bp");
+            fs::create_dir_all(&bp_target).unwrap();
+
+            let result = blueprint_save(tmp.path(), "my-bp", false);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("already exists"), "got: {}", err);
+            assert!(err.contains("--force"), "got: {}", err);
+        });
+    }
+
+    #[test]
+    fn test_blueprint_save_force_overwrites() {
+        with_temp_config_dir(|config_home| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+
+            // Create a valid config dir
+            fs::write(tmp.path().join("crap.toml"), "[server]\nadmin_port = 3000\n").unwrap();
+            fs::write(tmp.path().join("init.lua"), "-- hello").unwrap();
+
+            // Pre-create the blueprint target with old content
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            let bp_target = bp_dir.join("overwrite-bp");
+            fs::create_dir_all(&bp_target).unwrap();
+            fs::write(bp_target.join("old-file.txt"), "old content").unwrap();
+
+            // Force overwrite
+            let result = blueprint_save(tmp.path(), "overwrite-bp", true);
+            assert!(result.is_ok(), "blueprint_save with force failed: {:?}", result);
+
+            // Old file should be gone, new content should be there
+            assert!(!bp_target.join("old-file.txt").exists(), "old file should be removed");
+            assert!(bp_target.join("crap.toml").exists(), "crap.toml should be copied");
+            assert!(bp_target.join(MANIFEST_FILENAME).exists(), "manifest should be written");
+        });
+    }
+
+    #[test]
+    fn test_blueprint_save_success() {
+        with_temp_config_dir(|config_home| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+
+            // Create a valid config dir with various contents
+            fs::create_dir_all(tmp.path().join("collections")).unwrap();
+            fs::create_dir_all(tmp.path().join("data")).unwrap();
+            fs::create_dir_all(tmp.path().join("uploads")).unwrap();
+            fs::create_dir_all(tmp.path().join("types")).unwrap();
+            fs::write(tmp.path().join("crap.toml"), "[server]\nadmin_port = 3000\n").unwrap();
+            fs::write(tmp.path().join("collections/posts.lua"), "-- posts").unwrap();
+            fs::write(tmp.path().join("data/crap.db"), "should skip").unwrap();
+            fs::write(tmp.path().join("uploads/photo.jpg"), "should skip").unwrap();
+            fs::write(tmp.path().join("types/crap.lua"), "should skip").unwrap();
+
+            let result = blueprint_save(tmp.path(), "new-bp", false);
+            assert!(result.is_ok(), "blueprint_save failed: {:?}", result);
+
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            let bp_target = bp_dir.join("new-bp");
+            assert!(bp_target.exists());
+            assert!(bp_target.join("crap.toml").exists());
+            assert!(bp_target.join("collections/posts.lua").exists());
+            assert!(bp_target.join(MANIFEST_FILENAME).exists());
+            // Runtime artifacts must be excluded
+            assert!(!bp_target.join("data").exists());
+            assert!(!bp_target.join("uploads").exists());
+            assert!(!bp_target.join("types").exists());
+        });
+    }
+
+    #[test]
+    fn test_blueprint_remove_success() {
+        with_temp_config_dir(|config_home| {
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            let bp_target = bp_dir.join("remove-me");
+            fs::create_dir_all(&bp_target).unwrap();
+            fs::write(bp_target.join("crap.toml"), "").unwrap();
+
+            let result = blueprint_remove("remove-me");
+            assert!(result.is_ok(), "blueprint_remove failed: {:?}", result);
+            assert!(!bp_target.exists(), "blueprint directory should be removed");
+        });
+    }
+
+    #[test]
+    fn test_blueprint_use_overwrite_protection() {
+        with_temp_config_dir(|config_home| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+
+            // Create a blueprint
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            let bp_source = bp_dir.join("existing-bp");
+            fs::create_dir_all(&bp_source).unwrap();
+            fs::write(bp_source.join("crap.toml"), "[server]\nadmin_port = 3000\n").unwrap();
+
+            // Create a target directory that already has a crap.toml
+            let target = tmp.path().join("my-project");
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("crap.toml"), "already here").unwrap();
+
+            let result = blueprint_use("existing-bp", Some(target.clone()));
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("already contains a crap.toml"), "got: {}", err);
+        });
+    }
+
+    #[test]
+    fn test_blueprint_use_not_found_with_others_available() {
+        with_temp_config_dir(|config_home| {
+            // Create a different blueprint so "available blueprints" branch fires
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            fs::create_dir_all(bp_dir.join("other-bp")).unwrap();
+
+            let result = blueprint_use("missing-bp", None);
+            assert!(result.is_err());
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("not found"), "got: {}", err);
+            assert!(err.contains("other-bp"), "should list available blueprints, got: {}", err);
+        });
+    }
+
+    #[test]
+    fn test_blueprint_use_version_mismatch_warning() {
+        with_temp_config_dir(|config_home| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+
+            // Create a blueprint with a mismatched version in its manifest
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            let bp_source = bp_dir.join("old-version-bp");
+            fs::create_dir_all(&bp_source).unwrap();
+            fs::write(bp_source.join("crap.toml"), "[server]\nadmin_port = 3000\n").unwrap();
+
+            // Write a manifest with a different (fake old) version
+            let old_manifest = BlueprintManifest {
+                crap_version: "0.0.1-old".to_string(),
+                created_at: None,
+            };
+            let content = toml::to_string_pretty(&old_manifest).unwrap();
+            fs::write(bp_source.join(MANIFEST_FILENAME), content).unwrap();
+
+            // Use the blueprint into a fresh target — should succeed despite version mismatch
+            // (it warns but doesn't block)
+            let target = tmp.path().join("new-project");
+            let result = blueprint_use("old-version-bp", Some(target.clone()));
+            assert!(result.is_ok(), "blueprint_use should succeed with version mismatch: {:?}", result);
+            assert!(target.join("crap.toml").exists(), "project should be created");
+        });
+    }
+
+    #[test]
+    fn test_blueprint_use_success() {
+        with_temp_config_dir(|config_home| {
+            let tmp = tempfile::tempdir().expect("tempdir");
+
+            // Create a blueprint with matching version manifest
+            let bp_dir = config_home.join("crap-cms").join("blueprints");
+            let bp_source = bp_dir.join("good-bp");
+            fs::create_dir_all(bp_source.join("collections")).unwrap();
+            fs::write(bp_source.join("crap.toml"), "[server]\nadmin_port = 3000\n").unwrap();
+            fs::write(bp_source.join("collections/posts.lua"), "-- posts").unwrap();
+            write_manifest(&bp_source).unwrap();
+
+            let target = tmp.path().join("my-new-project");
+            let result = blueprint_use("good-bp", Some(target.clone()));
+            assert!(result.is_ok(), "blueprint_use failed: {:?}", result);
+
+            assert!(target.join("crap.toml").exists());
+            assert!(target.join("collections/posts.lua").exists());
+            // types/crap.lua must be regenerated from compiled source
+            assert!(target.join("types/crap.lua").exists());
+            let types_content = fs::read_to_string(target.join("types/crap.lua")).unwrap();
+            assert!(!types_content.is_empty());
+        });
     }
 }

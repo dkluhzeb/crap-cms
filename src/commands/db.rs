@@ -1,6 +1,6 @@
 //! `migrate`, `db console`, `backup`, and `db cleanup` commands.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -249,6 +249,106 @@ pub fn backup(
         .context("Failed to write manifest.json")?;
 
     println!("\nBackup complete: {}", backup_dir.display());
+    Ok(())
+}
+
+/// Handle the `restore` subcommand.
+/// Untestable: replaces database file and spawns tar process.
+/// Covered by CLI integration tests.
+#[cfg(not(tarpaulin_include))]
+pub fn restore(
+    config_dir: &Path,
+    backup_dir: &Path,
+    include_uploads: bool,
+    confirm: bool,
+) -> Result<()> {
+    if !confirm {
+        anyhow::bail!(
+            "Restore is destructive — it replaces the current database.\n\
+             Pass --confirm / -y to proceed."
+        );
+    }
+
+    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let backup_dir = backup_dir.canonicalize().unwrap_or_else(|_| backup_dir.to_path_buf());
+
+    // Validate backup directory
+    let manifest_path = backup_dir.join("manifest.json");
+    let backup_db_path = backup_dir.join("crap.db");
+
+    if !manifest_path.exists() {
+        anyhow::bail!("No manifest.json found in {}", backup_dir.display());
+    }
+    if !backup_db_path.exists() {
+        anyhow::bail!("No crap.db found in {}", backup_dir.display());
+    }
+
+    // Read and display manifest
+    let manifest_str = std::fs::read_to_string(&manifest_path)
+        .context("Failed to read manifest.json")?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_str)
+        .context("Failed to parse manifest.json")?;
+
+    println!("Restoring from backup:");
+    println!("  Version:   {}", manifest.get("crap_version").and_then(|v| v.as_str()).unwrap_or("unknown"));
+    println!("  Timestamp: {}", manifest.get("timestamp").and_then(|v| v.as_str()).unwrap_or("unknown"));
+    println!("  DB size:   {} bytes", manifest.get("db_size").and_then(|v| v.as_u64()).unwrap_or(0));
+    if let Some(size) = manifest.get("uploads_size").and_then(|v| v.as_u64()) {
+        println!("  Uploads:   {} bytes", size);
+    }
+
+    // Load config to find target DB path
+    let cfg = crate::config::CrapConfig::load(&config_dir)
+        .context("Failed to load config")?;
+    let db_path = cfg.db_path(&config_dir);
+
+    // Ensure target directory exists
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    }
+
+    // Replace database file
+    println!("Restoring database to {}...", db_path.display());
+    std::fs::copy(&backup_db_path, &db_path)
+        .with_context(|| format!("Failed to copy database to {}", db_path.display()))?;
+    println!("Database restored.");
+
+    // Remove WAL/SHM files if they exist (stale from previous instance)
+    let wal_path = db_path.with_extension("db-wal");
+    let shm_path = db_path.with_extension("db-shm");
+    if wal_path.exists() {
+        let _ = std::fs::remove_file(&wal_path);
+    }
+    if shm_path.exists() {
+        let _ = std::fs::remove_file(&shm_path);
+    }
+
+    // Optionally restore uploads
+    if include_uploads {
+        let archive_path = backup_dir.join("uploads.tar.gz");
+        if archive_path.exists() {
+            println!("Extracting uploads...");
+            let status = std::process::Command::new("tar")
+                .args(["xzf", &archive_path.to_string_lossy(), "-C", &config_dir.to_string_lossy()])
+                .status();
+            match status {
+                Ok(s) if s.success() => {
+                    println!("Uploads restored.");
+                }
+                Ok(s) => {
+                    eprintln!("Warning: tar exited with status {}", s);
+                }
+                Err(e) => {
+                    eprintln!("Warning: tar not found or failed: {}. Skipping uploads restore.", e);
+                }
+            }
+        } else {
+            println!("No uploads.tar.gz in backup — skipping uploads restore.");
+        }
+    }
+
+    println!("\nRestore complete.");
     Ok(())
 }
 

@@ -27,6 +27,9 @@
   "upload_file": "Datei hochladen",
   "replace_file": "Datei ersetzen",
   "login": "Anmelden",
+  "login_page_title": "Anmelden",
+  "forgot_password_page_title": "Passwort vergessen",
+  "reset_password_page_title": "Passwort zurücksetzen",
   "logout": "Abmelden",
   "email": "E-Mail",
   "password": "Passwort",
@@ -81,6 +84,9 @@
   "value_placeholder": "Wert...",
 
   "no_items_yet_generic": "Noch keine Einträge",
+  "add": "Hinzufügen",
+  "item": "Eintrag",
+  "items": "Einträge",
   "row": "Zeile",
   "block": "Block",
   "collapse_all": "Alle einklappen",
@@ -131,5 +137,10 @@
   "browse_media": "Medien durchsuchen",
   "load_more": "Mehr laden",
   "confirm": "Bestätigen",
-  "log_out": "Abmelden"
+  "log_out": "Abmelden",
+
+  "clear_search": "Suche löschen",
+  "sort": "Sortieren",
+  "sorted_ascending": "Aufsteigend sortiert",
+  "sorted_descending": "Absteigend sortiert"
 }

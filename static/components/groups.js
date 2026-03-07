@@ -20,6 +20,8 @@ function toggleGroup(btn) {
     ? 'form__collapsible--collapsed'
     : 'form__group--collapsed';
   fieldset.classList.toggle(cls);
+  const collapsed = fieldset.classList.contains(cls);
+  btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
 }
 
 registerAction('toggle-group', (el) => toggleGroup(el));

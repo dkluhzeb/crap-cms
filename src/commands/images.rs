@@ -1,6 +1,6 @@
 //! `images` command — manage the image processing queue.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 /// Handle the `images` subcommand.
 // Excluded from coverage: requires full Lua + DB setup for each variant.
@@ -21,8 +21,8 @@ pub fn run(action: super::ImagesAction) -> Result<()> {
                 return Ok(());
             }
 
-            println!("{:<24} {:<12} {:<12} {:<8} {:<20} {}",
-                "ID", "Collection", "Document", "Format", "Created", "Status");
+            println!("{:<24} {:<12} {:<12} {:<8} {:<20} Status",
+                "ID", "Collection", "Document", "Format", "Created");
             println!("{}", "-".repeat(90));
 
             for e in &entries {

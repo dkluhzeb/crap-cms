@@ -1,7 +1,7 @@
 //! Pool-based read-only wrappers around `query::*` functions for convenience.
 
 use std::collections::HashMap;
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 use crate::core::{CollectionDefinition, Document};
 use crate::core::collection::GlobalDefinition;

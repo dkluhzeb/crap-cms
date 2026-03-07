@@ -1,6 +1,6 @@
 //! `serve` command — start admin UI and gRPC servers.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn, error};

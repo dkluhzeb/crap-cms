@@ -516,6 +516,197 @@ mod tests {
         assert!(features.is_err() || matches!(tbl.get::<Value>("features"), Ok(Value::Nil)));
     }
 
+    // Covers min_length, max_length, min, max in field_def_to_lua_table
+    #[test]
+    fn field_def_to_lua_table_min_max_length_and_value() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "score".to_string(),
+            field_type: crate::core::field::FieldType::Number,
+            min_length: Some(2),
+            max_length: Some(100),
+            min: Some(0.5),
+            max: Some(99.9),
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let min_length: usize = tbl.get("min_length").unwrap();
+        assert_eq!(min_length, 2);
+        let max_length: usize = tbl.get("max_length").unwrap();
+        assert_eq!(max_length, 100);
+        let min: f64 = tbl.get("min").unwrap();
+        assert!((min - 0.5).abs() < f64::EPSILON);
+        let max: f64 = tbl.get("max").unwrap();
+        assert!((max - 99.9).abs() < 1e-9);
+    }
+
+    // Covers has_many = true in field_def_to_lua_table (lines 174-176)
+    #[test]
+    fn field_def_to_lua_table_has_many() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "tags".to_string(),
+            field_type: crate::core::field::FieldType::Select,
+            has_many: true,
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let has_many: bool = tbl.get("has_many").unwrap();
+        assert!(has_many);
+    }
+
+    // Covers min_date and max_date in field_def_to_lua_table (lines 178-183)
+    #[test]
+    fn field_def_to_lua_table_min_max_date() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "published_at".to_string(),
+            field_type: crate::core::field::FieldType::Date,
+            min_date: Some("2020-01-01".to_string()),
+            max_date: Some("2030-12-31".to_string()),
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let min_date: String = tbl.get("min_date").unwrap();
+        assert_eq!(min_date, "2020-01-01");
+        let max_date: String = tbl.get("max_date").unwrap();
+        assert_eq!(max_date, "2030-12-31");
+    }
+
+    // Covers admin.language in field_def_to_lua_table (lines 185-187)
+    #[test]
+    fn field_def_to_lua_table_language() {
+        let lua = Lua::new();
+        let mut field = crate::core::field::FieldDefinition {
+            name: "snippet".to_string(),
+            field_type: crate::core::field::FieldType::Code,
+            ..Default::default()
+        };
+        field.admin.language = Some("javascript".to_string());
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let lang: String = tbl.get("language").unwrap();
+        assert_eq!(lang, "javascript");
+    }
+
+    // Covers admin.picker in field_def_to_lua_table (lines 197-199)
+    #[test]
+    fn field_def_to_lua_table_picker() {
+        let lua = Lua::new();
+        let mut field = crate::core::field::FieldDefinition {
+            name: "layout".to_string(),
+            field_type: crate::core::field::FieldType::Blocks,
+            ..Default::default()
+        };
+        field.admin.picker = Some("card".to_string());
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let picker: String = tbl.get("picker").unwrap();
+        assert_eq!(picker, "card");
+    }
+
+    // Covers join config in field_def_to_lua_table (lines 201-204)
+    #[test]
+    fn field_def_to_lua_table_join_config() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "comments".to_string(),
+            field_type: crate::core::field::FieldType::Join,
+            join: Some(crate::core::field::JoinConfig {
+                collection: "comments".to_string(),
+                on: "post_id".to_string(),
+            }),
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let collection: String = tbl.get("collection").unwrap();
+        assert_eq!(collection, "comments");
+        let on: String = tbl.get("on").unwrap();
+        assert_eq!(on, "post_id");
+    }
+
+    // Covers sub-fields in field_def_to_lua_table (lines 218-224) — array/group type
+    #[test]
+    fn field_def_to_lua_table_sub_fields() {
+        let lua = Lua::new();
+        let field = crate::core::field::FieldDefinition {
+            name: "address".to_string(),
+            field_type: crate::core::field::FieldType::Group,
+            fields: vec![
+                crate::core::field::FieldDefinition {
+                    name: "street".to_string(),
+                    field_type: crate::core::field::FieldType::Text,
+                    ..Default::default()
+                },
+                crate::core::field::FieldDefinition {
+                    name: "city".to_string(),
+                    field_type: crate::core::field::FieldType::Text,
+                    required: true,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let tbl = field_def_to_lua_table(&lua, &field).unwrap();
+
+        let sub: Table = tbl.get("fields").unwrap();
+        let sf1: Table = sub.get(1).unwrap();
+        let name1: String = sf1.get("name").unwrap();
+        assert_eq!(name1, "street");
+        let sf2: Table = sub.get(2).unwrap();
+        let name2: String = sf2.get("name").unwrap();
+        assert_eq!(name2, "city");
+        let req2: bool = sf2.get("required").unwrap();
+        assert!(req2);
+    }
+
+    // Covers get_global when plural label is absent (the `if let Some` branch for plural
+    // evaluates to None and skips — exercises the None path rather than Some).
+    #[test]
+    fn get_global_with_no_plural_label() {
+        use std::sync::{Arc, RwLock};
+        let mut reg = crate::core::Registry::new();
+        reg.register_global(crate::core::collection::GlobalDefinition {
+            slug: "branding".to_string(),
+            labels: crate::core::collection::CollectionLabels {
+                singular: Some(crate::core::field::LocalizedString::Plain("Brand".to_string())),
+                plural: None, // no plural label
+            },
+            fields: vec![],
+            hooks: crate::core::collection::CollectionHooks::default(),
+            access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
+            live: None,
+            versions: None,
+        });
+        let registry = Arc::new(RwLock::new(reg));
+
+        let lua = Lua::new();
+        let crap = lua.create_table().unwrap();
+        register_schema(&lua, &crap, registry).unwrap();
+
+        let schema: Table = crap.get("schema").unwrap();
+        let get_global: mlua::Function = schema.get("get_global").unwrap();
+        let result: Value = get_global.call("branding".to_string()).unwrap();
+
+        if let Value::Table(tbl) = result {
+            let slug: String = tbl.get("slug").unwrap();
+            assert_eq!(slug, "branding");
+            let labels: Table = tbl.get("labels").unwrap();
+            let singular: String = labels.get("singular").unwrap();
+            assert_eq!(singular, "Brand");
+            // plural should be nil since we didn't set it
+            let plural: Value = labels.get("plural").unwrap();
+            assert!(matches!(plural, Value::Nil));
+        } else {
+            panic!("Expected Table for global");
+        }
+    }
+
     #[test]
     fn field_def_to_lua_table_blocks_with_group_and_image() {
         let lua = Lua::new();

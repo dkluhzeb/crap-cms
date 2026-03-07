@@ -1,6 +1,6 @@
 //! Image processing queue database operations.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 
 /// A pending image format conversion entry.
 #[derive(Debug, Clone)]

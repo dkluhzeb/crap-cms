@@ -1,6 +1,6 @@
 //! `user` command — user management for auth collections.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
 

@@ -91,7 +91,7 @@ fn help_shows_all_commands() {
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "help should succeed");
-    for cmd in &["serve", "status", "user", "make", "init", "export", "import", "backup", "migrate", "typegen", "proto", "blueprint"] {
+    for cmd in &["serve", "status", "user", "make", "init", "export", "import", "backup", "restore", "migrate", "typegen", "proto", "blueprint"] {
         assert!(stdout.contains(cmd), "help should list '{}' command, got:\n{}", cmd, stdout);
     }
 }
@@ -3242,6 +3242,91 @@ fn cmd_backup_with_output_dir() {
     assert_eq!(subdirs.len(), 1);
     assert!(subdirs[0].path().join("crap.db").exists());
     assert!(subdirs[0].path().join("manifest.json").exists());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 30b. Restore Command
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn cmd_restore_requires_confirm() {
+    let (tmp, pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    drop(pool);
+
+    // Create a fake backup dir
+    let backup_dir = tmp.path().join("fake-backup");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+
+    let result = commands::db::restore(&config_dir, &backup_dir, false, false);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("--confirm"));
+}
+
+#[test]
+fn cmd_restore_validates_backup_dir() {
+    let (tmp, pool, _registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+    drop(pool);
+
+    // Empty dir — no manifest.json
+    let backup_dir = tmp.path().join("empty-backup");
+    std::fs::create_dir_all(&backup_dir).unwrap();
+
+    let result = commands::db::restore(&config_dir, &backup_dir, false, true);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("manifest.json"));
+}
+
+#[test]
+fn cmd_restore_roundtrip() {
+    let (tmp, pool, registry) = full_setup();
+    let config_dir = tmp.path().join("config");
+
+    // Create data
+    {
+        let reg = registry.read().unwrap();
+        let def = reg.get_collection("posts").unwrap();
+        let mut conn = pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Restore Test Post".to_string());
+        query::create(&tx, "posts", def, &data, None).unwrap();
+        tx.commit().unwrap();
+    }
+    drop(pool);
+
+    // Backup
+    let backup_output = tmp.path().join("backups");
+    commands::db::backup(&config_dir, Some(backup_output.clone()), false).unwrap();
+
+    let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().is_dir())
+        .collect();
+    let backup_dir = backup_dirs[0].path();
+
+    // Delete the original DB
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let db_path = cfg.db_path(&config_dir);
+    std::fs::remove_file(&db_path).unwrap();
+    assert!(!db_path.exists());
+
+    // Restore
+    commands::db::restore(&config_dir, &backup_dir, false, true).unwrap();
+
+    // Verify DB was restored
+    assert!(db_path.exists(), "DB should be restored");
+
+    // Verify data is intact
+    let pool2 = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("posts").unwrap();
+    let conn = pool2.get().unwrap();
+    let results = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].fields.get("title").unwrap(), "Restore Test Post");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

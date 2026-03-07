@@ -16,7 +16,8 @@
         hx-push-url="true"
         hx-trigger="submit"
         hx-include="find input">
-    <span class="material-symbols-outlined search-bar__icon">search</span>
+    <label for="list-search-input" class="sr-only">{{t "search_placeholder"}} {{collection.display_name}}</label>
+    <span class="material-symbols-outlined search-bar__icon" aria-hidden="true">search</span>
     <input
       type="text"
       name="search"
@@ -36,8 +37,9 @@
        href="/admin/collections/{{collection.slug}}"
        hx-get="/admin/collections/{{collection.slug}}"
        hx-target="body"
-       hx-push-url="true">
-      <span class="material-symbols-outlined">close</span>
+       hx-push-url="true"
+       aria-label="{{t "clear_search"}}">
+      <span class="material-symbols-outlined" aria-hidden="true">close</span>
     </a>
     {{/if}}
   </form>

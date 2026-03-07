@@ -2,9 +2,11 @@
   <div class="form__tabs-nav" role="tablist">
     {{#each tabs}}
     <button type="button"
+            id="tab-{{../name}}-{{@index}}"
             class="form__tabs-tab{{#if @first}} form__tabs-tab--active{{/if}}"
             role="tab"
             aria-selected="{{#if @first}}true{{else}}false{{/if}}"
+            aria-controls="tabpanel-{{../name}}-{{@index}}"
             data-action="switch-tab"
             data-tab-index="{{@index}}">
       {{label}}
@@ -14,7 +16,9 @@
   </div>
   {{#each tabs}}
   <div class="form__tabs-panel{{#unless @first}} form__tabs-panel--hidden{{/unless}}"
+       id="tabpanel-{{../name}}-{{@index}}"
        role="tabpanel"
+       aria-labelledby="tab-{{../name}}-{{@index}}"
        data-tab-panel="{{@index}}">
     {{#if description}}<p class="form__description form__tabs-description">{{description}}</p>{{/if}}
     {{#each sub_fields}}

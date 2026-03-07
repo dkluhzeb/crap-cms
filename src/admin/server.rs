@@ -20,6 +20,7 @@ use crate::db::DbPool;
 use crate::db::query;
 use crate::hooks::lifecycle::HookRunner;
 use super::AdminState;
+use super::context::ContextBuilder;
 use super::handlers::{auth as auth_handlers, dashboard, collections, globals, static_assets, uploads, events};
 
 /// Start the admin HTTP server (Axum) with all routes, middleware, and static file serving.
@@ -577,7 +578,7 @@ async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<ax
 
 /// Render the "setup required" page (no auth collection exists, require_auth is on).
 fn auth_required_response(state: &AdminState) -> axum::response::Response {
-    let data = serde_json::json!({});
+    let data = ContextBuilder::auth(state).build();
     match state.render("errors/auth_required", &data) {
         Ok(html) => (StatusCode::SERVICE_UNAVAILABLE, axum::response::Html(html)).into_response(),
         Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Setup required: no auth collection configured").into_response(),
@@ -586,7 +587,7 @@ fn auth_required_response(state: &AdminState) -> axum::response::Response {
 
 /// Render the "access denied" page (user authenticated but not authorized for admin).
 fn admin_denied_response(state: &AdminState) -> axum::response::Response {
-    let data = serde_json::json!({});
+    let data = ContextBuilder::auth(state).build();
     match state.render("errors/admin_denied", &data) {
         Ok(html) => (StatusCode::FORBIDDEN, axum::response::Html(html)).into_response(),
         Err(_) => (StatusCode::FORBIDDEN, "Access denied").into_response(),

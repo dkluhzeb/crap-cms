@@ -1,7 +1,7 @@
 //! Background job scheduler: polls for pending jobs, evaluates cron schedules,
 //! executes Lua handlers, and manages heartbeats and stale recovery.
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -85,7 +85,7 @@ pub async fn start(
 
                 // Auto-purge old jobs periodically (every 10 cron intervals)
                 purge_counter += 1;
-                if purge_counter % 10 == 0 {
+                if purge_counter.is_multiple_of(10) {
                     if let Some(secs) = auto_purge_secs {
                         if let Ok(conn) = pool.get() {
                             match job_query::purge_old_jobs(&conn, secs) {
