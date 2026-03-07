@@ -75,6 +75,14 @@ pub enum FieldType {
     Join,
 }
 
+/// MCP-specific configuration for a field.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct McpFieldConfig {
+    /// Description used in MCP tool JSON Schema for this field.
+    pub description: Option<String>,
+}
+
 /// Configuration for join (virtual reverse-relationship) fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct JoinConfig {
@@ -392,6 +400,8 @@ pub struct FieldDefinition {
     #[serde(default)]
     pub access: FieldAccess,
     #[serde(default)]
+    pub mcp: McpFieldConfig,
+    #[serde(default)]
     pub relationship: Option<RelationshipConfig>,
     #[serde(default)]
     pub fields: Vec<FieldDefinition>,
@@ -451,6 +461,7 @@ impl Default for FieldDefinition {
             admin: FieldAdmin::default(),
             hooks: FieldHooks::default(),
             access: FieldAccess::default(),
+            mcp: McpFieldConfig::default(),
             relationship: None,
             fields: Vec::new(),
             blocks: Vec::new(),

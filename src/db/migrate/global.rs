@@ -144,6 +144,7 @@ mod tests {
             fields,
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         }

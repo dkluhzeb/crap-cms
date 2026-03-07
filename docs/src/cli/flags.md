@@ -608,6 +608,26 @@ crap-cms images retry ./my-project --all -y
 crap-cms images purge ./my-project --older-than 30d
 ```
 
+### `mcp` — Start the MCP server (stdio)
+
+Start an MCP (Model Context Protocol) server over stdio for AI assistant integration.
+
+```bash
+crap-cms mcp <CONFIG>
+```
+
+| Argument | Description |
+|----------|-------------|
+| `<CONFIG>` | Path to the config directory |
+
+```bash
+crap-cms mcp ./my-project
+```
+
+Reads JSON-RPC 2.0 from stdin, writes responses to stdout. Use with Claude Desktop,
+Cursor, VS Code, or any MCP-compatible client. See [MCP Overview](../mcp/overview.md)
+for configuration and usage.
+
 ## Environment Variables
 
 | Variable | Description |

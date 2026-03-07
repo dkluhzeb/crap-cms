@@ -1139,6 +1139,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: Some(crate::core::collection::VersionsConfig { drafts: true, max_versions: 10 }),
             indexes: Vec::new(),

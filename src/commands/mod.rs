@@ -11,6 +11,7 @@ pub mod db;
 pub mod export;
 pub mod templates;
 pub mod typegen;
+pub mod mcp;
 
 use anyhow::{Context, Result};
 use clap::Subcommand;

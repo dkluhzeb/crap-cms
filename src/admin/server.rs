@@ -131,6 +131,13 @@ pub fn build_router(state: AdminState) -> Router {
 
     let config_dir = &state.config_dir;
 
+    // Mount MCP HTTP endpoint if enabled
+    let mcp_route = if state.config.mcp.enabled && state.config.mcp.http {
+        Some(post(mcp_http_handler))
+    } else {
+        None
+    };
+
     let upload_api = crate::api::upload::upload_router(state.clone());
 
     let router = Router::new()
@@ -140,6 +147,11 @@ pub fn build_router(state: AdminState) -> Router {
         .route("/admin/reset-password", get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action))
         .route("/admin/verify-email", get(auth_handlers::verify_email))
         .merge(protected)
+        .merge(if let Some(mcp) = mcp_route {
+            Router::new().route("/mcp", mcp)
+        } else {
+            Router::new()
+        })
         .nest("/api", upload_api)
         .nest_service("/static", static_assets::overlay_service(config_dir))
         .route("/uploads/{collection_slug}/{filename}", get(uploads::serve_upload))
@@ -527,6 +539,78 @@ pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str>
         }
     }
     None
+}
+
+/// MCP HTTP transport handler — receives JSON-RPC 2.0 over POST /mcp.
+/// Optionally validates API key from Authorization header.
+// Excluded from coverage: async Axum handler requiring full server state.
+#[cfg(not(tarpaulin_include))]
+async fn mcp_http_handler(
+    State(state): State<AdminState>,
+    request: axum::http::Request<axum::body::Body>,
+) -> axum::response::Response {
+    // API key auth — constant-time comparison to prevent timing attacks
+    if !state.config.mcp.api_key.is_empty() {
+        let auth_header = request.headers()
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let expected = format!("Bearer {}", state.config.mcp.api_key);
+        use subtle::ConstantTimeEq;
+        let is_valid = auth_header.as_bytes().ct_eq(expected.as_bytes());
+        if !bool::from(is_valid) {
+            return (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response();
+        }
+    }
+
+    let body_bytes = match axum::body::to_bytes(request.into_body(), 1024 * 1024).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Request body too large").into_response(),
+    };
+
+    let rpc_request: crate::mcp::protocol::JsonRpcRequest = match serde_json::from_slice(&body_bytes) {
+        Ok(r) => r,
+        Err(e) => {
+            let error_resp = crate::mcp::protocol::JsonRpcResponse {
+                jsonrpc: "2.0".to_string(),
+                id: None,
+                result: None,
+                error: Some(crate::mcp::protocol::JsonRpcError {
+                    code: crate::mcp::protocol::PARSE_ERROR,
+                    message: format!("Parse error: {}", e),
+                    data: None,
+                }),
+            };
+            return axum::Json(error_resp).into_response();
+        }
+    };
+
+    let server = crate::mcp::McpServer {
+        pool: state.pool.clone(),
+        registry: state.registry.clone(),
+        runner: state.hook_runner.clone(),
+        config: state.config.clone(),
+        config_dir: state.config_dir.clone(),
+    };
+
+    // Run handle_message in spawn_blocking — it does DB queries, Lua hooks, and filesystem I/O
+    let response = match tokio::task::spawn_blocking(move || {
+        server.handle_message(rpc_request)
+    }).await {
+        Ok(resp) => resp,
+        Err(_) => crate::mcp::protocol::JsonRpcResponse::error(
+            None,
+            crate::mcp::protocol::INTERNAL_ERROR,
+            "Internal error",
+        ),
+    };
+
+    // Notifications must not receive a response per JSON-RPC spec
+    if response.id.is_none() && response.result.is_none() && response.error.is_none() {
+        return StatusCode::NO_CONTENT.into_response();
+    }
+
+    axum::Json(response).into_response()
 }
 
 #[cfg(test)]

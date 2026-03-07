@@ -10,4 +10,5 @@ pub mod scheduler;
 pub mod scaffold;
 pub mod service;
 pub mod typegen;
+pub mod mcp;
 pub mod commands;

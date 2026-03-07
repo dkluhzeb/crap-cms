@@ -158,6 +158,12 @@ enum Command {
         #[command(subcommand)]
         action: ImagesAction,
     },
+
+    /// Start the MCP (Model Context Protocol) server (stdio transport)
+    Mcp {
+        /// Path to the config directory
+        config: PathBuf,
+    },
 }
 
 #[cfg(not(tarpaulin_include))] // binary entrypoint — not unit-testable
@@ -254,5 +260,6 @@ async fn main() -> Result<()> {
         Command::Templates { action } => commands::templates::run(action),
         Command::Jobs { action } => commands::jobs::run(action),
         Command::Images { action } => commands::images::run(action),
+        Command::Mcp { config } => commands::mcp::run(&config).await,
     }
 }

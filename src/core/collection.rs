@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 use super::field::{FieldDefinition, LocalizedString};
 use super::upload::CollectionUpload;
 
+/// MCP-specific configuration for a collection or global.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct McpCollectionConfig {
+    /// Description used in MCP tool descriptions for this collection/global.
+    pub description: Option<String>,
+}
+
 /// Configuration for document versioning and drafts on a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersionsConfig {
@@ -157,6 +165,8 @@ pub struct CollectionDefinition {
     #[serde(default)]
     pub access: CollectionAccess,
     #[serde(default)]
+    pub mcp: McpCollectionConfig,
+    #[serde(default)]
     pub live: Option<LiveSetting>,
     #[serde(default)]
     pub versions: Option<VersionsConfig>,
@@ -242,6 +252,8 @@ pub struct GlobalDefinition {
     #[serde(default)]
     pub access: CollectionAccess,
     #[serde(default)]
+    pub mcp: McpCollectionConfig,
+    #[serde(default)]
     pub live: Option<LiveSetting>,
     #[serde(default)]
     pub versions: Option<VersionsConfig>,
@@ -276,6 +288,41 @@ impl GlobalDefinition {
     }
 }
 
+impl Default for CollectionDefinition {
+    fn default() -> Self {
+        Self {
+            slug: String::new(),
+            labels: CollectionLabels::default(),
+            timestamps: true,
+            fields: Vec::new(),
+            admin: CollectionAdmin::default(),
+            hooks: CollectionHooks::default(),
+            auth: None,
+            upload: None,
+            access: CollectionAccess::default(),
+            mcp: McpCollectionConfig::default(),
+            live: None,
+            versions: None,
+            indexes: Vec::new(),
+        }
+    }
+}
+
+impl Default for GlobalDefinition {
+    fn default() -> Self {
+        Self {
+            slug: String::new(),
+            labels: CollectionLabels::default(),
+            fields: Vec::new(),
+            hooks: CollectionHooks::default(),
+            access: CollectionAccess::default(),
+            mcp: McpCollectionConfig::default(),
+            live: None,
+            versions: None,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +345,7 @@ mod tests {
             auth: None,
             upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -438,6 +486,7 @@ mod tests {
             auth: None,
             upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -510,6 +559,7 @@ mod tests {
             auth: None,
             upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -542,6 +592,7 @@ mod tests {
             fields: Vec::new(),
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         }
@@ -579,6 +630,7 @@ mod tests {
             fields: Vec::new(),
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };

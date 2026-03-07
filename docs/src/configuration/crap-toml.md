@@ -289,6 +289,19 @@ Enable this to enforce a "secure by default" posture — every collection must e
 
 When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC API (Tonic) servers. CORS runs before CSRF middleware, so preflight `OPTIONS` requests get CORS headers without triggering CSRF validation.
 
+### `[mcp]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports. |
+| `http` | boolean | `false` | Mount `POST /mcp` on the admin server for HTTP-based MCP access. |
+| `config_tools` | boolean | `false` | Enable config generation tools (`read_config_file`, `write_config_file`, `list_config_files`). Opt-in because they allow filesystem writes. |
+| `api_key` | string | `""` (empty) | API key for HTTP transport. When set, requests must include `Authorization: Bearer <key>`. Empty = no auth. |
+| `include_collections` | string[] | `[]` (empty) | Only expose these collections via MCP. Empty = all collections. |
+| `exclude_collections` | string[] | `[]` (empty) | Hide these collections from MCP. Takes precedence over `include_collections`. |
+
+See [MCP Overview](../mcp/overview.md) for usage details.
+
 When locales are configured, any field with `localized = true` in its Lua definition gets one column per locale (`title__en`, `title__de`) instead of a single `title` column. The API accepts a `locale` parameter on Find, FindByID, Create, Update, GetGlobal, and UpdateGlobal to control which locale to read/write. The admin UI shows a locale selector in the edit sidebar.
 
 **Special locale values:**

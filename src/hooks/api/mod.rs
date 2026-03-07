@@ -362,6 +362,13 @@ fn collection_config_to_lua(lua: &Lua, def: &crate::core::CollectionDefinition) 
     if let Some(ref s) = def.access.delete { access.set("delete", s.as_str())?; }
     tbl.set("access", access)?;
 
+    // mcp
+    if let Some(ref desc) = def.mcp.description {
+        let mcp = lua.create_table()?;
+        mcp.set("description", desc.as_str())?;
+        tbl.set("mcp", mcp)?;
+    }
+
     // auth
     if let Some(ref auth) = def.auth {
         if auth.enabled {
@@ -517,6 +524,13 @@ fn global_config_to_lua(lua: &Lua, def: &crate::core::collection::GlobalDefiniti
     if let Some(ref s) = def.access.update { access.set("update", s.as_str())?; }
     if let Some(ref s) = def.access.delete { access.set("delete", s.as_str())?; }
     tbl.set("access", access)?;
+
+    // mcp
+    if let Some(ref desc) = def.mcp.description {
+        let mcp = lua.create_table()?;
+        mcp.set("description", desc.as_str())?;
+        tbl.set("mcp", mcp)?;
+    }
 
     // live
     match &def.live {
@@ -729,6 +743,13 @@ fn field_config_to_lua(lua: &Lua, f: &crate::core::field::FieldDefinition) -> ml
         if has_any {
             tbl.set("access", access)?;
         }
+    }
+
+    // mcp
+    if let Some(ref desc) = f.mcp.description {
+        let mcp = lua.create_table()?;
+        mcp.set("description", desc.as_str())?;
+        tbl.set("mcp", mcp)?;
     }
 
     // relationship
@@ -1114,6 +1135,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -1146,6 +1168,7 @@ mod tests {
             }),
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -1179,6 +1202,7 @@ mod tests {
             }),
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -1223,6 +1247,7 @@ mod tests {
                 },
             }),
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -1258,6 +1283,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             versions: None,
             indexes: Vec::new(),
         };
@@ -1276,6 +1302,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             versions: None,
             indexes: Vec::new(),
         };
@@ -1294,6 +1321,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             versions: None,
             indexes: Vec::new(),
         };
@@ -1316,6 +1344,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: Some(crate::core::collection::VersionsConfig {
                 drafts: true,
@@ -1337,6 +1366,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: Some(crate::core::collection::VersionsConfig {
                 drafts: false,
@@ -1367,6 +1397,7 @@ mod tests {
             }],
             hooks: crate::core::collection::CollectionHooks::default(),
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -1391,6 +1422,7 @@ mod tests {
                 read: Some("hooks.access.allow".to_string()),
                 ..Default::default()
             },
+            mcp: Default::default(),
             live: Some(crate::core::collection::LiveSetting::Disabled),
             versions: None,
         };
@@ -1718,6 +1750,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),

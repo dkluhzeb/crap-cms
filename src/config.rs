@@ -232,6 +232,7 @@ pub struct CrapConfig {
     pub cors: CorsConfig,
     pub access: AccessConfig,
     pub pagination: PaginationConfig,
+    pub mcp: McpConfig,
 }
 
 /// Controls relationship population depth defaults and limits.
@@ -303,6 +304,37 @@ impl PaginationConfig {
 pub enum PaginationMode {
     Page,
     Cursor,
+}
+
+/// MCP (Model Context Protocol) server configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct McpConfig {
+    /// Enable MCP server (default: false).
+    pub enabled: bool,
+    /// Enable HTTP transport on /mcp (default: false).
+    pub http: bool,
+    /// Enable config generation tools that can write files to disk (default: false).
+    pub config_tools: bool,
+    /// API key for HTTP transport auth (empty = no auth).
+    pub api_key: String,
+    /// Whitelist of collection slugs to expose (empty = all).
+    pub include_collections: Vec<String>,
+    /// Blacklist of collection slugs to hide (takes precedence over include).
+    pub exclude_collections: Vec<String>,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            http: false,
+            config_tools: false,
+            api_key: String::new(),
+            include_collections: Vec::new(),
+            exclude_collections: Vec::new(),
+        }
+    }
 }
 
 /// Global upload settings (per-collection upload config is separate).

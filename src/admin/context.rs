@@ -470,6 +470,7 @@ mod tests {
             auth: None,
             upload: None,
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -504,6 +505,7 @@ mod tests {
             }],
             hooks: crate::core::collection::CollectionHooks::default(),
             access: crate::core::collection::CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };

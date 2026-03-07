@@ -108,6 +108,10 @@
 - [crap.jobs](lua-api/jobs.md)
 - [Filter Operators](lua-api/filter-operators.md)
 
+# MCP (Model Context Protocol)
+
+- [Overview](mcp/overview.md)
+
 # gRPC API
 
 - [Overview](grpc-api/overview.md)

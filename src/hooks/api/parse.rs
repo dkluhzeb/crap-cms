@@ -127,6 +127,15 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
         }
     }
 
+    // Parse MCP config
+    let mcp = if let Ok(mcp_tbl) = get_table(config, "mcp") {
+        crate::core::collection::McpCollectionConfig {
+            description: get_string(&mcp_tbl, "description"),
+        }
+    } else {
+        Default::default()
+    };
+
     Ok(CollectionDefinition {
         slug: slug.to_string(),
         labels,
@@ -137,6 +146,7 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
         auth,
         upload,
         access,
+        mcp,
         live,
         versions,
         indexes,
@@ -188,12 +198,22 @@ pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
     let live = parse_live_setting(config);
     let versions = parse_versions_config(config);
 
+    // Parse MCP config
+    let mcp = if let Ok(mcp_tbl) = get_table(config, "mcp") {
+        crate::core::collection::McpCollectionConfig {
+            description: get_string(&mcp_tbl, "description"),
+        }
+    } else {
+        Default::default()
+    };
+
     Ok(GlobalDefinition {
         slug: slug.to_string(),
         labels,
         fields,
         hooks,
         access,
+        mcp,
         live,
         versions,
     })
@@ -677,6 +697,15 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             None
         };
 
+        // Parse MCP config for field
+        let mcp = if let Ok(mcp_tbl) = get_table(&field_tbl, "mcp") {
+            crate::core::field::McpFieldConfig {
+                description: get_string(&mcp_tbl, "description"),
+            }
+        } else {
+            Default::default()
+        };
+
         fields.push(FieldDefinition {
             name,
             field_type,
@@ -689,6 +718,7 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             admin,
             hooks,
             access,
+            mcp,
             relationship,
             fields: sub_fields,
             blocks: block_defs,

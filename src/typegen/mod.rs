@@ -260,6 +260,7 @@ mod tests {
             auth: None,
             upload: None,
             access: Default::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -273,6 +274,7 @@ mod tests {
             fields: vec![],
             hooks: Default::default(),
             access: Default::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         }

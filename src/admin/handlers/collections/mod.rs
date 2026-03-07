@@ -1923,6 +1923,7 @@ mod tests {
             auth: None,
             upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),

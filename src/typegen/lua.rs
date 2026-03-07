@@ -431,6 +431,7 @@ mod tests {
             auth: None,
             upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -476,6 +477,7 @@ mod tests {
             auth: None,
             upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -499,6 +501,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -532,6 +535,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -551,6 +555,7 @@ mod tests {
             fields: vec![text_field("copyright", true)],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -575,6 +580,7 @@ mod tests {
             hooks: CollectionHooks::default(),
             auth: None, upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None, versions: None,
             indexes: Vec::new(),
         });
@@ -587,6 +593,7 @@ mod tests {
             hooks: CollectionHooks::default(),
             auth: None, upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None, versions: None,
             indexes: Vec::new(),
         });
@@ -609,6 +616,7 @@ mod tests {
             hooks: CollectionHooks::default(),
             auth: None, upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None, versions: None,
             indexes: Vec::new(),
         });
@@ -621,6 +629,7 @@ mod tests {
             hooks: CollectionHooks::default(),
             auth: None, upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None, versions: None,
             indexes: Vec::new(),
         });
@@ -716,6 +725,7 @@ mod tests {
             hooks: CollectionHooks::default(),
             auth: None, upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None, versions: None,
             indexes: Vec::new(),
         };
@@ -883,6 +893,7 @@ mod tests {
             hooks: CollectionHooks::default(),
             auth: None, upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None, versions: None,
             indexes: Vec::new(),
         };

@@ -95,6 +95,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     toml.push_str("\n# [jobs]\n# poll_interval = 1              # seconds between job queue polls\n# cron_interval = 60             # seconds between cron schedule checks\n");
     toml.push_str("\n# [cors]\n# allowed_origins = []           # empty = CORS disabled; [\"*\"] = allow any origin\n# allowed_methods = [\"GET\", \"POST\", \"PUT\", \"DELETE\", \"PATCH\", \"OPTIONS\"]\n# allowed_headers = [\"Content-Type\", \"Authorization\"]\n# max_age_seconds = 3600\n# allow_credentials = false      # cannot be used with wildcard origin\n");
     toml.push_str("\n# [access]\n# default_deny = false           # when true, collections without access functions deny all\n");
+    toml.push_str("\n# [mcp]\n# enabled = true                 # enable MCP (Model Context Protocol) server\n# http = false                   # enable HTTP transport on /mcp (POST)\n# config_tools = false           # enable config generation tools (write access to config dir)\n# api_key = \"\"                   # API key for HTTP transport auth (empty = no auth)\n# include_collections = []       # whitelist (empty = all)\n# exclude_collections = []       # blacklist (takes precedence over include)\n");
 
     fs::write(&toml_path, &toml)
         .context("Failed to write crap.toml")?;
@@ -209,6 +210,7 @@ mod tests {
         assert!(content.contains("# [jobs]"));
         assert!(content.contains("# [cors]"));
         assert!(content.contains("# [access]"));
+        assert!(content.contains("# [mcp]"));
     }
 
     #[test]

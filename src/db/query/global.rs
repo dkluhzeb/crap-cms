@@ -184,6 +184,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         }
@@ -246,6 +247,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -352,6 +354,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -399,6 +402,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -427,6 +431,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: Some(crate::core::collection::VersionsConfig { drafts: true, max_versions: 10 }),
         };
@@ -477,6 +482,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -542,6 +548,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -585,6 +592,7 @@ mod tests {
             ],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };

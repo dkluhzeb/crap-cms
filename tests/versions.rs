@@ -49,6 +49,7 @@ fn make_versioned_def() -> CollectionDefinition {
         auth: None,
         upload: None,
         access: CollectionAccess::default(),
+        mcp: Default::default(),
         live: None,
         versions: Some(VersionsConfig {
             drafts: true,
@@ -600,6 +601,7 @@ fn make_versioned_group_def() -> CollectionDefinition {
         auth: None,
         upload: None,
         access: CollectionAccess::default(),
+        mcp: Default::default(),
         live: None,
         versions: Some(VersionsConfig { drafts: true, max_versions: 0 }),
         indexes: Vec::new(),
@@ -624,6 +626,7 @@ fn make_versioned_global_group_def() -> GlobalDefinition {
         ],
         hooks: CollectionHooks::default(),
         access: CollectionAccess::default(),
+        mcp: Default::default(),
         live: None,
         versions: Some(VersionsConfig { drafts: true, max_versions: 0 }),
     }

@@ -219,6 +219,7 @@ mod tests {
             auth: None,
             upload: None,
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
             indexes: Vec::new(),
@@ -518,6 +519,7 @@ mod tests {
             fields: vec![text_field("site_name", true)],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         };
@@ -540,6 +542,7 @@ mod tests {
             fields: vec![text_field("name", true)],
             hooks: CollectionHooks::default(),
             access: CollectionAccess::default(),
+            mcp: Default::default(),
             live: None,
             versions: None,
         });
