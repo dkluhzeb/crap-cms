@@ -279,8 +279,8 @@ pub fn execute_tool(
         return match parsed.op {
             ToolOp::Find => exec_find(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::FindById => exec_find_by_id(args, &parsed.slug, registry, pool, config),
-            ToolOp::Create => exec_create(args, &parsed.slug, registry, pool, runner),
-            ToolOp::Update => exec_update(args, &parsed.slug, registry, pool, runner),
+            ToolOp::Create => exec_create(args, &parsed.slug, registry, pool, runner, config),
+            ToolOp::Update => exec_update(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::Delete => exec_delete(args, &parsed.slug, registry, pool, runner),
             ToolOp::ReadGlobal => exec_read_global(&parsed.slug, registry, pool),
             ToolOp::UpdateGlobal => exec_update_global(args, &parsed.slug, registry, pool, runner),
@@ -1022,6 +1022,7 @@ fn exec_create(
     registry: &Arc<Registry>,
     pool: &DbPool,
     runner: &HookRunner,
+    config: &crate::config::CrapConfig,
 ) -> Result<String> {
     let def = registry.collections.get(slug)
         .context("Collection not found")?;
@@ -1032,6 +1033,11 @@ fn exec_create(
     } else {
         None
     };
+
+    // Validate password against policy
+    if let Some(ref pw) = password {
+        config.auth.password_policy.validate(pw)?;
+    }
 
     // Convert args to string map for create
     let mut data = HashMap::new();
@@ -1064,6 +1070,7 @@ fn exec_update(
     registry: &Arc<Registry>,
     pool: &DbPool,
     runner: &HookRunner,
+    config: &crate::config::CrapConfig,
 ) -> Result<String> {
     let id = args.get("id").and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
@@ -1077,6 +1084,11 @@ fn exec_update(
     } else {
         None
     };
+
+    // Validate password against policy
+    if let Some(ref pw) = password {
+        config.auth.password_policy.validate(pw)?;
+    }
 
     let mut data = HashMap::new();
     let mut join_data = HashMap::new();

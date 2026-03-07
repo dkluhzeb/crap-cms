@@ -57,7 +57,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // Array sub-type classes (emitted before the collection class that references them)
     for f in collect_array_fields(&col.fields) {
         let sub_pascal = to_pascal_case(&f.name);
-        writeln!(out, "---@class crap.array_row.{sub_pascal}").unwrap();
+        writeln!(out, "---@class crap.array_row.{sub_pascal}").expect("write to String");
         for sf in &f.fields {
             write_field(out, sf);
         }
@@ -65,39 +65,39 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     }
 
     // crap.data.* — hook ctx.data (mutable input)
-    writeln!(out, "---@class crap.data.{pascal}").unwrap();
+    writeln!(out, "---@class crap.data.{pascal}").expect("write to String");
     for f in &col.fields {
         write_field(out, f);
     }
     out.push('\n');
 
     // crap.doc.* — returned document (id + timestamps)
-    writeln!(out, "---@class crap.doc.{pascal}").unwrap();
-    writeln!(out, "---@field id string").unwrap();
+    writeln!(out, "---@class crap.doc.{pascal}").expect("write to String");
+    writeln!(out, "---@field id string").expect("write to String");
     for f in &col.fields {
         write_field(out, f);
     }
     if col.timestamps {
-        writeln!(out, "---@field created_at? string").unwrap();
-        writeln!(out, "---@field updated_at? string").unwrap();
+        writeln!(out, "---@field created_at? string").expect("write to String");
+        writeln!(out, "---@field updated_at? string").expect("write to String");
     }
     out.push('\n');
 
     // crap.hook.* — typed HookContext
-    writeln!(out, "---@class crap.hook.{pascal}").unwrap();
-    writeln!(out, "---@field collection \"{}\"", col.slug).unwrap();
-    writeln!(out, "---@field operation \"create\" | \"update\" | \"find\" | \"find_by_id\"").unwrap();
-    writeln!(out, "---@field data crap.data.{pascal}").unwrap();
-    writeln!(out, "---@field context table<string, any>").unwrap();
-    writeln!(out, "---@field hook_depth integer").unwrap();
-    writeln!(out, "---@field locale? string").unwrap();
-    writeln!(out, "---@field draft? boolean").unwrap();
+    writeln!(out, "---@class crap.hook.{pascal}").expect("write to String");
+    writeln!(out, "---@field collection \"{}\"", col.slug).expect("write to String");
+    writeln!(out, "---@field operation \"create\" | \"update\" | \"find\" | \"find_by_id\"").expect("write to String");
+    writeln!(out, "---@field data crap.data.{pascal}").expect("write to String");
+    writeln!(out, "---@field context table<string, any>").expect("write to String");
+    writeln!(out, "---@field hook_depth integer").expect("write to String");
+    writeln!(out, "---@field locale? string").expect("write to String");
+    writeln!(out, "---@field draft? boolean").expect("write to String");
     out.push('\n');
 
     // crap.find_result.*
-    writeln!(out, "---@class crap.find_result.{pascal}").unwrap();
-    writeln!(out, "---@field documents crap.doc.{pascal}[]").unwrap();
-    writeln!(out, "---@field total integer").unwrap();
+    writeln!(out, "---@class crap.find_result.{pascal}").expect("write to String");
+    writeln!(out, "---@field documents crap.doc.{pascal}[]").expect("write to String");
+    writeln!(out, "---@field total integer").expect("write to String");
     out.push('\n');
 
     // hook function alias
@@ -105,36 +105,36 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
         out,
         "---@alias crap.hook_fn.{pascal} fun(ctx: crap.hook.{pascal}): crap.hook.{pascal}"
     )
-    .unwrap();
+    .expect("write to String");
     out.push('\n');
 
     // crap.field_hook.* — typed FieldHookContext (data = full document)
-    writeln!(out, "---@class crap.field_hook.{pascal}").unwrap();
-    writeln!(out, "---@field field_name string").unwrap();
-    writeln!(out, "---@field collection \"{}\"", col.slug).unwrap();
-    writeln!(out, "---@field operation string").unwrap();
-    writeln!(out, "---@field data crap.data.{pascal}").unwrap();
+    writeln!(out, "---@class crap.field_hook.{pascal}").expect("write to String");
+    writeln!(out, "---@field field_name string").expect("write to String");
+    writeln!(out, "---@field collection \"{}\"", col.slug).expect("write to String");
+    writeln!(out, "---@field operation string").expect("write to String");
+    writeln!(out, "---@field data crap.data.{pascal}").expect("write to String");
     out.push('\n');
 
     // crap.where.* — typed filter keys
     let columns = get_column_names(col);
-    writeln!(out, "---@class crap.where.{pascal}").unwrap();
+    writeln!(out, "---@class crap.where.{pascal}").expect("write to String");
     for col_name in &columns {
-        writeln!(out, "---@field {col_name}? crap.FilterValue").unwrap();
+        writeln!(out, "---@field {col_name}? crap.FilterValue").expect("write to String");
     }
     out.push('\n');
 
     // crap.query.* — typed query options
-    writeln!(out, "---@class crap.query.{pascal}").unwrap();
-    writeln!(out, "---@field where? crap.where.{pascal}").unwrap();
+    writeln!(out, "---@class crap.query.{pascal}").expect("write to String");
+    writeln!(out, "---@field where? crap.where.{pascal}").expect("write to String");
     let order_by_union: Vec<String> = columns
         .iter()
         .flat_map(|c| [format!("\"{c}\""), format!("\"-{c}\"")])
         .collect();
-    writeln!(out, "---@field order_by? {}", order_by_union.join("|")).unwrap();
-    writeln!(out, "---@field limit? integer").unwrap();
-    writeln!(out, "---@field offset? integer").unwrap();
-    writeln!(out, "---@field locale? string").unwrap();
+    writeln!(out, "---@field order_by? {}", order_by_union.join("|")).expect("write to String");
+    writeln!(out, "---@field limit? integer").expect("write to String");
+    writeln!(out, "---@field offset? integer").expect("write to String");
+    writeln!(out, "---@field locale? string").expect("write to String");
     out.push('\n');
 }
 
@@ -144,7 +144,7 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     // Array sub-type classes (same as collections — recurse into layout wrappers)
     for f in collect_array_fields(&global.fields) {
         let sub_pascal = to_pascal_case(&f.name);
-        writeln!(out, "---@class crap.array_row.{sub_pascal}").unwrap();
+        writeln!(out, "---@class crap.array_row.{sub_pascal}").expect("write to String");
         for sf in &f.fields {
             write_field(out, sf);
         }
@@ -152,39 +152,39 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     }
 
     // crap.global_data.*
-    writeln!(out, "---@class crap.global_data.{pascal}").unwrap();
+    writeln!(out, "---@class crap.global_data.{pascal}").expect("write to String");
     for f in &global.fields {
         write_field(out, f);
     }
     out.push('\n');
 
     // crap.global_doc.* — always has timestamps
-    writeln!(out, "---@class crap.global_doc.{pascal}").unwrap();
-    writeln!(out, "---@field id string").unwrap();
+    writeln!(out, "---@class crap.global_doc.{pascal}").expect("write to String");
+    writeln!(out, "---@field id string").expect("write to String");
     for f in &global.fields {
         write_field(out, f);
     }
-    writeln!(out, "---@field created_at? string").unwrap();
-    writeln!(out, "---@field updated_at? string").unwrap();
+    writeln!(out, "---@field created_at? string").expect("write to String");
+    writeln!(out, "---@field updated_at? string").expect("write to String");
     out.push('\n');
 
     // crap.hook.global_*
-    writeln!(out, "---@class crap.hook.global_{}", global.slug).unwrap();
-    writeln!(out, "---@field global \"{}\"", global.slug).unwrap();
-    writeln!(out, "---@field operation \"update\" | \"get_global\"").unwrap();
-    writeln!(out, "---@field data crap.global_data.{pascal}").unwrap();
-    writeln!(out, "---@field context table<string, any>").unwrap();
-    writeln!(out, "---@field hook_depth integer").unwrap();
-    writeln!(out, "---@field locale? string").unwrap();
-    writeln!(out, "---@field draft? boolean").unwrap();
+    writeln!(out, "---@class crap.hook.global_{}", global.slug).expect("write to String");
+    writeln!(out, "---@field global \"{}\"", global.slug).expect("write to String");
+    writeln!(out, "---@field operation \"update\" | \"get_global\"").expect("write to String");
+    writeln!(out, "---@field data crap.global_data.{pascal}").expect("write to String");
+    writeln!(out, "---@field context table<string, any>").expect("write to String");
+    writeln!(out, "---@field hook_depth integer").expect("write to String");
+    writeln!(out, "---@field locale? string").expect("write to String");
+    writeln!(out, "---@field draft? boolean").expect("write to String");
     out.push('\n');
 
     // crap.field_hook.global_* — typed FieldHookContext for globals
-    writeln!(out, "---@class crap.field_hook.global_{}", global.slug).unwrap();
-    writeln!(out, "---@field field_name string").unwrap();
-    writeln!(out, "---@field global \"{}\"", global.slug).unwrap();
-    writeln!(out, "---@field operation string").unwrap();
-    writeln!(out, "---@field data crap.global_data.{pascal}").unwrap();
+    writeln!(out, "---@class crap.field_hook.global_{}", global.slug).expect("write to String");
+    writeln!(out, "---@field field_name string").expect("write to String");
+    writeln!(out, "---@field global \"{}\"", global.slug).expect("write to String");
+    writeln!(out, "---@field operation string").expect("write to String");
+    writeln!(out, "---@field data crap.global_data.{pascal}").expect("write to String");
     out.push('\n');
 }
 
@@ -203,12 +203,12 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
             out,
             "---@overload fun(collection: \"{slug}\", query?: crap.query.{pascal}): crap.find_result.{pascal}"
         )
-        .unwrap();
+        .expect("write to String");
     }
-    writeln!(out, "---@param collection string").unwrap();
-    writeln!(out, "---@param query? crap.FindQuery").unwrap();
-    writeln!(out, "---@return crap.FindResult").unwrap();
-    writeln!(out, "function crap.collections.find(collection, query) end").unwrap();
+    writeln!(out, "---@param collection string").expect("write to String");
+    writeln!(out, "---@param query? crap.FindQuery").expect("write to String");
+    writeln!(out, "---@return crap.FindResult").expect("write to String");
+    writeln!(out, "function crap.collections.find(collection, query) end").expect("write to String");
     out.push('\n');
 
     // find_by_id() overloads
@@ -218,13 +218,13 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
             out,
             "---@overload fun(collection: \"{slug}\", id: string, opts?: crap.FindByIdOptions): crap.doc.{pascal}?"
         )
-        .unwrap();
+        .expect("write to String");
     }
-    writeln!(out, "---@param collection string").unwrap();
-    writeln!(out, "---@param id string").unwrap();
-    writeln!(out, "---@param opts? crap.FindByIdOptions").unwrap();
-    writeln!(out, "---@return crap.Document?").unwrap();
-    writeln!(out, "function crap.collections.find_by_id(collection, id, opts) end").unwrap();
+    writeln!(out, "---@param collection string").expect("write to String");
+    writeln!(out, "---@param id string").expect("write to String");
+    writeln!(out, "---@param opts? crap.FindByIdOptions").expect("write to String");
+    writeln!(out, "---@return crap.Document?").expect("write to String");
+    writeln!(out, "function crap.collections.find_by_id(collection, id, opts) end").expect("write to String");
     out.push('\n');
 }
 
@@ -257,13 +257,13 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         if let Some(rc) = &field.relationship {
             if rc.is_polymorphic() {
                 let targets = rc.all_collections().join(", ");
-                writeln!(out, "--- Polymorphic relationship — targets: {}", targets).unwrap();
+                writeln!(out, "--- Polymorphic relationship — targets: {}", targets).expect("write to String");
             }
         }
     }
     let lua_type = field_to_lua_type(field);
     let opt = if is_optional(field) { "?" } else { "" };
-    writeln!(out, "---@field {}{opt} {lua_type}", field.name).unwrap();
+    writeln!(out, "---@field {}{opt} {lua_type}", field.name).expect("write to String");
 }
 
 fn field_to_lua_type(field: &FieldDefinition) -> String {
@@ -599,8 +599,8 @@ mod tests {
         });
 
         let output = render(&registry);
-        let apples_pos = output.find("crap.data.Apples").unwrap();
-        let zebras_pos = output.find("crap.data.Zebras").unwrap();
+        let apples_pos = output.find("crap.data.Apples").expect("write to String");
+        let zebras_pos = output.find("crap.data.Zebras").expect("write to String");
         assert!(apples_pos < zebras_pos);
     }
 

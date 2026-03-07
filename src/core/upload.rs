@@ -193,9 +193,25 @@ pub fn process_upload(
     collection_slug: &str,
     global_max_file_size: u64,
 ) -> Result<ProcessedUpload> {
-    // Validate MIME type
+    // Validate MIME type against allowlist
     if !validate_mime_type(&file.content_type, &upload_config.mime_types) {
         bail!("File type '{}' is not allowed", file.content_type);
+    }
+
+    // Magic-byte MIME verification: check that the file content matches the claimed type.
+    // If `infer` can detect the type (images, videos, archives, etc.) it must match the
+    // claimed content_type. Files without magic bytes (text, CSS, JS) pass through.
+    if let Some(detected) = infer::get(&file.data) {
+        let detected_mime = detected.mime_type();
+        if !mime_matches(detected_mime, &file.content_type)
+            && !mime_matches(&file.content_type, detected_mime)
+        {
+            bail!(
+                "File content does not match claimed type '{}' (detected '{}')",
+                file.content_type,
+                detected_mime,
+            );
+        }
     }
 
     // Validate file size
@@ -608,6 +624,65 @@ mod tests {
         assert!(validate_mime_type("image/png", &patterns));
         assert!(validate_mime_type("application/pdf", &patterns));
         assert!(!validate_mime_type("text/plain", &patterns));
+    }
+
+    #[test]
+    fn magic_byte_verification_rejects_mismatched_type() {
+        // PNG magic bytes but claimed as text/plain
+        let png_header = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde";
+        let file = UploadedFile {
+            filename: "evil.txt".into(),
+            content_type: "text/plain".into(),
+            data: png_header.to_vec(),
+        };
+        let upload_config = CollectionUpload {
+            mime_types: vec![], // allow all
+            ..Default::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let result = process_upload(&file, &upload_config, tmp.path(), "test", 10_000_000);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("does not match claimed type"), "Error: {}", err);
+    }
+
+    #[test]
+    fn magic_byte_verification_allows_matching_type() {
+        // PNG magic bytes with correct content_type
+        let png_header = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde";
+        let file = UploadedFile {
+            filename: "image.png".into(),
+            content_type: "image/png".into(),
+            data: png_header.to_vec(),
+        };
+        let upload_config = CollectionUpload {
+            mime_types: vec!["image/*".into()],
+            ..Default::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        // Won't fully succeed (no valid full PNG) but passes the MIME check
+        let result = process_upload(&file, &upload_config, tmp.path(), "test", 10_000_000);
+        // Should pass MIME validation (might fail later on image processing, that's OK)
+        let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(!err_msg.contains("does not match claimed type"), "Unexpected mismatch: {}", err_msg);
+    }
+
+    #[test]
+    fn magic_byte_verification_passes_text_files() {
+        // Plain text has no magic bytes — infer returns None, so it passes through
+        let file = UploadedFile {
+            filename: "readme.txt".into(),
+            content_type: "text/plain".into(),
+            data: b"Hello, world!".to_vec(),
+        };
+        let upload_config = CollectionUpload {
+            mime_types: vec![],
+            ..Default::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+        let result = process_upload(&file, &upload_config, tmp.path(), "test", 10_000_000);
+        let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(!err_msg.contains("does not match claimed type"), "Unexpected mismatch: {}", err_msg);
     }
 
     #[test]

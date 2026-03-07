@@ -60,8 +60,8 @@ impl ContentService {
             }
             Ok::<_, anyhow::Error>(Some(doc))
         }).await
-            .map_err(|e| Status::internal(format!("Task error: {}", e)))?
-            .map_err(|e| Status::internal(format!("Login error: {}", e)))?;
+            .map_err(|e| { tracing::error!("Login task error: {}", e); Status::internal("Internal error") })?
+            .map_err(|e| { tracing::error!("Login error: {}", e); Status::internal("Internal error") })?;
 
         let user = match user {
             Some(u) => u,
@@ -80,8 +80,8 @@ impl ContentService {
                 let conn = pool.get().context("DB connection")?;
                 query::is_locked(&conn, &slug, &uid)
             }).await
-                .map_err(|e| Status::internal(format!("Task error: {}", e)))?
-                .map_err(|e| Status::internal(format!("Lock check error: {}", e)))?;
+                .map_err(|e| { tracing::error!("Lock check task error: {}", e); Status::internal("Internal error") })?
+                .map_err(|e| { tracing::error!("Lock check error: {}", e); Status::internal("Internal error") })?;
 
             if locked {
                 return Err(Status::permission_denied("This account has been locked"));
@@ -97,8 +97,8 @@ impl ContentService {
                 let conn = pool.get().context("DB connection")?;
                 query::is_verified(&conn, &slug, &uid)
             }).await
-                .map_err(|e| Status::internal(format!("Task error: {}", e)))?
-                .map_err(|e| Status::internal(format!("Verification check error: {}", e)))?;
+                .map_err(|e| { tracing::error!("Verification check task error: {}", e); Status::internal("Internal error") })?
+                .map_err(|e| { tracing::error!("Verification check error: {}", e); Status::internal("Internal error") })?;
 
             if !verified {
                 return Err(Status::permission_denied(
@@ -124,7 +124,7 @@ impl ContentService {
         };
 
         let token = auth::create_token(&claims, &self.jwt_secret)
-            .map_err(|e| Status::internal(format!("Token error: {}", e)))?;
+            .map_err(|e| { tracing::error!("Token creation error: {}", e); Status::internal("Internal error") })?;
 
         // Successful login — clear rate limit state
         self.login_limiter.clear(&req.email);
@@ -154,8 +154,8 @@ impl ContentService {
             let conn = pool.get().context("DB connection")?;
             query::find_by_id(&conn, &collection, &def, &id, None)
         }).await
-            .map_err(|e| Status::internal(format!("Task error: {}", e)))?
-            .map_err(|e| Status::internal(format!("Query error: {}", e)))?;
+            .map_err(|e| { tracing::error!("Me task error: {}", e); Status::internal("Internal error") })?
+            .map_err(|e| { tracing::error!("Me query error: {}", e); Status::internal("Internal error") })?;
 
         let doc = doc.ok_or_else(|| Status::not_found("User not found"))?;
 
@@ -171,6 +171,13 @@ impl ContentService {
         request: Request<content::ForgotPasswordRequest>,
     ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
         let req = request.into_inner();
+
+        // Rate limit: prevent email flooding (always count, always return success)
+        if self.forgot_password_limiter.is_blocked(&req.email) {
+            return Ok(Response::new(content::ForgotPasswordResponse { success: true }));
+        }
+        self.forgot_password_limiter.record_failure(&req.email);
+
         let def = self.get_collection_def(&req.collection)?;
 
         if !def.is_auth_collection() {
@@ -251,8 +258,8 @@ impl ContentService {
             )));
         }
 
-        if req.new_password.len() < 6 {
-            return Err(Status::invalid_argument("Password must be at least 6 characters"));
+        if let Err(e) = self.password_policy.validate(&req.new_password) {
+            return Err(Status::invalid_argument(e.to_string()));
         }
 
         let pool = self.pool.clone();
@@ -275,8 +282,16 @@ impl ContentService {
             query::clear_reset_token(&conn, &slug, &user.id)?;
             Ok(())
         }).await
-            .map_err(|e| Status::internal(format!("Task error: {}", e)))?
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
+            .map_err(|e| { tracing::error!("Reset password task error: {}", e); Status::internal("Internal error") })?
+            .map_err(|e| {
+                let msg = e.to_string();
+                if msg.contains("Invalid reset token") || msg.contains("expired") {
+                    Status::invalid_argument(msg)
+                } else {
+                    tracing::error!("Reset password error: {}", e);
+                    Status::internal("Internal error")
+                }
+            })?;
 
         Ok(Response::new(content::ResetPasswordResponse { success: true }))
     }
@@ -317,8 +332,8 @@ impl ContentService {
                 None => Ok(false),
             }
         }).await
-            .map_err(|e| Status::internal(format!("Task error: {}", e)))?
-            .map_err(|e: anyhow::Error| Status::internal(e.to_string()))?;
+            .map_err(|e| { tracing::error!("Verify email task error: {}", e); Status::internal("Internal error") })?
+            .map_err(|e: anyhow::Error| { tracing::error!("Verify email error: {}", e); Status::internal("Internal error") })?;
 
         if !found {
             return Err(Status::not_found("Invalid verification token"));

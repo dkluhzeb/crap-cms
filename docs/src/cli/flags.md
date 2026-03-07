@@ -18,17 +18,19 @@ Use `crap-cms --help` to list all commands, or `crap-cms <command> --help` for d
 ### `serve` — Start the server
 
 ```bash
-crap-cms serve <CONFIG> [-d]
+crap-cms serve <CONFIG> [-d] [--json]
 ```
 
 | Argument / Flag | Description |
 |-----------------|-------------|
 | `<CONFIG>` | Path to the config directory |
 | `-d`, `--detach` | Run in the background (prints PID and exits) |
+| `--json` | Output logs as structured JSON (for log aggregation) |
 
 ```bash
 crap-cms serve ./my-project
 crap-cms serve ./my-project -d
+crap-cms serve ./my-project --json
 ```
 
 ### `status` — Show project status
@@ -633,3 +635,4 @@ for configuration and usage.
 | Variable | Description |
 |----------|-------------|
 | `RUST_LOG` | Controls log verbosity. Default: `crap_cms=debug,info`. Example: `RUST_LOG=crap_cms=trace` |
+| `CRAP_LOG_FORMAT` | Set to `json` for structured JSON log output (same as `--json` flag) |

@@ -170,7 +170,7 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
             }
             // Try "YYYY-MM-DD"
             if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                return Ok(d.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp());
+                return Ok(d.and_hms_opt(0, 0, 0).expect("00:00:00 is valid").and_utc().timestamp());
             }
             Err(mlua::Error::RuntimeError(format!("could not parse date: {}", s)))
         })?;

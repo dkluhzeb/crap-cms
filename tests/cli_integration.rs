@@ -1836,6 +1836,7 @@ fn cmd_user_create_via_library() {
         Some("lib_create@example.com".to_string()),
         Some("password123".to_string()),
         vec![("name".to_string(), "Lib User".to_string())],
+        &crap_cms::config::PasswordPolicy::default(),
     ).unwrap();
 
     // Verify user was created in DB
@@ -1869,6 +1870,7 @@ fn cmd_user_create_extra_fields() {
             ("name".to_string(), "Admin User".to_string()),
             ("role".to_string(), "admin".to_string()),
         ],
+        &crap_cms::config::PasswordPolicy::default(),
     ).unwrap();
 
     let reg = registry.read().unwrap();
@@ -1892,6 +1894,7 @@ fn cmd_user_create_non_auth_errors() {
         Some("fail@example.com".to_string()),
         Some("password".to_string()),
         vec![],
+        &crap_cms::config::PasswordPolicy::default(),
     );
     assert!(result.is_err(), "creating user in non-auth collection should fail");
     let err_msg = result.unwrap_err().to_string();
@@ -2560,6 +2563,7 @@ fn cmd_user_change_password_by_email() {
         &pool, &registry, "users",
         Some("chpw@example.com".to_string()), None,
         Some("newpw123".to_string()),
+        &crap_cms::config::PasswordPolicy::default(),
     ).unwrap();
 
     // Verify new password works
@@ -2582,6 +2586,7 @@ fn cmd_user_change_password_by_id() {
         &pool, &registry, "users",
         None, Some(doc.id.clone()),
         Some("newpw456".to_string()),
+        &crap_cms::config::PasswordPolicy::default(),
     ).unwrap();
 
     let conn = pool.get().unwrap();
@@ -2597,6 +2602,7 @@ fn cmd_user_change_password_nonexistent_errors() {
         &pool, &registry, "users",
         Some("noone@example.com".to_string()), None,
         Some("newpw".to_string()),
+        &crap_cms::config::PasswordPolicy::default(),
     );
     assert!(result.is_err());
 }
@@ -2649,6 +2655,7 @@ fn cmd_user_change_password_non_auth_errors() {
         &pool, &registry, "posts",
         Some("anyone@example.com".to_string()), None,
         Some("newpw".to_string()),
+        &crap_cms::config::PasswordPolicy::default(),
     );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -2666,6 +2673,7 @@ fn cmd_user_create_missing_collection_errors() {
         Some("test@example.com".to_string()),
         Some("pw".to_string()),
         vec![],
+        &crap_cms::config::PasswordPolicy::default(),
     );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();

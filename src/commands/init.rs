@@ -99,8 +99,10 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             .interact()
             .context("Failed to read user creation preference")?
         {
+            let cfg = crate::config::CrapConfig::load(&config_dir)
+                .context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config_dir)?;
-            super::user::user_create(&pool, &registry, auth_collection, None, None, vec![])?;
+            super::user::user_create(&pool, &registry, auth_collection, None, None, vec![], &cfg.auth.password_policy)?;
         } else {
             println!("You can create a user later with:");
             println!("  crap-cms user create {}", config_dir.display());

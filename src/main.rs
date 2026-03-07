@@ -30,6 +30,10 @@ enum Command {
         /// Run in the background (detached)
         #[arg(short, long)]
         detach: bool,
+
+        /// Output logs as structured JSON (for log aggregation)
+        #[arg(long)]
+        json: bool,
     },
 
     /// Show project status (collections, globals, migrations)
@@ -173,19 +177,29 @@ async fn main() -> Result<()> {
 
     // Initialize tracing subscriber early so all commands get logging.
     // RUST_LOG env overrides. Default: crap_cms=debug for serve, info for others.
+    let use_json = matches!(&cli.command, Command::Serve { json: true, .. })
+        || std::env::var("CRAP_LOG_FORMAT").map(|v| v == "json").unwrap_or(false);
+
     let default_filter = match &cli.command {
         Command::Serve { .. } => "crap_cms=debug,info",
         _ => "crap_cms=info,warn",
     };
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter)),
-        )
-        .init();
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_filter));
+
+    if use_json {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(env_filter)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(env_filter)
+            .init();
+    }
 
     match cli.command {
-        Command::Serve { config, detach } => {
+        Command::Serve { config, detach, .. } => {
             if detach {
                 return commands::serve::detach(&config);
             }

@@ -232,8 +232,7 @@ impl HookRunner {
             return Ok(context);
         }
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         for hook_ref in hook_refs {
             tracing::debug!("Running hook: {} for {}", hook_ref, context.collection);
@@ -267,8 +266,7 @@ impl HookRunner {
             return Ok(context);
         }
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         // Inject the connection pointer so CRUD functions can use it.
         // Safety: conn is valid for the duration of this method, and we hold
@@ -304,8 +302,7 @@ impl HookRunner {
             return Ok(());
         }
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(None));
@@ -348,8 +345,7 @@ impl HookRunner {
             return Ok(());
         }
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         run_field_hooks_inner(&lua, fields, &event, data, collection, operation)
     }
@@ -373,8 +369,7 @@ impl HookRunner {
             return Ok(());
         }
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         // Inject the connection pointer so CRUD functions can use it.
         lua.set_app_data(TxContext(conn as *const _));
@@ -560,8 +555,7 @@ impl HookRunner {
             context: HashMap::new(),
         };
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         let mut context = ctx;
 
@@ -595,8 +589,7 @@ impl HookRunner {
             None => Ok(true), // absent = broadcast all
             Some(LiveSetting::Disabled) => Ok(false),
             Some(LiveSetting::Function(func_ref)) => {
-                let lua = self.pool.acquire()
-                    .map_err(|e| anyhow::anyhow!("{}", e))?;
+                let lua = self.pool.acquire()?;
 
                 let func = resolve_hook_function(&lua, func_ref)?;
 
@@ -686,8 +679,7 @@ impl HookRunner {
         headers: &HashMap<String, String>,
         conn: &rusqlite::Connection,
     ) -> Result<Option<Document>> {
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         // Inject connection for CRUD access
         lua.set_app_data(TxContext(conn as *const _));
@@ -875,8 +867,7 @@ impl HookRunner {
             return Ok(AccessResult::Allowed);
         }
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         // Inject connection for CRUD access in access functions
         lua.set_app_data(TxContext(conn as *const _));
@@ -958,8 +949,7 @@ impl HookRunner {
         let code = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read migration {}", path.display()))?;
 
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         // Inject connection for CRUD access
         lua.set_app_data(TxContext(conn as *const _));
@@ -1005,8 +995,7 @@ impl HookRunner {
         max_attempts: u32,
         conn: &rusqlite::Connection,
     ) -> Result<Option<String>> {
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(None));
@@ -1059,8 +1048,7 @@ impl HookRunner {
         conn: &rusqlite::Connection,
         user: Option<&Document>,
     ) -> Result<String> {
-        let lua = self.pool.acquire()
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        let lua = self.pool.acquire()?;
 
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(user.cloned()));

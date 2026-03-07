@@ -41,6 +41,8 @@ pub struct ContentService {
     config_dir: std::path::PathBuf,
     login_limiter: std::sync::Arc<LoginRateLimiter>,
     reset_token_expiry: u64,
+    password_policy: crate::config::PasswordPolicy,
+    forgot_password_limiter: std::sync::Arc<crate::core::rate_limit::LoginRateLimiter>,
     /// Shared cross-request cache for populated relationship documents.
     /// None when disabled (default). Cleared on any write operation.
     populate_cache: Option<std::sync::Arc<query::PopulateCache>>,
@@ -70,6 +72,8 @@ impl ContentService {
         config_dir: std::path::PathBuf,
         login_limiter: std::sync::Arc<LoginRateLimiter>,
         reset_token_expiry: u64,
+        password_policy: crate::config::PasswordPolicy,
+        forgot_password_limiter: std::sync::Arc<crate::core::rate_limit::LoginRateLimiter>,
     ) -> Self {
         Self {
             pool,
@@ -86,6 +90,8 @@ impl ContentService {
             config_dir,
             login_limiter,
             reset_token_expiry,
+            password_policy,
+            forgot_password_limiter,
             populate_cache: if depth_config.populate_cache {
                 Some(std::sync::Arc::new(query::PopulateCache::new()))
             } else {
@@ -151,12 +157,12 @@ impl ContentService {
             .get()
             .map_err(|_| Status::unavailable("Database connection pool exhausted (retryable)"))?;
         let tx = conn.transaction()
-            .map_err(|e| Status::internal(format!("Transaction error: {}", e)))?;
+            .map_err(|e| { tracing::error!("Access check tx error: {}", e); Status::internal("Internal error") })?;
         let result = self.hook_runner
             .check_access(access_ref, user_doc, id, data, &tx)
-            .map_err(|e| Status::internal(format!("Access check error: {}", e)))?;
+            .map_err(|e| { tracing::error!("Access check error: {}", e); Status::internal("Internal error") })?;
         tx.commit()
-            .map_err(|e| Status::internal(format!("Transaction commit error: {}", e)))?;
+            .map_err(|e| { tracing::error!("Access check commit error: {}", e); Status::internal("Internal error") })?;
         Ok(result)
     }
 
@@ -169,6 +175,7 @@ impl ContentService {
     }
 
     /// Strip field-level read-denied fields from a proto document.
+    /// Fail closed: on pool/tx error, strip ALL fields that have access controls.
     fn strip_denied_read_fields(
         &self,
         doc: &mut content::Document,
@@ -176,18 +183,24 @@ impl ContentService {
         auth_user: &Option<AuthUser>,
     ) {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let mut conn = match self.pool.get() {
-            Ok(c) => c,
-            Err(_) => return,
+        let denied = match self.pool.get() {
+            Ok(mut conn) => match conn.transaction() {
+                Ok(tx) => {
+                    let d = self.hook_runner.check_field_read_access(fields, user_doc, &tx);
+                    // Read-only access check — commit result is irrelevant, rollback on drop is safe
+                    let _ = tx.commit();
+                    d
+                }
+                Err(e) => {
+                    tracing::error!("Field access check tx error (fail closed): {}", e);
+                    fields.iter().filter(|f| f.access.read.is_some()).map(|f| f.name.clone()).collect()
+                }
+            },
+            Err(e) => {
+                tracing::error!("Field access check pool error (fail closed): {}", e);
+                fields.iter().filter(|f| f.access.read.is_some()).map(|f| f.name.clone()).collect()
+            }
         };
-        let tx = match conn.transaction() {
-            Ok(t) => t,
-            Err(_) => return,
-        };
-        let denied = self
-            .hook_runner
-            .check_field_read_access(fields, user_doc, &tx);
-        let _ = tx.commit();
         if let Some(ref mut s) = doc.fields {
             for name in &denied {
                 s.fields.remove(name);

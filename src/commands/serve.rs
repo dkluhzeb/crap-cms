@@ -2,23 +2,65 @@
 
 use anyhow::{Context, Result};
 use std::path::Path;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn, error};
+
+/// Path to the PID file within the config directory.
+fn pid_file_path(config_dir: &Path) -> std::path::PathBuf {
+    config_dir.join("data").join("crap.pid")
+}
+
+/// Write the current process PID to the PID file.
+fn write_pid_file(config_dir: &Path, pid: u32) -> Result<()> {
+    let path = pid_file_path(config_dir);
+    let _ = std::fs::create_dir_all(path.parent().expect("pid path has parent"));
+    std::fs::write(&path, pid.to_string())
+        .with_context(|| format!("Failed to write PID file: {}", path.display()))?;
+    Ok(())
+}
+
+/// Remove the PID file on clean shutdown.
+fn remove_pid_file(config_dir: &Path) {
+    let path = pid_file_path(config_dir);
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
+}
+
+/// Check if a PID file exists and warn if the process is still running.
+fn check_existing_pid(config_dir: &Path) {
+    let path = pid_file_path(config_dir);
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        if let Ok(pid) = contents.trim().parse::<u32>() {
+            // Check if process is still running (kill -0)
+            let running = std::path::Path::new(&format!("/proc/{}", pid)).exists();
+            if running {
+                warn!("PID file exists with PID {} — another instance may be running", pid);
+            }
+        }
+    }
+}
 
 /// Re-exec the current binary as a detached background process.
 #[cfg(not(tarpaulin_include))]
 pub fn detach(config_dir: &Path) -> Result<()> {
     let exe = std::env::current_exe().context("Failed to determine executable path")?;
 
+    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    check_existing_pid(&config_dir);
+
     let child = std::process::Command::new(&exe)
         .arg("serve")
-        .arg(config_dir)
+        .arg(&config_dir)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .context("Failed to spawn detached process")?;
 
-    println!("Started crap-cms in background (PID {})", child.id());
+    let pid = child.id();
+    write_pid_file(&config_dir, pid)?;
+    println!("Started crap-cms in background (PID {})", pid);
     Ok(())
 }
 
@@ -27,12 +69,19 @@ pub fn detach(config_dir: &Path) -> Result<()> {
 pub async fn run(config_dir: &Path) -> Result<()> {
     let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
 
+    // PID file management
+    check_existing_pid(&config_dir);
+    write_pid_file(&config_dir, std::process::id())?;
+
     info!("Config directory: {}", config_dir.display());
 
     // Load config
     let cfg = crate::config::CrapConfig::load(&config_dir)
         .context("Failed to load config")?;
-    info!(?cfg, "Configuration loaded");
+    info!("Configuration loaded");
+
+    // Validate configuration
+    cfg.validate().context("Invalid configuration")?;
 
     // Check crap_version compatibility
     if let Some(warning) = cfg.check_version() {
@@ -97,7 +146,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
                 }
                 _ => {
                     let secret = nanoid::nanoid!(64);
-                    let _ = std::fs::create_dir_all(secret_path.parent().unwrap());
+                    let _ = std::fs::create_dir_all(secret_path.parent().expect("path has parent"));
                     if let Err(e) = std::fs::write(&secret_path, &secret) {
                         warn!("Failed to write JWT secret to {}: {}", secret_path.display(), e);
                     } else {
@@ -108,7 +157,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             }
         } else {
             let secret = nanoid::nanoid!(64);
-            let _ = std::fs::create_dir_all(secret_path.parent().unwrap());
+            let _ = std::fs::create_dir_all(secret_path.parent().expect("path has parent"));
             if let Err(e) = std::fs::write(&secret_path, &secret) {
                 warn!("Failed to write JWT secret to {}: {}", secret_path.display(), e);
             } else {
@@ -149,6 +198,61 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         None
     };
 
+    // Graceful shutdown: CancellationToken shared across all servers
+    let shutdown = CancellationToken::new();
+
+    // Spawn signal handler task
+    let shutdown_signal = shutdown.clone();
+    tokio::spawn(async move {
+        // First signal: graceful shutdown
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate())
+                .expect("Failed to register SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received SIGINT, shutting down gracefully...");
+                }
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, shutting down gracefully...");
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+            info!("Received shutdown signal, shutting down gracefully...");
+        }
+
+        shutdown_signal.cancel();
+
+        // Second signal: force exit
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{signal, SignalKind};
+            let mut sigterm = signal(SignalKind::terminate())
+                .expect("Failed to register SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    warn!("Received second SIGINT, forcing exit");
+                }
+                _ = sigterm.recv() => {
+                    warn!("Received second SIGTERM, forcing exit");
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+            warn!("Received second shutdown signal, forcing exit");
+        }
+
+        std::process::exit(1);
+    });
+
     // Start servers
     let admin_addr = format!("{}:{}", cfg.server.host, cfg.server.admin_port);
     let grpc_addr = format!("{}:{}", cfg.server.host, cfg.server.grpc_port);
@@ -165,6 +269,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         hook_runner.clone(),
         jwt_secret.clone(),
         event_bus.clone(),
+        shutdown.clone(),
     );
 
     let grpc_handle = crate::api::start_server(
@@ -177,6 +282,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         &cfg,
         &config_dir,
         event_bus,
+        shutdown.clone(),
     );
 
     // Start the background job scheduler
@@ -184,8 +290,9 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let scheduler_runner = hook_runner.clone();
     let scheduler_registry = registry.clone();
     let scheduler_config = cfg.jobs.clone();
+    let scheduler_shutdown = shutdown.clone();
     let scheduler_handle = async move {
-        crate::scheduler::start(scheduler_pool, scheduler_runner, scheduler_registry, scheduler_config)
+        crate::scheduler::start(scheduler_pool, scheduler_runner, scheduler_registry, scheduler_config, scheduler_shutdown)
             .await
     };
 
@@ -195,5 +302,58 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             e
         })?;
 
+    remove_pid_file(&config_dir);
+    info!("All servers stopped. Goodbye.");
+
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pid_file_write_and_remove() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config_dir = tmp.path();
+
+        write_pid_file(config_dir, 12345).unwrap();
+
+        let path = pid_file_path(config_dir);
+        assert!(path.exists());
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(contents, "12345");
+
+        remove_pid_file(config_dir);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn pid_file_path_is_in_data_dir() {
+        let path = pid_file_path(Path::new("/some/config"));
+        assert_eq!(path, std::path::PathBuf::from("/some/config/data/crap.pid"));
+    }
+
+    #[test]
+    fn remove_pid_file_noop_if_missing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Should not panic
+        remove_pid_file(tmp.path());
+    }
+
+    #[test]
+    fn check_existing_pid_no_file_no_warning() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Should not panic
+        check_existing_pid(tmp.path());
+    }
+
+    #[test]
+    fn check_existing_pid_stale_pid_no_panic() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // Write a PID that almost certainly doesn't exist
+        write_pid_file(tmp.path(), 999999999).unwrap();
+        // Should not panic
+        check_existing_pid(tmp.path());
+    }
 }

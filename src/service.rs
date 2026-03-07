@@ -19,6 +19,12 @@ use crate::db::query::{self, LocaleContext};
 use crate::db::DbPool;
 use crate::hooks::lifecycle::{self, HookContext, HookEvent, HookRunner};
 
+/// Validate a password against the configured policy. Call this before any
+/// password-setting operation (create, update, reset).
+pub fn validate_password(password: &str, policy: &crate::config::PasswordPolicy) -> Result<()> {
+    policy.validate(password)
+}
+
 /// Result of a write operation: the document and the request-scoped hook context.
 pub type WriteResult = (Document, HashMap<String, serde_json::Value>);
 

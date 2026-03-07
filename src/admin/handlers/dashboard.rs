@@ -76,6 +76,9 @@ pub async fn index(
 
     match state.render("dashboard/index", &data) {
         Ok(html) => Html(html),
-        Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)),
+        Err(e) => {
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+        }
     }
 }

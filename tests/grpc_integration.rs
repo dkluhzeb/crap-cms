@@ -184,6 +184,8 @@ fn setup_service(
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
     TestSetup { _tmp: tmp, service, pool: db_pool }
@@ -817,7 +819,7 @@ async fn login_invalid_password() {
             collection: "users".to_string(),
             data: Some(make_struct(&[
                 ("email", "bob@example.com"),
-                ("password", "correct"),
+                ("password", "correct1"),
             ])),
             locale: None,
             draft: None,
@@ -865,7 +867,7 @@ async fn me_valid_token() {
             data: Some(make_struct(&[
                 ("email", "carol@example.com"),
                 ("name", "Carol"),
-                ("password", "pw12345"),
+                ("password", "pw123456"),
             ])),
             locale: None,
             draft: None,
@@ -878,7 +880,7 @@ async fn me_valid_token() {
         .login(Request::new(content::LoginRequest {
             collection: "users".to_string(),
             email: "carol@example.com".to_string(),
-            password: "pw12345".to_string(),
+            password: "pw123456".to_string(),
         }))
         .await
         .unwrap()
@@ -924,13 +926,13 @@ async fn reset_password_short_password() {
         .reset_password(Request::new(content::ResetPasswordRequest {
             collection: "users".to_string(),
             token: "some-token".to_string(),
-            new_password: "short".to_string(), // < 6 chars
+            new_password: "short".to_string(), // < 8 chars
         }))
         .await
         .unwrap_err();
 
     assert_eq!(err.code(), tonic::Code::InvalidArgument);
-    assert!(err.message().contains("at least 6 characters"));
+    assert!(err.message().contains("at least 8 characters"));
 }
 
 #[tokio::test]
@@ -2067,6 +2069,8 @@ fn setup_service_with_hook(
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
     TestSetup { _tmp: tmp, service, pool: db_pool }
@@ -2504,6 +2508,8 @@ return M
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2619,6 +2625,8 @@ return M
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2713,6 +2721,8 @@ return M
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2822,6 +2832,8 @@ return M
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -2922,6 +2934,8 @@ return M
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
     let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
 
@@ -3039,6 +3053,8 @@ fn setup_service_with_locale(
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
     TestSetup { _tmp: tmp, service, pool: db_pool }

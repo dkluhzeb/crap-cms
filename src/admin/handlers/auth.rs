@@ -44,7 +44,10 @@ pub async fn login_page(
 
     match state.render("auth/login", &data) {
         Ok(html) => Html(html),
-        Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)),
+        Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            },
     }
 }
 
@@ -171,7 +174,7 @@ pub async fn login_action(
     for cookie in cookies {
         response.headers_mut().append(
             axum::http::header::SET_COOKIE,
-            cookie.parse().unwrap(),
+            cookie.parse().expect("cookie header is valid ASCII"),
         );
     }
     response
@@ -186,7 +189,7 @@ pub async fn logout_action(
     for cookie in cookies {
         response.headers_mut().append(
             axum::http::header::SET_COOKIE,
-            cookie.parse().unwrap(),
+            cookie.parse().expect("cookie header is valid ASCII"),
         );
     }
     response
@@ -251,7 +254,7 @@ pub async fn session_refresh(
     for cookie in cookies {
         response.headers_mut().append(
             axum::http::header::SET_COOKIE,
-            cookie.parse().unwrap(),
+            cookie.parse().expect("cookie header is valid ASCII"),
         );
     }
     response
@@ -279,7 +282,10 @@ pub async fn forgot_password_page(State(state): State<AdminState>) -> Html<Strin
 
     match state.render("auth/forgot_password", &data) {
         Ok(html) => Html(html),
-        Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)),
+        Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            },
     }
 }
 
@@ -290,6 +296,12 @@ pub async fn forgot_password_action(
     Form(form): Form<ForgotPasswordForm>,
 ) -> Html<String> {
     let auth_collections = get_auth_collections(&state);
+
+    // Rate limit: prevent email flooding (always count, always return success)
+    if state.forgot_password_limiter.is_blocked(&form.email) {
+        return render_forgot_success(&state, &auth_collections);
+    }
+    state.forgot_password_limiter.record_failure(&form.email);
 
     // Try to find user and send reset email in background
     let def = state.registry.get_collection(&form.collection).cloned();
@@ -375,7 +387,10 @@ fn render_forgot_success(state: &AdminState, auth_collections: &[serde_json::Val
 
     match state.render("auth/forgot_password", &data) {
         Ok(html) => Html(html),
-        Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)),
+        Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            },
     }
 }
 
@@ -434,7 +449,10 @@ pub async fn reset_password_page(
 
     match state.render("auth/reset_password", &data) {
         Ok(html) => Html(html),
-        Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)),
+        Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            },
     }
 }
 
@@ -451,19 +469,25 @@ pub async fn reset_password_action(
             .build();
         return match state.render("auth/reset_password", &data) {
             Ok(html) => Html(html).into_response(),
-            Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
+            Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            }.into_response(),
         };
     }
 
-    if form.password.len() < 6 {
+    if let Err(e) = state.config.auth.password_policy.validate(&form.password) {
         let data = ContextBuilder::auth(&state)
             .page(PageType::AuthReset, "Reset Password")
             .set("token", serde_json::json!(form.token))
-            .set("error", serde_json::json!("error_password_min_length"))
+            .set("error", serde_json::json!(e.to_string()))
             .build();
         return match state.render("auth/reset_password", &data) {
             Ok(html) => Html(html).into_response(),
-            Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
+            Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            }.into_response(),
         };
     }
 
@@ -509,7 +533,10 @@ pub async fn reset_password_action(
                 .build();
             match state.render("auth/reset_password", &data) {
                 Ok(html) => Html(html).into_response(),
-                Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
+                Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            }.into_response(),
             }
         }
         Err(e) => {
@@ -520,7 +547,10 @@ pub async fn reset_password_action(
                 .build();
             match state.render("auth/reset_password", &data) {
                 Ok(html) => Html(html).into_response(),
-                Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
+                Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            }.into_response(),
             }
         }
     }
@@ -662,7 +692,10 @@ fn login_error(state: &AdminState, error: &str, email: &str) -> axum::response::
 
     match state.render("auth/login", &data) {
         Ok(html) => Html(html).into_response(),
-        Err(e) => Html(format!("<h1>Error</h1><pre>{}</pre>", e)).into_response(),
+        Err(e) => {
+                tracing::error!("Template render error: {}", e);
+                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+            }.into_response(),
     }
 }
 

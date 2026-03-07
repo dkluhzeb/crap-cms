@@ -554,7 +554,7 @@ pub fn normalize_date_value(value: &str) -> String {
     // Try date only: YYYY-MM-DD (10 chars)
     if value.len() == 10 {
         if let Ok(d) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-            let noon = d.and_hms_opt(12, 0, 0).unwrap();
+            let noon = d.and_hms_opt(12, 0, 0).expect("12:00:00 is valid");
             return noon.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
         }
     }

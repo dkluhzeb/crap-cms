@@ -22,6 +22,7 @@ pub async fn start(
     hook_runner: HookRunner,
     registry: SharedRegistry,
     config: JobsConfig,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     tracing::info!("Scheduler started (poll={}s, cron={}s, max_concurrent={})",
         config.poll_interval, config.cron_interval, config.max_concurrent);
@@ -54,6 +55,10 @@ pub async fn start(
 
     loop {
         tokio::select! {
+            _ = shutdown.cancelled() => {
+                tracing::info!("Scheduler shutting down");
+                break Ok(());
+            }
             _ = poll_ticker.tick() => {
                 // Poll for pending jobs and execute them
                 let pool = pool.clone();

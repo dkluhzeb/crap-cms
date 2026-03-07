@@ -11,6 +11,8 @@ use std::sync::Arc;
 
 use handlebars::Handlebars;
 
+use tokio_util::sync::CancellationToken;
+
 use crate::config::CrapConfig;
 use crate::core::Registry;
 use crate::core::email::EmailRenderer;
@@ -35,8 +37,10 @@ pub struct AdminState {
     pub email_renderer: Arc<EmailRenderer>,
     pub event_bus: Option<EventBus>,
     pub login_limiter: Arc<LoginRateLimiter>,
+    pub forgot_password_limiter: Arc<LoginRateLimiter>,
     pub has_auth: bool,
     pub translations: Arc<Translations>,
+    pub shutdown: CancellationToken,
 }
 
 impl AdminState {

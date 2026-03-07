@@ -27,10 +27,23 @@ fn map_db_error(e: anyhow::Error, prefix: &str) -> Status {
         || msg.contains("SQLITE_LOCKED")
         || msg.contains("Timed out waiting")
         || msg.contains("connection pool");
+    // Hook/validation errors are user-facing — pass the message through.
+    // These originate from Lua hooks (before_validate, before_change, validators)
+    // and contain domain-specific messages the caller needs to see.
+    let is_hook_error = msg.contains("hook error:")
+        || msg.contains("validation error:")
+        || msg.contains("Validation failed:")
+        || msg.contains("runtime error:")
+        || msg.contains("UNIQUE constraint failed");
     if is_transient {
-        Status::unavailable(format!("{}: {} (retryable)", prefix, msg))
+        tracing::warn!("{}: {}", prefix, msg);
+        Status::unavailable("Service temporarily unavailable, please retry")
+    } else if is_hook_error {
+        tracing::warn!("{}: {}", prefix, msg);
+        Status::invalid_argument(msg)
     } else {
-        Status::internal(format!("{}: {}", prefix, msg))
+        tracing::error!("{}: {}", prefix, msg);
+        Status::internal("Internal error")
     }
 }
 
@@ -218,7 +231,7 @@ impl ContentService {
             Ok::<_, anyhow::Error>((docs, total))
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| map_db_error(e, "Query error"))?;
 
         let mut proto_docs: Vec<_> = documents
@@ -394,7 +407,7 @@ impl ContentService {
             Ok::<_, anyhow::Error>(doc)
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| map_db_error(e, "Query error"))?;
 
         let mut proto_doc = doc.map(|d| document_to_proto(&d, &req.collection));
@@ -445,6 +458,13 @@ impl ContentService {
             None
         };
 
+        // Validate password against policy
+        if let Some(ref pw) = password {
+            if let Err(e) = self.password_policy.validate(pw) {
+                return Err(Status::invalid_argument(e.to_string()));
+            }
+        }
+
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
 
@@ -483,7 +503,7 @@ impl ContentService {
             )
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| map_db_error(e, "Create error"))?;
 
         if let Some(c) = &self.populate_cache { c.clear(); }
@@ -573,6 +593,15 @@ impl ContentService {
             None
         };
 
+        // Validate password against policy (only if non-empty)
+        if let Some(ref pw) = password {
+            if !pw.is_empty() {
+                if let Err(e) = self.password_policy.validate(pw) {
+                    return Err(Status::invalid_argument(e.to_string()));
+                }
+            }
+        }
+
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
 
@@ -591,7 +620,7 @@ impl ContentService {
                 )
             })
             .await
-            .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+            .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
             .map_err(|e| map_db_error(e, "Unpublish error"))?;
 
             if let Some(c) = &self.populate_cache { c.clear(); }
@@ -653,7 +682,7 @@ impl ContentService {
             )
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| map_db_error(e, "Update error"))?;
 
         if let Some(c) = &self.populate_cache { c.clear(); }
@@ -725,7 +754,7 @@ impl ContentService {
             )
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| map_db_error(e, "Delete error"))?;
 
         if let Some(c) = &self.populate_cache { c.clear(); }
@@ -794,7 +823,7 @@ impl ContentService {
             query::count_with_search(&conn, &collection, &def_owned, &filters, locale_ctx.as_ref(), search.as_deref())
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| map_db_error(e, "Count error"))?;
 
         Ok(Response::new(content::CountResponse { count }))
@@ -888,10 +917,11 @@ impl ContentService {
             Ok(count)
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| {
             if e.to_string().contains("access denied") {
-                Status::permission_denied(e.to_string())
+                tracing::warn!("UpdateMany access denied: {}", e);
+                Status::permission_denied("Update access denied")
             } else {
                 map_db_error(e, "UpdateMany error")
             }
@@ -976,10 +1006,11 @@ impl ContentService {
             Ok(count)
         })
         .await
-        .map_err(|e| Status::internal(format!("Task error: {}", e)))?
+        .map_err(|e| { tracing::error!("Task error: {}", e); Status::internal("Internal error") })?
         .map_err(|e| {
             if e.to_string().contains("access denied") {
-                Status::permission_denied(e.to_string())
+                tracing::warn!("DeleteMany access denied: {}", e);
+                Status::permission_denied("Delete access denied")
             } else {
                 map_db_error(e, "DeleteMany error")
             }

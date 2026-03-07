@@ -10,8 +10,10 @@ use std::collections::HashMap;
 pub fn run(action: super::UserAction) -> Result<()> {
     match action {
         super::UserAction::Create { config, collection, email, password, fields } => {
+            let cfg = crate::config::CrapConfig::load(&config)
+                .context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config)?;
-            user_create(&pool, &registry, &collection, email, password, fields)
+            user_create(&pool, &registry, &collection, email, password, fields, &cfg.auth.password_policy)
         }
         super::UserAction::List { config, collection } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
@@ -30,8 +32,10 @@ pub fn run(action: super::UserAction) -> Result<()> {
             user_unlock(&pool, &registry, &collection, email, id)
         }
         super::UserAction::ChangePassword { config, collection, email, id, password } => {
+            let cfg = crate::config::CrapConfig::load(&config)
+                .context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config)?;
-            user_change_password(&pool, &registry, &collection, email, id, password)
+            user_change_password(&pool, &registry, &collection, email, id, password, &cfg.auth.password_policy)
         }
     }
 }
@@ -83,7 +87,7 @@ fn resolve_user(
         }).collect();
         if users.len() == 1 {
             println!("Auto-selected only user: {}", labels[0]);
-            let doc = users.into_iter().next().unwrap();
+            let doc = users.into_iter().next().expect("guarded by len == 1");
             return Ok((def, doc));
         }
         let selection = Select::new()
@@ -91,7 +95,7 @@ fn resolve_user(
             .items(&labels)
             .interact()
             .context("Failed to read user selection")?;
-        Ok((def, users.into_iter().nth(selection).unwrap()))
+        Ok((def, users.into_iter().nth(selection).expect("selection within bounds")))
     }
 }
 
@@ -105,6 +109,7 @@ pub fn user_create(
     email: Option<String>,
     password: Option<String>,
     fields: Vec<(String, String)>,
+    password_policy: &crate::config::PasswordPolicy,
 ) -> Result<()> {
     let reg = registry.read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
@@ -157,6 +162,9 @@ pub fn user_create(
             p1
         }
     };
+
+    // Validate password against policy
+    password_policy.validate(&password)?;
 
     // Build data map from email + extra --field args
     let mut data: HashMap<String, String> = fields.into_iter().collect();
@@ -394,6 +402,7 @@ pub fn user_change_password(
     email: Option<String>,
     id: Option<String>,
     password: Option<String>,
+    password_policy: &crate::config::PasswordPolicy,
 ) -> Result<()> {
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
@@ -418,6 +427,9 @@ pub fn user_change_password(
             p1
         }
     };
+
+    // Validate password against policy
+    password_policy.validate(&password)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
     crate::db::query::update_password(&conn, collection, &doc.id, &password)

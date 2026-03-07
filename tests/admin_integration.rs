@@ -173,8 +173,10 @@ fn setup_app_with_config(
         email_renderer,
         event_bus: None,
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
+        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
         has_auth,
         translations,
+        shutdown: tokio_util::sync::CancellationToken::new(),
     };
 
     let router = build_router(state);
@@ -235,6 +237,39 @@ fn auth_and_csrf(auth_cookie: &str) -> String {
 async fn body_string(body: Body) -> String {
     let bytes = body.collect().await.unwrap().to_bytes();
     String::from_utf8(bytes.to_vec()).unwrap()
+}
+
+// ── Health Endpoints ──────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn health_liveness_returns_200() {
+    let app = setup_app(vec![make_posts_def()], vec![]);
+    let resp = app.router
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn health_readiness_returns_200_with_healthy_db() {
+    let app = setup_app(vec![make_posts_def()], vec![]);
+    let resp = app.router
+        .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn health_endpoints_bypass_auth() {
+    // Setup with auth required — health should still be accessible
+    let app = setup_app(vec![make_users_def()], vec![]);
+    let resp = app.router
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }
 
 // ── 1A. Public Routes ─────────────────────────────────────────────────────
@@ -3572,8 +3607,8 @@ async fn reset_password_too_short() {
     assert_eq!(status, StatusCode::OK, "Too-short password should re-render form");
     let body = body_string(resp.into_body()).await;
     assert!(
-        body.to_lowercase().contains("6 characters") || body.to_lowercase().contains("at least"),
-        "Should show minimum password length error"
+        body.to_lowercase().contains("at least") && body.to_lowercase().contains("characters"),
+        "Should show minimum password length error, got: {}", body
     );
 }
 

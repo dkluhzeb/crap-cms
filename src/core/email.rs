@@ -129,10 +129,12 @@ fn send_email_smtp(
 
     let creds = Credentials::new(config.smtp_user.clone(), config.smtp_pass.clone());
 
+    let timeout = std::time::Duration::from_secs(config.smtp_timeout);
     let transport = SmtpTransport::starttls_relay(&config.smtp_host)
         .with_context(|| format!("Failed to create SMTP transport for {}", config.smtp_host))?
         .port(config.smtp_port)
         .credentials(creds)
+        .timeout(Some(timeout))
         .build();
 
     transport.send(&message)

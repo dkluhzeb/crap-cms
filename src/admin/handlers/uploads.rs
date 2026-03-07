@@ -184,11 +184,18 @@ fn negotiate_variants(filename: &str, accepts_avif: bool, accepts_webp: bool) ->
 
 fn serve_bytes(bytes: Vec<u8>, content_type: &str, cache_control: &str, varied: bool) -> Response {
     let len = bytes.len();
+    // Content-Disposition: inline for images (render in browser), attachment for everything else
+    let disposition = if content_type.starts_with("image/") {
+        "inline".to_string()
+    } else {
+        "attachment".to_string()
+    };
     let mut builder = axum::http::Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .header(header::CONTENT_LENGTH, len.to_string())
-        .header(header::CACHE_CONTROL, cache_control);
+        .header(header::CACHE_CONTROL, cache_control)
+        .header(header::CONTENT_DISPOSITION, disposition);
 
     // Vary: Accept tells caches that the response depends on the Accept header
     if varied {
@@ -196,7 +203,7 @@ fn serve_bytes(bytes: Vec<u8>, content_type: &str, cache_control: &str, varied: 
     }
 
     builder.body(axum::body::Body::from(bytes))
-        .unwrap()
+        .expect("in-memory body builder")
         .into_response()
 }
 
@@ -256,5 +263,34 @@ mod tests {
         let variants = negotiate_variants("icon.png", false, true);
         assert_eq!(variants.len(), 1);
         assert_eq!(variants[0], ("icon.webp".to_string(), "image/webp"));
+    }
+
+    #[test]
+    fn serve_bytes_image_content_disposition_inline() {
+        let resp = serve_bytes(vec![1, 2, 3], "image/png", "public", false);
+        let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
+        assert_eq!(disposition, "inline");
+    }
+
+    #[test]
+    fn serve_bytes_pdf_content_disposition_attachment() {
+        let resp = serve_bytes(vec![1, 2, 3], "application/pdf", "public", false);
+        let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
+        assert_eq!(disposition, "attachment");
+    }
+
+    #[test]
+    fn serve_bytes_sets_content_type_and_length() {
+        let data = vec![0u8; 42];
+        let resp = serve_bytes(data, "text/plain", "no-cache", false);
+        assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), "text/plain");
+        assert_eq!(resp.headers().get(header::CONTENT_LENGTH).unwrap(), "42");
+        assert!(resp.headers().get(header::VARY).is_none());
+    }
+
+    #[test]
+    fn serve_bytes_varied_sets_vary_header() {
+        let resp = serve_bytes(vec![1], "image/jpeg", "public", true);
+        assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept");
     }
 }

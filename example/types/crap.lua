@@ -120,6 +120,12 @@ crap = {}
 
 --- @alias crap.PickerAppearance "dayOnly" | "dayAndTime" | "timeOnly" | "monthOnly"
 
+--- @class crap.McpFieldConfig
+--- @field description? string  Description shown in MCP tool JSON Schema for this field.
+
+--- @class crap.McpCollectionConfig
+--- @field description? string  Description used as the MCP tool description for this collection/global.
+
 --- @class crap.FieldDefinition
 --- @field name          string            Column name (required).
 --- @field type          crap.FieldType    Field type (required).
@@ -140,6 +146,7 @@ crap = {}
 --- @field tabs?         crap.FieldTab[]        Tab definitions for "tabs" type. Each tab has a label and fields.
 --- @field admin?        crap.FieldAdmin   Admin UI display options.
 --- @field access?       crap.FieldAccess  Field-level access control (read/create/update).
+--- @field mcp?          crap.McpFieldConfig  MCP tool schema options.
 --- @field picker_appearance? crap.PickerAppearance  For "date" fields: controls HTML input type and storage format. "dayOnly" (default) = date picker, stored as `YYYY-MM-DDT12:00:00.000Z`. "dayAndTime" = datetime-local picker, stored as full ISO 8601 UTC. "timeOnly" = time picker, stored as `HH:MM`. "monthOnly" = month picker, stored as `YYYY-MM`.
 --- @field min_rows?    integer  Minimum number of rows for array/blocks fields. Validated on create/update (skipped for drafts).
 --- @field max_rows?    integer  Maximum number of rows for array/blocks fields. Validated on create/update (skipped for drafts). Admin UI disables "Add" button at max.
@@ -453,6 +460,7 @@ function crap.fields.join(config) end
 --- @field versions?   boolean|crap.VersionsConfig  Enable versioning. `true` for defaults, or a config table with drafts/max_versions.
 --- @field live?       boolean|string              Live event broadcasting. `false` to disable, string for Lua function ref that receives `{ collection, operation, data }` and returns boolean. Absent = enabled (broadcast all).
 --- @field indexes?    crap.IndexDefinition[]      Compound indexes (multi-column). Created on startup, stale indexes dropped.
+--- @field mcp?        crap.McpCollectionConfig    MCP tool description and options.
 
 --- @class crap.IndexDefinition
 --- @field fields string[]    Column names to include in the index (required).
@@ -468,6 +476,7 @@ function crap.fields.join(config) end
 --- @field access?    crap.CollectionAccess    Access control function refs.
 --- @field versions?  boolean|crap.VersionsConfig  Enable versioning. Same as collection `versions`.
 --- @field live?      boolean|string           Live event broadcasting. Same as collection `live`.
+--- @field mcp?       crap.McpCollectionConfig  MCP tool description and options.
 
 
 -- ── Document Types ───────────────────────────────────────────

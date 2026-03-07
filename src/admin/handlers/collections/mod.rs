@@ -488,8 +488,8 @@ pub async fn list_items(
 
     let (documents, total) = match read_result {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => return server_error(&state, &format!("Query error: {}", e)).into_response(),
-        Err(e) => return server_error(&state, &format!("Task error: {}", e)).into_response(),
+        Ok(Err(e)) => { tracing::error!("Collection list query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
+        Err(e) => { tracing::error!("Collection list task error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
     };
 
     // Strip field-level read-denied fields from documents
@@ -504,6 +504,7 @@ pub async fn list_items(
             Err(_) => return server_error(&state, "Database error").into_response(),
         };
         let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         denied
     } else {
@@ -879,17 +880,22 @@ pub async fn create_action(
         }
     }
 
-    // Strip field-level create-denied fields (skip pool.get if no field-level access configured)
+    // Strip field-level create-denied fields (fail closed on pool exhaustion)
     if def.fields.iter().any(|f| f.access.create.is_some()) {
         let user_doc = get_user_doc(&auth_user);
-        if let Ok(mut conn) = state.pool.get() {
-            if let Ok(tx) = conn.transaction() {
-                let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "create", &tx);
-                let _ = tx.commit();
-                for name in &denied {
-                    form_data.remove(name);
-                }
-            }
+        let mut conn = match state.pool.get() {
+            Ok(c) => c,
+            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "create", &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
+        let _ = tx.commit();
+        for name in &denied {
+            form_data.remove(name);
         }
     }
 
@@ -899,6 +905,15 @@ pub async fn create_action(
     } else {
         None
     };
+
+    // Validate password against policy (create requires a password for auth collections)
+    if let Some(ref pw) = password {
+        if !pw.is_empty() {
+            if let Err(e) = state.config.auth.password_policy.validate(pw) {
+                return html_with_toast(&state, "collections/edit_form", &serde_json::json!({}), &e.to_string()).into_response();
+            }
+        }
+    }
 
     // Convert comma-separated multi-select values to JSON arrays
     transform_select_has_many(&mut form_data, &def.fields);
@@ -1068,20 +1083,25 @@ pub async fn edit_form(
     let mut document = match read_result {
         Ok(Ok(Some(doc))) => doc,
         Ok(Ok(None)) => return not_found(&state, &format!("Document '{}' not found", id)).into_response(),
-        Ok(Err(e)) => return server_error(&state, &format!("Query error: {}", e)).into_response(),
-        Err(e) => return server_error(&state, &format!("Task error: {}", e)).into_response(),
+        Ok(Err(e)) => { tracing::error!("Document edit query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
+        Err(e) => { tracing::error!("Document edit task error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
     };
 
-    // Strip field-level read-denied fields (skip pool.get if no field-level access configured)
+    // Strip field-level read-denied fields (fail closed on pool exhaustion)
     if def.fields.iter().any(|f| f.access.read.is_some()) {
         let user_doc = get_user_doc(&auth_user);
-        if let Ok(mut conn) = state.pool.get() {
-            if let Ok(tx) = conn.transaction() {
-                let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
-                let _ = tx.commit();
-                strip_denied_fields(&mut document.fields, &denied);
-            }
-        }
+        let mut conn = match state.pool.get() {
+            Ok(c) => c,
+            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
+        let _ = tx.commit();
+        strip_denied_fields(&mut document.fields, &denied);
     }
 
     let values: HashMap<String, String> = document.fields.iter()
@@ -1354,17 +1374,22 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
         }
     }
 
-    // Strip field-level update-denied fields (skip pool.get if no field-level access configured)
+    // Strip field-level update-denied fields (fail closed on pool exhaustion)
     if def.fields.iter().any(|f| f.access.update.is_some()) {
         let user_doc = get_user_doc(auth_user);
-        if let Ok(mut conn) = state.pool.get() {
-            if let Ok(tx) = conn.transaction() {
-                let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
-                let _ = tx.commit();
-                for name in &denied {
-                    form_data.remove(name);
-                }
-            }
+        let mut conn = match state.pool.get() {
+            Ok(c) => c,
+            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
+        let _ = tx.commit();
+        for name in &denied {
+            form_data.remove(name);
         }
     }
 
@@ -1379,6 +1404,15 @@ async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: Hash
     } else {
         None
     };
+
+    // Validate password against policy (update: empty password means "keep current")
+    if let Some(ref pw) = password {
+        if !pw.is_empty() {
+            if let Err(e) = state.config.auth.password_policy.validate(pw) {
+                return html_with_toast(&state, "collections/edit_form", &serde_json::json!({}), &e.to_string()).into_response();
+            }
+        }
+    }
 
     // Convert comma-separated multi-select values to JSON arrays
     transform_select_has_many(&mut form_data, &def.fields);
@@ -1518,7 +1552,7 @@ pub async fn delete_confirm(
     let document = match ops::find_document_by_id(&state.pool, &slug, &def, &id, None) {
         Ok(Some(doc)) => doc,
         Ok(None) => return not_found(&state, &format!("Document '{}' not found", id)).into_response(),
-        Err(e) => return server_error(&state, &format!("Query error: {}", e)).into_response(),
+        Err(e) => { tracing::error!("Document delete query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
     };
 
     let title_value = def.title_field()
@@ -1693,7 +1727,7 @@ pub async fn list_versions_page(
     let document = match ops::find_document_by_id(&state.pool, &slug, &def, &id, locale_ctx.as_ref()) {
         Ok(Some(doc)) => doc,
         Ok(None) => return not_found(&state, &format!("Document '{}' not found", id)).into_response(),
-        Err(e) => return server_error(&state, &format!("Query error: {}", e)).into_response(),
+        Err(e) => { tracing::error!("Document versions query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
     };
 
     let doc_title = def.title_field()

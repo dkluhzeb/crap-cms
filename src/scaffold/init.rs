@@ -69,9 +69,10 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     toml.push_str("\n[database]\npath = \"data/crap.db\"\n# pool_max_size = 32             # max connections in pool\n# busy_timeout = \"30s\"          # SQLite busy timeout (ms or \"30s\", \"1m\")\n# connection_timeout = 5          # pool checkout timeout (seconds or \"5s\")\n");
     toml.push_str("\n[admin]\ndev_mode = true\n# require_auth = true               # block admin when no auth collection exists (default: true)\n# access = \"access.admin_panel\"     # Lua function: which users can access the admin UI\n");
     toml.push_str(&format!(
-        "\n[auth]\nsecret = \"{}\"\n# token_expiry = 7200           # seconds, default 2 hours\n",
+        "\n[auth]\nsecret = \"{}\"\n# token_expiry = 7200           # seconds, default 2 hours\n# max_forgot_password_attempts = 3  # rate limit forgot-password per email\n# forgot_password_window_seconds = 900  # rate limit window (15 minutes)\n",
         opts.auth_secret
     ));
+    toml.push_str("\n# [auth.password_policy]\n# min_length = 8                # minimum password length\n# max_length = 128              # maximum password length\n# require_uppercase = false     # require uppercase letter\n# require_lowercase = false     # require lowercase letter\n# require_digit = false         # require digit\n# require_special = false       # require special character\n");
     toml.push_str("\n[live]\n# enabled = true                # enable SSE + gRPC Subscribe for live mutation events\n# channel_capacity = 1024       # broadcast channel buffer size\n");
 
     if opts.locales.is_empty() {
@@ -90,7 +91,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     toml.push_str("\n# [depth]\n# default_depth = 1              # default relationship population depth for FindByID\n# max_depth = 10                 # hard cap on population depth\n");
     toml.push_str("\n# [pagination]\n# default_limit = 20            # default page size when no limit specified\n# max_limit = 1000               # maximum allowed limit (requests above this are clamped)\n# mode = \"page\"                  # pagination mode: \"page\" (offset-based) or \"cursor\" (keyset-based)\n");
     toml.push_str("\n# [upload]\n# max_file_size = \"50MB\"         # global max upload size (integer bytes or \"50MB\", \"1GB\")\n");
-    toml.push_str("\n# [email]\n# smtp_host = \"\"                 # SMTP server (empty = email disabled)\n# smtp_port = 587\n# smtp_user = \"\"\n# smtp_pass = \"\"\n# from_address = \"noreply@example.com\"\n# from_name = \"Crap CMS\"\n");
+    toml.push_str("\n# [email]\n# smtp_host = \"\"                 # SMTP server (empty = email disabled)\n# smtp_port = 587\n# smtp_user = \"\"\n# smtp_pass = \"\"\n# from_address = \"noreply@example.com\"\n# from_name = \"Crap CMS\"\n# smtp_timeout = 30               # SMTP connection/send timeout (seconds or \"30s\")\n");
     toml.push_str("\n# [hooks]\n# on_init = []                   # hook functions to run at startup\n# max_depth = 3                  # max hook recursion depth (hook → CRUD → hook)\n# vm_pool_size = 8               # number of Lua VMs for concurrent hook execution (default: max(cpus, 4), cap 32)\n");
     toml.push_str("\n# [jobs]\n# poll_interval = 1              # seconds between job queue polls\n# cron_interval = 60             # seconds between cron schedule checks\n");
     toml.push_str("\n# [cors]\n# allowed_origins = []           # empty = CORS disabled; [\"*\"] = allow any origin\n# allowed_methods = [\"GET\", \"POST\", \"PUT\", \"DELETE\", \"PATCH\", \"OPTIONS\"]\n# allowed_headers = [\"Content-Type\", \"Authorization\"]\n# max_age_seconds = 3600\n# allow_credentials = false      # cannot be used with wildcard origin\n");

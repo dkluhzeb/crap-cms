@@ -35,6 +35,7 @@ pub async fn start(
     hook_runner: HookRunner,
     jwt_secret: String,
     event_bus: Option<EventBus>,
+    shutdown: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let translations = std::sync::Arc::new(
         super::translations::Translations::load(&config_dir)
@@ -53,6 +54,12 @@ pub async fn start(
             config.auth.login_lockout_seconds,
         )
     );
+    let forgot_password_limiter = std::sync::Arc::new(
+        crate::core::rate_limit::LoginRateLimiter::new(
+            config.auth.max_forgot_password_attempts,
+            config.auth.forgot_password_window_seconds,
+        )
+    );
 
     let state = AdminState {
         config,
@@ -65,14 +72,30 @@ pub async fn start(
         email_renderer,
         event_bus,
         login_limiter,
+        forgot_password_limiter,
         has_auth,
         translations,
+        shutdown: shutdown.clone(),
     };
 
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    let shutdown_timeout = shutdown.clone();
+    let server = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown.cancelled_owned());
+
+    // Hard deadline: force-stop after 10s if graceful drain doesn't complete
+    // (SSE streams and other long-lived connections may not close promptly)
+    tokio::select! {
+        result = server => { result?; }
+        _ = async {
+            shutdown_timeout.cancelled().await;
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        } => {
+            tracing::warn!("Admin server: graceful shutdown timed out after 10s");
+        }
+    }
 
     Ok(())
 }
@@ -141,6 +164,8 @@ pub fn build_router(state: AdminState) -> Router {
     let upload_api = crate::api::upload::upload_router(state.clone());
 
     let router = Router::new()
+        .route("/health", get(health_liveness))
+        .route("/ready", get(health_readiness))
         .route("/admin/login", get(auth_handlers::login_page).post(auth_handlers::login_action))
         .route("/admin/logout", get(auth_handlers::logout_action).post(auth_handlers::logout_action))
         .route("/admin/forgot-password", get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action))
@@ -156,8 +181,9 @@ pub fn build_router(state: AdminState) -> Router {
         .nest_service("/static", static_assets::overlay_service(config_dir))
         .route("/uploads/{collection_slug}/{filename}", get(uploads::serve_upload))
         .layer(DefaultBodyLimit::max((state.config.upload.max_file_size + 1024 * 1024) as usize))
-        .layer(middleware::from_fn(csrf_middleware))
-        .layer(middleware::from_fn(html_cache_control));
+        .layer(middleware::from_fn_with_state(state.clone(), csrf_middleware))
+        .layer(middleware::from_fn(html_cache_control))
+        .layer(middleware::from_fn(security_headers));
 
     // Add CORS layer if configured (runs before CSRF in request processing)
     let router = if let Some(cors) = state.config.cors.build_layer() {
@@ -182,7 +208,72 @@ pub fn build_router(state: AdminState) -> Router {
         ),
     };
 
+    // Request tracing: per-request spans with method, path, status, latency
+    let router = router.layer(
+        tower_http::trace::TraceLayer::new_for_http()
+            .make_span_with(|req: &axum::http::Request<_>| {
+                let request_id = nanoid::nanoid!(12);
+                tracing::info_span!(
+                    "http",
+                    method = %req.method(),
+                    path = %req.uri().path(),
+                    request_id = %request_id,
+                )
+            })
+            .on_response(
+                |resp: &axum::http::Response<_>, latency: std::time::Duration, _span: &tracing::Span| {
+                    tracing::info!(status = resp.status().as_u16(), latency_ms = latency.as_millis(), "response");
+                },
+            ),
+    );
+
     router.with_state(state)
+}
+
+/// Liveness probe — always returns 200 OK.
+async fn health_liveness() -> StatusCode {
+    StatusCode::OK
+}
+
+/// Readiness probe — returns 200 if DB pool is healthy, 503 otherwise.
+async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
+    match state.pool.get() {
+        Ok(conn) => {
+            match conn.query_row("SELECT 1", [], |_| Ok(())) {
+                Ok(()) => StatusCode::OK,
+                Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+            }
+        }
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
+/// Security headers middleware — sets protective headers on every response.
+// Excluded from coverage: async Axum middleware.
+#[cfg(not(tarpaulin_include))]
+async fn security_headers(
+    request: axum::http::Request<axum::body::Body>,
+    next: Next,
+) -> axum::response::Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        axum::http::HeaderName::from_static("x-frame-options"),
+        axum::http::HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("x-content-type-options"),
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("referrer-policy"),
+        axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
+    );
+    headers.insert(
+        axum::http::HeaderName::from_static("permissions-policy"),
+        axum::http::HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+    );
+    response
 }
 
 /// Cache-Control middleware — sets `no-store` on HTML responses to prevent
@@ -213,10 +304,12 @@ async fn html_cache_control(
 // Excluded from coverage: async Axum middleware.
 #[cfg(not(tarpaulin_include))]
 async fn csrf_middleware(
+    State(state): State<AdminState>,
     request: axum::http::Request<axum::body::Body>,
     next: Next,
 ) -> axum::response::Response {
     let method = request.method().clone();
+    let dev_mode = state.config.admin.dev_mode;
     let cookie_header = request.headers()
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -244,7 +337,7 @@ async fn csrf_middleware(
             if ht == cookie_value {
                 // Header matches — proceed
                 let mut response = next.run(request).await;
-                ensure_csrf_cookie(&mut response, csrf_cookie.as_deref());
+                ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
                 return response;
             }
         }
@@ -274,7 +367,7 @@ async fn csrf_middleware(
                     // Form field matches — reconstruct request and proceed
                     let request = axum::http::Request::from_parts(parts, axum::body::Body::from(bytes));
                     let mut response = next.run(request).await;
-                    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref());
+                    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
                     return response;
                 }
             }
@@ -285,20 +378,23 @@ async fn csrf_middleware(
 
     // Non-mutating method — pass through and set cookie if needed
     let mut response = next.run(request).await;
-    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref());
+    ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
     response
 }
 
 /// Set the `crap_csrf` cookie on the response if not already present in the request.
+/// Adds `Secure` flag in production mode (same as session cookies).
 fn ensure_csrf_cookie(
     response: &mut axum::response::Response,
     existing_cookie: Option<&str>,
+    dev_mode: bool,
 ) {
     if existing_cookie.is_some() {
         return;
     }
     let token = nanoid::nanoid!(32);
-    let cookie = format!("crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400", token);
+    let secure = if dev_mode { "" } else { "; Secure" };
+    let cookie = format!("crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400{}", token, secure);
     if let Ok(value) = cookie.parse() {
         response.headers_mut().append(axum::http::header::SET_COOKIE, value);
     }
@@ -358,7 +454,7 @@ async fn auth_middleware(
                 .map(|a| !a.strategies.is_empty())
                 .unwrap_or(false)
         })
-        .map(|d| (d.slug.clone(), d.auth.clone().unwrap()))
+        .map(|d| (d.slug.clone(), d.auth.clone().expect("guarded by filter")))
         .collect();
 
     if !auth_defs.is_empty() {
@@ -414,6 +510,7 @@ async fn auth_middleware(
                     }
                 }
             }
+            // Read-only access check — commit result is irrelevant, rollback on drop is safe
             let _ = tx.commit();
             result
         }).await;
@@ -443,7 +540,7 @@ async fn auth_middleware(
             .status(StatusCode::OK)
             .header("HX-Redirect", "/admin/login")
             .body(axum::body::Body::empty())
-            .unwrap()
+            .expect("static response builder")
     } else {
         Redirect::to("/admin/login").into_response()
     }

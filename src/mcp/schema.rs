@@ -159,7 +159,7 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
         "properties": props,
     });
     if !required.is_empty() {
-        schema.as_object_mut().unwrap()
+        schema.as_object_mut().expect("json!({}) is Object")
             .insert("required".to_string(), Value::Array(required));
     }
     schema

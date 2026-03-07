@@ -47,7 +47,7 @@ login_lockout_seconds = "5m"
 auto_purge = "7d"
 ```
 
-Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`.
+Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`.
 
 ## File Size Values
 
@@ -99,6 +99,16 @@ token_expiry = "2h"      # Default token expiry (accepts integer seconds or "2h"
 max_login_attempts = 5   # Failed attempts before temporary lockout
 login_lockout_seconds = "5m"  # Lockout duration after max attempts
 reset_token_expiry = "1h"    # Password reset token expiry
+max_forgot_password_attempts = 3   # Forgot-password requests per email before rate limiting
+forgot_password_window_seconds = "15m"  # Rate limit window for forgot-password
+
+[auth.password_policy]
+min_length = 8              # Minimum password length
+max_length = 128            # Maximum password length (DoS protection)
+# require_uppercase = false # Require at least one uppercase letter
+# require_lowercase = false # Require at least one lowercase letter
+# require_digit = false     # Require at least one digit
+# require_special = false   # Require at least one special character
 
 [depth]
 default_depth = 1        # Default population depth for FindByID (Find always defaults to 0)
@@ -121,6 +131,7 @@ smtp_user = ""           # SMTP username
 smtp_pass = ""           # SMTP password
 from_address = "noreply@example.com"  # Sender email address
 from_name = "Crap CMS"  # Sender display name
+# smtp_timeout = 30     # SMTP connection/send timeout in seconds (or "30s")
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
@@ -197,6 +208,21 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `max_login_attempts` | integer | `5` | Maximum failed login attempts before temporary lockout. Tracked per email address. |
 | `login_lockout_seconds` | integer/string | `300` (`"5m"`) | Duration of lockout after `max_login_attempts` is reached. Accepts seconds or human-readable. |
 | `reset_token_expiry` | integer/string | `3600` (`"1h"`) | Password reset token expiry. The "Forgot password" email link expires after this duration. Accepts seconds or human-readable. |
+| `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
+| `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Accepts seconds or human-readable. |
+
+### `[auth.password_policy]`
+
+Password strength requirements applied to all password-setting paths (create, update, reset, CLI).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `min_length` | integer | `8` | Minimum password length. |
+| `max_length` | integer | `128` | Maximum password length. Prevents DoS via Argon2 on huge inputs. |
+| `require_uppercase` | boolean | `false` | Require at least one uppercase letter (A-Z). |
+| `require_lowercase` | boolean | `false` | Require at least one lowercase letter (a-z). |
+| `require_digit` | boolean | `false` | Require at least one digit (0-9). |
+| `require_special` | boolean | `false` | Require at least one special (non-alphanumeric) character. |
 
 ### `[depth]`
 
@@ -231,6 +257,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `smtp_pass` | string | `""` | SMTP authentication password. |
 | `from_address` | string | `"noreply@example.com"` | Sender email address for outgoing mail. |
 | `from_name` | string | `"Crap CMS"` | Sender display name. |
+| `smtp_timeout` | integer/string | `30` | SMTP connection and send timeout in seconds. Accepts integer or duration string (`"30s"`, `"1m"`). |
 
 When configured, email enables password reset ("Forgot password?" link on login), email verification (optional per-collection), and the `crap.email.send()` Lua API.
 

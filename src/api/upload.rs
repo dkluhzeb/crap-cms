@@ -86,6 +86,7 @@ async fn create_upload(
             Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
         };
         let result = state.hook_runner.check_access(def.access.create.as_deref(), user_doc, None, None, &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         result
     };
@@ -127,6 +128,7 @@ async fn create_upload(
         if let Ok(mut conn) = state.pool.get() {
             if let Ok(tx) = conn.transaction() {
                 let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "create", &tx);
+                // Read-only access check — commit result is irrelevant, rollback on drop is safe
                 let _ = tx.commit();
                 for name in &denied {
                     form_data.remove(name);
@@ -227,6 +229,7 @@ async fn update_upload(
             Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
         };
         let result = state.hook_runner.check_access(def.access.update.as_deref(), user_doc, Some(&id), None, &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         result
     };
@@ -276,6 +279,7 @@ async fn update_upload(
         if let Ok(mut conn) = state.pool.get() {
             if let Ok(tx) = conn.transaction() {
                 let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
+                // Read-only access check — commit result is irrelevant, rollback on drop is safe
                 let _ = tx.commit();
                 for name in &denied {
                     form_data.remove(name);
@@ -378,6 +382,7 @@ async fn delete_upload(
             Err(_) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Database error"),
         };
         let result = state.hook_runner.check_access(def.access.delete.as_deref(), user_doc, Some(&id), None, &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         result
     };

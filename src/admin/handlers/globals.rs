@@ -65,22 +65,27 @@ pub async fn edit_form(
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,
-        Ok(Err(e)) => return server_error(&state, &format!("Query error: {}", e)).into_response(),
-        Err(e) => return server_error(&state, &format!("Task error: {}", e)).into_response(),
+        Ok(Err(e)) => { tracing::error!("Global read query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
+        Err(e) => { tracing::error!("Global read task error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
     };
 
     // Strip field-level read-denied fields (skip pool.get if no field-level access configured)
     let mut doc_fields = document.fields.clone();
     if def.fields.iter().any(|f| f.access.read.is_some()) {
         let user_doc = get_user_doc(&auth_user);
-        if let Ok(mut conn) = state.pool.get() {
-            if let Ok(tx) = conn.transaction() {
-                let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
-                let _ = tx.commit();
-                for name in &denied {
-                    doc_fields.remove(name);
-                }
-            }
+        let mut conn = match state.pool.get() {
+            Ok(c) => c,
+            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
+        let _ = tx.commit();
+        for name in &denied {
+            doc_fields.remove(name);
         }
     }
 
@@ -184,17 +189,22 @@ pub async fn update_action(
         form_locale.as_deref(), &state.config.locale,
     );
 
-    // Strip field-level update-denied fields (skip pool.get if no field-level access configured)
+    // Strip field-level update-denied fields (fail closed on pool exhaustion)
     if def.fields.iter().any(|f| f.access.update.is_some()) {
         let user_doc = get_user_doc(&auth_user);
-        if let Ok(mut conn) = state.pool.get() {
-            if let Ok(tx) = conn.transaction() {
-                let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
-                let _ = tx.commit();
-                for name in &denied {
-                    form_data.remove(name);
-                }
-            }
+        let mut conn = match state.pool.get() {
+            Ok(c) => c,
+            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let tx = match conn.transaction() {
+            Ok(t) => t,
+            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+        };
+        let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
+        // Read-only access check — commit result is irrelevant, rollback on drop is safe
+        let _ = tx.commit();
+        for name in &denied {
+            form_data.remove(name);
         }
     }
 

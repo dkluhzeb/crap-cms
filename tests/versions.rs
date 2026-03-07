@@ -138,6 +138,8 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
+        config.auth.password_policy.clone(),
+        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
     TestSetup { _tmp: tmp, service, pool: db_pool, registry, runner: hook_runner }

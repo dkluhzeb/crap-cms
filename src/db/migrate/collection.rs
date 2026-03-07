@@ -152,7 +152,7 @@ fn alter_collection_table(
     // Auth collections: ensure system columns exist
     if def.is_auth_collection() {
         for col in ["_password_hash TEXT", "_reset_token TEXT", "_reset_token_exp INTEGER", "_locked INTEGER DEFAULT 0", "_settings TEXT"] {
-            let col_name = col.split_whitespace().next().unwrap();
+            let col_name = col.split_whitespace().next().expect("static column definition");
             if !existing_columns.contains(col_name) {
                 let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
                 tracing::info!("Adding {} column to {}", col_name, slug);
@@ -162,7 +162,7 @@ fn alter_collection_table(
         }
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
             for col in ["_verified INTEGER DEFAULT 0", "_verification_token TEXT", "_verification_token_exp INTEGER"] {
-                let col_name = col.split_whitespace().next().unwrap();
+                let col_name = col.split_whitespace().next().expect("static column definition");
                 if !existing_columns.contains(col_name) {
                     let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
                     tracing::info!("Adding {} column to {}", col_name, slug);

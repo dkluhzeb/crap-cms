@@ -371,6 +371,13 @@ pub struct EmailConfig {
     pub from_address: String,
     /// "From" display name (default "Crap CMS").
     pub from_name: String,
+    /// SMTP connection/send timeout in seconds (default 30).
+    #[serde(default = "default_smtp_timeout", with = "serde_duration")]
+    pub smtp_timeout: u64,
+}
+
+fn default_smtp_timeout() -> u64 {
+    30
 }
 
 impl Default for EmailConfig {
@@ -382,6 +389,7 @@ impl Default for EmailConfig {
             smtp_pass: String::new(),
             from_address: "noreply@example.com".to_string(),
             from_name: "Crap CMS".to_string(),
+            smtp_timeout: 30,
         }
     }
 }
@@ -412,6 +420,27 @@ impl LocaleConfig {
     /// Returns true if localization is enabled (at least one locale defined).
     pub fn is_enabled(&self) -> bool {
         !self.locales.is_empty()
+    }
+
+    /// Validate that all locale codes are safe identifiers (alphanumeric, hyphens,
+    /// underscores only). This prevents SQL injection via locale strings that are
+    /// interpolated into DDL during migrations.
+    pub fn validate(&self) -> Result<()> {
+        Self::validate_locale_code(&self.default_locale)?;
+        for locale in &self.locales {
+            Self::validate_locale_code(locale)?;
+        }
+        Ok(())
+    }
+
+    fn validate_locale_code(code: &str) -> Result<()> {
+        if code.is_empty() {
+            anyhow::bail!("Locale code must not be empty");
+        }
+        if !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+            anyhow::bail!("Invalid locale code '{}': only ASCII alphanumeric, hyphens, and underscores allowed", code);
+        }
+        Ok(())
     }
 }
 
@@ -640,6 +669,15 @@ pub struct AuthConfig {
     /// Accepts integer seconds or human-readable string ("1h", "3600").
     #[serde(with = "serde_duration")]
     pub reset_token_expiry: u64,
+    /// Max forgot-password requests per email before rate limiting. Default: 3.
+    pub max_forgot_password_attempts: u32,
+    /// Forgot-password rate limit window in seconds. Default: 900 (15 minutes).
+    /// Accepts integer seconds or human-readable string ("15m", "900").
+    #[serde(with = "serde_duration")]
+    pub forgot_password_window_seconds: u64,
+    /// Password strength requirements.
+    #[serde(default)]
+    pub password_policy: PasswordPolicy,
 }
 
 impl Default for AuthConfig {
@@ -650,7 +688,68 @@ impl Default for AuthConfig {
             max_login_attempts: 5,
             login_lockout_seconds: 300,
             reset_token_expiry: 3600,
+            max_forgot_password_attempts: 3,
+            forgot_password_window_seconds: 900,
+            password_policy: PasswordPolicy::default(),
         }
+    }
+}
+
+/// Password strength requirements. Applied to all password-setting paths:
+/// user creation (admin, gRPC, CLI), password reset, and password update.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct PasswordPolicy {
+    /// Minimum password length. Default: 8.
+    pub min_length: usize,
+    /// Maximum password length. Default: 128. Prevents DoS via Argon2 on huge inputs.
+    pub max_length: usize,
+    /// Require at least one uppercase letter (A-Z). Default: false.
+    pub require_uppercase: bool,
+    /// Require at least one lowercase letter (a-z). Default: false.
+    pub require_lowercase: bool,
+    /// Require at least one digit (0-9). Default: false.
+    pub require_digit: bool,
+    /// Require at least one special character (non-alphanumeric). Default: false.
+    pub require_special: bool,
+}
+
+impl Default for PasswordPolicy {
+    fn default() -> Self {
+        Self {
+            min_length: 8,
+            max_length: 128,
+            require_uppercase: false,
+            require_lowercase: false,
+            require_digit: false,
+            require_special: false,
+        }
+    }
+}
+
+impl PasswordPolicy {
+    /// Validate a password against this policy. Returns `Ok(())` if the password
+    /// meets all requirements, or `Err` with a human-readable message.
+    pub fn validate(&self, password: &str) -> Result<()> {
+        if password.len() < self.min_length {
+            anyhow::bail!("Password must be at least {} characters", self.min_length);
+        }
+        if password.len() > self.max_length {
+            anyhow::bail!("Password must be at most {} characters", self.max_length);
+        }
+        if self.require_uppercase && !password.chars().any(|c| c.is_ascii_uppercase()) {
+            anyhow::bail!("Password must contain at least one uppercase letter");
+        }
+        if self.require_lowercase && !password.chars().any(|c| c.is_ascii_lowercase()) {
+            anyhow::bail!("Password must contain at least one lowercase letter");
+        }
+        if self.require_digit && !password.chars().any(|c| c.is_ascii_digit()) {
+            anyhow::bail!("Password must contain at least one digit");
+        }
+        if self.require_special && !password.chars().any(|c| !c.is_alphanumeric()) {
+            anyhow::bail!("Password must contain at least one special character");
+        }
+        Ok(())
     }
 }
 
@@ -773,11 +872,50 @@ impl CrapConfig {
             substitute_in_value(&mut value)?;
             let config: CrapConfig = value.try_into()
                 .with_context(|| format!("Failed to deserialize {}", config_path.display()))?;
+            config.locale.validate().context("Invalid locale configuration")?;
             Ok(config)
         } else {
             tracing::info!("No crap.toml found, using defaults");
             Ok(CrapConfig::default())
         }
+    }
+
+    /// Validate configuration for common misconfigurations.
+    ///
+    /// Returns errors for fatal issues (e.g., pool_max_size = 0) and logs
+    /// warnings for non-fatal but suspicious settings.
+    pub fn validate(&self) -> Result<()> {
+        // Fatal: database pool with no connections
+        if self.database.pool_max_size == 0 {
+            anyhow::bail!("database.pool_max_size must be > 0");
+        }
+
+        // Fatal: instant connection timeout
+        if self.database.connection_timeout == 0 {
+            anyhow::bail!("database.connection_timeout must be > 0");
+        }
+
+        // Fatal: Lua VM pool with no VMs
+        if self.hooks.vm_pool_size == 0 {
+            anyhow::bail!("hooks.vm_pool_size must be > 0");
+        }
+
+        // Warning: no jobs will execute
+        if self.jobs.max_concurrent == 0 {
+            tracing::warn!("jobs.max_concurrent = 0 — no jobs will be executed");
+        }
+
+        // Warning: weak JWT signing key (when explicitly set)
+        if !self.auth.secret.is_empty() && self.auth.secret.len() < 32 {
+            tracing::warn!("auth.secret is shorter than 32 characters — consider using a stronger key");
+        }
+
+        // Warning: max_depth = 0 means no population will ever work
+        if self.depth.max_depth == 0 {
+            tracing::warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
+        }
+
+        Ok(())
     }
 
     /// Check `crap_version` against the running binary version.
@@ -862,7 +1000,7 @@ fn substitute_env_vars(input: &str) -> Result<String> {
     let mut last_end = 0;
 
     for cap in re.captures_iter(input) {
-        let full_match = cap.get(0).unwrap();
+        let full_match = cap.get(0).expect("regex group 0 always exists");
         result.push_str(&input[last_end..full_match.start()]);
 
         let inner = &cap[1];
@@ -1697,5 +1835,199 @@ allow_credentials = true
         let mut val = toml::Value::Boolean(true);
         substitute_in_value(&mut val).unwrap();
         assert!(val.as_bool().unwrap());
+    }
+
+    #[test]
+    fn locale_validation_valid_codes() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string(), "pt-BR".to_string(), "zh_CN".to_string()],
+            fallback: true,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn locale_validation_rejects_sql_injection() {
+        let config = LocaleConfig {
+            default_locale: "en'; DROP TABLE posts; --".to_string(),
+            locales: vec![],
+            fallback: true,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn locale_validation_rejects_empty() {
+        let config = LocaleConfig {
+            default_locale: "".to_string(),
+            locales: vec![],
+            fallback: true,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn locale_validation_rejects_bad_locale_in_list() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de/../etc".to_string()],
+            fallback: true,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    // ── Password policy tests ──────────────────────────────────────────────
+
+    #[test]
+    fn password_policy_defaults() {
+        let policy = PasswordPolicy::default();
+        assert_eq!(policy.min_length, 8);
+        assert_eq!(policy.max_length, 128);
+        assert!(!policy.require_uppercase);
+        assert!(!policy.require_lowercase);
+        assert!(!policy.require_digit);
+        assert!(!policy.require_special);
+    }
+
+    #[test]
+    fn password_policy_accepts_valid() {
+        let policy = PasswordPolicy::default();
+        assert!(policy.validate("abcdefgh").is_ok());
+        assert!(policy.validate("12345678").is_ok());
+    }
+
+    #[test]
+    fn password_policy_rejects_too_short() {
+        let policy = PasswordPolicy { min_length: 8, ..Default::default() };
+        assert!(policy.validate("short").is_err());
+        assert!(policy.validate("1234567").is_err());
+        assert!(policy.validate("12345678").is_ok());
+    }
+
+    #[test]
+    fn password_policy_rejects_too_long() {
+        let policy = PasswordPolicy { max_length: 10, ..Default::default() };
+        assert!(policy.validate("12345678").is_ok());
+        assert!(policy.validate("12345678901").is_err());
+    }
+
+    #[test]
+    fn password_policy_require_uppercase() {
+        let policy = PasswordPolicy { require_uppercase: true, ..Default::default() };
+        assert!(policy.validate("alllower").is_err());
+        assert!(policy.validate("hasUpper1").is_ok());
+    }
+
+    #[test]
+    fn password_policy_require_lowercase() {
+        let policy = PasswordPolicy { require_lowercase: true, ..Default::default() };
+        assert!(policy.validate("ALLUPPER").is_err());
+        assert!(policy.validate("HASLOWERa").is_ok());
+    }
+
+    #[test]
+    fn password_policy_require_digit() {
+        let policy = PasswordPolicy { require_digit: true, ..Default::default() };
+        assert!(policy.validate("nodigits").is_err());
+        assert!(policy.validate("hasdigit1").is_ok());
+    }
+
+    #[test]
+    fn password_policy_require_special() {
+        let policy = PasswordPolicy { require_special: true, ..Default::default() };
+        assert!(policy.validate("nospecial1").is_err());
+        assert!(policy.validate("special!1").is_ok());
+    }
+
+    #[test]
+    fn password_policy_all_requirements() {
+        let policy = PasswordPolicy {
+            min_length: 8,
+            max_length: 128,
+            require_uppercase: true,
+            require_lowercase: true,
+            require_digit: true,
+            require_special: true,
+        };
+        assert!(policy.validate("Abc1234!").is_ok());
+        assert!(policy.validate("abc1234!").is_err(), "missing uppercase");
+        assert!(policy.validate("ABC1234!").is_err(), "missing lowercase");
+        assert!(policy.validate("Abcdefg!").is_err(), "missing digit");
+        assert!(policy.validate("Abc12345").is_err(), "missing special");
+        assert!(policy.validate("Ac1!").is_err(), "too short");
+    }
+
+    #[test]
+    fn password_policy_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), r#"
+[auth.password_policy]
+min_length = 12
+require_uppercase = true
+require_digit = true
+"#).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
+        assert_eq!(config.auth.password_policy.min_length, 12);
+        assert!(config.auth.password_policy.require_uppercase);
+        assert!(config.auth.password_policy.require_digit);
+        assert!(!config.auth.password_policy.require_lowercase);
+        assert!(!config.auth.password_policy.require_special);
+    }
+
+    // ── validate() ───────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_default_config_passes() {
+        let config = CrapConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_pool_max_size_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.database.pool_max_size = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("pool_max_size"));
+    }
+
+    #[test]
+    fn validate_connection_timeout_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.database.connection_timeout = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("connection_timeout"));
+    }
+
+    #[test]
+    fn validate_vm_pool_size_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.hooks.vm_pool_size = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("vm_pool_size"));
+    }
+
+    #[test]
+    fn validate_max_concurrent_zero_warns_but_passes() {
+        let mut config = CrapConfig::default();
+        config.jobs.max_concurrent = 0;
+        // Should pass (warning only, not fatal)
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_short_auth_secret_warns_but_passes() {
+        let mut config = CrapConfig::default();
+        config.auth.secret = "short".to_string();
+        // Should pass (warning only)
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_max_depth_zero_warns_but_passes() {
+        let mut config = CrapConfig::default();
+        config.depth.max_depth = 0;
+        // Should pass (warning only)
+        assert!(config.validate().is_ok());
     }
 }

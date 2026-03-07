@@ -435,7 +435,10 @@ pub(super) fn html_with_toast(state: &AdminState, template: &str, data: &serde_j
             }
             resp
         }
-        Err(e) => Html(format!("<h1>Template Error</h1><pre>{}</pre>", e)).into_response(),
+        Err(e) => {
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string()).into_response()
+        }
     }
 }
 
@@ -443,7 +446,10 @@ pub(super) fn html_with_toast(state: &AdminState, template: &str, data: &serde_j
 pub(super) fn render_or_error(state: &AdminState, template: &str, data: &serde_json::Value) -> Html<String> {
     match state.render(template, data) {
         Ok(html) => Html(html),
-        Err(e) => Html(format!("<h1>Template Error</h1><pre>{}</pre>", e)),
+        Err(e) => {
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+        }
     }
 }
 

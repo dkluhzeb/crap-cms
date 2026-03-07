@@ -165,7 +165,8 @@ fn resolve_filter(field: &str, slug: &str, fields: &[FieldDefinition]) -> Result
         return Ok(ResolvedFilter::Column(field.to_string()));
     }
 
-    let dot_pos = field.find('.').unwrap();
+    // Guarded by early return above: field.contains('.') is true here
+    let dot_pos = field.find('.').expect("dot checked above");
     let root = &field[..dot_pos];
     let rest = &field[dot_pos + 1..];
 
@@ -308,7 +309,7 @@ fn walk_block_fields(
                 bail!("_block_type must be the last segment in a filter path");
             }
             let expr = if !each_joins.is_empty() {
-                let last_alias = &each_joins.last().unwrap().1;
+                let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
                 if json_path_parts.is_empty() {
                     format!("json_extract({}.value, '$._block_type')", last_alias)
                 } else {
@@ -364,7 +365,7 @@ fn walk_block_fields(
                 }
                 json_path_parts.push(seg.to_string());
                 let expr = if !each_joins.is_empty() {
-                    let last_alias = &each_joins.last().unwrap().1;
+                    let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
                     format!("json_extract({}.value, '$.{}')", last_alias, json_path_parts.join("."))
                 } else {
                     format!("json_extract(data, '$.{}')", json_path_parts.join("."))

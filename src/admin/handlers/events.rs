@@ -2,15 +2,42 @@
 
 use std::collections::HashSet;
 use std::convert::Infallible;
+use std::future::Future;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
+use tokio_util::sync::WaitForCancellationFutureOwned;
 
 use crate::core::auth::AuthUser;
 use crate::db::query::AccessResult;
 use super::super::AdminState;
+
+/// Stream wrapper that ends when a CancellationToken fires.
+struct CancellableStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>,
+    shutdown: Pin<Box<WaitForCancellationFutureOwned>>,
+    done: bool,
+}
+
+impl Stream for CancellableStream {
+    type Item = Result<Event, Infallible>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.done {
+            return Poll::Ready(None);
+        }
+        // Check shutdown first
+        if self.shutdown.as_mut().poll(cx).is_ready() {
+            self.done = true;
+            return Poll::Ready(None);
+        }
+        self.inner.as_mut().poll_next(cx)
+    }
+}
 
 /// SSE handler — streams mutation events to authenticated admin users.
 /// Auth user is injected by the admin middleware.
@@ -24,6 +51,7 @@ pub async fn sse_handler(
     auth_user: Option<axum::Extension<AuthUser>>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let event_bus = state.event_bus.clone();
+    let shutdown = state.shutdown.clone();
 
     // Build allowed collections/globals snapshot at subscribe time
     let mut allowed_collections: HashSet<String> = HashSet::new();
@@ -57,6 +85,7 @@ pub async fn sse_handler(
                             _ => {}
                         }
                     }
+                    // Read-only access check — commit result is irrelevant, rollback on drop is safe
                     let _ = tx.commit();
                 }
             }
@@ -111,11 +140,19 @@ pub async fn sse_handler(
                     Err(_) => None, // lagged — skip
                 }
             });
-        Box::pin(filtered) as std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
+        Box::pin(filtered) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
     } else {
         // No event bus — return an empty stream that never yields
         let empty = tokio_stream::empty();
-        Box::pin(empty) as std::pin::Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
+        Box::pin(empty) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
+    };
+
+    // End the stream when the server is shutting down, so Axum's
+    // graceful shutdown can complete without waiting for SSE clients.
+    let stream = CancellableStream {
+        inner: stream,
+        shutdown: Box::pin(shutdown.cancelled_owned()),
+        done: false,
     };
 
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)))

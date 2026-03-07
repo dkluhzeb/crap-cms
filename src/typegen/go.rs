@@ -31,41 +31,41 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     for f in &col.fields {
         if f.field_type == FieldType::Array && !f.fields.is_empty() {
             let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
-            writeln!(out, "// {} represents a row in the {} array field.", sub_pascal, f.name).unwrap();
-            writeln!(out, "type {} struct {{", sub_pascal).unwrap();
+            writeln!(out, "// {} represents a row in the {} array field.", sub_pascal, f.name).expect("write to String");
+            writeln!(out, "type {} struct {{", sub_pascal).expect("write to String");
             for sf in &f.fields {
                 write_field(out, sf);
             }
-            writeln!(out, "}}\n").unwrap();
+            writeln!(out, "}}\n").expect("write to String");
         }
     }
 
     // Document struct (includes id, fields, and timestamps)
-    writeln!(out, "// {} represents a {} document.", pascal, col.slug).unwrap();
-    writeln!(out, "type {} struct {{", pascal).unwrap();
-    writeln!(out, "\tID        string  `json:\"id\"`").unwrap();
+    writeln!(out, "// {} represents a {} document.", pascal, col.slug).expect("write to String");
+    writeln!(out, "type {} struct {{", pascal).expect("write to String");
+    writeln!(out, "\tID        string  `json:\"id\"`").expect("write to String");
     for f in &col.fields {
         write_field_with_context(out, f, &pascal);
     }
     if col.timestamps {
-        writeln!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`").unwrap();
-        writeln!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`").unwrap();
+        writeln!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`").expect("write to String");
+        writeln!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`").expect("write to String");
     }
-    writeln!(out, "}}\n").unwrap();
+    writeln!(out, "}}\n").expect("write to String");
 }
 
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
-    writeln!(out, "// {} represents the {} global.", pascal, global.slug).unwrap();
-    writeln!(out, "type {} struct {{", pascal).unwrap();
-    writeln!(out, "\tID        string  `json:\"id\"`").unwrap();
+    writeln!(out, "// {} represents the {} global.", pascal, global.slug).expect("write to String");
+    writeln!(out, "type {} struct {{", pascal).expect("write to String");
+    writeln!(out, "\tID        string  `json:\"id\"`").expect("write to String");
     for f in &global.fields {
         write_field(out, f);
     }
-    writeln!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`").unwrap();
-    writeln!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`").unwrap();
-    writeln!(out, "}}\n").unwrap();
+    writeln!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`").expect("write to String");
+    writeln!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`").expect("write to String");
+    writeln!(out, "}}\n").expect("write to String");
 }
 
 fn write_field(out: &mut String, field: &FieldDefinition) {
@@ -101,7 +101,7 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
         if let Some(rc) = &field.relationship {
             if rc.is_polymorphic() {
                 let targets = rc.all_collections().join(", ");
-                writeln!(out, "\t// Polymorphic relationship — targets: {}", targets).unwrap();
+                writeln!(out, "\t// Polymorphic relationship — targets: {}", targets).expect("write to String");
             }
         }
     }
@@ -112,7 +112,7 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
     } else {
         format!("`json:\"{}\"`", field.name)
     };
-    writeln!(out, "\t{:<9} {} {}", go_name, go_type, tag).unwrap();
+    writeln!(out, "\t{:<9} {} {}", go_name, go_type, tag).expect("write to String");
 }
 
 fn field_to_go(field: &FieldDefinition, parent_pascal: &str) -> (String, bool) {

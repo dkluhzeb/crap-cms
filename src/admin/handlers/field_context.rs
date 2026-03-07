@@ -3899,8 +3899,10 @@ mod tests {
             email_renderer,
             event_bus: None,
             login_limiter,
+            forgot_password_limiter: std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(3, 900)),
             has_auth: false,
             translations,
+            shutdown: tokio_util::sync::CancellationToken::new(),
         };
 
         // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -3979,8 +3981,10 @@ mod tests {
             email_renderer,
             event_bus: None,
             login_limiter,
+            forgot_password_limiter: std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(3, 900)),
             has_auth: false,
             translations,
+            shutdown: tokio_util::sync::CancellationToken::new(),
         };
 
         super::enrich_field_contexts(
@@ -4031,8 +4035,10 @@ mod tests {
             email_renderer,
             event_bus: None,
             login_limiter,
+            forgot_password_limiter: std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(3, 900)),
             has_auth: false,
             translations,
+            shutdown: tokio_util::sync::CancellationToken::new(),
         }
     }
 

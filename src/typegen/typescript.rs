@@ -33,49 +33,49 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     for f in &col.fields {
         if f.field_type == FieldType::Array && !f.fields.is_empty() {
             let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
-            writeln!(out, "export interface {} {{", sub_pascal).unwrap();
+            writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
             for sf in &f.fields {
                 write_field(out, sf);
             }
-            writeln!(out, "}}\n").unwrap();
+            writeln!(out, "}}\n").expect("write to String");
         }
     }
 
     // Input data interface
-    writeln!(out, "/** Input data for creating/updating a {} */", pascal).unwrap();
-    writeln!(out, "export interface {}Data {{", pascal).unwrap();
+    writeln!(out, "/** Input data for creating/updating a {} */", pascal).expect("write to String");
+    writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
     for f in &col.fields {
         write_field_with_context(out, f, &pascal);
     }
-    writeln!(out, "}}\n").unwrap();
+    writeln!(out, "}}\n").expect("write to String");
 
     // Document interface (extends data with id + timestamps)
-    writeln!(out, "/** {} document returned from the API */", pascal).unwrap();
-    writeln!(out, "export interface {}Document extends {}Data {{", pascal, pascal).unwrap();
-    writeln!(out, "  id: string;").unwrap();
+    writeln!(out, "/** {} document returned from the API */", pascal).expect("write to String");
+    writeln!(out, "export interface {}Document extends {}Data {{", pascal, pascal).expect("write to String");
+    writeln!(out, "  id: string;").expect("write to String");
     if col.timestamps {
-        writeln!(out, "  created_at?: string;").unwrap();
-        writeln!(out, "  updated_at?: string;").unwrap();
+        writeln!(out, "  created_at?: string;").expect("write to String");
+        writeln!(out, "  updated_at?: string;").expect("write to String");
     }
-    writeln!(out, "}}\n").unwrap();
+    writeln!(out, "}}\n").expect("write to String");
 }
 
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
-    writeln!(out, "/** Input data for {} global */", pascal).unwrap();
-    writeln!(out, "export interface {}Data {{", pascal).unwrap();
+    writeln!(out, "/** Input data for {} global */", pascal).expect("write to String");
+    writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
     for f in &global.fields {
         write_field(out, f);
     }
-    writeln!(out, "}}\n").unwrap();
+    writeln!(out, "}}\n").expect("write to String");
 
-    writeln!(out, "/** {} global document */", pascal).unwrap();
-    writeln!(out, "export interface {}Document extends {}Data {{", pascal, pascal).unwrap();
-    writeln!(out, "  id: string;").unwrap();
-    writeln!(out, "  created_at?: string;").unwrap();
-    writeln!(out, "  updated_at?: string;").unwrap();
-    writeln!(out, "}}\n").unwrap();
+    writeln!(out, "/** {} global document */", pascal).expect("write to String");
+    writeln!(out, "export interface {}Document extends {}Data {{", pascal, pascal).expect("write to String");
+    writeln!(out, "  id: string;").expect("write to String");
+    writeln!(out, "  created_at?: string;").expect("write to String");
+    writeln!(out, "  updated_at?: string;").expect("write to String");
+    writeln!(out, "}}\n").expect("write to String");
 }
 
 fn render_collection_slug_type(out: &mut String, registry: &Registry) {
@@ -84,8 +84,8 @@ fn render_collection_slug_type(out: &mut String, registry: &Registry) {
         return;
     }
     let union = slugs.iter().map(|s| format!("\"{}\"", s)).collect::<Vec<_>>().join(" | ");
-    writeln!(out, "/** All collection slugs */").unwrap();
-    writeln!(out, "export type CollectionSlug = {};", union).unwrap();
+    writeln!(out, "/** All collection slugs */").expect("write to String");
+    writeln!(out, "export type CollectionSlug = {};", union).expect("write to String");
 }
 
 fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: &str) {
@@ -93,7 +93,7 @@ fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: 
         if let Some(rc) = &field.relationship {
             if rc.is_polymorphic() {
                 let targets = rc.all_collections().join(", ");
-                writeln!(out, "{}/** Polymorphic relationship — targets: {} */", indent, targets).unwrap();
+                writeln!(out, "{}/** Polymorphic relationship — targets: {} */", indent, targets).expect("write to String");
             }
         }
     }
@@ -126,7 +126,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
     write_polymorphic_comment(out, field, "  ");
     let ts_type = field_to_ts(field, "");
     let opt = if is_optional(field) { "?" } else { "" };
-    writeln!(out, "  {}{}: {};", field.name, opt, ts_type).unwrap();
+    writeln!(out, "  {}{}: {};", field.name, opt, ts_type).expect("write to String");
 }
 
 fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
@@ -156,7 +156,7 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
     write_polymorphic_comment(out, field, "  ");
     let ts_type = field_to_ts(field, parent_pascal);
     let opt = if is_optional(field) { "?" } else { "" };
-    writeln!(out, "  {}{}: {};", field.name, opt, ts_type).unwrap();
+    writeln!(out, "  {}{}: {};", field.name, opt, ts_type).expect("write to String");
 }
 
 fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {

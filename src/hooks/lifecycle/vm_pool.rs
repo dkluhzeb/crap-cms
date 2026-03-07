@@ -1,5 +1,6 @@
 //! Lua VM pool for concurrent hook execution.
 
+use anyhow::bail;
 use mlua::Lua;
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
@@ -19,23 +20,23 @@ impl VmPool {
     }
 
     /// Acquire a VM from the pool, blocking up to 5 seconds.
-    pub(super) fn acquire(&self) -> std::result::Result<VmGuard<'_>, String> {
+    pub(super) fn acquire(&self) -> anyhow::Result<VmGuard<'_>> {
         let timeout = Duration::from_secs(5);
         let mut pool = self.vms.lock()
-            .map_err(|e| format!("VM pool lock poisoned: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("VM pool lock poisoned: {}", e))?;
         loop {
             if let Some(vm) = pool.pop() {
                 return Ok(VmGuard { pool: self, vm: Some(vm) });
             }
             let (guard, wait_result) = self.available.wait_timeout(pool, timeout)
-                .map_err(|e| format!("VM pool condvar wait failed: {}", e))?;
+                .map_err(|e| anyhow::anyhow!("VM pool condvar wait failed: {}", e))?;
             pool = guard;
             if wait_result.timed_out() {
                 // Try one more time after timeout — another thread may have returned a VM
                 if let Some(vm) = pool.pop() {
                     return Ok(VmGuard { pool: self, vm: Some(vm) });
                 }
-                return Err("VM pool acquire timed out after 5s".to_string());
+                bail!("VM pool acquire timed out after 5s");
             }
         }
     }
@@ -50,7 +51,7 @@ pub(super) struct VmGuard<'a> {
 impl std::ops::Deref for VmGuard<'_> {
     type Target = Lua;
     fn deref(&self) -> &Lua {
-        self.vm.as_ref().unwrap()
+        self.vm.as_ref().expect("VmGuard used after drop")
     }
 }
 
