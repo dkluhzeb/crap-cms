@@ -28,7 +28,11 @@ fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRe
     let db_pool = pool::create_pool(tmp.path(), &pool_config).expect("Failed to create pool");
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("Failed to sync schema");
 
-    let runner = HookRunner::new(&config_dir, registry.clone(), &config)
+    let runner = HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&config)
+        .build()
         .expect("Failed to create HookRunner");
     (tmp, db_pool, registry, runner)
 }
@@ -242,23 +246,10 @@ fn validate_blocks_required_subfield_fails_when_empty() {
         name: "content".to_string(),
         field_type: FieldType::Blocks,
         blocks: vec![
-            crap_cms::core::field::BlockDefinition {
-                block_type: "text".to_string(),
-                fields: vec![
-                    FieldDefinition {
-                        name: "title".to_string(),
-                        field_type: FieldType::Text,
-                        required: true,
-                        ..Default::default()
-                    },
-                    FieldDefinition {
-                        name: "body".to_string(),
-                        field_type: FieldType::Textarea,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
+            crap_cms::core::field::BlockDefinition::new("text", vec![
+                FieldDefinition { name: "title".to_string(), field_type: FieldType::Text, required: true, ..Default::default() },
+                FieldDefinition { name: "body".to_string(), field_type: FieldType::Textarea, ..Default::default() },
+            ]),
         ],
         ..Default::default()
     };
@@ -288,18 +279,9 @@ fn validate_blocks_required_subfield_passes_when_present() {
         name: "content".to_string(),
         field_type: FieldType::Blocks,
         blocks: vec![
-            crap_cms::core::field::BlockDefinition {
-                block_type: "text".to_string(),
-                fields: vec![
-                    FieldDefinition {
-                        name: "title".to_string(),
-                        field_type: FieldType::Text,
-                        required: true,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
+            crap_cms::core::field::BlockDefinition::new("text", vec![
+                FieldDefinition { name: "title".to_string(), field_type: FieldType::Text, required: true, ..Default::default() },
+            ]),
         ],
         ..Default::default()
     };
@@ -323,18 +305,9 @@ fn validate_blocks_skips_required_for_drafts() {
         name: "content".to_string(),
         field_type: FieldType::Blocks,
         blocks: vec![
-            crap_cms::core::field::BlockDefinition {
-                block_type: "text".to_string(),
-                fields: vec![
-                    FieldDefinition {
-                        name: "title".to_string(),
-                        field_type: FieldType::Text,
-                        required: true,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
+            crap_cms::core::field::BlockDefinition::new("text", vec![
+                FieldDefinition { name: "title".to_string(), field_type: FieldType::Text, required: true, ..Default::default() },
+            ]),
         ],
         ..Default::default()
     };
@@ -827,18 +800,9 @@ fn validate_nested_blocks_in_array_rows() {
                 name: "content".to_string(),
                 field_type: FieldType::Blocks,
                 blocks: vec![
-                    BlockDefinition {
-                        block_type: "text".to_string(),
-                        fields: vec![
-                            FieldDefinition {
-                                name: "body".to_string(),
-                                field_type: FieldType::Text,
-                                required: true,
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    },
+                    BlockDefinition::new("text", vec![
+                        FieldDefinition { name: "body".to_string(), field_type: FieldType::Text, required: true, ..Default::default() },
+                    ]),
                 ],
                 ..Default::default()
             },
@@ -1112,18 +1076,9 @@ fn validate_blocks_unknown_block_type_skips() {
         name: "content".to_string(),
         field_type: FieldType::Blocks,
         blocks: vec![
-            BlockDefinition {
-                block_type: "text".to_string(),
-                fields: vec![
-                    FieldDefinition {
-                        name: "body".to_string(),
-                        field_type: FieldType::Text,
-                        required: true,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
+            BlockDefinition::new("text", vec![
+                FieldDefinition { name: "body".to_string(), field_type: FieldType::Text, required: true, ..Default::default() },
+            ]),
         ],
         ..Default::default()
     };
@@ -1216,18 +1171,9 @@ fn validate_blocks_non_object_row_skips() {
         name: "content".to_string(),
         field_type: FieldType::Blocks,
         blocks: vec![
-            BlockDefinition {
-                block_type: "text".to_string(),
-                fields: vec![
-                    FieldDefinition {
-                        name: "body".to_string(),
-                        field_type: FieldType::Text,
-                        required: true,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
+            BlockDefinition::new("text", vec![
+                FieldDefinition { name: "body".to_string(), field_type: FieldType::Text, required: true, ..Default::default() },
+            ]),
         ],
         ..Default::default()
     };

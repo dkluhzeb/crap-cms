@@ -14,7 +14,12 @@ fn setup_lua() -> HookRunner {
     let config_dir = fixture_dir();
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
-    HookRunner::new(&config_dir, registry, &config).expect("HookRunner::new failed")
+    HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry)
+        .config(&config)
+        .build()
+        .expect("HookRunner::new failed")
 }
 
 /// Helper to eval Lua code and get a string result (no DB connection needed for pure functions).
@@ -232,7 +237,11 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync failed");
 
-    let runner = HookRunner::new(&config_dir, registry.clone(), &config)
+    let runner = HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&config)
+        .build()
         .expect("HookRunner::new failed");
     (tmp, pool, registry, runner)
 }

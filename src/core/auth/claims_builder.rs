@@ -1,0 +1,73 @@
+//! Builder for `crate::core::auth::Claims`.
+
+use crate::core::auth::Claims;
+
+/// Builder for [`Claims`].
+///
+/// `sub` and `collection` are taken in `new()` (always required).
+/// `email` and `exp` are set via chained methods.
+pub struct ClaimsBuilder {
+    sub: String,
+    collection: String,
+    email: Option<String>,
+    exp: Option<u64>,
+}
+
+impl ClaimsBuilder {
+    pub fn new(sub: impl Into<String>, collection: impl Into<String>) -> Self {
+        Self {
+            sub: sub.into(),
+            collection: collection.into(),
+            email: None,
+            exp: None,
+        }
+    }
+
+    pub fn email(mut self, email: impl Into<String>) -> Self {
+        self.email = Some(email.into());
+        self
+    }
+
+    pub fn exp(mut self, exp: u64) -> Self {
+        self.exp = Some(exp);
+        self
+    }
+
+    pub fn build(self) -> Claims {
+        Claims {
+            sub: self.sub,
+            collection: self.collection,
+            email: self.email.expect("ClaimsBuilder: email is required"),
+            exp: self.exp.expect("ClaimsBuilder: exp is required"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn builds_claims_with_all_fields() {
+        let claims = ClaimsBuilder::new("user-id", "users")
+            .email("user@example.com")
+            .exp(9999999999)
+            .build();
+        assert_eq!(claims.sub, "user-id");
+        assert_eq!(claims.collection, "users");
+        assert_eq!(claims.email, "user@example.com");
+        assert_eq!(claims.exp, 9999999999);
+    }
+
+    #[test]
+    #[should_panic(expected = "ClaimsBuilder: email is required")]
+    fn panics_without_email() {
+        ClaimsBuilder::new("id", "col").exp(1).build();
+    }
+
+    #[test]
+    #[should_panic(expected = "ClaimsBuilder: exp is required")]
+    fn panics_without_exp() {
+        ClaimsBuilder::new("id", "col").email("a@b.com").build();
+    }
+}

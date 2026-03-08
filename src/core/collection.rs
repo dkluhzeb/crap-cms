@@ -23,6 +23,12 @@ pub struct VersionsConfig {
     pub max_versions: u32,
 }
 
+impl VersionsConfig {
+    pub fn new(drafts: bool, max_versions: u32) -> Self {
+        Self { drafts, max_versions }
+    }
+}
+
 /// Controls live event broadcasting for a collection or global.
 /// `None` = enabled (broadcast all events).
 /// `Some(LiveSetting::Disabled)` = never broadcast.
@@ -54,6 +60,12 @@ pub struct AuthStrategy {
     pub authenticate: String,
 }
 
+impl AuthStrategy {
+    pub fn new(name: impl Into<String>, authenticate: impl Into<String>) -> Self {
+        Self { name: name.into(), authenticate: authenticate.into() }
+    }
+}
+
 /// Authentication configuration for a collection (JWT, strategies, local login).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionAuth {
@@ -78,6 +90,12 @@ fn default_true_auth() -> bool {
 
 fn default_token_expiry() -> u64 {
     7200
+}
+
+impl CollectionAuth {
+    pub fn new(enabled: bool) -> Self {
+        Self { enabled, ..Default::default() }
+    }
 }
 
 impl Default for CollectionAuth {
@@ -144,6 +162,12 @@ pub struct IndexDefinition {
     pub unique: bool,
 }
 
+impl IndexDefinition {
+    pub fn new(fields: Vec<String>) -> Self {
+        Self { fields, unique: false }
+    }
+}
+
 /// Full definition of a collection, parsed from a Lua file. Maps to one SQLite table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionDefinition {
@@ -179,6 +203,10 @@ fn default_true() -> bool {
 }
 
 impl CollectionDefinition {
+    pub fn new(slug: impl Into<String>) -> Self {
+        Self { slug: slug.into(), ..Default::default() }
+    }
+
     /// Get the display label (plural form, falls back to slug). Uses default resolution.
     pub fn display_name(&self) -> &str {
         self.labels.plural.as_ref()
@@ -260,6 +288,10 @@ pub struct GlobalDefinition {
 }
 
 impl GlobalDefinition {
+    pub fn new(slug: impl Into<String>) -> Self {
+        Self { slug: slug.into(), ..Default::default() }
+    }
+
     /// Get the display label (singular, falls back to slug). Uses default resolution.
     pub fn display_name(&self) -> &str {
         self.labels.singular.as_ref()
@@ -315,27 +347,16 @@ mod tests {
     use std::collections::HashMap;
 
     fn make_collection(slug: &str, singular: Option<&str>, plural: Option<&str>, title_field: Option<&str>) -> CollectionDefinition {
-        CollectionDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels {
-                singular: singular.map(|s| LocalizedString::Plain(s.to_string())),
-                plural: plural.map(|s| LocalizedString::Plain(s.to_string())),
-            },
-            timestamps: true,
-            fields: Vec::new(),
-            admin: CollectionAdmin {
-                use_as_title: title_field.map(|s| s.to_string()),
-                ..Default::default()
-            },
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new(slug);
+        def.labels = CollectionLabels {
+            singular: singular.map(|s| LocalizedString::Plain(s.to_string())),
+            plural: plural.map(|s| LocalizedString::Plain(s.to_string())),
+        };
+        def.admin = CollectionAdmin {
+            use_as_title: title_field.map(|s| s.to_string()),
+            ..Default::default()
+        };
+        def
     }
 
     #[test]
@@ -400,10 +421,9 @@ mod tests {
     fn is_upload_collection() {
         use crate::core::upload::CollectionUpload;
         let mut col = make_collection("media", None, None, None);
-        col.upload = Some(CollectionUpload {
-            enabled: true,
-            ..Default::default()
-        });
+        let mut upload = CollectionUpload::default();
+        upload.enabled = true;
+        col.upload = Some(upload);
         assert!(col.is_upload_collection());
     }
 
@@ -418,7 +438,7 @@ mod tests {
     #[test]
     fn has_versions_true() {
         let mut col = make_collection("posts", None, None, None);
-        col.versions = Some(VersionsConfig { drafts: false, max_versions: 0 });
+        col.versions = Some(VersionsConfig::new(false, 0));
         assert!(col.has_versions());
     }
 
@@ -431,7 +451,7 @@ mod tests {
     #[test]
     fn has_drafts_true() {
         let mut col = make_collection("posts", None, None, None);
-        col.versions = Some(VersionsConfig { drafts: true, max_versions: 5 });
+        col.versions = Some(VersionsConfig::new(true, 5));
         assert!(col.has_drafts());
     }
 
@@ -444,7 +464,7 @@ mod tests {
     #[test]
     fn has_drafts_false_when_versions_but_no_drafts() {
         let mut col = make_collection("posts", None, None, None);
-        col.versions = Some(VersionsConfig { drafts: false, max_versions: 10 });
+        col.versions = Some(VersionsConfig::new(false, 10));
         assert!(!col.has_drafts());
     }
 
@@ -459,24 +479,12 @@ mod tests {
         singular_labels.insert("en".to_string(), "Post".to_string());
         singular_labels.insert("de".to_string(), "Beitrag".to_string());
 
-        CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: CollectionLabels {
-                singular: Some(LocalizedString::Localized(singular_labels)),
-                plural: Some(LocalizedString::Localized(labels)),
-            },
-            timestamps: true,
-            fields: Vec::new(),
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new("posts");
+        def.labels = CollectionLabels {
+            singular: Some(LocalizedString::Localized(singular_labels)),
+            plural: Some(LocalizedString::Localized(labels)),
+        };
+        def
     }
 
     #[test]
@@ -532,23 +540,10 @@ mod tests {
     #[test]
     fn display_name_for_empty_localized_falls_back_to_slug() {
         let labels = HashMap::new(); // empty map
-        let col = CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: CollectionLabels {
-                singular: None,
-                plural: Some(LocalizedString::Localized(labels)),
-            },
-            timestamps: true,
-            fields: Vec::new(),
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
+        let mut col = CollectionDefinition::new("posts");
+        col.labels = CollectionLabels {
+            singular: None,
+            plural: Some(LocalizedString::Localized(labels)),
         };
         assert_eq!(col.display_name_for("en", "en"), "posts");
     }
@@ -559,29 +554,19 @@ mod tests {
     fn is_upload_collection_false_when_disabled() {
         use crate::core::upload::CollectionUpload;
         let mut col = make_collection("media", None, None, None);
-        col.upload = Some(CollectionUpload {
-            enabled: false,
-            ..Default::default()
-        });
+        col.upload = Some(CollectionUpload::default()); // enabled defaults to false
         assert!(!col.is_upload_collection());
     }
 
     // ── GlobalDefinition tests ──────────────────────────────────────────
 
     fn make_global(slug: &str, singular: Option<&str>) -> GlobalDefinition {
-        GlobalDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels {
-                singular: singular.map(|s| LocalizedString::Plain(s.to_string())),
-                plural: None,
-            },
-            fields: Vec::new(),
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        }
+        let mut def = GlobalDefinition::new(slug);
+        def.labels = CollectionLabels {
+            singular: singular.map(|s| LocalizedString::Plain(s.to_string())),
+            plural: None,
+        };
+        def
     }
 
     #[test]
@@ -607,18 +592,10 @@ mod tests {
         let mut labels = HashMap::new();
         labels.insert("en".to_string(), "Site Settings".to_string());
         labels.insert("de".to_string(), "Seiteneinstellungen".to_string());
-        let g = GlobalDefinition {
-            slug: "site_settings".to_string(),
-            labels: CollectionLabels {
-                singular: Some(LocalizedString::Localized(labels)),
-                plural: None,
-            },
-            fields: Vec::new(),
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
+        let mut g = GlobalDefinition::new("site_settings");
+        g.labels = CollectionLabels {
+            singular: Some(LocalizedString::Localized(labels)),
+            plural: None,
         };
         assert_eq!(g.display_name_for("de", "en"), "Seiteneinstellungen");
         assert_eq!(g.display_name_for("fr", "en"), "Site Settings");
@@ -633,7 +610,7 @@ mod tests {
     #[test]
     fn global_has_versions_true() {
         let mut g = make_global("site_settings", None);
-        g.versions = Some(VersionsConfig { drafts: false, max_versions: 0 });
+        g.versions = Some(VersionsConfig::new(false, 0));
         assert!(g.has_versions());
     }
 
@@ -646,7 +623,7 @@ mod tests {
     #[test]
     fn global_has_drafts_true() {
         let mut g = make_global("site_settings", None);
-        g.versions = Some(VersionsConfig { drafts: true, max_versions: 0 });
+        g.versions = Some(VersionsConfig::new(true, 0));
         assert!(g.has_drafts());
     }
 
@@ -659,7 +636,7 @@ mod tests {
     #[test]
     fn global_has_drafts_false_drafts_disabled() {
         let mut g = make_global("site_settings", None);
-        g.versions = Some(VersionsConfig { drafts: false, max_versions: 0 });
+        g.versions = Some(VersionsConfig::new(false, 0));
         assert!(!g.has_drafts());
     }
 
@@ -680,7 +657,7 @@ mod tests {
 
     #[test]
     fn versions_config_defaults() {
-        let v = VersionsConfig { drafts: false, max_versions: 0 };
+        let v = VersionsConfig::new(false, 0);
         assert!(!v.drafts);
         assert_eq!(v.max_versions, 0);
     }

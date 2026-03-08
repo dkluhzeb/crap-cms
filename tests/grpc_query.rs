@@ -25,36 +25,26 @@ use crap_cms::hooks::lifecycle::HookRunner;
 
 #[allow(dead_code)]
 fn make_posts_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "posts".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Post".to_string())),
-            plural: Some(LocalizedString::Plain("Posts".to_string())),
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "status".to_string(),
-                field_type: FieldType::Select,
-                default_value: Some(serde_json::json!("draft")),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+        FieldDefinition {
+            name: "status".to_string(),
+            field_type: FieldType::Select,
+            default_value: Some(serde_json::json!("draft")),
+            ..Default::default()
+        },
+    ];
+    def
 }
 
 /// Build a prost Struct from key-value string pairs.
@@ -113,7 +103,12 @@ fn setup_service(
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
+        HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(registry.clone())
+            .config(&config)
+            .build()
+            .expect("create hook runner");
 
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
@@ -166,7 +161,12 @@ fn setup_service_with_hook(
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
+        HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(registry.clone())
+            .config(&config)
+            .build()
+            .expect("create hook runner");
 
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
@@ -244,234 +244,119 @@ fn make_product_struct(
 }
 
 fn make_products_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "products".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Product".to_string())),
-            plural: Some(LocalizedString::Plain("Products".to_string())),
+    let mut def = CollectionDefinition::new("products");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Product".to_string())),
+        plural: Some(LocalizedString::Plain("Products".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "name".to_string(),
+            required: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "name".to_string(),
-                required: true,
+        FieldDefinition {
+            name: "seo".to_string(),
+            field_type: FieldType::Group,
+            fields: vec![FieldDefinition {
+                name: "meta_title".to_string(),
                 ..Default::default()
-            },
-            FieldDefinition {
-                name: "seo".to_string(),
-                field_type: FieldType::Group,
-                fields: vec![FieldDefinition {
-                    name: "meta_title".to_string(),
+            }],
+            ..Default::default()
+        },
+        FieldDefinition {
+            name: "variants".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![
+                FieldDefinition {
+                    name: "color".to_string(),
                     ..Default::default()
-                }],
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "variants".to_string(),
-                field_type: FieldType::Array,
-                fields: vec![
+                },
+                FieldDefinition {
+                    name: "dimensions".to_string(),
+                    field_type: FieldType::Group,
+                    fields: vec![
+                        FieldDefinition {
+                            name: "width".to_string(),
+                            ..Default::default()
+                        },
+                        FieldDefinition {
+                            name: "height".to_string(),
+                            ..Default::default()
+                        },
+                    ],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        },
+        FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            blocks: vec![
+                BlockDefinition::new("text", vec![FieldDefinition {
+                    name: "body".to_string(),
+                    ..Default::default()
+                }]),
+                BlockDefinition::new("section", vec![
                     FieldDefinition {
-                        name: "color".to_string(),
+                        name: "heading".to_string(),
                         ..Default::default()
                     },
                     FieldDefinition {
-                        name: "dimensions".to_string(),
+                        name: "meta".to_string(),
                         field_type: FieldType::Group,
-                        fields: vec![
-                            FieldDefinition {
-                                name: "width".to_string(),
-                                ..Default::default()
-                            },
-                            FieldDefinition {
-                                name: "height".to_string(),
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "content".to_string(),
-                field_type: FieldType::Blocks,
-                blocks: vec![
-                    BlockDefinition {
-                        block_type: "text".to_string(),
                         fields: vec![FieldDefinition {
-                            name: "body".to_string(),
+                            name: "author".to_string(),
                             ..Default::default()
                         }],
                         ..Default::default()
                     },
-                    BlockDefinition {
-                        block_type: "section".to_string(),
-                        fields: vec![
-                            FieldDefinition {
-                                name: "heading".to_string(),
-                                ..Default::default()
-                            },
-                            FieldDefinition {
-                                name: "meta".to_string(),
-                                field_type: FieldType::Group,
-                                fields: vec![FieldDefinition {
-                                    name: "author".to_string(),
-                                    ..Default::default()
-                                }],
-                                ..Default::default()
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+                ]),
+            ],
+            ..Default::default()
+        },
+    ];
+    def
 }
 
 fn make_categories_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "categories".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Category".to_string())),
-            plural: Some(LocalizedString::Plain("Categories".to_string())),
-        },
-        timestamps: true,
-        fields: vec![FieldDefinition {
-            name: "name".to_string(),
-            required: true,
-            ..Default::default()
-        }],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("categories");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Category".to_string())),
+        plural: Some(LocalizedString::Plain("Categories".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![FieldDefinition {
+        name: "name".to_string(),
+        required: true,
+        ..Default::default()
+    }];
+    def
 }
 
 fn make_posts_with_relationship() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "posts".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Post".to_string())),
-            plural: Some(LocalizedString::Plain("Posts".to_string())),
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "category".to_string(),
-                field_type: FieldType::Relationship,
-                relationship: Some(RelationshipConfig {
-                    collection: "categories".to_string(),
-                    has_many: false,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
-}
-
-fn make_numbered_posts_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "items".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Item".to_string())),
-            plural: Some(LocalizedString::Plain("Items".to_string())),
+        FieldDefinition {
+            name: "category".to_string(),
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig::new("categories", false)),
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "name".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "score".to_string(),
-                field_type: FieldType::Number,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "tag".to_string(),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
-}
-
-fn make_item(name: &str, score: &str, tag: &str) -> Struct {
-    make_struct(&[("name", name), ("score", score), ("tag", tag)])
-}
-
-fn make_posts_with_unique_slug() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "articles".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Article".to_string())),
-            plural: Some(LocalizedString::Plain("Articles".to_string())),
-        },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "slug".to_string(),
-                unique: true,
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+    ];
+    def
 }
 
 // ── Depth > 0 in gRPC ────────────────────────────────────────────────────
@@ -851,830 +736,3 @@ async fn before_change_hook_modifies_array_data() {
 
 // ── Group 1: Filter Operators (gRPC) ──────────────────────────────────────
 
-#[tokio::test]
-async fn find_with_where_operators() {
-    let ts = setup_service(vec![make_numbered_posts_def()], vec![]);
-
-    // Seed data
-    for (name, score, tag) in &[
-        ("Alpha", "10", "red"),
-        ("Beta", "20", "blue"),
-        ("Gamma", "30", "red"),
-        ("Delta", "40", ""),
-        ("Epsilon", "50", "green"),
-    ] {
-        ts.service
-            .create(Request::new(content::CreateRequest {
-                collection: "items".to_string(),
-                data: Some(make_item(name, score, tag)),
-                locale: None,
-                draft: None,
-            }))
-            .await
-            .unwrap();
-    }
-
-    // not_equals
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"tag": {"not_equals": "red"}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    // Delta has tag="" which may be stored as NULL — SQL NULL != 'red' is NULL (not true)
-    // So we expect either 2 (excluding NULL) or 3 (if "" is stored as empty string)
-    assert!(resp.pagination.as_ref().unwrap().total_docs >= 2 && resp.pagination.as_ref().unwrap().total_docs <= 3, "not_equals: got {}", resp.pagination.as_ref().unwrap().total_docs);
-
-    // greater_than
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"score": {"greater_than": "30"}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2, "greater_than 30 → Delta(40), Epsilon(50)");
-
-    // less_than
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"score": {"less_than": "20"}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "less_than 20 → Alpha(10)");
-
-    // greater_than_or_equal
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"score": {"greater_than_or_equal": "30"}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 3, "gte 30 → Gamma, Delta, Epsilon");
-
-    // less_than_or_equal
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"score": {"less_than_or_equal": "20"}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2, "lte 20 → Alpha, Beta");
-
-    // in
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"tag": {"in": ["red", "green"]}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 3, "in [red, green] → Alpha, Gamma, Epsilon");
-
-    // not_in
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"tag": {"not_in": ["red", "green"]}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    // Delta has tag="" stored as NULL — SQL NOT IN excludes NULLs
-    assert!(resp.pagination.as_ref().unwrap().total_docs >= 1 && resp.pagination.as_ref().unwrap().total_docs <= 2, "not_in [red, green]: got {}", resp.pagination.as_ref().unwrap().total_docs);
-
-    // like
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"name": {"like": "%lph%"}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "like '%lph%' → Alpha");
-
-    // contains
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"name": {"contains": "eta"}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "contains 'eta' → Beta");
-
-    // exists (tag is non-empty)
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"tag": {"exists": true}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert!(resp.pagination.as_ref().unwrap().total_docs >= 3, "exists: at least the non-empty tags");
-
-    // not_exists (tag is empty/null)
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "items".to_string(),
-            r#where: Some(r#"{"tag": {"not_exists": true}}"#.to_string()),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    // Delta has tag="" which may or may not count as "not exists" depending on impl
-    assert!(resp.pagination.as_ref().unwrap().total_docs <= 2, "not_exists: empty/null tags");
-}
-
-// ── Group 2: Unique Constraints (gRPC) ────────────────────────────────────
-
-#[tokio::test]
-async fn find_with_unique_constraint_violation() {
-    let ts = setup_service(vec![make_posts_with_unique_slug()], vec![]);
-
-    // First create succeeds
-    ts.service
-        .create(Request::new(content::CreateRequest {
-            collection: "articles".to_string(),
-            data: Some(make_struct(&[("title", "First"), ("slug", "my-slug")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap();
-
-    // Second create with same slug should fail
-    let err = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "articles".to_string(),
-            data: Some(make_struct(&[("title", "Second"), ("slug", "my-slug")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap_err();
-
-    // Should be some error (InvalidArgument or Internal depending on where uniqueness is enforced)
-    assert!(
-        err.code() == tonic::Code::InvalidArgument
-            || err.code() == tonic::Code::AlreadyExists
-            || err.code() == tonic::Code::Internal,
-        "Duplicate unique field should return error, got: {:?}: {}",
-        err.code(),
-        err.message()
-    );
-}
-
-// ── Group 3: Custom Validators (gRPC) ─────────────────────────────────────
-
-#[tokio::test]
-async fn create_with_custom_validator() {
-    // Write validator as a proper module file so hook resolution finds it
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-
-    std::fs::write(
-        hooks_dir.join("score_validator.lua"),
-        r#"
-local M = {}
-function M.check(value, ctx)
-    if value == nil then return true end
-    local n = tonumber(value)
-    if n == nil then return "score must be a number" end
-    if n < 0 then return "score must be positive" end
-    return true
-end
-return M
-        "#,
-    )
-    .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
-
-    let mut config = CrapConfig::default();
-    config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
-
-    let def = CollectionDefinition {
-        slug: "scored".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Scored".to_string())),
-            plural: Some(LocalizedString::Plain("Scored".to_string())),
-        },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "name".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "score".to_string(),
-                validate: Some("hooks.score_validator.check".to_string()),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    };
-
-    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
-    {
-        let mut reg = registry.write().unwrap();
-        reg.register_collection(def);
-    }
-    migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
-    let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
-        tmp.path().to_path_buf(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        config.auth.reset_token_expiry,
-        config.auth.password_policy.clone(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
-    );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
-
-    // Valid score passes
-    let resp = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "scored".to_string(),
-            data: Some(make_struct(&[("name", "Good"), ("score", "42")])),
-            locale: None,
-            draft: None,
-        }))
-        .await;
-    assert!(resp.is_ok(), "Valid score should succeed");
-
-    // Negative score fails
-    let err = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "scored".to_string(),
-            data: Some(make_struct(&[("name", "Bad"), ("score", "-5")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap_err();
-    assert!(
-        err.message().contains("positive"),
-        "Negative score should trigger validator: {}",
-        err.message()
-    );
-}
-
-// ── Group 4: Field-Level Hooks (gRPC) ─────────────────────────────────────
-
-#[tokio::test]
-async fn field_level_before_change_hook() {
-    // Write hook as a proper module file
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-
-    std::fs::write(
-        hooks_dir.join("slug_gen.lua"),
-        r#"
-local M = {}
-function M.auto_slug(value, ctx)
-    if (value == nil or value == "") and ctx.data and ctx.data.name then
-        local s = ctx.data.name:lower()
-        s = s:gsub("[^%w%s-]", "")
-        s = s:gsub("%s+", "-")
-        return s
-    end
-    return value
-end
-return M
-        "#,
-    )
-    .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
-
-    let mut config = CrapConfig::default();
-    config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
-
-    let def = CollectionDefinition {
-        slug: "pages".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Page".to_string())),
-            plural: Some(LocalizedString::Plain("Pages".to_string())),
-        },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "name".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "slug".to_string(),
-                hooks: FieldHooks {
-                    before_change: vec!["hooks.slug_gen.auto_slug".to_string()],
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    };
-
-    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
-    {
-        let mut reg = registry.write().unwrap();
-        reg.register_collection(def);
-    }
-    migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
-    let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
-        tmp.path().to_path_buf(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        config.auth.reset_token_expiry,
-        config.auth.password_policy.clone(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
-    );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
-
-    // Create without providing slug — hook should auto-generate
-    let doc = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "pages".to_string(),
-            data: Some(make_struct(&[("name", "Hello World")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .document
-        .unwrap();
-
-    assert_eq!(
-        get_proto_field(&doc, "slug").as_deref(),
-        Some("hello-world"),
-        "Field before_change hook should auto-generate slug"
-    );
-}
-
-#[tokio::test]
-async fn field_level_after_read_hook() {
-    // Write hook as proper module file
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-
-    std::fs::write(
-        hooks_dir.join("transform.lua"),
-        r#"
-local M = {}
-function M.uppercase_on_read(value, ctx)
-    if value then return value:upper() end
-    return value
-end
-return M
-        "#,
-    )
-    .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
-
-    let mut config = CrapConfig::default();
-    config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
-
-    let def = CollectionDefinition {
-        slug: "entries".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Entry".to_string())),
-            plural: Some(LocalizedString::Plain("Entries".to_string())),
-        },
-        timestamps: true,
-        fields: vec![FieldDefinition {
-            name: "name".to_string(),
-            required: true,
-            hooks: FieldHooks {
-                after_read: vec!["hooks.transform.uppercase_on_read".to_string()],
-                ..Default::default()
-            },
-            ..Default::default()
-        }],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    };
-
-    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
-    {
-        let mut reg = registry.write().unwrap();
-        reg.register_collection(def);
-    }
-    migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
-    let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
-        tmp.path().to_path_buf(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        config.auth.reset_token_expiry,
-        config.auth.password_policy.clone(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
-    );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
-
-    ts.service
-        .create(Request::new(content::CreateRequest {
-            collection: "entries".to_string(),
-            data: Some(make_struct(&[("name", "hello world")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap();
-
-    // Find should return uppercased name
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "entries".to_string(),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert_eq!(resp.documents.len(), 1);
-    assert_eq!(
-        get_proto_field(&resp.documents[0], "name").as_deref(),
-        Some("HELLO WORLD"),
-        "Field after_read hook should uppercase name"
-    );
-}
-
-// ── Group 5: Collection-Level Hooks (gRPC) ────────────────────────────────
-
-#[tokio::test]
-async fn collection_after_read_hook() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-
-    std::fs::write(
-        hooks_dir.join("note_hooks.lua"),
-        r#"
-local M = {}
-function M.add_computed(ctx)
-    if ctx.data and ctx.data.title then
-        ctx.data.computed = "read:" .. ctx.data.title
-    end
-    return ctx
-end
-return M
-        "#,
-    )
-    .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
-
-    let mut config = CrapConfig::default();
-    config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
-
-    let def = CollectionDefinition {
-        slug: "notes".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Note".to_string())),
-            plural: Some(LocalizedString::Plain("Notes".to_string())),
-        },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "computed".to_string(),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks {
-            after_read: vec!["hooks.note_hooks.add_computed".to_string()],
-            ..Default::default()
-        },
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    };
-
-    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
-    {
-        let mut reg = registry.write().unwrap();
-        reg.register_collection(def);
-    }
-    migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
-    let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
-        tmp.path().to_path_buf(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        config.auth.reset_token_expiry,
-        config.auth.password_policy.clone(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
-    );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
-
-    ts.service
-        .create(Request::new(content::CreateRequest {
-            collection: "notes".to_string(),
-            data: Some(make_struct(&[("title", "Test Note")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap();
-
-    let resp = ts
-        .service
-        .find(Request::new(content::FindRequest {
-            collection: "notes".to_string(),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert_eq!(resp.documents.len(), 1);
-    assert_eq!(
-        get_proto_field(&resp.documents[0], "computed").as_deref(),
-        Some("read:Test Note"),
-        "after_read hook should add computed field"
-    );
-}
-
-#[tokio::test]
-async fn collection_before_validate_hook() {
-    let tmp = tempfile::tempdir().expect("tempdir");
-    let hooks_dir = tmp.path().join("hooks");
-    std::fs::create_dir_all(&hooks_dir).unwrap();
-
-    std::fs::write(
-        hooks_dir.join("moderator.lua"),
-        r#"
-local M = {}
-function M.reject_forbidden(ctx)
-    if ctx.data and ctx.data.title and ctx.data.title:find("FORBIDDEN") then
-        error("Title contains forbidden word")
-    end
-    return ctx
-end
-return M
-        "#,
-    )
-    .unwrap();
-    std::fs::write(tmp.path().join("init.lua"), "").unwrap();
-
-    let mut config = CrapConfig::default();
-    config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
-
-    let def = CollectionDefinition {
-        slug: "moderated".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Moderated".to_string())),
-            plural: Some(LocalizedString::Plain("Moderated".to_string())),
-        },
-        timestamps: true,
-        fields: vec![FieldDefinition {
-            name: "title".to_string(),
-            required: true,
-            ..Default::default()
-        }],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks {
-            before_validate: vec!["hooks.moderator.reject_forbidden".to_string()],
-            ..Default::default()
-        },
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    };
-
-    let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
-    let registry = Registry::shared();
-    {
-        let mut reg = registry.write().unwrap();
-        reg.register_collection(def);
-    }
-    migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
-    let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
-        tmp.path().to_path_buf(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        config.auth.reset_token_expiry,
-        config.auth.password_policy.clone(),
-        std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
-    );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
-
-    // Valid title succeeds
-    let resp = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "moderated".to_string(),
-            data: Some(make_struct(&[("title", "Good Title")])),
-            locale: None,
-            draft: None,
-        }))
-        .await;
-    assert!(resp.is_ok(), "Valid title should pass");
-
-    // Forbidden title fails
-    let err = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "moderated".to_string(),
-            data: Some(make_struct(&[("title", "FORBIDDEN content")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap_err();
-    assert!(
-        err.message().contains("forbidden") || err.message().contains("FORBIDDEN"),
-        "Hook should reject forbidden title: {}",
-        err.message()
-    );
-}
-
-// ── Relationship Gaps ─────────────────────────────────────────────────────
-
-#[tokio::test]
-async fn find_depth_0_returns_id_only() {
-    let ts = setup_service(
-        vec![make_categories_def(), make_posts_with_relationship()],
-        vec![],
-    );
-
-    // Create a category
-    let cat_doc = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "categories".to_string(),
-            data: Some(make_struct(&[("name", "Art")])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .document
-        .unwrap();
-
-    // Create a post with the category relationship
-    let post_doc = ts
-        .service
-        .create(Request::new(content::CreateRequest {
-            collection: "posts".to_string(),
-            data: Some(make_struct(&[
-                ("title", "Depth Zero Test"),
-                ("category", &cat_doc.id),
-            ])),
-            locale: None,
-            draft: None,
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .document
-        .unwrap();
-
-    // Find with depth=0 — category should be a string ID, not a populated object
-    let found = ts
-        .service
-        .find_by_id(Request::new(content::FindByIdRequest {
-            collection: "posts".to_string(),
-            id: post_doc.id.clone(),
-            depth: Some(0),
-            locale: None,
-            select: vec![],
-            draft: None,
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .document
-        .expect("Document should be found");
-
-    let fields = found.fields.as_ref().unwrap();
-    let cat_field = fields.fields.get("category");
-    assert!(cat_field.is_some(), "category field should be present");
-
-    match &cat_field.unwrap().kind {
-        Some(Kind::StringValue(s)) => {
-            assert_eq!(
-                s, &cat_doc.id,
-                "At depth=0, category should be the raw ID string"
-            );
-        }
-        other => {
-            panic!(
-                "At depth=0, category should be a StringValue (ID), got: {:?}",
-                other
-            );
-        }
-    }
-}

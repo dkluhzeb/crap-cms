@@ -311,8 +311,8 @@ mod tests {
             name: "status".to_string(),
             field_type: FieldType::Select,
             options: vec![
-                SelectOption { label: LocalizedString::Plain("Draft".to_string()), value: "draft".to_string() },
-                SelectOption { label: LocalizedString::Plain("Published".to_string()), value: "published".to_string() },
+                SelectOption::new(LocalizedString::Plain("Draft".to_string()), "draft"),
+                SelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
             ],
             ..Default::default()
         };
@@ -338,12 +338,7 @@ mod tests {
         let f = FieldDefinition {
             name: "tags".to_string(),
             field_type: FieldType::Relationship,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "tags".to_string(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(crate::core::field::RelationshipConfig::new("tags", true)),
             ..Default::default()
         };
         let s = field_to_json_schema(&f);
@@ -379,11 +374,8 @@ mod tests {
 
     #[test]
     fn collection_create_schema() {
-        let def = CollectionDefinition {
-            slug: "posts".to_string(),
-            fields: vec![required_text("title"), text_field("body")],
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![required_text("title"), text_field("body")];
         let s = collection_input_schema(&def, CrudOp::Create);
         assert!(s["properties"]["title"].is_object());
         assert!(s["properties"]["body"].is_object());
@@ -393,11 +385,8 @@ mod tests {
 
     #[test]
     fn collection_update_schema_has_id() {
-        let def = CollectionDefinition {
-            slug: "posts".to_string(),
-            fields: vec![text_field("title")],
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![text_field("title")];
         let s = collection_input_schema(&def, CrudOp::Update);
         assert!(s["properties"]["id"].is_object());
         assert!(s["required"].as_array().unwrap().contains(&Value::String("id".to_string())));
@@ -405,22 +394,14 @@ mod tests {
 
     #[test]
     fn collection_delete_schema() {
-        let def = CollectionDefinition {
-            slug: "posts".to_string(),
-            fields: vec![],
-            ..Default::default()
-        };
+        let def = CollectionDefinition::new("posts");
         let s = collection_input_schema(&def, CrudOp::Delete);
         assert!(s["properties"]["id"].is_object());
     }
 
     #[test]
     fn collection_find_schema() {
-        let def = CollectionDefinition {
-            slug: "posts".to_string(),
-            fields: vec![],
-            ..Default::default()
-        };
+        let def = CollectionDefinition::new("posts");
         let s = collection_input_schema(&def, CrudOp::Find);
         assert!(s["properties"]["where"].is_object());
         assert!(s["properties"]["limit"].is_object());
@@ -447,11 +428,8 @@ mod tests {
             fields: vec![text_field("first_name"), text_field("last_name")],
             ..Default::default()
         };
-        let def = CollectionDefinition {
-            slug: "people".to_string(),
-            fields: vec![row],
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("people");
+        def.fields = vec![row];
         let s = collection_input_schema(&def, CrudOp::Create);
         // Row's children should be promoted
         assert!(s["properties"]["first_name"].is_object());
@@ -462,22 +440,16 @@ mod tests {
 
     #[test]
     fn global_read_schema() {
-        let def = GlobalDefinition {
-            slug: "settings".to_string(),
-            fields: vec![text_field("site_name")],
-            ..Default::default()
-        };
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![text_field("site_name")];
         let s = global_input_schema(&def, CrudOp::Find);
         assert!(s["properties"].is_object());
     }
 
     #[test]
     fn global_update_schema() {
-        let def = GlobalDefinition {
-            slug: "settings".to_string(),
-            fields: vec![required_text("site_name")],
-            ..Default::default()
-        };
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![required_text("site_name")];
         let s = global_input_schema(&def, CrudOp::Update);
         assert!(s["properties"]["site_name"].is_object());
     }
@@ -564,9 +536,9 @@ mod tests {
             name: "size".to_string(),
             field_type: FieldType::Radio,
             options: vec![
-                SelectOption { label: LocalizedString::Plain("S".to_string()), value: "s".to_string() },
-                SelectOption { label: LocalizedString::Plain("M".to_string()), value: "m".to_string() },
-                SelectOption { label: LocalizedString::Plain("L".to_string()), value: "l".to_string() },
+                SelectOption::new(LocalizedString::Plain("S".to_string()), "s"),
+                SelectOption::new(LocalizedString::Plain("M".to_string()), "m"),
+                SelectOption::new(LocalizedString::Plain("L".to_string()), "l"),
             ],
             ..Default::default()
         };
@@ -609,8 +581,8 @@ mod tests {
             field_type: FieldType::Select,
             has_many: true,
             options: vec![
-                SelectOption { label: LocalizedString::Plain("A".to_string()), value: "a".to_string() },
-                SelectOption { label: LocalizedString::Plain("B".to_string()), value: "b".to_string() },
+                SelectOption::new(LocalizedString::Plain("A".to_string()), "a"),
+                SelectOption::new(LocalizedString::Plain("B".to_string()), "b"),
             ],
             ..Default::default()
         };
@@ -635,12 +607,7 @@ mod tests {
         let f = FieldDefinition {
             name: "images".to_string(),
             field_type: FieldType::Upload,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "media".to_string(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(crate::core::field::RelationshipConfig::new("media", true)),
             ..Default::default()
         };
         let s = field_to_json_schema(&f);
@@ -745,16 +712,8 @@ mod tests {
             name: "layout".to_string(),
             field_type: FieldType::Blocks,
             blocks: vec![
-                BlockDefinition {
-                    block_type: "hero".to_string(),
-                    fields: vec![required_text("heading")],
-                    ..Default::default()
-                },
-                BlockDefinition {
-                    block_type: "cta".to_string(),
-                    fields: vec![text_field("label"), text_field("url")],
-                    ..Default::default()
-                },
+                BlockDefinition::new("hero", vec![required_text("heading")]),
+                BlockDefinition::new("cta", vec![text_field("label"), text_field("url")]),
             ],
             ..Default::default()
         };
@@ -783,24 +742,13 @@ mod tests {
             name: "tabs".to_string(),
             field_type: FieldType::Tabs,
             tabs: vec![
-                FieldTab {
-                    label: "SEO".to_string(),
-                    fields: vec![text_field("meta_title"), required_text("meta_desc")],
-                    ..Default::default()
-                },
-                FieldTab {
-                    label: "Content".to_string(),
-                    fields: vec![text_field("body")],
-                    ..Default::default()
-                },
+                FieldTab::new("SEO", vec![text_field("meta_title"), required_text("meta_desc")]),
+                FieldTab::new("Content", vec![text_field("body")]),
             ],
             ..Default::default()
         };
-        let def = CollectionDefinition {
-            slug: "pages".to_string(),
-            fields: vec![tabs],
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("pages");
+        def.fields = vec![tabs];
         let s = collection_input_schema(&def, CrudOp::Create);
         // Tab fields should be promoted to the root
         assert!(s["properties"]["meta_title"].is_object());
@@ -821,11 +769,8 @@ mod tests {
             fields: vec![text_field("internal_notes"), required_text("reference_code")],
             ..Default::default()
         };
-        let def = CollectionDefinition {
-            slug: "orders".to_string(),
-            fields: vec![collapsible],
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("orders");
+        def.fields = vec![collapsible];
         let s = collection_input_schema(&def, CrudOp::Create);
         assert!(s["properties"]["internal_notes"].is_object());
         assert!(s["properties"]["reference_code"].is_object());
@@ -842,11 +787,8 @@ mod tests {
             field_type: FieldType::Join,
             ..Default::default()
         };
-        let def = CollectionDefinition {
-            slug: "posts".to_string(),
-            fields: vec![text_field("title"), join],
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("posts");
+        def.fields = vec![text_field("title"), join];
         let s = collection_input_schema(&def, CrudOp::Create);
         // title appears but comments (Join) does not
         assert!(s["properties"]["title"].is_object());
@@ -860,12 +802,9 @@ mod tests {
         use crate::core::collection::CollectionAuth;
         // Use a required field so the "required" array is already present in the schema,
         // allowing the auth code path to push "password" into it.
-        let def = CollectionDefinition {
-            slug: "users".to_string(),
-            fields: vec![required_text("email"), text_field("name")],
-            auth: Some(CollectionAuth { enabled: true, ..Default::default() }),
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("users");
+        def.fields = vec![required_text("email"), text_field("name")];
+        def.auth = Some(CollectionAuth { enabled: true, ..Default::default() });
         let s = collection_input_schema(&def, CrudOp::Create);
         assert!(s["properties"]["password"].is_object());
         // password is appended to the existing required array
@@ -876,12 +815,9 @@ mod tests {
     #[test]
     fn auth_collection_update_adds_optional_password_field() {
         use crate::core::collection::CollectionAuth;
-        let def = CollectionDefinition {
-            slug: "users".to_string(),
-            fields: vec![text_field("name")],
-            auth: Some(CollectionAuth { enabled: true, ..Default::default() }),
-            ..Default::default()
-        };
+        let mut def = CollectionDefinition::new("users");
+        def.fields = vec![text_field("name")];
+        def.auth = Some(CollectionAuth { enabled: true, ..Default::default() });
         let s = collection_input_schema(&def, CrudOp::Update);
         // password appears but is not required (optional change)
         assert!(s["properties"]["password"].is_object());
@@ -896,11 +832,7 @@ mod tests {
 
     #[test]
     fn collection_find_by_id_schema() {
-        let def = CollectionDefinition {
-            slug: "posts".to_string(),
-            fields: vec![],
-            ..Default::default()
-        };
+        let def = CollectionDefinition::new("posts");
         let s = collection_input_schema(&def, CrudOp::FindById);
         assert!(s["properties"]["id"].is_object());
         assert!(s["properties"]["depth"].is_object());
@@ -912,11 +844,8 @@ mod tests {
 
     #[test]
     fn global_input_schema_other_ops_return_empty() {
-        let def = GlobalDefinition {
-            slug: "settings".to_string(),
-            fields: vec![text_field("site_name")],
-            ..Default::default()
-        };
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![text_field("site_name")];
         // Delete, Create, FindById all fall through to the `_` arm → empty schema
         for op in &[CrudOp::Delete, CrudOp::Create, CrudOp::FindById] {
             let s = global_input_schema(&def, *op);

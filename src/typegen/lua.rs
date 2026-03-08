@@ -332,9 +332,6 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::{
-        CollectionAccess, CollectionAdmin, CollectionHooks, CollectionLabels,
-    };
     use crate::core::field::{LocalizedString, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
@@ -352,10 +349,7 @@ mod tests {
             required,
             options: opts
                 .iter()
-                .map(|v| SelectOption {
-                    label: LocalizedString::Plain(v.to_string()),
-                    value: v.to_string(),
-                })
+                .map(|v| SelectOption::new(LocalizedString::Plain(v.to_string()), *v))
                 .collect(),
             ..Default::default()
         }
@@ -416,26 +410,14 @@ mod tests {
 
     #[test]
     fn render_collection_output() {
-        let col = CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![
-                text_field("title", true),
-                text_field("content", false),
-                select_field("status", true, &["draft", "published"]),
-                checkbox_field("active"),
-            ],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        };
+        let mut col = CollectionDefinition::new("posts");
+        col.timestamps = true;
+        col.fields = vec![
+            text_field("title", true),
+            text_field("content", false),
+            select_field("status", true, &["draft", "published"]),
+            checkbox_field("active"),
+        ];
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -467,21 +449,9 @@ mod tests {
 
     #[test]
     fn render_collection_no_timestamps() {
-        let col = CollectionDefinition {
-            slug: "tags".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: false,
-            fields: vec![text_field("name", true)],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        };
+        let mut col = CollectionDefinition::new("tags");
+        col.timestamps = false;
+        col.fields = vec![text_field("name", true)];
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -492,19 +462,11 @@ mod tests {
 
     #[test]
     fn render_global_output() {
-        let global = GlobalDefinition {
-            slug: "site_settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                text_field("site_name", true),
-                text_field("tagline", false),
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut global = GlobalDefinition::new("site_settings");
+        global.fields = vec![
+            text_field("site_name", true),
+            text_field("tagline", false),
+        ];
 
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -519,26 +481,18 @@ mod tests {
 
     #[test]
     fn render_global_array_row() {
-        let global = GlobalDefinition {
-            slug: "navigation".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "main_nav".to_string(),
-                    field_type: FieldType::Array,
-                    fields: vec![
-                        text_field("label", true),
-                        text_field("url", true),
-                    ],
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut global = GlobalDefinition::new("navigation");
+        global.fields = vec![
+            FieldDefinition {
+                name: "main_nav".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![
+                    text_field("label", true),
+                    text_field("url", true),
+                ],
+                ..Default::default()
+            },
+        ];
 
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -549,16 +503,8 @@ mod tests {
 
     #[test]
     fn render_global_hook_context_fields() {
-        let global = GlobalDefinition {
-            slug: "footer".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![text_field("copyright", true)],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut global = GlobalDefinition::new("footer");
+        global.fields = vec![text_field("copyright", true)];
 
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -571,32 +517,12 @@ mod tests {
     #[test]
     fn render_sorted_output() {
         let mut registry = Registry::new();
-        registry.register_collection(CollectionDefinition {
-            slug: "zebras".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None, upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None, versions: None,
-            indexes: Vec::new(),
-        });
-        registry.register_collection(CollectionDefinition {
-            slug: "apples".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None, upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None, versions: None,
-            indexes: Vec::new(),
-        });
+        let mut zebras = CollectionDefinition::new("zebras");
+        zebras.timestamps = true;
+        registry.register_collection(zebras);
+        let mut apples = CollectionDefinition::new("apples");
+        apples.timestamps = true;
+        registry.register_collection(apples);
 
         let output = render(&registry);
         let apples_pos = output.find("crap.data.Apples").expect("write to String");
@@ -607,32 +533,14 @@ mod tests {
     #[test]
     fn render_find_overloads_output() {
         let mut registry = Registry::new();
-        registry.register_collection(CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![text_field("title", true)],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None, upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None, versions: None,
-            indexes: Vec::new(),
-        });
-        registry.register_collection(CollectionDefinition {
-            slug: "pages".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![text_field("body", false)],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None, upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None, versions: None,
-            indexes: Vec::new(),
-        });
+        let mut posts = CollectionDefinition::new("posts");
+        posts.timestamps = true;
+        posts.fields = vec![text_field("title", true)];
+        registry.register_collection(posts);
+        let mut pages = CollectionDefinition::new("pages");
+        pages.timestamps = true;
+        pages.fields = vec![text_field("body", false)];
+        registry.register_collection(pages);
 
         let output = render(&registry);
         assert!(output.contains("---@overload fun(collection: \"pages\""));
@@ -655,12 +563,7 @@ mod tests {
         let f = FieldDefinition {
             name: "tags".to_string(),
             field_type: FieldType::Relationship,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "tags".to_string(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(crate::core::field::RelationshipConfig::new("tags", true)),
             ..Default::default()
         };
         assert_eq!(field_to_lua_type(&f), "string[]");
@@ -668,16 +571,13 @@ mod tests {
 
     #[test]
     fn lua_polymorphic_has_one_type() {
+        let mut rc = crate::core::field::RelationshipConfig::new("posts", false);
+        rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let f = FieldDefinition {
             name: "subject".to_string(),
             field_type: FieldType::Relationship,
             required: true,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "posts".to_string(),
-                has_many: false,
-                max_depth: None,
-                polymorphic: vec!["posts".to_string(), "pages".to_string()],
-            }),
+            relationship: Some(rc),
             ..Default::default()
         };
         // Polymorphic has-one stores "collection/id" composite as string
@@ -686,15 +586,12 @@ mod tests {
 
     #[test]
     fn lua_polymorphic_has_many_type() {
+        let mut rc = crate::core::field::RelationshipConfig::new("articles", true);
+        rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
         let f = FieldDefinition {
             name: "related".to_string(),
             field_type: FieldType::Relationship,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "articles".to_string(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec!["articles".to_string(), "videos".to_string()],
-            }),
+            relationship: Some(rc),
             ..Default::default()
         };
         // Polymorphic has-many stores array of "collection/id" composites
@@ -703,32 +600,18 @@ mod tests {
 
     #[test]
     fn lua_polymorphic_comment_emitted() {
-        let col = CollectionDefinition {
-            slug: "comments".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: false,
-            fields: vec![
-                FieldDefinition {
-                    name: "subject".to_string(),
-                    field_type: FieldType::Relationship,
-                    required: true,
-                    relationship: Some(crate::core::field::RelationshipConfig {
-                        collection: "posts".to_string(),
-                        has_many: false,
-                        max_depth: None,
-                        polymorphic: vec!["posts".to_string(), "pages".to_string()],
-                    }),
-                    ..Default::default()
-                },
-            ],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None, upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None, versions: None,
-            indexes: Vec::new(),
-        };
+        let mut rc = crate::core::field::RelationshipConfig::new("posts", false);
+        rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
+        let mut col = CollectionDefinition::new("comments");
+        col.fields = vec![
+            FieldDefinition {
+                name: "subject".to_string(),
+                field_type: FieldType::Relationship,
+                required: true,
+                relationship: Some(rc),
+                ..Default::default()
+            },
+        ];
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
@@ -742,12 +625,7 @@ mod tests {
             name: "author".to_string(),
             field_type: FieldType::Relationship,
             required: true,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "users".to_string(),
-                has_many: false,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(crate::core::field::RelationshipConfig::new("users", false)),
             ..Default::default()
         };
         assert_eq!(field_to_lua_type(&f), "string");
@@ -789,12 +667,7 @@ mod tests {
         let f = FieldDefinition {
             name: "images".to_string(),
             field_type: FieldType::Upload,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: String::new(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(crate::core::field::RelationshipConfig::new("", true)),
             ..Default::default()
         };
         assert_eq!(field_to_lua_type(&f), "string[]");
@@ -874,29 +747,18 @@ mod tests {
 
     #[test]
     fn render_collection_with_array_subtype() {
-        let col = CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: false,
-            fields: vec![
-                FieldDefinition {
-                    name: "items".to_string(),
-                    field_type: FieldType::Array,
-                    fields: vec![
-                        text_field("label", true),
-                        text_field("desc", false),
-                    ],
-                    ..Default::default()
-                },
-            ],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None, upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None, versions: None,
-            indexes: Vec::new(),
-        };
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![
+            FieldDefinition {
+                name: "items".to_string(),
+                field_type: FieldType::Array,
+                fields: vec![
+                    text_field("label", true),
+                    text_field("desc", false),
+                ],
+                ..Default::default()
+            },
+        ];
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("---@class crap.array_row.Items"));
@@ -936,8 +798,8 @@ mod tests {
             field_type: FieldType::Select,
             has_many: true,
             options: vec![
-                SelectOption { label: LocalizedString::Plain("A".into()), value: "a".into() },
-                SelectOption { label: LocalizedString::Plain("B".into()), value: "b".into() },
+                SelectOption::new(LocalizedString::Plain("A".into()), "a"),
+                SelectOption::new(LocalizedString::Plain("B".into()), "b"),
             ],
             ..Default::default()
         };
@@ -959,42 +821,27 @@ mod tests {
     #[test]
     fn lua_row_collapsible_tabs_promote_subfields() {
         use crate::core::field::FieldTab;
-        let col = CollectionDefinition {
-            slug: "items".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: false,
-            fields: vec![
-                FieldDefinition {
-                    name: "layout_row".to_string(),
-                    field_type: FieldType::Row,
-                    fields: vec![text_field("first_name", true), text_field("last_name", false)],
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "details".to_string(),
-                    field_type: FieldType::Collapsible,
-                    fields: vec![text_field("bio", false)],
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "sections".to_string(),
-                    field_type: FieldType::Tabs,
-                    tabs: vec![FieldTab {
-                        label: "Tab1".to_string(),
-                        description: None,
-                        fields: vec![text_field("tab_field", true)],
-                    }],
-                    ..Default::default()
-                },
-            ],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None, upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None, versions: None,
-            indexes: Vec::new(),
-        };
+        let mut col = CollectionDefinition::new("items");
+        col.fields = vec![
+            FieldDefinition {
+                name: "layout_row".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![text_field("first_name", true), text_field("last_name", false)],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "details".to_string(),
+                field_type: FieldType::Collapsible,
+                fields: vec![text_field("bio", false)],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "sections".to_string(),
+                field_type: FieldType::Tabs,
+                tabs: vec![FieldTab::new("Tab1", vec![text_field("tab_field", true)])],
+                ..Default::default()
+            },
+        ];
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Row sub-fields promoted — "layout_row" should not appear as a @field
@@ -1030,18 +877,14 @@ mod tests {
             FieldDefinition {
                 name: "tab_container".to_string(),
                 field_type: FieldType::Tabs,
-                tabs: vec![FieldTab {
-                    label: "T".to_string(),
-                    description: None,
-                    fields: vec![
-                        FieldDefinition {
-                            name: "tab_items".to_string(),
-                            field_type: FieldType::Array,
-                            fields: vec![text_field("name", true)],
-                            ..Default::default()
-                        },
-                    ],
-                }],
+                tabs: vec![FieldTab::new("T", vec![
+                    FieldDefinition {
+                        name: "tab_items".to_string(),
+                        field_type: FieldType::Array,
+                        fields: vec![text_field("name", true)],
+                        ..Default::default()
+                    },
+                ])],
                 ..Default::default()
             },
             // Nested array inside an array (recursion)

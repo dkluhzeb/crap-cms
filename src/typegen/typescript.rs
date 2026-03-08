@@ -224,9 +224,6 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::{
-        CollectionAccess, CollectionAdmin, CollectionHooks, CollectionLabels,
-    };
     use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
@@ -242,29 +239,18 @@ mod tests {
             name: name.to_string(),
             field_type: FieldType::Select,
             required: true,
-            options: opts.iter().map(|v| SelectOption {
-                label: LocalizedString::Plain(v.to_string()), value: v.to_string(),
-            }).collect(),
+            options: opts.iter().map(|v| SelectOption::new(
+                LocalizedString::Plain(v.to_string()), *v,
+            )).collect(),
             ..Default::default()
         }
     }
 
     fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
-        CollectionDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields,
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new(slug);
+        def.timestamps = true;
+        def.fields = fields;
+        def
     }
 
     #[test]
@@ -290,14 +276,8 @@ mod tests {
 
     #[test]
     fn typescript_global_output() {
-        let global = GlobalDefinition {
-            slug: "site_settings".to_string(), labels: CollectionLabels::default(),
-            fields: vec![text_field("site_name", true)],
-            hooks: CollectionHooks::default(), access: CollectionAccess::default(),
-            live: None,
-            versions: None,
-            mcp: Default::default(),
-        };
+        let mut global = GlobalDefinition::new("site_settings");
+        global.fields = vec![text_field("site_name", true)];
 
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -312,12 +292,7 @@ mod tests {
             FieldDefinition {
                 name: "tags".to_string(),
                 field_type: FieldType::Relationship,
-                relationship: Some(RelationshipConfig {
-                    collection: "tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("tags", true)),
                 ..Default::default()
             },
         ]);
@@ -328,17 +303,14 @@ mod tests {
 
     #[test]
     fn typescript_polymorphic_has_one() {
+        let mut rc = RelationshipConfig::new("posts", false);
+        rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let col = make_col("comments", vec![
             FieldDefinition {
                 name: "subject".to_string(),
                 field_type: FieldType::Relationship,
                 required: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "posts".to_string(),
-                    has_many: false,
-                    max_depth: None,
-                    polymorphic: vec!["posts".to_string(), "pages".to_string()],
-                }),
+                relationship: Some(rc),
                 ..Default::default()
             },
         ]);
@@ -354,17 +326,14 @@ mod tests {
 
     #[test]
     fn typescript_polymorphic_has_many() {
+        let mut rc = RelationshipConfig::new("articles", true);
+        rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
         let col = make_col("posts", vec![
             FieldDefinition {
                 name: "related".to_string(),
                 field_type: FieldType::Relationship,
                 has_many: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "articles".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec!["articles".to_string(), "videos".to_string()],
-                }),
+                relationship: Some(rc),
                 ..Default::default()
             },
         ]);
@@ -384,12 +353,7 @@ mod tests {
                 name: "author".to_string(),
                 field_type: FieldType::Relationship,
                 required: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "users".to_string(),
-                    has_many: false,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("users", false)),
                 ..Default::default()
             },
         ]);
@@ -456,16 +420,13 @@ mod tests {
 
     #[test]
     fn typescript_blocks_field() {
+        let mut bd = BlockDefinition::new("text", vec![text_field("body", true)]);
+        bd.label = Some(LocalizedString::Plain("Text".to_string()));
         let col = make_col("pages", vec![
             FieldDefinition {
                 name: "content".to_string(),
                 field_type: FieldType::Blocks,
-                blocks: vec![BlockDefinition {
-                    block_type: "text".to_string(),
-                    fields: vec![text_field("body", true)],
-                    label: Some(LocalizedString::Plain("Text".to_string())),
-                    ..Default::default()
-                }],
+                blocks: vec![bd],
                 ..Default::default()
             },
         ]);
@@ -491,12 +452,7 @@ mod tests {
                 name: "images".to_string(),
                 field_type: FieldType::Upload,
                 required: true,
-                relationship: Some(RelationshipConfig {
-                    collection: String::new(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("", true)),
                 ..Default::default()
             },
         ]);
@@ -626,8 +582,8 @@ mod tests {
                 has_many: true,
                 required: true,
                 options: vec![
-                    SelectOption { label: LocalizedString::Plain("A".into()), value: "a".into() },
-                    SelectOption { label: LocalizedString::Plain("B".into()), value: "b".into() },
+                    SelectOption::new(LocalizedString::Plain("A".into()), "a"),
+                    SelectOption::new(LocalizedString::Plain("B".into()), "b"),
                 ],
                 ..Default::default()
             },
@@ -655,8 +611,8 @@ mod tests {
                 has_many: true,
                 required: true,
                 options: vec![
-                    SelectOption { label: LocalizedString::Plain("S".into()), value: "s".into() },
-                    SelectOption { label: LocalizedString::Plain("L".into()), value: "l".into() },
+                    SelectOption::new(LocalizedString::Plain("S".into()), "s"),
+                    SelectOption::new(LocalizedString::Plain("L".into()), "l"),
                 ],
                 ..Default::default()
             },
@@ -685,11 +641,7 @@ mod tests {
             FieldDefinition {
                 name: "sections".to_string(),
                 field_type: FieldType::Tabs,
-                tabs: vec![FieldTab {
-                    label: "Tab1".to_string(),
-                    description: None,
-                    fields: vec![text_field("tab_field", true)],
-                }],
+                tabs: vec![FieldTab::new("Tab1", vec![text_field("tab_field", true)])],
                 ..Default::default()
             },
         ]);
@@ -711,16 +663,9 @@ mod tests {
     fn typescript_full_render_with_globals() {
         let mut registry = Registry::new();
         registry.register_collection(make_col("posts", vec![text_field("title", true)]));
-        registry.register_global(GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![text_field("name", true)],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        });
+        let mut settings = GlobalDefinition::new("settings");
+        settings.fields = vec![text_field("name", true)];
+        registry.register_global(settings);
         let out = render(&registry);
         assert!(out.contains("Auto-generated"));
         assert!(out.contains("export interface PostsData {"));

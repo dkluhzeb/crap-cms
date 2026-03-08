@@ -121,7 +121,11 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         .context("Failed to sync database schema")?;
 
     // Initialize Lua hook runner (with registry for CRUD access in hooks)
-    let hook_runner = crate::hooks::lifecycle::HookRunner::new(&config_dir, registry.clone(), &cfg)?;
+    let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&cfg)
+        .build()?;
 
     // Run on_init hooks (synchronous — failure aborts startup)
     if !cfg.hooks.on_init.is_empty() {

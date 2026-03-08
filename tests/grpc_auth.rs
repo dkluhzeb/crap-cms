@@ -23,69 +23,50 @@ use crap_cms::hooks::lifecycle::HookRunner;
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 fn make_posts_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "posts".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Post".to_string())),
-            plural: Some(LocalizedString::Plain("Posts".to_string())),
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "status".to_string(),
-                field_type: FieldType::Select,
-                default_value: Some(serde_json::json!("draft")),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+        FieldDefinition {
+            name: "status".to_string(),
+            field_type: FieldType::Select,
+            default_value: Some(serde_json::json!("draft")),
+            ..Default::default()
+        },
+    ];
+    def
 }
 
 fn make_users_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "users".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("User".to_string())),
-            plural: Some(LocalizedString::Plain("Users".to_string())),
+    let mut def = CollectionDefinition::new("users");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("User".to_string())),
+        plural: Some(LocalizedString::Plain("Users".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            required: true,
+            unique: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "email".to_string(),
-                field_type: FieldType::Email,
-                required: true,
-                unique: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "name".to_string(),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: Some(CollectionAuth { enabled: true, ..Default::default() }),
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+        FieldDefinition {
+            name: "name".to_string(),
+            ..Default::default()
+        },
+    ];
+    def.auth = Some(CollectionAuth { enabled: true, ..Default::default() });
+    def
 }
 
 /// Build a prost Struct from key-value string pairs.
@@ -143,7 +124,12 @@ fn setup_service(
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
+        HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(registry.clone())
+            .config(&config)
+            .build()
+            .expect("create hook runner");
 
     let email_renderer =
         Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
@@ -171,36 +157,25 @@ fn setup_service(
 }
 
 fn make_verify_users_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "members".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Member".to_string())),
-            plural: Some(LocalizedString::Plain("Members".to_string())),
-        },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "email".to_string(),
-                field_type: FieldType::Email,
-                required: true,
-                unique: true,
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: Some(CollectionAuth {
-            enabled: true,
-            verify_email: true,
-            ..Default::default()
-        }),
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("members");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Member".to_string())),
+        plural: Some(LocalizedString::Plain("Members".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![FieldDefinition {
+        name: "email".to_string(),
+        field_type: FieldType::Email,
+        required: true,
+        unique: true,
+        ..Default::default()
+    }];
+    def.auth = Some(CollectionAuth {
+        enabled: true,
+        verify_email: true,
+        ..Default::default()
+    });
+    def
 }
 
 // ── Auth Tests ────────────────────────────────────────────────────────────

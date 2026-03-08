@@ -138,16 +138,9 @@ mod tests {
     }
 
     fn simple_global(slug: &str, fields: Vec<FieldDefinition>) -> GlobalDefinition {
-        GlobalDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels::default(),
-            fields,
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        }
+        let mut def = GlobalDefinition::new(slug);
+        def.fields = fields;
+        def
     }
 
     fn text_field(name: &str) -> FieldDefinition {
@@ -336,7 +329,7 @@ mod tests {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_global("settings", vec![text_field("name")]);
-        def.versions = Some(VersionsConfig { drafts: true, max_versions: 5 });
+        def.versions = Some(VersionsConfig::new(true, 5));
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "_versions__global_settings").unwrap());
@@ -358,7 +351,7 @@ mod tests {
 
         // Now enable drafts
         let mut def2 = simple_global("settings", vec![text_field("name")]);
-        def2.versions = Some(VersionsConfig { drafts: true, max_versions: 5 });
+        def2.versions = Some(VersionsConfig::new(true, 5));
         sync_global_table(&conn, "settings", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -418,8 +411,8 @@ mod tests {
                 name: "layout".to_string(),
                 field_type: FieldType::Tabs,
                 tabs: vec![
-                    FieldTab { label: "General".to_string(), description: None, fields: vec![text_field("site_name")] },
-                    FieldTab { label: "Footer".to_string(), description: None, fields: vec![text_field("copyright")] },
+                    FieldTab::new("General", vec![text_field("site_name")]),
+                    FieldTab::new("Footer", vec![text_field("copyright")]),
                 ],
                 ..Default::default()
             },
@@ -444,18 +437,14 @@ mod tests {
                 name: "layout".to_string(),
                 field_type: FieldType::Tabs,
                 tabs: vec![
-                    FieldTab {
-                        label: "Social".to_string(),
-                        description: None,
-                        fields: vec![
-                            FieldDefinition {
-                                name: "social".to_string(),
-                                field_type: FieldType::Group,
-                                fields: vec![text_field("github"), text_field("twitter")],
-                                ..Default::default()
-                            },
-                        ],
-                    },
+                    FieldTab::new("Social", vec![
+                        FieldDefinition {
+                            name: "social".to_string(),
+                            field_type: FieldType::Group,
+                            fields: vec![text_field("github"), text_field("twitter")],
+                            ..Default::default()
+                        },
+                    ]),
                 ],
                 ..Default::default()
             },
@@ -512,18 +501,14 @@ mod tests {
                 name: "layout".to_string(),
                 field_type: FieldType::Tabs,
                 tabs: vec![
-                    FieldTab {
-                        label: "Social".to_string(),
-                        description: None,
-                        fields: vec![
-                            FieldDefinition {
-                                name: "social".to_string(),
-                                field_type: FieldType::Group,
-                                fields: vec![text_field("github")],
-                                ..Default::default()
-                            },
-                        ],
-                    },
+                    FieldTab::new("Social", vec![
+                        FieldDefinition {
+                            name: "social".to_string(),
+                            field_type: FieldType::Group,
+                            fields: vec![text_field("github")],
+                            ..Default::default()
+                        },
+                    ]),
                 ],
                 ..Default::default()
             },
@@ -546,26 +531,22 @@ mod tests {
                 name: "layout".to_string(),
                 field_type: FieldType::Tabs,
                 tabs: vec![
-                    FieldTab {
-                        label: "Advanced".to_string(),
-                        description: None,
-                        fields: vec![
-                            FieldDefinition {
-                                name: "advanced".to_string(),
-                                field_type: FieldType::Collapsible,
-                                fields: vec![
-                                    FieldDefinition {
-                                        name: "og".to_string(),
-                                        field_type: FieldType::Group,
-                                        fields: vec![text_field("image")],
-                                        ..Default::default()
-                                    },
-                                    text_field("canonical"),
-                                ],
-                                ..Default::default()
-                            },
-                        ],
-                    },
+                    FieldTab::new("Advanced", vec![
+                        FieldDefinition {
+                            name: "advanced".to_string(),
+                            field_type: FieldType::Collapsible,
+                            fields: vec![
+                                FieldDefinition {
+                                    name: "og".to_string(),
+                                    field_type: FieldType::Group,
+                                    fields: vec![text_field("image")],
+                                    ..Default::default()
+                                },
+                                text_field("canonical"),
+                            ],
+                            ..Default::default()
+                        },
+                    ]),
                 ],
                 ..Default::default()
             },
@@ -618,16 +599,8 @@ mod tests {
                         name: "layout".to_string(),
                         field_type: FieldType::Tabs,
                         tabs: vec![
-                            FieldTab {
-                                label: "General".to_string(),
-                                description: None,
-                                fields: vec![text_field("site_name")],
-                            },
-                            FieldTab {
-                                label: "Social".to_string(),
-                                description: None,
-                                fields: vec![text_field("twitter")],
-                            },
+                            FieldTab::new("General", vec![text_field("site_name")]),
+                            FieldTab::new("Social", vec![text_field("twitter")]),
                         ],
                         ..Default::default()
                     },
@@ -654,18 +627,14 @@ mod tests {
                     FieldDefinition {
                         name: "t".to_string(),
                         field_type: FieldType::Tabs,
-                        tabs: vec![FieldTab {
-                            label: "Tab".to_string(),
-                            description: None,
-                            fields: vec![
-                                FieldDefinition {
-                                    name: "b".to_string(),
-                                    field_type: FieldType::Group,
-                                    fields: vec![text_field("leaf")],
-                                    ..Default::default()
-                                },
-                            ],
-                        }],
+                        tabs: vec![FieldTab::new("Tab", vec![
+                            FieldDefinition {
+                                name: "b".to_string(),
+                                field_type: FieldType::Group,
+                                fields: vec![text_field("leaf")],
+                                ..Default::default()
+                            },
+                        ])],
                         ..Default::default()
                     },
                 ],

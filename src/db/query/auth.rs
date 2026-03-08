@@ -292,33 +292,18 @@ mod tests {
     use crate::core::field::*;
 
     fn auth_def() -> CollectionDefinition {
-        CollectionDefinition {
-            slug: "users".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![
-                FieldDefinition {
-                    name: "email".to_string(),
-                    field_type: FieldType::Email,
-                    required: true,
-                    unique: true,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "name".to_string(),
-                    ..Default::default()
-                },
-            ],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-        versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new("users");
+        def.fields = vec![
+            FieldDefinition {
+                name: "email".to_string(),
+                field_type: FieldType::Email,
+                required: true,
+                unique: true,
+                ..Default::default()
+            },
+            FieldDefinition { name: "name".to_string(), ..Default::default() },
+        ];
+        def
     }
 
     fn setup_auth_db() -> Connection {

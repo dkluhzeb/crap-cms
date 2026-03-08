@@ -26,7 +26,11 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
         .context("Failed to sync database schema")?;
 
-    let hook_runner = crate::hooks::lifecycle::HookRunner::new(&config_dir, registry.clone(), &cfg)?;
+    let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&cfg)
+        .build()?;
 
     let registry_snapshot = crate::core::Registry::snapshot(&registry);
 

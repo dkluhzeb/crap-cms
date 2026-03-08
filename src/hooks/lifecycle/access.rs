@@ -10,7 +10,7 @@ use crate::db::query::{AccessResult, Filter, FilterClause, FilterOp};
 
 use super::DefaultDeny;
 use super::converters::{document_to_lua_table, lua_parse_filter_op};
-use super::resolve_hook_function;
+use super::execution::resolve_hook_function;
 
 /// Check collection-level access using an already-held `&Lua` reference.
 /// Does NOT lock the VM or manage TxContext — caller must ensure those are set.
@@ -154,6 +154,7 @@ pub(crate) fn check_field_write_access_with_lua(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::document::DocumentBuilder;
     use crate::core::field::{FieldAccess, FieldType};
     use mlua::Lua;
 
@@ -246,12 +247,7 @@ mod tests {
         let mut fields = HashMap::new();
         fields.insert("role".to_string(), serde_json::json!(role));
         fields.insert("email".to_string(), serde_json::json!("user@test.com"));
-        Document {
-            id: "user-1".to_string(),
-            fields,
-            created_at: None,
-            updated_at: None,
-        }
+        DocumentBuilder::new("user-1").fields(fields).build()
     }
 
     // ── check_access_with_lua ───────────────────────────────────────────

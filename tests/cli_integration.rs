@@ -7,13 +7,11 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crap_cms::commands;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
-use crap_cms::db::{migrate, ops, pool, query, DbPool};
+use crap_cms::db::{migrate, pool, query, DbPool};
 use crap_cms::hooks;
 use crap_cms::scaffold;
-use crap_cms::typegen;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -50,26 +48,6 @@ fn copy_dir(src: &Path, dst: &Path) {
         let entry = entry.unwrap();
         let src_path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir(&src_path, &dst_path);
-        } else {
-            std::fs::copy(&src_path, &dst_path).unwrap();
-        }
-    }
-}
-
-/// Recursively copy a directory, skipping named subdirs/files.
-fn copy_dir_skip(src: &Path, dst: &Path, skip: &[&str]) {
-    std::fs::create_dir_all(dst).unwrap();
-    for entry in std::fs::read_dir(src).unwrap() {
-        let entry = entry.unwrap();
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if skip.iter().any(|s| *s == name_str.as_ref()) {
-            continue;
-        }
-        let src_path = entry.path();
-        let dst_path = dst.join(&name);
         if src_path.is_dir() {
             copy_dir(&src_path, &dst_path);
         } else {

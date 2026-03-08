@@ -471,11 +471,10 @@ mod tests {
     #[test]
     fn field_def_to_proto_with_relationship() {
         let field = FieldDefinition {
-            relationship: Some(RelationshipConfig {
-                collection: "authors".to_string(),
-                has_many: true,
-                max_depth: Some(3),
-                polymorphic: vec![],
+            relationship: Some({
+                let mut rc = RelationshipConfig::new("authors", true);
+                rc.max_depth = Some(3);
+                rc
             }),
             ..make_field("author", FieldType::Relationship)
         };
@@ -491,14 +490,8 @@ mod tests {
     fn field_def_to_proto_with_options() {
         let field = FieldDefinition {
             options: vec![
-                SelectOption {
-                    label: LocalizedString::Plain("Draft".to_string()),
-                    value: "draft".to_string(),
-                },
-                SelectOption {
-                    label: LocalizedString::Plain("Published".to_string()),
-                    value: "published".to_string(),
-                },
+                SelectOption::new(LocalizedString::Plain("Draft".to_string()), "draft"),
+                SelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
             ],
             ..make_field("status", FieldType::Select)
         };
@@ -514,14 +507,11 @@ mod tests {
     #[test]
     fn field_def_to_proto_with_blocks() {
         let field = FieldDefinition {
-            blocks: vec![
-                BlockDefinition {
-                    block_type: "text_block".to_string(),
-                    label: Some(LocalizedString::Plain("Text Block".to_string())),
-                    fields: vec![make_field("body", FieldType::Textarea)],
-                    ..Default::default()
-                },
-            ],
+            blocks: vec![{
+                let mut bd = BlockDefinition::new("text_block", vec![make_field("body", FieldType::Textarea)]);
+                bd.label = Some(LocalizedString::Plain("Text Block".to_string()));
+                bd
+            }],
             ..make_field("content", FieldType::Blocks)
         };
 

@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use crate::config::{CrapConfig, CompressionMode};
 use crate::core::Registry;
 use crate::core::auth::{self, AuthUser};
+use crate::core::auth::ClaimsBuilder;
 use crate::core::event::EventBus;
 use crate::db::DbPool;
 use crate::db::query;
@@ -491,12 +492,10 @@ async fn auth_middleware(
                                 .unwrap_or("")
                                 .to_string();
                             let expiry = auth_config.token_expiry;
-                            let claims = auth::Claims {
-                                sub: user.id.clone(),
-                                collection: slug.clone(),
-                                email: user_email,
-                                exp: (chrono::Utc::now().timestamp() as u64) + expiry,
-                            };
+                            let claims = ClaimsBuilder::new(&user.id, slug)
+                                .email(user_email)
+                                .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+                                .build();
                             result = Some((claims, jwt_secret.clone()));
                             break;
                         }
@@ -619,11 +618,9 @@ pub(crate) fn load_auth_user(
         .and_then(|v| v.get("ui_locale").and_then(|l| l.as_str()).map(|s| s.to_string()))
         .unwrap_or_else(|| locale_config.default_locale.clone());
 
-    Some(AuthUser {
-        claims: claims.clone(),
-        user_doc: doc,
-        ui_locale,
-    })
+    let mut auth = AuthUser::new(claims.clone(), doc);
+    auth.ui_locale = ui_locale;
+    Some(auth)
 }
 
 /// Extract a named cookie value from a Cookie header string.

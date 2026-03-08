@@ -18,7 +18,12 @@ fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRe
     // Sync schema so tables exist
     migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
 
-    let runner = HookRunner::new(&config_dir, registry.clone(), &config).unwrap();
+    let runner = HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .unwrap();
     (tmp, db_pool, registry, runner)
 }
 
@@ -242,10 +247,8 @@ fn constrained_find_filters_results() {
         }),
     ];
 
-    let find_query = query::FindQuery {
-        filters: constraint_filters,
-        ..Default::default()
-    };
+    let mut find_query = query::FindQuery::new();
+    find_query.filters = constraint_filters;
 
     let docs = ops::find_documents(&pool, "posts", &posts, &find_query, None).unwrap();
 
@@ -305,7 +308,7 @@ fn access_check_plus_db_query_end_to_end() {
 fn field_read_access_strips_denied_fields() {
     // Test check_field_read_access() with a field that has a deny_all read access
     // function. The denied field name should appear in the returned list.
-    let (_tmp, pool, registry, runner) = setup();
+    let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
     // Build fields: one normal, one with read access that always denies, one normal
@@ -460,5 +463,45 @@ fn no_access_config_means_allowed() {
     assert!(
         denied_write_update.is_empty(),
         "Fields with no access config should not be denied for update"
+    );
+}
+
+/// Regression: HookRunner::check_access must consult DefaultDeny when access_ref is None.
+/// Previously, check_access short-circuited to Allowed before reaching the DefaultDeny check.
+#[test]
+fn default_deny_true_no_access_ref_returns_denied() {
+    let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
+    let mut config = CrapConfig::default();
+    config.access.default_deny = true;
+
+    let registry = hooks::init_lua(&config_dir, &config).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let db_pool = pool::create_pool(tmp.path(), &config).unwrap();
+    migrate::sync_all(&db_pool, &registry, &config.locale).unwrap();
+
+    let runner = HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .unwrap();
+
+    let conn = db_pool.get().unwrap();
+
+    // No access function configured + default_deny = true → must be Denied
+    let result = runner.check_access(None, None, None, None, &conn).unwrap();
+    assert!(
+        matches!(result, query::AccessResult::Denied),
+        "With default_deny=true and no access ref, expected Denied, got: {:?}",
+        result
+    );
+
+    // Even with a user present, no access function + default_deny → Denied
+    let user = make_user_doc("user-1", "editor");
+    let result = runner.check_access(None, Some(&user), None, None, &conn).unwrap();
+    assert!(
+        matches!(result, query::AccessResult::Denied),
+        "With default_deny=true, user present, and no access ref, expected Denied, got: {:?}",
+        result
     );
 }

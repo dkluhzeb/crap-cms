@@ -41,11 +41,9 @@ pub async fn search_collection(
     let locale_ctx = crate::db::query::LocaleContext::from_locale_string(
         None, &state.config.locale,
     );
-    let find_query = query::FindQuery {
-        limit: Some(limit as i64),
-        search: if search_term.is_empty() { None } else { Some(search_term.clone()) },
-        ..Default::default()
-    };
+    let mut find_query = query::FindQuery::new();
+    find_query.limit = Some(limit as i64);
+    find_query.search = if search_term.is_empty() { None } else { Some(search_term.clone()) };
     let Ok(mut docs) = query::find(&conn, &slug, def, &find_query, locale_ctx.as_ref()) else {
         return axum::Json(serde_json::json!([]));
     };

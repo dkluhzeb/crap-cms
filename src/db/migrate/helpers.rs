@@ -313,7 +313,7 @@ mod tests {
     use super::*;
     use crate::config::LocaleConfig;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType, RelationshipConfig};
+    use crate::core::field::{FieldDefinition, FieldType, FieldTab, RelationshipConfig};
     use crate::db::DbPool;
 
     fn in_memory_pool() -> DbPool {
@@ -341,21 +341,9 @@ mod tests {
     }
 
     fn simple_collection(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
-        CollectionDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields,
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new(slug);
+        def.fields = fields;
+        def
     }
 
     fn text_field(name: &str) -> FieldDefinition {
@@ -407,12 +395,7 @@ mod tests {
             FieldDefinition {
                 name: "tags".to_string(),
                 field_type: FieldType::Relationship,
-                relationship: Some(RelationshipConfig {
-                    collection: "tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("tags", true)),
                 ..Default::default()
             },
         ]);
@@ -487,11 +470,7 @@ mod tests {
             name: "page_settings".to_string(),
             field_type: FieldType::Tabs,
             tabs: vec![
-                crate::core::field::FieldTab {
-                    label: "Content".to_string(),
-                    description: None,
-                    fields: vec![blocks_field],
-                },
+                FieldTab::new("Content", vec![blocks_field]),
             ],
             ..Default::default()
         };
@@ -575,12 +554,7 @@ mod tests {
                 name: "tags".to_string(),
                 field_type: FieldType::Relationship,
                 localized: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("tags", true)),
                 ..Default::default()
             },
         ]);
@@ -669,12 +643,7 @@ mod tests {
                 name: "tags".to_string(),
                 field_type: FieldType::Relationship,
                 localized: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("tags", true)),
                 ..Default::default()
             },
         ]);
@@ -784,7 +753,6 @@ mod tests {
 
     #[test]
     fn column_specs_group_containing_tabs() {
-        use crate::core::field::FieldTab;
         let fields = vec![
             FieldDefinition {
                 name: "settings".to_string(),
@@ -794,16 +762,8 @@ mod tests {
                         name: "t".to_string(),
                         field_type: FieldType::Tabs,
                         tabs: vec![
-                            FieldTab {
-                                label: "General".to_string(),
-                                description: None,
-                                fields: vec![text_field("theme")],
-                            },
-                            FieldTab {
-                                label: "Advanced".to_string(),
-                                description: None,
-                                fields: vec![text_field("cache_ttl")],
-                            },
+                            FieldTab::new("General", vec![text_field("theme")]),
+                            FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
                         ],
                         ..Default::default()
                     },
@@ -819,7 +779,6 @@ mod tests {
 
     #[test]
     fn column_specs_group_tabs_group_three_levels() {
-        use crate::core::field::FieldTab;
         let fields = vec![
             FieldDefinition {
                 name: "outer".to_string(),
@@ -828,18 +787,14 @@ mod tests {
                     FieldDefinition {
                         name: "t".to_string(),
                         field_type: FieldType::Tabs,
-                        tabs: vec![FieldTab {
-                            label: "Tab".to_string(),
-                            description: None,
-                            fields: vec![
-                                FieldDefinition {
-                                    name: "inner".to_string(),
-                                    field_type: FieldType::Group,
-                                    fields: vec![text_field("deep")],
-                                    ..Default::default()
-                                },
-                            ],
-                        }],
+                        tabs: vec![FieldTab::new("Tab", vec![
+                            FieldDefinition {
+                                name: "inner".to_string(),
+                                field_type: FieldType::Group,
+                                fields: vec![text_field("deep")],
+                                ..Default::default()
+                            },
+                        ])],
                         ..Default::default()
                     },
                 ],
@@ -853,7 +808,6 @@ mod tests {
 
     #[test]
     fn column_specs_group_containing_localized_tabs() {
-        use crate::core::field::FieldTab;
         let fields = vec![
             FieldDefinition {
                 name: "meta".to_string(),
@@ -863,11 +817,7 @@ mod tests {
                     FieldDefinition {
                         name: "t".to_string(),
                         field_type: FieldType::Tabs,
-                        tabs: vec![FieldTab {
-                            label: "Content".to_string(),
-                            description: None,
-                            fields: vec![text_field("title")],
-                        }],
+                        tabs: vec![FieldTab::new("Content", vec![text_field("title")])],
                         ..Default::default()
                     },
                 ],
@@ -883,7 +833,6 @@ mod tests {
 
     #[test]
     fn array_with_tabs_creates_flat_columns() {
-        use crate::core::field::FieldTab;
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
 
@@ -896,16 +845,8 @@ mod tests {
                     name: "layout".to_string(),
                     field_type: FieldType::Tabs,
                     tabs: vec![
-                        FieldTab {
-                            label: "General".to_string(),
-                            description: None,
-                            fields: vec![text_field("title")],
-                        },
-                        FieldTab {
-                            label: "Content".to_string(),
-                            description: None,
-                            fields: vec![text_field("body")],
-                        },
+                        FieldTab::new("General", vec![text_field("title")]),
+                        FieldTab::new("Content", vec![text_field("body")]),
                     ],
                     ..Default::default()
                 },

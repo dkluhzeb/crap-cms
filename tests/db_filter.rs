@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::collection::{
-    CollectionAccess, CollectionAdmin, CollectionDefinition, CollectionHooks,
+    CollectionDefinition,
     CollectionLabels,
 };
 use crap_cms::core::field::{
@@ -13,36 +13,26 @@ use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
 
 fn make_posts_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "posts".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Post".to_string())),
-            plural: Some(LocalizedString::Plain("Posts".to_string())),
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "status".to_string(),
-                field_type: FieldType::Select,
-                default_value: Some(serde_json::json!("draft")),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
+        FieldDefinition {
+            name: "status".to_string(),
+            field_type: FieldType::Select,
+            default_value: Some(serde_json::json!("draft")),
+            ..Default::default()
+        },
+    ];
+    def
 }
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
@@ -101,13 +91,11 @@ fn seed_posts() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinitio
 #[test]
 fn filter_equals() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "status".to_string(),
-            op: query::FilterOp::Equals("published".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "status".to_string(),
+        op: query::FilterOp::Equals("published".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 2);
     for doc in &docs {
@@ -118,13 +106,11 @@ fn filter_equals() {
 #[test]
 fn filter_not_equals() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "status".to_string(),
-            op: query::FilterOp::NotEquals("published".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "status".to_string(),
+        op: query::FilterOp::NotEquals("published".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     // != excludes "published" (2 rows), but NULL != 'published' is NULL (falsy in SQL)
     // so only "draft" and "archived" match
@@ -137,13 +123,11 @@ fn filter_not_equals() {
 #[test]
 fn filter_contains() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Contains("eta".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Contains("eta".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("title"), Some("Beta Post"));
@@ -152,13 +136,11 @@ fn filter_contains() {
 #[test]
 fn filter_like() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Like("A%".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Like("A%".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("title"), Some("Alpha Post"));
@@ -168,13 +150,11 @@ fn filter_like() {
 fn filter_greater_than() {
     let (_tmp, pool, def) = seed_posts();
     // SQLite text comparison: "D" < "Delta Post", "E" < "Epsilon Post", "G" < "Gamma Post"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::GreaterThan("D".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::GreaterThan("D".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     let titles: Vec<_> = docs.iter().filter_map(|d| d.get_str("title")).collect();
     // "Delta Post", "Epsilon Post", "Gamma Post" are all > "D"
@@ -187,13 +167,11 @@ fn filter_greater_than() {
 #[test]
 fn filter_less_than() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::LessThan("C".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::LessThan("C".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     let titles: Vec<_> = docs.iter().filter_map(|d| d.get_str("title")).collect();
     // "Alpha Post" and "Beta Post" are < "C"
@@ -205,13 +183,11 @@ fn filter_less_than() {
 #[test]
 fn filter_greater_than_or_equal() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::GreaterThanOrEqual("Gamma Post".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::GreaterThanOrEqual("Gamma Post".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     let titles: Vec<_> = docs.iter().filter_map(|d| d.get_str("title")).collect();
     // "Gamma Post" (=) is included
@@ -224,13 +200,11 @@ fn filter_greater_than_or_equal() {
 #[test]
 fn filter_less_than_or_equal() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::LessThanOrEqual("Beta Post".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::LessThanOrEqual("Beta Post".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     let titles: Vec<_> = docs.iter().filter_map(|d| d.get_str("title")).collect();
     // "Alpha Post" (<) and "Beta Post" (=)
@@ -242,13 +216,11 @@ fn filter_less_than_or_equal() {
 #[test]
 fn filter_in() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "status".to_string(),
-            op: query::FilterOp::In(vec!["draft".to_string(), "archived".to_string()]),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "status".to_string(),
+        op: query::FilterOp::In(vec!["draft".to_string(), "archived".to_string()]),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 2);
     let statuses: Vec<_> = docs.iter().filter_map(|d| d.get_str("status")).collect();
@@ -259,13 +231,11 @@ fn filter_in() {
 #[test]
 fn filter_not_in() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "status".to_string(),
-            op: query::FilterOp::NotIn(vec!["draft".to_string(), "archived".to_string()]),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "status".to_string(),
+        op: query::FilterOp::NotIn(vec!["draft".to_string(), "archived".to_string()]),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     // NOT IN excludes draft + archived, but NULL NOT IN (...) is NULL (falsy)
     // so only the 2 published rows match
@@ -278,13 +248,11 @@ fn filter_not_in() {
 #[test]
 fn filter_exists() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "status".to_string(),
-            op: query::FilterOp::Exists,
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "status".to_string(),
+        op: query::FilterOp::Exists,
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     // 4 rows have status set, 1 is NULL
     assert_eq!(docs.len(), 4);
@@ -293,13 +261,11 @@ fn filter_exists() {
 #[test]
 fn filter_not_exists() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "status".to_string(),
-            op: query::FilterOp::NotExists,
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "status".to_string(),
+        op: query::FilterOp::NotExists,
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     // Only "Epsilon Post" has NULL status
     assert_eq!(docs.len(), 1);
@@ -309,19 +275,17 @@ fn filter_not_exists() {
 #[test]
 fn filter_or_clause() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Or(vec![
-            vec![query::Filter {
-                field: "title".to_string(),
-                op: query::FilterOp::Contains("Alpha".to_string()),
-            }],
-            vec![query::Filter {
-                field: "title".to_string(),
-                op: query::FilterOp::Contains("Gamma".to_string()),
-            }],
-        ])],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Or(vec![
+        vec![query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Contains("Alpha".to_string()),
+        }],
+        vec![query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Contains("Gamma".to_string()),
+        }],
+    ])];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 2);
     let titles: Vec<_> = docs.iter().filter_map(|d| d.get_str("title")).collect();
@@ -333,25 +297,23 @@ fn filter_or_clause() {
 fn filter_or_multi_condition_groups() {
     let (_tmp, pool, def) = seed_posts();
     // (status = "published" AND title contains "Alpha") OR (title contains "Gamma")
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Or(vec![
-            vec![
-                query::Filter {
-                    field: "status".to_string(),
-                    op: query::FilterOp::Equals("published".to_string()),
-                },
-                query::Filter {
-                    field: "title".to_string(),
-                    op: query::FilterOp::Contains("Alpha".to_string()),
-                },
-            ],
-            vec![query::Filter {
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Or(vec![
+        vec![
+            query::Filter {
+                field: "status".to_string(),
+                op: query::FilterOp::Equals("published".to_string()),
+            },
+            query::Filter {
                 field: "title".to_string(),
-                op: query::FilterOp::Contains("Gamma".to_string()),
-            }],
-        ])],
-        ..Default::default()
-    };
+                op: query::FilterOp::Contains("Alpha".to_string()),
+            },
+        ],
+        vec![query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Contains("Gamma".to_string()),
+        }],
+    ])];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 2);
     let titles: Vec<_> = docs.iter().filter_map(|d| d.get_str("title")).collect();
@@ -363,25 +325,23 @@ fn filter_or_multi_condition_groups() {
 fn filter_or_with_and_top_level() {
     let (_tmp, pool, def) = seed_posts();
     // status = "published" AND (title contains "Alpha" OR title contains "Beta")
-    let q = query::FindQuery {
-        filters: vec![
-            query::FilterClause::Single(query::Filter {
-                field: "status".to_string(),
-                op: query::FilterOp::Equals("published".to_string()),
-            }),
-            query::FilterClause::Or(vec![
-                vec![query::Filter {
-                    field: "title".to_string(),
-                    op: query::FilterOp::Contains("Alpha".to_string()),
-                }],
-                vec![query::Filter {
-                    field: "title".to_string(),
-                    op: query::FilterOp::Contains("Beta".to_string()),
-                }],
-            ]),
-        ],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![
+        query::FilterClause::Single(query::Filter {
+            field: "status".to_string(),
+            op: query::FilterOp::Equals("published".to_string()),
+        }),
+        query::FilterClause::Or(vec![
+            vec![query::Filter {
+                field: "title".to_string(),
+                op: query::FilterOp::Contains("Alpha".to_string()),
+            }],
+            vec![query::Filter {
+                field: "title".to_string(),
+                op: query::FilterOp::Contains("Beta".to_string()),
+            }],
+        ]),
+    ];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     // Alpha is published, Beta is draft → only Alpha matches
     assert_eq!(docs.len(), 1);
@@ -391,10 +351,8 @@ fn filter_or_with_and_top_level() {
 #[test]
 fn select_fields_in_find() {
     let (_tmp, pool, def) = seed_posts();
-    let q = query::FindQuery {
-        select: Some(vec!["title".to_string()]),
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.select = Some(vec!["title".to_string()]);
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert!(!docs.is_empty());
     for doc in &docs {
@@ -410,7 +368,7 @@ fn select_fields_in_find() {
 #[test]
 fn select_fields_apply_to_document() {
     let (_tmp, pool, def) = seed_posts();
-    let mut docs = ops::find_documents(&pool, "posts", &def, &query::FindQuery::default(), None)
+    let mut docs = ops::find_documents(&pool, "posts", &def, &query::FindQuery::new(), None)
         .expect("Find failed");
     assert!(!docs.is_empty());
     let doc = &mut docs[0];
@@ -427,19 +385,17 @@ fn select_fields_apply_to_document() {
 fn filter_combined_and() {
     let (_tmp, pool, def) = seed_posts();
     // status = "published" AND title contains "Alpha"
-    let q = query::FindQuery {
-        filters: vec![
-            query::FilterClause::Single(query::Filter {
-                field: "status".to_string(),
-                op: query::FilterOp::Equals("published".to_string()),
-            }),
-            query::FilterClause::Single(query::Filter {
-                field: "title".to_string(),
-                op: query::FilterOp::Contains("Alpha".to_string()),
-            }),
-        ],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![
+        query::FilterClause::Single(query::Filter {
+            field: "status".to_string(),
+            op: query::FilterOp::Equals("published".to_string()),
+        }),
+        query::FilterClause::Single(query::Filter {
+            field: "title".to_string(),
+            op: query::FilterOp::Contains("Alpha".to_string()),
+        }),
+    ];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("title"), Some("Alpha Post"));
@@ -482,13 +438,11 @@ fn contains_filter_escapes_percent() {
     }
 
     // Filter with Contains("50%") — should only match "50% off", NOT everything
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Contains("50%".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Contains("50%".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 1, "Contains('50%') should only match one document");
     assert_eq!(docs[0].get_str("title"), Some("50% off"));
@@ -517,13 +471,11 @@ fn contains_filter_escapes_underscore() {
     }
 
     // Filter with Contains("a_b") — should only match literal "a_b", NOT "axb"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Contains("a_b".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Contains("a_b".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 1, "Contains('a_b') should only match literal underscore");
     assert_eq!(docs[0].get_str("title"), Some("a_b"));
@@ -534,14 +486,12 @@ fn contains_filter_escapes_underscore() {
 #[test]
 fn validate_query_fields_passes_valid() {
     let def = make_posts_def();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Equals("test".to_string()),
-        })],
-        order_by: Some("status".to_string()),
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Equals("test".to_string()),
+    })];
+    q.order_by = Some("status".to_string());
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_ok(), "Valid fields should pass validation: {:?}", result.err());
 }
@@ -549,13 +499,11 @@ fn validate_query_fields_passes_valid() {
 #[test]
 fn validate_query_fields_rejects_invalid_filter() {
     let def = make_posts_def();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "nonexistent_field".to_string(),
-            op: query::FilterOp::Equals("test".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "nonexistent_field".to_string(),
+        op: query::FilterOp::Equals("test".to_string()),
+    })];
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid filter field should be rejected");
     let err_msg = result.unwrap_err().to_string();
@@ -565,10 +513,8 @@ fn validate_query_fields_rejects_invalid_filter() {
 #[test]
 fn validate_query_fields_rejects_invalid_order() {
     let def = make_posts_def();
-    let q = query::FindQuery {
-        order_by: Some("nonexistent_field".to_string()),
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.order_by = Some("nonexistent_field".to_string());
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid order_by field should be rejected");
     let err_msg = result.unwrap_err().to_string();
@@ -580,122 +526,82 @@ fn validate_query_fields_rejects_invalid_order() {
 /// Build a collection with array, blocks, group, and has-many relationship fields
 /// for testing dot-notation sub-field filtering.
 fn make_filterable_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "products".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("name", FieldType::Text),
-            // Group field
-            FieldDefinition {
-                name: "seo".to_string(),
-                field_type: FieldType::Group,
-                fields: vec![
-                    make_field("meta_title", FieldType::Text),
-                    make_field("meta_description", FieldType::Text),
-                ],
-                ..make_field("seo", FieldType::Group)
-            },
-            // Array field with sub-fields (including a Group sub-field)
-            FieldDefinition {
-                name: "variants".to_string(),
-                field_type: FieldType::Array,
-                fields: vec![
-                    make_field("sku", FieldType::Text),
-                    make_field("color", FieldType::Text),
-                    make_field("size", FieldType::Text),
+    let mut def = CollectionDefinition::new("products");
+    def.timestamps = true;
+    def.fields = vec![
+        make_field("name", FieldType::Text),
+        // Group field
+        FieldDefinition {
+            name: "seo".to_string(),
+            field_type: FieldType::Group,
+            fields: vec![
+                make_field("meta_title", FieldType::Text),
+                make_field("meta_description", FieldType::Text),
+            ],
+            ..make_field("seo", FieldType::Group)
+        },
+        // Array field with sub-fields (including a Group sub-field)
+        FieldDefinition {
+            name: "variants".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![
+                make_field("sku", FieldType::Text),
+                make_field("color", FieldType::Text),
+                make_field("size", FieldType::Text),
+                FieldDefinition {
+                    name: "dimensions".to_string(),
+                    field_type: FieldType::Group,
+                    fields: vec![
+                        make_field("width", FieldType::Text),
+                        make_field("height", FieldType::Text),
+                    ],
+                    ..make_field("dimensions", FieldType::Group)
+                },
+            ],
+            ..make_field("variants", FieldType::Array)
+        },
+        // Blocks field
+        FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            blocks: vec![
+                BlockDefinition::new("text", vec![make_field("body", FieldType::Textarea)]),
+                BlockDefinition::new("image", vec![
+                    make_field("url", FieldType::Text),
+                    make_field("alt", FieldType::Text),
+                ]),
+                BlockDefinition::new("section", vec![
+                    make_field("heading", FieldType::Text),
                     FieldDefinition {
-                        name: "dimensions".to_string(),
+                        name: "meta".to_string(),
                         field_type: FieldType::Group,
                         fields: vec![
-                            make_field("width", FieldType::Text),
-                            make_field("height", FieldType::Text),
+                            make_field("author", FieldType::Text),
                         ],
-                        ..make_field("dimensions", FieldType::Group)
+                        ..make_field("meta", FieldType::Group)
                     },
-                ],
-                ..make_field("variants", FieldType::Array)
-            },
-            // Blocks field
-            FieldDefinition {
-                name: "content".to_string(),
-                field_type: FieldType::Blocks,
-                blocks: vec![
-                    BlockDefinition {
-                        block_type: "text".to_string(),
-                        fields: vec![make_field("body", FieldType::Textarea)],
-                        ..Default::default()
-                    },
-                    BlockDefinition {
-                        block_type: "image".to_string(),
-                        fields: vec![
-                            make_field("url", FieldType::Text),
-                            make_field("alt", FieldType::Text),
-                        ],
-                        ..Default::default()
-                    },
-                    BlockDefinition {
-                        block_type: "section".to_string(),
-                        fields: vec![
-                            make_field("heading", FieldType::Text),
-                            FieldDefinition {
-                                name: "meta".to_string(),
-                                field_type: FieldType::Group,
-                                fields: vec![
-                                    make_field("author", FieldType::Text),
-                                ],
-                                ..make_field("meta", FieldType::Group)
-                            },
-                        ],
-                        ..Default::default()
-                    },
-                ],
-                ..make_field("content", FieldType::Blocks)
-            },
-            // Has-many relationship
-            FieldDefinition {
-                name: "tags".to_string(),
-                field_type: FieldType::Relationship,
-                relationship: Some(RelationshipConfig {
-                    collection: "product_tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
-                ..make_field("tags", FieldType::Relationship)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-            indexes: Vec::new(),
-    }
+                ]),
+            ],
+            ..make_field("content", FieldType::Blocks)
+        },
+        // Has-many relationship
+        FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig::new("product_tags", true)),
+            ..make_field("tags", FieldType::Relationship)
+        },
+    ];
+    def
 }
 
 fn setup_filterable() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_filterable_def();
-    let tags_def = CollectionDefinition {
-        slug: "product_tags".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![make_field("label", FieldType::Text)],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-            indexes: Vec::new(),
-    };
+    let mut tags_def = CollectionDefinition::new("product_tags");
+    tags_def.timestamps = true;
+    tags_def.fields = vec![make_field("label", FieldType::Text)];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -780,13 +686,11 @@ fn filter_array_subfield() {
     seed_filterable_products(&pool, &def);
 
     // Filter by array sub-field: variants.color = "red"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "variants.color".to_string(),
-            op: query::FilterOp::Equals("red".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "variants.color".to_string(),
+        op: query::FilterOp::Equals("red".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Widget"));
@@ -798,13 +702,11 @@ fn filter_array_subfield_contains() {
     seed_filterable_products(&pool, &def);
 
     // Filter by array sub-field: variants.sku contains "G-"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "variants.sku".to_string(),
-            op: query::FilterOp::Contains("G-".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "variants.sku".to_string(),
+        op: query::FilterOp::Contains("G-".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Gadget"));
@@ -816,13 +718,11 @@ fn filter_array_subfield_size() {
     seed_filterable_products(&pool, &def);
 
     // Filter by array sub-field: variants.size = "large"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "variants.size".to_string(),
-            op: query::FilterOp::Equals("large".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "variants.size".to_string(),
+        op: query::FilterOp::Equals("large".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Widget"));
@@ -834,13 +734,11 @@ fn filter_block_subfield() {
     seed_filterable_products(&pool, &def);
 
     // Filter by block sub-field: content.body contains "description"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "content.body".to_string(),
-            op: query::FilterOp::Contains("description".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "content.body".to_string(),
+        op: query::FilterOp::Contains("description".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Widget"));
@@ -852,13 +750,11 @@ fn filter_block_type() {
     seed_filterable_products(&pool, &def);
 
     // Filter by block type: content._block_type = "section"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "content._block_type".to_string(),
-            op: query::FilterOp::Equals("section".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "content._block_type".to_string(),
+        op: query::FilterOp::Equals("section".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Gadget"));
@@ -870,13 +766,11 @@ fn filter_block_group_subfield() {
     seed_filterable_products(&pool, &def);
 
     // Filter by group-in-block: content.meta.author = "Alice"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "content.meta.author".to_string(),
-            op: query::FilterOp::Equals("Alice".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "content.meta.author".to_string(),
+        op: query::FilterOp::Equals("Alice".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Gadget"));
@@ -888,13 +782,11 @@ fn filter_has_many_relationship() {
     seed_filterable_products(&pool, &def);
 
     // Filter by has-many relationship: tags.id = "tag-sale"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "tags.id".to_string(),
-            op: query::FilterOp::Equals("tag-sale".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "tags.id".to_string(),
+        op: query::FilterOp::Equals("tag-sale".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Widget"));
@@ -914,10 +806,8 @@ fn filter_group_dot_notation_normalized() {
     })];
     query::filter::normalize_filter_fields(&mut filters, &def.fields);
 
-    let q = query::FindQuery {
-        filters,
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = filters;
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Widget"));
@@ -930,37 +820,33 @@ fn filter_subquery_combined_with_column_filter() {
 
     // Combine a regular column filter with a subquery filter:
     // name = "Widget" AND variants.color = "red"
-    let q = query::FindQuery {
-        filters: vec![
-            query::FilterClause::Single(query::Filter {
-                field: "name".to_string(),
-                op: query::FilterOp::Equals("Widget".to_string()),
-            }),
-            query::FilterClause::Single(query::Filter {
-                field: "variants.color".to_string(),
-                op: query::FilterOp::Equals("red".to_string()),
-            }),
-        ],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![
+        query::FilterClause::Single(query::Filter {
+            field: "name".to_string(),
+            op: query::FilterOp::Equals("Widget".to_string()),
+        }),
+        query::FilterClause::Single(query::Filter {
+            field: "variants.color".to_string(),
+            op: query::FilterOp::Equals("red".to_string()),
+        }),
+    ];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Widget"));
 
     // Non-matching combination: name = "Widget" AND variants.color = "blue" → 0 results
-    let q2 = query::FindQuery {
-        filters: vec![
-            query::FilterClause::Single(query::Filter {
-                field: "name".to_string(),
-                op: query::FilterOp::Equals("Widget".to_string()),
-            }),
-            query::FilterClause::Single(query::Filter {
-                field: "variants.color".to_string(),
-                op: query::FilterOp::Equals("blue".to_string()),
-            }),
-        ],
-        ..Default::default()
-    };
+    let mut q2 = query::FindQuery::new();
+    q2.filters = vec![
+        query::FilterClause::Single(query::Filter {
+            field: "name".to_string(),
+            op: query::FilterOp::Equals("Widget".to_string()),
+        }),
+        query::FilterClause::Single(query::Filter {
+            field: "variants.color".to_string(),
+            op: query::FilterOp::Equals("blue".to_string()),
+        }),
+    ];
     let docs2 = ops::find_documents(&pool, "products", &def, &q2, None).unwrap();
     assert_eq!(docs2.len(), 0);
 }
@@ -972,19 +858,17 @@ fn filter_or_with_subquery() {
 
     // OR group with subquery filters:
     // variants.color = "red" OR content._block_type = "section"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Or(vec![
-            vec![query::Filter {
-                field: "variants.color".to_string(),
-                op: query::FilterOp::Equals("red".to_string()),
-            }],
-            vec![query::Filter {
-                field: "content._block_type".to_string(),
-                op: query::FilterOp::Equals("section".to_string()),
-            }],
-        ])],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Or(vec![
+        vec![query::Filter {
+            field: "variants.color".to_string(),
+            op: query::FilterOp::Equals("red".to_string()),
+        }],
+        vec![query::Filter {
+            field: "content._block_type".to_string(),
+            op: query::FilterOp::Equals("section".to_string()),
+        }],
+    ])];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 2); // Both products match one of the conditions
 }
@@ -995,13 +879,11 @@ fn filter_subquery_no_match() {
     seed_filterable_products(&pool, &def);
 
     // Filter that matches nothing
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "variants.color".to_string(),
-            op: query::FilterOp::Equals("green".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "variants.color".to_string(),
+        op: query::FilterOp::Equals("green".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 0);
 }
@@ -1025,13 +907,11 @@ fn filter_rejects_invalid_dot_prefix() {
     let (_tmp, pool, def) = setup_filterable();
 
     // An invalid prefix (no such array/block/relationship field) should be rejected
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "nonexistent.field".to_string(),
-            op: query::FilterOp::Equals("x".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "nonexistent.field".to_string(),
+        op: query::FilterOp::Equals("x".to_string()),
+    })];
     let result = ops::find_documents(&pool, "products", &def, &q, None);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Invalid field"));
@@ -1043,25 +923,21 @@ fn filter_array_group_subfield() {
     seed_filterable_products(&pool, &def);
 
     // Filter by group-in-array: variants.dimensions.width = "10" (Widget)
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "variants.dimensions.width".to_string(),
-            op: query::FilterOp::Equals("10".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "variants.dimensions.width".to_string(),
+        op: query::FilterOp::Equals("10".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "products", &def, &q, None).unwrap();
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("name"), Some("Widget"));
 
     // Filter by group-in-array: variants.dimensions.height = "15" (Gadget)
-    let q2 = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "variants.dimensions.height".to_string(),
-            op: query::FilterOp::Equals("15".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q2 = query::FindQuery::new();
+    q2.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "variants.dimensions.height".to_string(),
+        op: query::FilterOp::Equals("15".to_string()),
+    })];
     let docs2 = ops::find_documents(&pool, "products", &def, &q2, None).unwrap();
     assert_eq!(docs2.len(), 1);
     assert_eq!(docs2[0].get_str("name"), Some("Gadget"));

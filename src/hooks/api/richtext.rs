@@ -70,14 +70,12 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
         storage.set(name.as_str(), node_entry)?;
 
         // Register in Rust registry
-        let def = RichtextNodeDef {
-            name: name.clone(),
-            label,
-            inline,
-            attrs,
-            searchable_attrs,
-            has_render,
-        };
+        let def = RichtextNodeDef::builder(&name, &label)
+            .inline(inline)
+            .attrs(attrs)
+            .searchable_attrs(searchable_attrs)
+            .has_render(has_render)
+            .build();
         let mut reg = reg_clone.write()
             .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
         reg.register_richtext_node(def);
@@ -155,14 +153,14 @@ fn parse_node_attrs(lua: &Lua, attrs_tbl: &Table) -> mlua::Result<Vec<NodeAttr>>
             Vec::new()
         };
 
-        attrs.push(NodeAttr {
-            name,
-            attr_type: NodeAttrType::from_str(&attr_type_str),
-            label,
-            required,
-            default_value,
-            options,
-        });
+        let mut node_attr_builder = NodeAttr::builder(name, label)
+            .attr_type(NodeAttrType::from_str(&attr_type_str))
+            .required(required)
+            .options(options);
+        if let Some(dv) = default_value {
+            node_attr_builder = node_attr_builder.default_value(dv);
+        }
+        attrs.push(node_attr_builder.build());
     }
     Ok(attrs)
 }
@@ -174,10 +172,7 @@ fn parse_select_options(tbl: &Table) -> mlua::Result<Vec<SelectOption>> {
         let opt_tbl = pair?;
         let label: String = opt_tbl.get("label")?;
         let value: String = opt_tbl.get("value")?;
-        options.push(SelectOption {
-            label: LocalizedString::Plain(label),
-            value,
-        });
+        options.push(SelectOption::new(LocalizedString::Plain(label), value));
     }
     Ok(options)
 }

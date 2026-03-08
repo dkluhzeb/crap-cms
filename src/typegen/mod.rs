@@ -190,12 +190,7 @@ mod tests {
         use crate::core::field::RelationshipConfig;
         let f = FieldDefinition {
             field_type: crate::core::field::FieldType::Upload,
-            relationship: Some(RelationshipConfig {
-                collection: "media".to_string(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(RelationshipConfig::new("media", true)),
             ..Default::default()
         };
         assert!(rel_has_many(&f));
@@ -206,12 +201,7 @@ mod tests {
         use crate::core::field::RelationshipConfig;
         let f = FieldDefinition {
             field_type: crate::core::field::FieldType::Upload,
-            relationship: Some(RelationshipConfig {
-                collection: "media".to_string(),
-                has_many: false,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(RelationshipConfig::new("media", false)),
             ..Default::default()
         };
         assert!(!rel_has_many(&f));
@@ -298,34 +288,11 @@ mod tests {
     }
 
     fn make_collection(slug: &str) -> crate::core::CollectionDefinition {
-        crate::core::CollectionDefinition {
-            slug: slug.to_string(),
-            labels: Default::default(),
-            timestamps: true,
-            fields: vec![],
-            admin: Default::default(),
-            hooks: Default::default(),
-            auth: None,
-            upload: None,
-            access: Default::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        crate::core::CollectionDefinition::new(slug)
     }
 
     fn make_global(slug: &str) -> crate::core::collection::GlobalDefinition {
-        crate::core::collection::GlobalDefinition {
-            slug: slug.to_string(),
-            labels: Default::default(),
-            fields: vec![],
-            hooks: Default::default(),
-            access: Default::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        }
+        crate::core::collection::GlobalDefinition::new(slug)
     }
 
     #[test]

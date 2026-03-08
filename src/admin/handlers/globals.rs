@@ -239,8 +239,11 @@ pub async fn update_action(
         } else {
             crate::service::update_global_document(
                 &pool, &runner, &slug_owned, &def_owned,
-                form_data, &join_data, locale_ctx.as_ref(), locale,
-                user_doc.as_ref(), draft,
+                crate::service::WriteInput {
+                    data: form_data, join_data: &join_data, password: None,
+                    locale_ctx: locale_ctx.as_ref(), locale, draft,
+                },
+                user_doc.as_ref(),
             )
         }
     }).await;

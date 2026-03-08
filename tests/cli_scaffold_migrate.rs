@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
-use crap_cms::core::auth;
 use crap_cms::db::{migrate, ops, pool, query, DbPool};
 use crap_cms::hooks;
 use crap_cms::scaffold;
@@ -74,27 +73,6 @@ fn copy_dir_skip(src: &Path, dst: &Path, skip: &[&str]) {
             std::fs::copy(&src_path, &dst_path).unwrap();
         }
     }
-}
-
-/// Create a user in an auth collection via query::create + update_password.
-fn create_user(
-    pool: &DbPool,
-    def: &crap_cms::core::CollectionDefinition,
-    email: &str,
-    password: &str,
-    extra_fields: &[(&str, &str)],
-) -> crap_cms::core::Document {
-    let mut data = HashMap::new();
-    data.insert("email".to_string(), email.to_string());
-    for (k, v) in extra_fields {
-        data.insert(k.to_string(), v.to_string());
-    }
-    let mut conn = pool.get().expect("DB connection");
-    let tx = conn.transaction().expect("Start transaction");
-    let doc = query::create(&tx, "users", def, &data, None).expect("create user");
-    query::update_password(&tx, "users", &doc.id, password).expect("set password");
-    tx.commit().expect("Commit");
-    doc
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -315,7 +293,12 @@ return M
     assert_eq!(pending.len(), 1);
 
     // Run migration via HookRunner
-    let hook_runner = hooks::lifecycle::HookRunner::new(&config_dir, registry, &cfg).unwrap();
+    let hook_runner = hooks::lifecycle::HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry)
+        .config(&cfg)
+        .build()
+        .unwrap();
     let filename = &pending[0];
     let path = migrations_dir.join(filename);
     let mut conn = db_pool.get().unwrap();
@@ -355,7 +338,12 @@ return M
     migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync");
 
     // Apply migration
-    let hook_runner = hooks::lifecycle::HookRunner::new(&config_dir, registry.clone(), &cfg).unwrap();
+    let hook_runner = hooks::lifecycle::HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&cfg)
+        .build()
+        .unwrap();
     let filename = "20240101000000_rollback.lua";
     {
         let mut conn = db_pool.get().unwrap();

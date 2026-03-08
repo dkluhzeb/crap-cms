@@ -31,6 +31,12 @@ pub struct EventUser {
     pub email: String,
 }
 
+impl EventUser {
+    pub fn new(id: impl Into<String>, email: impl Into<String>) -> Self {
+        Self { id: id.into(), email: email.into() }
+    }
+}
+
 /// A mutation event broadcast to all subscribers.
 #[derive(Debug, Clone, Serialize)]
 pub struct MutationEvent {

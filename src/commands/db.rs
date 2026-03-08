@@ -38,7 +38,11 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
             if pending.is_empty() {
                 println!("No pending migrations.");
             } else {
-                let hook_runner = crate::hooks::lifecycle::HookRunner::new(&config_dir, registry, &cfg)?;
+                let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+                    .config_dir(&config_dir)
+                    .registry(registry.clone())
+                    .config(&cfg)
+                    .build()?;
                 for filename in &pending {
                     let path = migrations_dir.join(filename);
                     let mut conn = pool.get().context("Failed to get DB connection")?;
@@ -59,7 +63,11 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
             if to_rollback.is_empty() {
                 println!("No migrations to roll back.");
             } else {
-                let hook_runner = crate::hooks::lifecycle::HookRunner::new(&config_dir, registry, &cfg)?;
+                let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+                    .config_dir(&config_dir)
+                    .registry(registry.clone())
+                    .config(&cfg)
+                    .build()?;
                 let migrations_dir = config_dir.join("migrations");
                 for filename in &to_rollback {
                     let path = migrations_dir.join(filename);
@@ -114,7 +122,11 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
             let migrations_dir = config_dir.join("migrations");
             let all_files = crate::db::migrate::list_migration_files(&migrations_dir)?;
             if !all_files.is_empty() {
-                let hook_runner = crate::hooks::lifecycle::HookRunner::new(&config_dir, registry, &cfg)?;
+                let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+                    .config_dir(&config_dir)
+                    .registry(registry.clone())
+                    .config(&cfg)
+                    .build()?;
                 for filename in &all_files {
                     let path = migrations_dir.join(filename);
                     let mut conn = pool.get().context("Failed to get DB connection")?;
@@ -558,21 +570,10 @@ mod tests {
     }
 
     fn simple_collection(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
-        CollectionDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields,
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new(slug);
+        def.timestamps = true;
+        def.fields = fields;
+        def
     }
 
     fn text_field(name: &str) -> FieldDefinition {

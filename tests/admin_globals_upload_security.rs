@@ -24,84 +24,59 @@ use crap_cms::hooks::lifecycle::HookRunner;
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 fn make_posts_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "posts".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Post".to_string())),
-            plural: Some(LocalizedString::Plain("Posts".to_string())),
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+    ];
+    def
 }
 
 fn make_users_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "users".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("User".to_string())),
-            plural: Some(LocalizedString::Plain("Users".to_string())),
+    let mut def = CollectionDefinition::new("users");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("User".to_string())),
+        plural: Some(LocalizedString::Plain("Users".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            required: true,
+            unique: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "email".to_string(),
-                field_type: FieldType::Email,
-                required: true,
-                unique: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "name".to_string(),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: Some(CollectionAuth { enabled: true, ..Default::default() }),
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-        indexes: Vec::new(),
-    }
+        FieldDefinition {
+            name: "name".to_string(),
+            ..Default::default()
+        },
+    ];
+    def.auth = Some(CollectionAuth { enabled: true, ..Default::default() });
+    def
 }
 
 fn make_global_def() -> GlobalDefinition {
-    GlobalDefinition {
-        slug: "settings".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Settings".to_string())),
-            plural: None,
+    let mut def = GlobalDefinition::new("settings");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Settings".to_string())),
+        plural: None,
+    };
+    def.fields = vec![
+        FieldDefinition {
+            name: "site_name".to_string(),
+            ..Default::default()
         },
-        fields: vec![
-            FieldDefinition {
-                name: "site_name".to_string(),
-                ..Default::default()
-            },
-        ],
-        hooks: CollectionHooks::default(),
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-    }
+    ];
+    def
 }
 
 struct TestApp {
@@ -147,7 +122,12 @@ fn setup_app_with_config(
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
+        HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(registry.clone())
+            .config(&config)
+            .build()
+            .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
     let handlebars =
@@ -206,12 +186,10 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
-    let claims = auth::Claims {
-        sub: user_id.to_string(),
-        collection: "users".to_string(),
-        email: email.to_string(),
-        exp: (chrono::Utc::now().timestamp() as u64) + 3600,
-    };
+    let claims = auth::Claims::builder(user_id, "users")
+        .email(email)
+        .exp((chrono::Utc::now().timestamp() as u64) + 3600)
+        .build();
     let token = auth::create_token(&claims, &app.jwt_secret).unwrap();
     format!("crap_session={}", token)
 }
@@ -240,58 +218,44 @@ fn make_locale_config() -> LocaleConfig {
 }
 
 fn make_versioned_global_def() -> GlobalDefinition {
-    GlobalDefinition {
-        slug: "site_config".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Site Config".to_string())),
-            plural: None,
+    let mut def = GlobalDefinition::new("site_config");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Site Config".to_string())),
+        plural: None,
+    };
+    def.fields = vec![
+        FieldDefinition {
+            name: "site_name".to_string(),
+            ..Default::default()
         },
-        fields: vec![
-            FieldDefinition {
-                name: "site_name".to_string(),
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "tagline".to_string(),
-                ..Default::default()
-            },
-        ],
-        hooks: CollectionHooks::default(),
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: Some(crap_cms::core::collection::VersionsConfig {
-            drafts: true,
-            max_versions: 10,
-        }),
-    }
+        FieldDefinition {
+            name: "tagline".to_string(),
+            ..Default::default()
+        },
+    ];
+    def.versions = Some(VersionsConfig::new(true, 10));
+    def
 }
 
 fn make_localized_global_def() -> GlobalDefinition {
-    GlobalDefinition {
-        slug: "l10n_settings".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("L10N Settings".to_string())),
-            plural: None,
+    let mut def = GlobalDefinition::new("l10n_settings");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("L10N Settings".to_string())),
+        plural: None,
+    };
+    def.fields = vec![
+        FieldDefinition {
+            name: "welcome_text".to_string(),
+            localized: true,
+            ..Default::default()
         },
-        fields: vec![
-            FieldDefinition {
-                name: "welcome_text".to_string(),
-                localized: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "max_items".to_string(),
-                field_type: FieldType::Number,
-                ..Default::default()
-            },
-        ],
-        hooks: CollectionHooks::default(),
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-    }
+        FieldDefinition {
+            name: "max_items".to_string(),
+            field_type: FieldType::Number,
+            ..Default::default()
+        },
+    ];
+    def
 }
 
 fn tiny_png() -> Vec<u8> {

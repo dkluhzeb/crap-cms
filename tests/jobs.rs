@@ -22,7 +22,11 @@ fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRe
     let db_pool = pool::create_pool(tmp.path(), &pool_config).expect("Failed to create pool");
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("Failed to sync schema");
 
-    let runner = HookRunner::new(&config_dir, registry.clone(), &config)
+    let runner = HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&config)
+        .build()
         .expect("Failed to create HookRunner");
     (tmp, db_pool, registry, runner)
 }

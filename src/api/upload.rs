@@ -161,9 +161,8 @@ async fn create_upload(
     let result = tokio::task::spawn_blocking(move || {
         crate::service::create_document(
             &pool, &runner, &slug_owned, &def_owned,
-            form_data, &join_data,
-            password.as_deref(), None, None,
-            user_doc_owned.as_ref(), draft,
+            crate::service::WriteInput { data: form_data, join_data: &join_data, password: password.as_deref(), locale_ctx: None, locale: None, draft },
+            user_doc_owned.as_ref(),
         )
     }).await;
 
@@ -178,10 +177,7 @@ async fn create_upload(
                 }
             }
 
-            let edited_by = auth_user.as_ref().map(|au| EventUser {
-                id: au.claims.sub.clone(),
-                email: au.claims.email.clone(),
-            });
+            let edited_by = auth_user.as_ref().map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,
@@ -310,9 +306,8 @@ async fn update_upload(
     let result = tokio::task::spawn_blocking(move || {
         crate::service::update_document(
             &pool, &runner, &slug_owned, &id_owned, &def_owned,
-            form_data, &join_data,
-            password.as_deref(), None, None,
-            user_doc_owned.as_ref(), draft,
+            crate::service::WriteInput { data: form_data, join_data: &join_data, password: password.as_deref(), locale_ctx: None, locale: None, draft },
+            user_doc_owned.as_ref(),
         )
     }).await;
 
@@ -332,10 +327,7 @@ async fn update_upload(
                 }
             }
 
-            let edited_by = auth_user.as_ref().map(|au| EventUser {
-                id: au.claims.sub.clone(),
-                email: au.claims.email.clone(),
-            });
+            let edited_by = auth_user.as_ref().map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,
@@ -419,10 +411,7 @@ async fn delete_upload(
     match result {
         Ok(Ok(_req_context)) => {
 
-            let edited_by = auth_user.as_ref().map(|au| EventUser {
-                id: au.claims.sub.clone(),
-                email: au.claims.email.clone(),
-            });
+            let edited_by = auth_user.as_ref().map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()));
             state.hook_runner.publish_event(
                 &state.event_bus, &def.hooks, def.live.as_ref(),
                 crate::core::event::EventTarget::Collection,

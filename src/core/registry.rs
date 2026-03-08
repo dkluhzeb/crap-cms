@@ -97,24 +97,9 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::{CollectionLabels, CollectionAdmin, CollectionHooks, CollectionAccess};
 
     fn make_collection(slug: &str) -> CollectionDefinition {
-        CollectionDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: Vec::new(),
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        CollectionDefinition::new(slug)
     }
 
     #[test]
@@ -144,16 +129,7 @@ mod tests {
     }
 
     fn make_global(slug: &str) -> GlobalDefinition {
-        GlobalDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels::default(),
-            fields: Vec::new(),
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        }
+        GlobalDefinition::new(slug)
     }
 
     #[test]
@@ -178,21 +154,19 @@ mod tests {
         let mut reg = Registry::new();
         assert!(reg.get_richtext_node("cta").is_none());
 
-        reg.register_richtext_node(RichtextNodeDef {
-            name: "cta".to_string(),
-            label: "Call to Action".to_string(),
-            inline: false,
-            attrs: vec![NodeAttr {
-                name: "text".to_string(),
-                attr_type: NodeAttrType::Text,
-                label: "Button Text".to_string(),
-                required: true,
-                default_value: None,
-                options: vec![],
-            }],
-            searchable_attrs: vec!["text".to_string()],
-            has_render: false,
-        });
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("cta", "Call to Action")
+                .inline(false)
+                .attrs(vec![
+                    NodeAttr::builder("text", "Button Text")
+                        .attr_type(NodeAttrType::Text)
+                        .required(true)
+                        .build(),
+                ])
+                .searchable_attrs(vec!["text".to_string()])
+                .has_render(false)
+                .build(),
+        );
         let node = reg.get_richtext_node("cta").unwrap();
         assert_eq!(node.name, "cta");
         assert_eq!(node.label, "Call to Action");

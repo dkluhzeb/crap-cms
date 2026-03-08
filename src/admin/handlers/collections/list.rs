@@ -438,16 +438,12 @@ pub async fn list_items(
     // Determine sort order: URL param > default_sort
     let order_by = sort.clone().or_else(|| def.admin.default_sort.clone());
 
-    let find_query = FindQuery {
-        filters: filters.clone(),
-        order_by,
-        limit: Some(per_page),
-        offset: Some(offset),
-        select: None,
-        after_cursor: None,
-        before_cursor: None,
-        search: search.clone(),
-    };
+    let mut find_query = FindQuery::new();
+    find_query.filters = filters.clone();
+    find_query.order_by = order_by;
+    find_query.limit = Some(per_page);
+    find_query.offset = Some(offset);
+    find_query.search = search.clone();
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let locale_ctx = LocaleContext::from_locale_string(editor_locale.as_deref(), &state.config.locale);
@@ -697,61 +693,52 @@ mod tests {
     use super::*;
     use crate::core::field::{FieldAdmin, FieldDefinition, FieldType, SelectOption, LocalizedString};
     use crate::core::collection::*;
+    use crate::core::document::DocumentBuilder;
 
     fn test_collection() -> CollectionDefinition {
-        CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![
-                FieldDefinition {
-                    name: "title".to_string(),
-                    field_type: FieldType::Text,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "status".to_string(),
-                    field_type: FieldType::Select,
-                    options: vec![
-                        SelectOption { label: LocalizedString::Plain("Draft".into()), value: "draft".into() },
-                        SelectOption { label: LocalizedString::Plain("Published".into()), value: "published".into() },
-                    ],
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "body".to_string(),
-                    field_type: FieldType::Richtext,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "views".to_string(),
-                    field_type: FieldType::Number,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "active".to_string(),
-                    field_type: FieldType::Checkbox,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "date".to_string(),
-                    field_type: FieldType::Date,
-                    ..Default::default()
-                },
-            ],
-            admin: CollectionAdmin {
-                use_as_title: Some("title".to_string()),
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: FieldType::Text,
                 ..Default::default()
             },
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+            FieldDefinition {
+                name: "status".to_string(),
+                field_type: FieldType::Select,
+                options: vec![
+                    SelectOption::new(LocalizedString::Plain("Draft".into()), "draft"),
+                    SelectOption::new(LocalizedString::Plain("Published".into()), "published"),
+                ],
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "body".to_string(),
+                field_type: FieldType::Richtext,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "views".to_string(),
+                field_type: FieldType::Number,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "active".to_string(),
+                field_type: FieldType::Checkbox,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "date".to_string(),
+                field_type: FieldType::Date,
+                ..Default::default()
+            },
+        ];
+        def.admin = CollectionAdmin {
+            use_as_title: Some("title".to_string()),
+            ..Default::default()
+        };
+        def
     }
 
     // --- field_label tests ---
@@ -832,12 +819,7 @@ mod tests {
     #[test]
     fn compute_cells_status_badge() {
         let def = test_collection();
-        let mut doc = crate::core::Document {
-            id: "1".into(),
-            fields: HashMap::new(),
-            created_at: None,
-            updated_at: None,
-        };
+        let mut doc = DocumentBuilder::new("1").build();
         doc.fields.insert("_status".into(), serde_json::json!("draft"));
 
         let columns = vec![serde_json::json!({"key": "_status"})];
@@ -849,12 +831,7 @@ mod tests {
     #[test]
     fn compute_cells_select_shows_label() {
         let def = test_collection();
-        let mut doc = crate::core::Document {
-            id: "1".into(),
-            fields: HashMap::new(),
-            created_at: None,
-            updated_at: None,
-        };
+        let mut doc = DocumentBuilder::new("1").build();
         doc.fields.insert("status".into(), serde_json::json!("published"));
 
         let columns = vec![serde_json::json!({"key": "status"})];
@@ -865,12 +842,7 @@ mod tests {
     #[test]
     fn compute_cells_checkbox() {
         let def = test_collection();
-        let mut doc = crate::core::Document {
-            id: "1".into(),
-            fields: HashMap::new(),
-            created_at: None,
-            updated_at: None,
-        };
+        let mut doc = DocumentBuilder::new("1").build();
         doc.fields.insert("active".into(), serde_json::json!(1));
 
         let columns = vec![serde_json::json!({"key": "active"})];
@@ -882,12 +854,7 @@ mod tests {
     #[test]
     fn compute_cells_date() {
         let def = test_collection();
-        let doc = crate::core::Document {
-            id: "1".into(),
-            fields: HashMap::new(),
-            created_at: Some("2024-01-15".into()),
-            updated_at: None,
-        };
+        let doc = DocumentBuilder::new("1").created_at("2024-01-15").build();
 
         let columns = vec![serde_json::json!({"key": "created_at"})];
         let cells = compute_cells(&doc, &columns, &def);

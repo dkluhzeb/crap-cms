@@ -143,7 +143,16 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQu
 
     let search: Option<String> = tbl.get("search").ok();
 
-    Ok((FindQuery { filters, order_by, limit, offset, select, after_cursor, before_cursor, search }, page))
+    let mut find_query = FindQuery::new();
+    find_query.filters = filters;
+    find_query.order_by = order_by;
+    find_query.limit = limit;
+    find_query.offset = offset;
+    find_query.select = select;
+    find_query.after_cursor = after_cursor;
+    find_query.before_cursor = before_cursor;
+    find_query.search = search;
+    Ok((find_query, page))
 }
 
 /// Parse a Lua filter operator name + value into a FilterOp.
@@ -275,6 +284,7 @@ pub(crate) fn find_result_to_lua(lua: &Lua, docs: &[crate::core::Document], pagi
 mod tests {
     use super::*;
     use mlua::Lua;
+    use crate::core::document::DocumentBuilder;
     use crate::core::field::{FieldDefinition, FieldType};
 
     // --- lua_parse_filter_op tests ---
@@ -540,12 +550,11 @@ mod tests {
         fields.insert("title".to_string(), serde_json::json!("Hello"));
         fields.insert("count".to_string(), serde_json::json!(42));
 
-        let doc = crate::core::Document {
-            id: "abc123".to_string(),
-            fields,
-            created_at: Some("2024-01-01T00:00:00Z".to_string()),
-            updated_at: Some("2024-01-02T00:00:00Z".to_string()),
-        };
+        let doc = DocumentBuilder::new("abc123")
+            .fields(fields)
+            .created_at("2024-01-01T00:00:00Z")
+            .updated_at("2024-01-02T00:00:00Z")
+            .build();
 
         let tbl = document_to_lua_table(&lua, &doc).unwrap();
         let id: String = tbl.get("id").unwrap();
@@ -563,12 +572,7 @@ mod tests {
     #[test]
     fn test_document_to_lua_no_timestamps() {
         let lua = Lua::new();
-        let doc = crate::core::Document {
-            id: "xyz".to_string(),
-            fields: HashMap::new(),
-            created_at: None,
-            updated_at: None,
-        };
+        let doc = DocumentBuilder::new("xyz").build();
 
         let tbl = document_to_lua_table(&lua, &doc).unwrap();
         let id: String = tbl.get("id").unwrap();
@@ -584,18 +588,8 @@ mod tests {
     fn test_find_result_to_lua_basic() {
         let lua = Lua::new();
         let docs = vec![
-            crate::core::Document {
-                id: "a".to_string(),
-                fields: HashMap::new(),
-                created_at: None,
-                updated_at: None,
-            },
-            crate::core::Document {
-                id: "b".to_string(),
-                fields: HashMap::new(),
-                created_at: None,
-                updated_at: None,
-            },
+            DocumentBuilder::new("a").build(),
+            DocumentBuilder::new("b").build(),
         ];
 
         let pg = lua.create_table().unwrap();

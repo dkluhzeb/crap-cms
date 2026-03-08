@@ -29,7 +29,11 @@ fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRe
     let db_pool = pool::create_pool(tmp.path(), &pool_config).expect("Failed to create pool");
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("Failed to sync schema");
 
-    let runner = HookRunner::new(&config_dir, registry.clone(), &config)
+    let runner = HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&config)
+        .build()
         .expect("Failed to create HookRunner");
     (tmp, db_pool, registry, runner)
 }
@@ -59,35 +63,30 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
     }
 }
 
-// ── 6K. hook_ctx_to_string_map ───────────────────────────────────────────────
+// ── 6K. HookContext::to_string_map ──────────────────────────────────────────
 
 #[test]
-fn hook_ctx_to_string_map_basic() {
+fn to_string_map_basic() {
     let mut data = HashMap::new();
     data.insert("title".to_string(), serde_json::json!("Hello"));
     data.insert("count".to_string(), serde_json::json!(42));
 
-    let ctx = HookContext {
-        collection: "test".to_string(),
-        operation: "create".to_string(),
-        data,
-        locale: None,
-        draft: None,
-        context: HashMap::new(),
-    };
+    let ctx = HookContext::builder("test", "create")
+        .data(data)
+        .build();
 
     let fields = vec![
         make_field("title", FieldType::Text),
         make_field("count", FieldType::Number),
     ];
 
-    let map = crap_cms::hooks::lifecycle::hook_ctx_to_string_map(&ctx, &fields);
+    let map = ctx.to_string_map(&fields);
     assert_eq!(map.get("title").unwrap(), "Hello");
     assert_eq!(map.get("count").unwrap(), "42");
 }
 
 #[test]
-fn hook_ctx_to_string_map_flattens_groups() {
+fn to_string_map_flattens_groups() {
     let mut data = HashMap::new();
     let mut seo = serde_json::Map::new();
     seo.insert("meta_title".to_string(), serde_json::json!("SEO Title"));
@@ -95,14 +94,9 @@ fn hook_ctx_to_string_map_flattens_groups() {
     data.insert("seo".to_string(), serde_json::Value::Object(seo));
     data.insert("title".to_string(), serde_json::json!("Normal Title"));
 
-    let ctx = HookContext {
-        collection: "test".to_string(),
-        operation: "create".to_string(),
-        data,
-        locale: None,
-        draft: None,
-        context: HashMap::new(),
-    };
+    let ctx = HookContext::builder("test", "create")
+        .data(data)
+        .build();
 
     let fields = vec![
         make_field("title", FieldType::Text),
@@ -117,7 +111,7 @@ fn hook_ctx_to_string_map_flattens_groups() {
         },
     ];
 
-    let map = crap_cms::hooks::lifecycle::hook_ctx_to_string_map(&ctx, &fields);
+    let map = ctx.to_string_map(&fields);
     assert_eq!(map.get("title").unwrap(), "Normal Title");
     assert_eq!(map.get("seo__meta_title").unwrap(), "SEO Title");
     assert_eq!(map.get("seo__meta_desc").unwrap(), "Description");
@@ -125,19 +119,14 @@ fn hook_ctx_to_string_map_flattens_groups() {
 }
 
 #[test]
-fn hook_ctx_to_string_map_group_as_string_falls_through() {
+fn to_string_map_group_as_string_falls_through() {
     // When group value is already a string (e.g. from form data), it should be kept as-is
     let mut data = HashMap::new();
     data.insert("seo".to_string(), serde_json::json!("already-a-string"));
 
-    let ctx = HookContext {
-        collection: "test".to_string(),
-        operation: "create".to_string(),
-        data,
-        locale: None,
-        draft: None,
-        context: HashMap::new(),
-    };
+    let ctx = HookContext::builder("test", "create")
+        .data(data)
+        .build();
 
     let fields = vec![
         FieldDefinition {
@@ -148,7 +137,7 @@ fn hook_ctx_to_string_map_group_as_string_falls_through() {
         },
     ];
 
-    let map = crap_cms::hooks::lifecycle::hook_ctx_to_string_map(&ctx, &fields);
+    let map = ctx.to_string_map(&fields);
     // When not an object, falls through to string insertion
     assert_eq!(map.get("seo").unwrap(), "already-a-string");
 }
@@ -598,7 +587,11 @@ fn before_render_registered_hook_adds_marker() {
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry, &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     let context = serde_json::json!({ "page": "edit" });
@@ -632,7 +625,11 @@ fn before_render_hook_returning_nil_preserves_context() {
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry, &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     let context = serde_json::json!({ "page": "list" });
@@ -662,7 +659,11 @@ fn run_migration_up_standalone() {
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
 
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry.clone(), &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     // Write a migration file
@@ -727,7 +728,11 @@ fn run_job_handler_with_return_value() {
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
     crap_cms::db::migrate::sync_all(&pool, &registry, &config.locale).expect("sync");
 
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry, &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     let conn = pool.get().expect("conn");
@@ -773,7 +778,11 @@ fn run_job_handler_nil_return() {
     pool_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &pool_config).expect("pool");
 
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry, &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     let conn = pool.get().expect("conn");
@@ -812,7 +821,11 @@ fn call_row_label_standalone_hook() {
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry, &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     let row_data = serde_json::json!({ "title": "Hello" });
@@ -842,7 +855,11 @@ fn call_display_condition_standalone_bool() {
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry, &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     let form_data = serde_json::json!({ "status": "published" });
@@ -882,7 +899,11 @@ fn call_display_condition_standalone_table() {
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
-    let runner = crap_cms::hooks::lifecycle::HookRunner::new(tmp.path(), registry, &config)
+    let runner = crap_cms::hooks::lifecycle::HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry)
+        .config(&config)
+        .build()
         .expect("HookRunner::new");
 
     let form_data = serde_json::json!({ "status": "published" });

@@ -169,25 +169,12 @@ mod tests {
     use crate::core::field::*;
 
     fn global_def() -> GlobalDefinition {
-        GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "site_name".to_string(),
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "tagline".to_string(),
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        }
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![
+            FieldDefinition { name: "site_name".to_string(), ..Default::default() },
+            FieldDefinition { name: "tagline".to_string(), ..Default::default() },
+        ];
+        def
     }
 
     fn setup_global_db() -> Connection {
@@ -224,33 +211,19 @@ mod tests {
             VALUES ('default', 'My Site', 'https://github.com', '2024-01-01', '2024-01-01');"
         ).unwrap();
 
-        let def = GlobalDefinition {
-            slug: "site".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "site_name".to_string(),
-                    localized: true,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "social".to_string(),
-                    field_type: FieldType::Group,
-                    fields: vec![
-                        FieldDefinition {
-                            name: "github".to_string(),
-                            ..Default::default()
-                        },
-                    ],
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut def = GlobalDefinition::new("site");
+        def.fields = vec![
+            FieldDefinition { name: "site_name".to_string(), localized: true, ..Default::default() },
+            FieldDefinition {
+                name: "social".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition { name: "github".to_string(), ..Default::default() },
+                ],
+                ..Default::default()
+            },
+        ];
+        let def = def;
 
         let locale_config = crate::config::LocaleConfig {
             default_locale: "en".to_string(),
@@ -342,22 +315,11 @@ mod tests {
             VALUES ('default', 1, '2024-01-01', '2024-01-01');"
         ).unwrap();
 
-        let def = GlobalDefinition {
-            slug: "prefs".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "newsletter".to_string(),
-                    field_type: FieldType::Checkbox,
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut def = GlobalDefinition::new("prefs");
+        def.fields = vec![
+            FieldDefinition { name: "newsletter".to_string(), field_type: FieldType::Checkbox, ..Default::default() },
+        ];
+        let def = def;
 
         // Update without providing the checkbox field -- should default to 0
         let data = HashMap::new();
@@ -380,32 +342,19 @@ mod tests {
             VALUES ('default', '2024-01-01', '2024-01-01');"
         ).unwrap();
 
-        let def = GlobalDefinition {
-            slug: "branding".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "colors".to_string(),
-                    field_type: FieldType::Group,
-                    fields: vec![
-                        FieldDefinition {
-                            name: "primary".to_string(),
-                            ..Default::default()
-                        },
-                        FieldDefinition {
-                            name: "secondary".to_string(),
-                            ..Default::default()
-                        },
-                    ],
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut def = GlobalDefinition::new("branding");
+        def.fields = vec![
+            FieldDefinition {
+                name: "colors".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition { name: "primary".to_string(), ..Default::default() },
+                    FieldDefinition { name: "secondary".to_string(), ..Default::default() },
+                ],
+                ..Default::default()
+            },
+        ];
+        let def = def;
 
         let mut data = HashMap::new();
         data.insert("colors__primary".to_string(), "#ff0000".to_string());
@@ -420,21 +369,12 @@ mod tests {
 
     #[test]
     fn get_global_column_names_with_drafts() {
-        let def = GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "site_name".to_string(),
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: Some(crate::core::collection::VersionsConfig { drafts: true, max_versions: 10 }),
-        };
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![
+            FieldDefinition { name: "site_name".to_string(), ..Default::default() },
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+        let def = def;
 
         let names = get_global_column_names(&def);
         assert!(names.contains(&"_status".to_string()), "should include _status for drafts-enabled global");
@@ -459,33 +399,26 @@ mod tests {
             VALUES ('default', '2024-01-01', '2024-01-01');"
         ).unwrap();
 
-        let def = GlobalDefinition {
-            slug: "branding".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "colors".to_string(),
-                    field_type: FieldType::Group,
-                    fields: vec![
-                        FieldDefinition {
-                            name: "r".to_string(),
-                            field_type: FieldType::Row,
-                            fields: vec![
-                                FieldDefinition { name: "primary".to_string(), ..Default::default() },
-                                FieldDefinition { name: "secondary".to_string(), ..Default::default() },
-                            ],
-                            ..Default::default()
-                        },
-                    ],
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut def = GlobalDefinition::new("branding");
+        def.fields = vec![
+            FieldDefinition {
+                name: "colors".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition {
+                        name: "r".to_string(),
+                        field_type: FieldType::Row,
+                        fields: vec![
+                            FieldDefinition { name: "primary".to_string(), ..Default::default() },
+                            FieldDefinition { name: "secondary".to_string(), ..Default::default() },
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+        let def = def;
 
         let mut data = HashMap::new();
         data.insert("colors__primary".to_string(), "#ff0000".to_string());
@@ -513,45 +446,30 @@ mod tests {
             VALUES ('default', '2024-01-01', '2024-01-01');"
         ).unwrap();
 
-        let def = GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "config".to_string(),
-                    field_type: FieldType::Group,
-                    fields: vec![
-                        FieldDefinition {
-                            name: "t".to_string(),
-                            field_type: FieldType::Tabs,
-                            tabs: vec![
-                                FieldTab {
-                                    label: "General".to_string(),
-                                    description: None,
-                                    fields: vec![
-                                        FieldDefinition { name: "theme".to_string(), ..Default::default() },
-                                    ],
-                                },
-                                FieldTab {
-                                    label: "Perf".to_string(),
-                                    description: None,
-                                    fields: vec![
-                                        FieldDefinition { name: "cache_ttl".to_string(), ..Default::default() },
-                                    ],
-                                },
-                            ],
-                            ..Default::default()
-                        },
-                    ],
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![
+            FieldDefinition {
+                name: "config".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition {
+                        name: "t".to_string(),
+                        field_type: FieldType::Tabs,
+                        tabs: vec![
+                            FieldTab::new("General", vec![
+                                FieldDefinition { name: "theme".to_string(), ..Default::default() },
+                            ]),
+                            FieldTab::new("Perf", vec![
+                                FieldDefinition { name: "cache_ttl".to_string(), ..Default::default() },
+                            ]),
+                        ],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+        let def = def;
 
         let mut data = HashMap::new();
         data.insert("config__theme".to_string(), "dark".to_string());
@@ -566,36 +484,25 @@ mod tests {
     #[test]
     fn get_global_column_names_group_containing_tabs() {
         use crate::core::field::FieldTab;
-        let def = GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                FieldDefinition {
-                    name: "config".to_string(),
-                    field_type: FieldType::Group,
-                    fields: vec![
-                        FieldDefinition {
-                            name: "t".to_string(),
-                            field_type: FieldType::Tabs,
-                            tabs: vec![FieldTab {
-                                label: "Tab".to_string(),
-                                description: None,
-                                fields: vec![
-                                    FieldDefinition { name: "value".to_string(), ..Default::default() },
-                                ],
-                            }],
-                            ..Default::default()
-                        },
-                    ],
-                    ..Default::default()
-                },
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut def = GlobalDefinition::new("settings");
+        def.fields = vec![
+            FieldDefinition {
+                name: "config".to_string(),
+                field_type: FieldType::Group,
+                fields: vec![
+                    FieldDefinition {
+                        name: "t".to_string(),
+                        field_type: FieldType::Tabs,
+                        tabs: vec![FieldTab::new("Tab", vec![
+                            FieldDefinition { name: "value".to_string(), ..Default::default() },
+                        ])],
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        ];
+        let def = def;
 
         let names = get_global_column_names(&def);
         assert!(names.contains(&"config__value".to_string()), "Group→Tabs: config__value");

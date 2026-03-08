@@ -4,6 +4,7 @@ use axum::extract::{FromRequest, Multipart};
 use std::collections::HashMap;
 
 use crate::admin::AdminState;
+use crate::core::upload::UploadedFileBuilder;
 use crate::core::field::FieldType;
 use crate::core::upload::UploadedFile;
 
@@ -465,11 +466,7 @@ mod tests {
         let blocks_field = make_field("content", FieldType::Blocks);
         let mut tabs_field = make_field("page_settings", FieldType::Tabs);
         tabs_field.tabs = vec![
-            crate::core::field::FieldTab {
-                label: "Content".to_string(),
-                description: None,
-                fields: vec![blocks_field],
-            },
+            crate::core::field::FieldTab::new("Content", vec![blocks_field]),
         ];
 
         let result = extract_join_data_from_form(&form, &[
@@ -531,9 +528,9 @@ mod tests {
         let mut field = make_field("tags", FieldType::Select);
         field.has_many = true;
         field.options = vec![
-            SelectOption { label: LocalizedString::Plain("Red".to_string()), value: "red".to_string() },
-            SelectOption { label: LocalizedString::Plain("Blue".to_string()), value: "blue".to_string() },
-            SelectOption { label: LocalizedString::Plain("Green".to_string()), value: "green".to_string() },
+            SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
+            SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
+            SelectOption::new(LocalizedString::Plain("Green".to_string()), "green"),
         ];
 
         transform_select_has_many(&mut form, &[field]);
@@ -616,16 +613,8 @@ mod tests {
                 name: "layout".to_string(),
                 field_type: FieldType::Tabs,
                 tabs: vec![
-                    crate::core::field::FieldTab {
-                        label: "General".to_string(),
-                        description: None,
-                        fields: vec![make_field("title", FieldType::Text)],
-                    },
-                    crate::core::field::FieldTab {
-                        label: "Content".to_string(),
-                        description: None,
-                        fields: vec![make_field("body", FieldType::Text)],
-                    },
+                    crate::core::field::FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
+                    crate::core::field::FieldTab::new("Content", vec![make_field("body", FieldType::Text)]),
                 ],
                 ..Default::default()
             },
@@ -686,11 +675,9 @@ pub(crate) async fn parse_multipart_form(
             let data = field.bytes().await
                 .map_err(|e| anyhow::anyhow!("Failed to read file data: {}", e))?;
             if !data.is_empty() {
-                file = Some(UploadedFile {
-                    filename,
-                    content_type,
-                    data: data.to_vec(),
-                });
+                file = Some(UploadedFileBuilder::new(filename, content_type)
+                    .data(data.to_vec())
+                    .build());
             }
         } else {
             let text = field.text().await.unwrap_or_default();

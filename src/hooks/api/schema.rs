@@ -258,61 +258,38 @@ mod tests {
     use std::sync::{Arc, RwLock};
 
     fn make_registry_with_collection() -> crate::core::SharedRegistry {
+        use crate::core::field::LocalizedString;
         let mut reg = crate::core::Registry::new();
-        reg.register_collection(crate::core::CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: crate::core::collection::CollectionLabels {
-                singular: Some(crate::core::field::LocalizedString::Plain("Post".to_string())),
-                plural: Some(crate::core::field::LocalizedString::Plain("Posts".to_string())),
+        let mut posts = crate::core::CollectionDefinition::new("posts");
+        posts.labels.singular = Some(LocalizedString::Plain("Post".to_string()));
+        posts.labels.plural = Some(LocalizedString::Plain("Posts".to_string()));
+        posts.timestamps = true;
+        let mut tags_rel = crate::core::field::RelationshipConfig::new("tags", true);
+        tags_rel.max_depth = Some(1);
+        posts.fields = vec![
+            crate::core::field::FieldDefinition {
+                name: "title".to_string(),
+                field_type: crate::core::field::FieldType::Text,
+                required: true,
+                ..Default::default()
             },
-            timestamps: true,
-            fields: vec![
-                crate::core::field::FieldDefinition {
-                    name: "title".to_string(),
-                    field_type: crate::core::field::FieldType::Text,
-                    required: true,
-                    ..Default::default()
-                },
-                crate::core::field::FieldDefinition {
-                    name: "tags".to_string(),
-                    field_type: crate::core::field::FieldType::Relationship,
-                    relationship: Some(crate::core::field::RelationshipConfig {
-                        collection: "tags".to_string(),
-                        has_many: true,
-                        max_depth: Some(1),
-                        polymorphic: vec![],
-                    }),
-                    ..Default::default()
-                },
-            ],
-            admin: crate::core::collection::CollectionAdmin::default(),
-            hooks: crate::core::collection::CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: crate::core::collection::CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        });
-        reg.register_global(crate::core::collection::GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: crate::core::collection::CollectionLabels {
-                singular: Some(crate::core::field::LocalizedString::Plain("Setting".to_string())),
-                plural: None,
+            crate::core::field::FieldDefinition {
+                name: "tags".to_string(),
+                field_type: crate::core::field::FieldType::Relationship,
+                relationship: Some(tags_rel),
+                ..Default::default()
             },
-            fields: vec![
-                crate::core::field::FieldDefinition {
-                    name: "site_name".to_string(),
-                    ..Default::default()
-                },
-            ],
-            hooks: crate::core::collection::CollectionHooks::default(),
-            access: crate::core::collection::CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        });
+        ];
+        reg.register_collection(posts);
+        let mut settings = crate::core::collection::GlobalDefinition::new("settings");
+        settings.labels.singular = Some(LocalizedString::Plain("Setting".to_string()));
+        settings.fields = vec![
+            crate::core::field::FieldDefinition {
+                name: "site_name".to_string(),
+                ..Default::default()
+            },
+        ];
+        reg.register_global(settings);
         Arc::new(RwLock::new(reg))
     }
 
@@ -435,15 +412,12 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_polymorphic_relationship() {
         let lua = Lua::new();
+        let mut rel_cfg = crate::core::field::RelationshipConfig::new("articles", true);
+        rel_cfg.polymorphic = vec!["articles".to_string(), "pages".to_string()];
         let field = crate::core::field::FieldDefinition {
             name: "refs".to_string(),
             field_type: crate::core::field::FieldType::Relationship,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "articles".to_string(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec!["articles".to_string(), "pages".to_string()],
-            }),
+            relationship: Some(rel_cfg),
             ..Default::default()
         };
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
@@ -465,12 +439,7 @@ mod tests {
         let field = crate::core::field::FieldDefinition {
             name: "author".to_string(),
             field_type: crate::core::field::FieldType::Relationship,
-            relationship: Some(crate::core::field::RelationshipConfig {
-                collection: "users".to_string(),
-                has_many: false,
-                max_depth: None,
-                polymorphic: vec![],
-            }),
+            relationship: Some(crate::core::field::RelationshipConfig::new("users", false)),
             ..Default::default()
         };
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
@@ -615,10 +584,7 @@ mod tests {
         let field = crate::core::field::FieldDefinition {
             name: "comments".to_string(),
             field_type: crate::core::field::FieldType::Join,
-            join: Some(crate::core::field::JoinConfig {
-                collection: "comments".to_string(),
-                on: "post_id".to_string(),
-            }),
+            join: Some(crate::core::field::JoinConfig::new("comments", "post_id")),
             ..Default::default()
         };
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
@@ -670,19 +636,10 @@ mod tests {
     fn get_global_with_no_plural_label() {
         use std::sync::{Arc, RwLock};
         let mut reg = crate::core::Registry::new();
-        reg.register_global(crate::core::collection::GlobalDefinition {
-            slug: "branding".to_string(),
-            labels: crate::core::collection::CollectionLabels {
-                singular: Some(crate::core::field::LocalizedString::Plain("Brand".to_string())),
-                plural: None, // no plural label
-            },
-            fields: vec![],
-            hooks: crate::core::collection::CollectionHooks::default(),
-            access: crate::core::collection::CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        });
+        let mut branding = crate::core::collection::GlobalDefinition::new("branding");
+        branding.labels.singular = Some(crate::core::field::LocalizedString::Plain("Brand".to_string()));
+        // no plural label
+        reg.register_global(branding);
         let registry = Arc::new(RwLock::new(reg));
 
         let lua = Lua::new();
@@ -713,26 +670,18 @@ mod tests {
         let field = crate::core::field::FieldDefinition {
             name: "content".to_string(),
             field_type: crate::core::field::FieldType::Blocks,
-            blocks: vec![
-                crate::core::field::BlockDefinition {
-                    block_type: "hero".to_string(),
-                    label: Some(crate::core::field::LocalizedString::Plain("Hero".to_string())),
-                    group: Some("Layout".to_string()),
-                    image_url: Some("/static/blocks/hero.svg".to_string()),
-                    ..Default::default()
-                },
-                crate::core::field::BlockDefinition {
-                    block_type: "text".to_string(),
-                    label: Some(crate::core::field::LocalizedString::Plain("Text".to_string())),
-                    group: Some("Content".to_string()),
-                    ..Default::default()
-                },
-                crate::core::field::BlockDefinition {
-                    block_type: "divider".to_string(),
-                    label: Some(crate::core::field::LocalizedString::Plain("Divider".to_string())),
-                    ..Default::default()
-                },
-            ],
+            blocks: {
+                let mut hero = crate::core::field::BlockDefinition::new("hero", vec![]);
+                hero.label = Some(crate::core::field::LocalizedString::Plain("Hero".to_string()));
+                hero.group = Some("Layout".to_string());
+                hero.image_url = Some("/static/blocks/hero.svg".to_string());
+                let mut text_block = crate::core::field::BlockDefinition::new("text", vec![]);
+                text_block.label = Some(crate::core::field::LocalizedString::Plain("Text".to_string()));
+                text_block.group = Some("Content".to_string());
+                let mut divider = crate::core::field::BlockDefinition::new("divider", vec![]);
+                divider.label = Some(crate::core::field::LocalizedString::Plain("Divider".to_string()));
+                vec![hero, text_block, divider]
+            },
             ..Default::default()
         };
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();

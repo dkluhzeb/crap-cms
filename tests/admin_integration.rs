@@ -20,103 +20,60 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::CrapConfig;
-use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::Registry;
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 fn make_posts_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "posts".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Post".to_string())),
-            plural: Some(LocalizedString::Plain("Posts".to_string())),
-        },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![FieldDefinition {
+        name: "title".to_string(),
+        required: true,
+        ..Default::default()
+    }];
+    def
 }
 
 fn make_users_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "users".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("User".to_string())),
-            plural: Some(LocalizedString::Plain("Users".to_string())),
+    let mut def = CollectionDefinition::new("users");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("User".to_string())),
+        plural: Some(LocalizedString::Plain("Users".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            required: true,
+            unique: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "email".to_string(),
-                field_type: FieldType::Email,
-                required: true,
-                unique: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "name".to_string(),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: Some(CollectionAuth { enabled: true, ..Default::default() }),
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
-}
-
-fn make_global_def() -> GlobalDefinition {
-    GlobalDefinition {
-        slug: "settings".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Settings".to_string())),
-            plural: None,
+        FieldDefinition {
+            name: "name".to_string(),
+            ..Default::default()
         },
-        fields: vec![
-            FieldDefinition {
-                name: "site_name".to_string(),
-                ..Default::default()
-            },
-        ],
-        hooks: CollectionHooks::default(),
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-    }
+    ];
+    def.auth = Some(CollectionAuth { enabled: true, ..Default::default() });
+    def
 }
 
 struct TestApp {
     _tmp: tempfile::TempDir,
     router: axum::Router,
-    pool: crap_cms::db::DbPool,
-    registry: crap_cms::core::SharedRegistry,
-    jwt_secret: String,
+    _pool: crap_cms::db::DbPool,
+    _registry: crap_cms::core::SharedRegistry,
+    _jwt_secret: String,
 }
 
 fn setup_app(
@@ -154,7 +111,12 @@ fn setup_app_with_config(
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
     let hook_runner =
-        HookRunner::new(tmp.path(), registry.clone(), &config).expect("create hook runner");
+        HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(registry.clone())
+            .config(&config)
+            .build()
+            .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
     let handlebars =
@@ -189,40 +151,10 @@ fn setup_app_with_config(
     TestApp {
         _tmp: tmp,
         router,
-        pool: db_pool,
-        registry,
-        jwt_secret: "test-jwt-secret".to_string(),
+        _pool: db_pool,
+        _registry: registry,
+        _jwt_secret: "test-jwt-secret".to_string(),
     }
-}
-
-/// Create a user in the database for auth tests.
-fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
-    let reg = app.registry.read().unwrap();
-    let def = reg.get_collection("users").unwrap().clone();
-    drop(reg);
-
-    let mut conn = app.pool.get().unwrap();
-    let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([
-        ("email".to_string(), email.to_string()),
-        ("name".to_string(), "Test User".to_string()),
-    ]);
-    let doc = query::create(&tx, "users", &def, &data, None).unwrap();
-    query::update_password(&tx, "users", &doc.id, password).unwrap();
-    tx.commit().unwrap();
-    doc.id
-}
-
-/// Generate a valid JWT cookie for the given user.
-fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
-    let claims = auth::Claims {
-        sub: user_id.to_string(),
-        collection: "users".to_string(),
-        email: email.to_string(),
-        exp: (chrono::Utc::now().timestamp() as u64) + 3600,
-    };
-    let token = auth::create_token(&claims, &app.jwt_secret).unwrap();
-    format!("crap_session={}", token)
 }
 
 /// Fixed CSRF token for tests.

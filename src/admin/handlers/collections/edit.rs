@@ -452,9 +452,15 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         } else {
             crate::service::update_document(
                 &pool, &runner, &slug_owned, &id_owned, &def_owned,
-                form_data, &join_data,
-                password.as_deref(), locale_ctx.as_ref(), locale,
-                user_doc.as_ref(), draft,
+                crate::service::WriteInput {
+                    data: form_data,
+                    join_data: &join_data,
+                    password: password.as_deref(),
+                    locale_ctx: locale_ctx.as_ref(),
+                    locale,
+                    draft,
+                },
+                user_doc.as_ref(),
             )
         };
 

@@ -219,9 +219,6 @@ fn field_options_comment(col: &CollectionDefinition) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::{
-        CollectionAccess, CollectionAdmin, CollectionHooks, CollectionLabels,
-    };
     use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
@@ -233,21 +230,10 @@ mod tests {
     }
 
     fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
-        CollectionDefinition {
-            slug: slug.to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields,
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new(slug);
+        def.timestamps = true;
+        def.fields = fields;
+        def
     }
 
     #[test]
@@ -271,12 +257,7 @@ mod tests {
             FieldDefinition {
                 name: "tags".to_string(),
                 field_type: FieldType::Relationship,
-                relationship: Some(RelationshipConfig {
-                    collection: "tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("tags", true)),
                 ..Default::default()
             },
         ]);
@@ -287,17 +268,14 @@ mod tests {
 
     #[test]
     fn python_polymorphic_has_one() {
+        let mut rc = RelationshipConfig::new("posts", false);
+        rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let col = make_col("comments", vec![
             FieldDefinition {
                 name: "subject".to_string(),
                 field_type: FieldType::Relationship,
                 required: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "posts".to_string(),
-                    has_many: false,
-                    max_depth: None,
-                    polymorphic: vec!["posts".to_string(), "pages".to_string()],
-                }),
+                relationship: Some(rc),
                 ..Default::default()
             },
         ]);
@@ -312,16 +290,13 @@ mod tests {
 
     #[test]
     fn python_polymorphic_has_many() {
+        let mut rc = RelationshipConfig::new("articles", true);
+        rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
         let col = make_col("posts", vec![
             FieldDefinition {
                 name: "related".to_string(),
                 field_type: FieldType::Relationship,
-                relationship: Some(RelationshipConfig {
-                    collection: "articles".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec!["articles".to_string(), "videos".to_string()],
-                }),
+                relationship: Some(rc),
                 ..Default::default()
             },
         ]);
@@ -341,12 +316,7 @@ mod tests {
                 name: "author".to_string(),
                 field_type: FieldType::Relationship,
                 required: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "users".to_string(),
-                    has_many: false,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("users", false)),
                 ..Default::default()
             },
         ]);
@@ -441,16 +411,13 @@ mod tests {
 
     #[test]
     fn python_blocks_field() {
+        let mut bd = BlockDefinition::new("text", vec![text_field("body", true)]);
+        bd.label = Some(LocalizedString::Plain("Text".to_string()));
         let col = make_col("pages", vec![
             FieldDefinition {
                 name: "content".to_string(),
                 field_type: FieldType::Blocks,
-                blocks: vec![BlockDefinition {
-                    block_type: "text".to_string(),
-                    fields: vec![text_field("body", true)],
-                    label: Some(LocalizedString::Plain("Text".to_string())),
-                    ..Default::default()
-                }],
+                blocks: vec![bd],
                 ..Default::default()
             },
         ]);
@@ -481,12 +448,7 @@ mod tests {
                 name: "images".to_string(),
                 field_type: FieldType::Upload,
                 required: true,
-                relationship: Some(RelationshipConfig {
-                    collection: String::new(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
+                relationship: Some(RelationshipConfig::new("", true)),
                 ..Default::default()
             },
         ]);
@@ -503,8 +465,8 @@ mod tests {
                 field_type: FieldType::Select,
                 required: true,
                 options: vec![
-                    SelectOption { label: LocalizedString::Plain("Draft".into()), value: "draft".into() },
-                    SelectOption { label: LocalizedString::Plain("Published".into()), value: "published".into() },
+                    SelectOption::new(LocalizedString::Plain("Draft".into()), "draft"),
+                    SelectOption::new(LocalizedString::Plain("Published".into()), "published"),
                 ],
                 ..Default::default()
             },
@@ -519,19 +481,11 @@ mod tests {
 
     #[test]
     fn python_global_output() {
-        let global = crate::core::collection::GlobalDefinition {
-            slug: "site_settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![
-                text_field("site_name", true),
-                text_field("tagline", false),
-            ],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        };
+        let mut global = crate::core::collection::GlobalDefinition::new("site_settings");
+        global.fields = vec![
+            text_field("site_name", true),
+            text_field("tagline", false),
+        ];
         let mut out = String::new();
         render_global(&mut out, &global);
         assert!(out.contains("class SiteSettings:"));
@@ -546,16 +500,9 @@ mod tests {
     fn python_full_render() {
         let mut registry = Registry::new();
         registry.register_collection(make_col("posts", vec![text_field("title", true)]));
-        registry.register_global(crate::core::collection::GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: CollectionLabels::default(),
-            fields: vec![text_field("name", true)],
-            hooks: CollectionHooks::default(),
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-        });
+        let mut settings = crate::core::collection::GlobalDefinition::new("settings");
+        settings.fields = vec![text_field("name", true)];
+        registry.register_global(settings);
         let out = render(&registry);
         assert!(out.contains("from dataclasses import dataclass"));
         assert!(out.contains("class Posts:"));
@@ -693,11 +640,7 @@ mod tests {
             FieldDefinition {
                 name: "sections".to_string(),
                 field_type: FieldType::Tabs,
-                tabs: vec![FieldTab {
-                    label: "Tab1".to_string(),
-                    description: None,
-                    fields: vec![text_field("tab_field", true)],
-                }],
+                tabs: vec![FieldTab::new("Tab1", vec![text_field("tab_field", true)])],
                 ..Default::default()
             },
         ]);

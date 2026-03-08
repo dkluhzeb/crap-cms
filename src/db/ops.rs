@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use anyhow::{Context as _, Result};
 
 use crate::core::{CollectionDefinition, Document};
+use crate::core::document::DocumentBuilder;
 use crate::core::collection::GlobalDefinition;
 use super::DbPool;
 use super::query::{self, FindQuery, FilterClause, FilterOp, Filter, LocaleContext};
@@ -81,7 +82,9 @@ pub fn find_by_id_full(
             field: "id".to_string(),
             op: FilterOp::Equals(id.to_string()),
         }));
-        let fq = FindQuery { filters, ..Default::default() };
+        let mut fq = FindQuery::new();
+        fq.filters = filters;
+        let fq = fq;
         query::find(conn, slug, def, &fq, locale_ctx)?
             .into_iter().next()
     } else {
@@ -105,10 +108,12 @@ fn document_from_snapshot(id: &str, snapshot: &serde_json::Value) -> Option<Docu
             fields.insert(k.clone(), v.clone());
         }
     }
-    Some(Document {
-        id: id.to_string(),
-        fields,
-        created_at: obj.get("created_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
-        updated_at: obj.get("updated_at").and_then(|v| v.as_str()).map(|s| s.to_string()),
-    })
+    let mut builder = DocumentBuilder::new(id).fields(fields);
+    if let Some(ts) = obj.get("created_at").and_then(|v| v.as_str()) {
+        builder = builder.created_at(ts);
+    }
+    if let Some(ts) = obj.get("updated_at").and_then(|v| v.as_str()) {
+        builder = builder.updated_at(ts);
+    }
+    Some(builder.build())
 }

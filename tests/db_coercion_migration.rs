@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::collection::{
-    CollectionAccess, CollectionAdmin, CollectionAuth, CollectionDefinition, CollectionHooks,
-    CollectionLabels, GlobalDefinition,
+    CollectionAuth, CollectionDefinition, CollectionLabels, GlobalDefinition,
 };
 use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType,
@@ -13,36 +12,26 @@ use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
 
 fn make_posts_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "posts".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Post".to_string())),
-            plural: Some(LocalizedString::Plain("Posts".to_string())),
+    let mut def = CollectionDefinition::new("posts");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "status".to_string(),
-                field_type: FieldType::Select,
-                default_value: Some(serde_json::json!("draft")),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
+        FieldDefinition {
+            name: "status".to_string(),
+            field_type: FieldType::Select,
+            default_value: Some(serde_json::json!("draft")),
+            ..Default::default()
+        },
+    ];
+    def
 }
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
@@ -95,121 +84,76 @@ fn seed_posts() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinitio
 }
 
 fn make_users_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "users".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("User".to_string())),
-            plural: Some(LocalizedString::Plain("Users".to_string())),
+    let mut def = CollectionDefinition::new("users");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("User".to_string())),
+        plural: Some(LocalizedString::Plain("Users".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            required: true,
+            unique: true,
+            ..Default::default()
         },
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "email".to_string(),
-                field_type: FieldType::Email,
-                required: true,
-                unique: true,
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "name".to_string(),
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: Some(CollectionAuth {
-            enabled: true,
-            verify_email: true,
-            ..CollectionAuth::default()
-        }),
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
+        FieldDefinition {
+            name: "name".to_string(),
+            ..Default::default()
+        },
+    ];
+    def.auth = Some(CollectionAuth {
+        enabled: true,
+        verify_email: true,
+        ..CollectionAuth::default()
+    });
+    def
 }
 
 fn make_articles_with_join_tables() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "articles".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("title", FieldType::Text),
-            // has-many relationship
-            FieldDefinition {
-                name: "tags".to_string(),
-                field_type: FieldType::Relationship,
-                relationship: Some(RelationshipConfig {
-                    collection: "tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
-                ..make_field("tags", FieldType::Relationship)
-            },
-            // array field with sub-fields
-            FieldDefinition {
-                name: "links".to_string(),
-                field_type: FieldType::Array,
-                fields: vec![
-                    make_field("url", FieldType::Text),
-                    make_field("label", FieldType::Text),
-                ],
-                ..make_field("links", FieldType::Array)
-            },
-            // blocks field
-            FieldDefinition {
-                name: "content".to_string(),
-                field_type: FieldType::Blocks,
-                blocks: vec![
-                    BlockDefinition {
-                        block_type: "paragraph".to_string(),
-                        fields: vec![make_field("text", FieldType::Textarea)],
-                        ..Default::default()
-                    },
-                    BlockDefinition {
-                        block_type: "image".to_string(),
-                        fields: vec![make_field("url", FieldType::Text)],
-                        ..Default::default()
-                    },
-                ],
-                ..make_field("content", FieldType::Blocks)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("articles");
+    def.timestamps = true;
+    def.fields = vec![
+        make_field("title", FieldType::Text),
+        // has-many relationship
+        FieldDefinition {
+            name: "tags".to_string(),
+            field_type: FieldType::Relationship,
+            relationship: Some(RelationshipConfig::new("tags", true)),
+            ..make_field("tags", FieldType::Relationship)
+        },
+        // array field with sub-fields
+        FieldDefinition {
+            name: "links".to_string(),
+            field_type: FieldType::Array,
+            fields: vec![
+                make_field("url", FieldType::Text),
+                make_field("label", FieldType::Text),
+            ],
+            ..make_field("links", FieldType::Array)
+        },
+        // blocks field
+        FieldDefinition {
+            name: "content".to_string(),
+            field_type: FieldType::Blocks,
+            blocks: vec![
+                BlockDefinition::new("paragraph", vec![make_field("text", FieldType::Textarea)]),
+                BlockDefinition::new("image", vec![make_field("url", FieldType::Text)]),
+            ],
+            ..make_field("content", FieldType::Blocks)
+        },
+    ];
+    def
 }
 
 fn setup_articles() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_articles_with_join_tables();
-    let tags_def = CollectionDefinition {
-        slug: "tags".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![make_field("name", FieldType::Text)],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut tags_def = CollectionDefinition::new("tags");
+    tags_def.timestamps = true;
+    tags_def.fields = vec![make_field("name", FieldType::Text)];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -220,28 +164,22 @@ fn setup_articles() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefin
 }
 
 fn make_global_def() -> GlobalDefinition {
-    GlobalDefinition {
-        slug: "site_settings".to_string(),
-        labels: CollectionLabels {
-            singular: Some(LocalizedString::Plain("Site Settings".to_string())),
-            plural: None,
+    let mut def = GlobalDefinition::new("site_settings");
+    def.labels = CollectionLabels {
+        singular: Some(LocalizedString::Plain("Site Settings".to_string())),
+        plural: None,
+    };
+    def.fields = vec![
+        FieldDefinition {
+            name: "site_name".to_string(),
+            ..Default::default()
         },
-        fields: vec![
-            FieldDefinition {
-                name: "site_name".to_string(),
-                ..Default::default()
-            },
-            FieldDefinition {
-                name: "tagline".to_string(),
-                ..Default::default()
-            },
-        ],
-        hooks: CollectionHooks::default(),
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-    }
+        FieldDefinition {
+            name: "tagline".to_string(),
+            ..Default::default()
+        },
+    ];
+    def
 }
 
 fn setup_global() -> (tempfile::TempDir, crap_cms::db::DbPool, GlobalDefinition) {
@@ -262,27 +200,13 @@ fn setup_global() -> (tempfile::TempDir, crap_cms::db::DbPool, GlobalDefinition)
 fn coerce_checkbox_values() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "forms".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "active".to_string(),
-                field_type: FieldType::Checkbox,
-                ..make_field("active", FieldType::Checkbox)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("forms");
+    def.timestamps = true;
+    def.fields = vec![FieldDefinition {
+        name: "active".to_string(),
+        field_type: FieldType::Checkbox,
+        ..make_field("active", FieldType::Checkbox)
+    }];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -312,21 +236,9 @@ fn coerce_checkbox_values() {
 fn coerce_number_valid() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "metrics".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![make_field("score", FieldType::Number)],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("metrics");
+    def.timestamps = true;
+    def.fields = vec![make_field("score", FieldType::Number)];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -346,21 +258,9 @@ fn coerce_number_valid() {
 fn coerce_number_invalid_returns_null() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "metrics2".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![make_field("score", FieldType::Number)],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("metrics2");
+    def.timestamps = true;
+    def.fields = vec![make_field("score", FieldType::Number)];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -380,21 +280,9 @@ fn coerce_number_invalid_returns_null() {
 fn coerce_number_empty_returns_null() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "metrics3".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![make_field("score", FieldType::Number)],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("metrics3");
+    def.timestamps = true;
+    def.fields = vec![make_field("score", FieldType::Number)];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -427,28 +315,16 @@ fn coerce_text_empty_returns_null() {
 fn checkbox_default_when_field_missing() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "checks".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("title", FieldType::Text),
-            FieldDefinition {
-                name: "enabled".to_string(),
-                field_type: FieldType::Checkbox,
-                ..make_field("enabled", FieldType::Checkbox)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("checks");
+    def.timestamps = true;
+    def.fields = vec![
+        make_field("title", FieldType::Text),
+        FieldDefinition {
+            name: "enabled".to_string(),
+            field_type: FieldType::Checkbox,
+            ..make_field("enabled", FieldType::Checkbox)
+        },
+    ];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -570,30 +446,18 @@ fn alter_adds_auth_columns_on_upgrade() {
     let registry = Registry::shared();
 
     // Start without auth
-    let mut def = CollectionDefinition {
-        slug: "members".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "email".to_string(),
-                field_type: FieldType::Email,
-                required: true,
-                unique: true,
-                ..make_field("email", FieldType::Email)
-            },
-            make_field("name", FieldType::Text),
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("members");
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "email".to_string(),
+            field_type: FieldType::Email,
+            required: true,
+            unique: true,
+            ..make_field("email", FieldType::Email)
+        },
+        make_field("name", FieldType::Text),
+    ];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -627,28 +491,16 @@ fn alter_adds_auth_columns_on_upgrade() {
 fn sync_adds_locale_columns() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "pages".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                localized: true,
-                ..Default::default()
-            },
-            make_field("slug_field", FieldType::Text),
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("pages");
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition {
+            name: "title".to_string(),
+            localized: true,
+            ..Default::default()
+        },
+        make_field("slug_field", FieldType::Text),
+    ];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -691,32 +543,21 @@ fn sync_global_creates_and_seeds() {
 // ── Group Field Tests ─────────────────────────────────────────────────────────
 
 fn make_group_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "pages_with_seo".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("title", FieldType::Text),
-            FieldDefinition {
-                name: "seo".to_string(),
-                field_type: FieldType::Group,
-                fields: vec![
-                    make_field("meta_title", FieldType::Text),
-                    make_field("meta_description", FieldType::Text),
-                ],
-                ..make_field("seo", FieldType::Group)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("pages_with_seo");
+    def.timestamps = true;
+    def.fields = vec![
+        make_field("title", FieldType::Text),
+        FieldDefinition {
+            name: "seo".to_string(),
+            field_type: FieldType::Group,
+            fields: vec![
+                make_field("meta_title", FieldType::Text),
+                make_field("meta_description", FieldType::Text),
+            ],
+            ..make_field("seo", FieldType::Group)
+        },
+    ];
+    def
 }
 
 fn setup_group_collection() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
@@ -815,10 +656,8 @@ fn select_group_prefix_in_find() {
     tx.commit().expect("Commit");
 
     // Select only "seo" -- should include all seo__* sub-fields
-    let q = query::FindQuery {
-        select: Some(vec!["seo".to_string()]),
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.select = Some(vec!["seo".to_string()]);
     let docs = ops::find_documents(&pool, "pages_with_seo", &def, &q, None).expect("Find");
     assert!(!docs.is_empty());
     let doc = &docs[0];
@@ -964,13 +803,11 @@ fn contains_filter_escapes_percent() {
     }
 
     // Filter with Contains("50%") -- should only match "50% off", NOT everything
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Contains("50%".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Contains("50%".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 1, "Contains('50%') should only match one document");
     assert_eq!(docs[0].get_str("title"), Some("50% off"));
@@ -999,13 +836,11 @@ fn contains_filter_escapes_underscore() {
     }
 
     // Filter with Contains("a_b") -- should only match literal "a_b", NOT "axb"
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Contains("a_b".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Contains("a_b".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
     assert_eq!(docs.len(), 1, "Contains('a_b') should only match literal underscore");
     assert_eq!(docs[0].get_str("title"), Some("a_b"));
@@ -1016,14 +851,12 @@ fn contains_filter_escapes_underscore() {
 #[test]
 fn validate_query_fields_passes_valid() {
     let def = make_posts_def();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Equals("test".to_string()),
-        })],
-        order_by: Some("status".to_string()),
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Equals("test".to_string()),
+    })];
+    q.order_by = Some("status".to_string());
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_ok(), "Valid fields should pass validation: {:?}", result.err());
 }
@@ -1031,13 +864,11 @@ fn validate_query_fields_passes_valid() {
 #[test]
 fn validate_query_fields_rejects_invalid_filter() {
     let def = make_posts_def();
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "nonexistent_field".to_string(),
-            op: query::FilterOp::Equals("test".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "nonexistent_field".to_string(),
+        op: query::FilterOp::Equals("test".to_string()),
+    })];
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid filter field should be rejected");
     let err_msg = result.unwrap_err().to_string();
@@ -1047,10 +878,8 @@ fn validate_query_fields_rejects_invalid_filter() {
 #[test]
 fn validate_query_fields_rejects_invalid_order() {
     let def = make_posts_def();
-    let q = query::FindQuery {
-        order_by: Some("nonexistent_field".to_string()),
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.order_by = Some("nonexistent_field".to_string());
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid order_by field should be rejected");
     let err_msg = result.unwrap_err().to_string();
@@ -1063,29 +892,17 @@ fn validate_query_fields_rejects_invalid_order() {
 fn migrate_default_value_with_quotes() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "books".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("title", FieldType::Text),
-            FieldDefinition {
-                name: "publisher".to_string(),
-                field_type: FieldType::Text,
-                default_value: Some(serde_json::json!("O'Reilly")),
-                ..make_field("publisher", FieldType::Text)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("books");
+    def.timestamps = true;
+    def.fields = vec![
+        make_field("title", FieldType::Text),
+        FieldDefinition {
+            name: "publisher".to_string(),
+            field_type: FieldType::Text,
+            default_value: Some(serde_json::json!("O'Reilly")),
+            ..make_field("publisher", FieldType::Text)
+        },
+    ];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -1111,28 +928,16 @@ fn migrate_default_value_with_quotes() {
 fn create_checkbox_truthy_values() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "flags".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("label", FieldType::Text),
-            FieldDefinition {
-                name: "active".to_string(),
-                field_type: FieldType::Checkbox,
-                ..make_field("active", FieldType::Checkbox)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("flags");
+    def.timestamps = true;
+    def.fields = vec![
+        make_field("label", FieldType::Text),
+        FieldDefinition {
+            name: "active".to_string(),
+            field_type: FieldType::Checkbox,
+            ..make_field("active", FieldType::Checkbox)
+        },
+    ];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -1159,28 +964,16 @@ fn create_checkbox_truthy_values() {
 fn create_checkbox_falsy_values() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "flags2".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("label", FieldType::Text),
-            FieldDefinition {
-                name: "active".to_string(),
-                field_type: FieldType::Checkbox,
-                ..make_field("active", FieldType::Checkbox)
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("flags2");
+    def.timestamps = true;
+    def.fields = vec![
+        make_field("label", FieldType::Text),
+        FieldDefinition {
+            name: "active".to_string(),
+            field_type: FieldType::Checkbox,
+            ..make_field("active", FieldType::Checkbox)
+        },
+    ];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -1207,21 +1000,9 @@ fn create_checkbox_falsy_values() {
 fn create_number_invalid_stores_null() {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
-    let def = CollectionDefinition {
-        slug: "metrics_invalid".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![make_field("score", FieldType::Number)],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    };
+    let mut def = CollectionDefinition::new("metrics_invalid");
+    def.timestamps = true;
+    def.fields = vec![make_field("score", FieldType::Number)];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());

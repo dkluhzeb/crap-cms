@@ -59,10 +59,7 @@ pub(super) fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&c
 
 /// Extract an EventUser from the AuthUser extension (for SSE event attribution).
 pub(super) fn get_event_user(auth_user: &Option<Extension<AuthUser>>) -> Option<crate::core::event::EventUser> {
-    auth_user.as_ref().map(|Extension(au)| crate::core::event::EventUser {
-        id: au.claims.sub.clone(),
-        email: au.claims.email.clone(),
-    })
+    auth_user.as_ref().map(|Extension(au)| crate::core::event::EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
 }
 
 /// Strip denied fields from a document's fields map.
@@ -478,42 +475,31 @@ mod tests {
     use crate::core::collection::*;
 
     fn test_def() -> CollectionDefinition {
-        CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: CollectionLabels::default(),
-            timestamps: true,
-            fields: vec![
-                FieldDefinition {
-                    name: "title".to_string(),
-                    field_type: FieldType::Text,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "status".to_string(),
-                    field_type: FieldType::Select,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "body".to_string(),
-                    field_type: FieldType::Richtext,
-                    ..Default::default()
-                },
-                FieldDefinition {
-                    name: "count".to_string(),
-                    field_type: FieldType::Number,
-                    ..Default::default()
-                },
-            ],
-            admin: CollectionAdmin::default(),
-            hooks: CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
-        }
+        let mut def = CollectionDefinition::new("posts");
+        def.timestamps = true;
+        def.fields = vec![
+            FieldDefinition {
+                name: "title".to_string(),
+                field_type: FieldType::Text,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "status".to_string(),
+                field_type: FieldType::Select,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "body".to_string(),
+                field_type: FieldType::Richtext,
+                ..Default::default()
+            },
+            FieldDefinition {
+                name: "count".to_string(),
+                field_type: FieldType::Number,
+                ..Default::default()
+            },
+        ];
+        def
     }
 
     // --- parse_where_params tests ---
@@ -760,16 +746,14 @@ mod tests {
 
     #[test]
     fn version_to_json_maps_all_fields() {
-        let v = VersionSnapshot {
-            id: "v1".to_string(),
-            parent: "doc1".to_string(),
-            version: 3,
-            status: "published".to_string(),
-            latest: true,
-            created_at: Some("2026-01-01T00:00:00Z".to_string()),
-            updated_at: Some("2026-01-01T00:00:00Z".to_string()),
-            snapshot: serde_json::json!({}),
-        };
+        let v = VersionSnapshot::builder("v1", "doc1")
+            .version(3)
+            .status("published")
+            .latest(true)
+            .created_at("2026-01-01T00:00:00Z")
+            .updated_at("2026-01-01T00:00:00Z")
+            .snapshot(serde_json::json!({}))
+            .build();
         let json = version_to_json(v);
         assert_eq!(json["id"], "v1");
         assert_eq!(json["version"], 3);

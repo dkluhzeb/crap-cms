@@ -133,6 +133,15 @@ mod tests {
     #[test]
     fn hex_encode_single_byte() {
         assert_eq!(hex_encode(&[0x42]), "42");
+        assert_eq!(hex_encode(&[0x00]), "00");
+        assert_eq!(hex_encode(&[0xff]), "ff");
+        assert_eq!(hex_encode(&[0x0a]), "0a");
+    }
+
+    #[test]
+    fn hex_encode_multiple_bytes() {
+        assert_eq!(hex_encode(&[0xde, 0xad, 0xbe, 0xef]), "deadbeef");
+        assert_eq!(hex_encode(&[0x01, 0x23, 0x45, 0x67]), "01234567");
     }
 
     // --- AES-GCM roundtrip ---

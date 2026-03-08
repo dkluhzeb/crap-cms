@@ -23,7 +23,11 @@ fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRe
     let db_pool = pool::create_pool(tmp.path(), &pool_config).expect("Failed to create pool");
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("Failed to sync schema");
 
-    let runner = HookRunner::new(&config_dir, registry.clone(), &config)
+    let runner = HookRunner::builder()
+        .config_dir(&config_dir)
+        .registry(registry.clone())
+        .config(&config)
+        .build()
         .expect("Failed to create HookRunner");
     (tmp, db_pool, registry, runner)
 }
@@ -120,12 +124,9 @@ fn execute_job_failing_handler_marks_failed() {
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
-    let job_def = JobDefinition {
-        slug: "test_failing_job".to_string(),
-        handler: "jobs.test_job.fail".to_string(),
-        timeout: 30,
-        ..Default::default()
-    };
+    let job_def = JobDefinition::builder("test_failing_job", "jobs.test_job.fail")
+        .timeout(30)
+        .build();
 
     // execute_job itself returns Ok — it handles the error internally
     scheduler::execute_job(&pool, &runner, &job_def, &claimed[0]).expect("execute_job");
@@ -153,12 +154,9 @@ fn execute_job_failing_handler_retries() {
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
-    let job_def = JobDefinition {
-        slug: "test_failing_job".to_string(),
-        handler: "jobs.test_job.fail".to_string(),
-        timeout: 30,
-        ..Default::default()
-    };
+    let job_def = JobDefinition::builder("test_failing_job", "jobs.test_job.fail")
+        .timeout(30)
+        .build();
 
     // claimed[0].attempt = 1 (after claim), max_attempts = 3 => should_retry = true
     scheduler::execute_job(&pool, &runner, &job_def, &claimed[0]).expect("execute_job");

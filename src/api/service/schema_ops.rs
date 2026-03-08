@@ -124,16 +124,12 @@ impl ContentService {
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
         let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             crate::service::update_global_document(
-                &pool,
-                &runner,
-                &slug,
-                &def_owned,
-                data,
-                &join_data,
-                locale_ctx.as_ref(),
-                None,
+                &pool, &runner, &slug, &def_owned,
+                crate::service::WriteInput {
+                    data, join_data: &join_data, password: None,
+                    locale_ctx: locale_ctx.as_ref(), locale: None, draft: false,
+                },
                 user_doc.as_ref(),
-                false,
             )
         })
         .await

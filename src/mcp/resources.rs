@@ -124,10 +124,7 @@ mod tests {
     #[test]
     fn read_collections_resource() {
         let mut reg = Registry::new();
-        reg.register_collection(CollectionDefinition {
-            slug: "posts".to_string(),
-            ..Default::default()
-        });
+        reg.register_collection(CollectionDefinition::new("posts"));
         let config = CrapConfig::default();
         let content = read_resource("crap://schema/collections", &reg, &config).unwrap();
         assert!(content.text.contains("posts"));
@@ -136,10 +133,7 @@ mod tests {
     #[test]
     fn read_globals_resource() {
         let mut reg = Registry::new();
-        reg.register_global(GlobalDefinition {
-            slug: "settings".to_string(),
-            ..Default::default()
-        });
+        reg.register_global(GlobalDefinition::new("settings"));
         let config = CrapConfig::default();
         let content = read_resource("crap://schema/globals", &reg, &config).unwrap();
         assert!(content.text.contains("settings"));

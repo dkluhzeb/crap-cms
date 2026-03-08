@@ -190,7 +190,12 @@ mod tests {
         migrate::sync_all(&db_pool, &shared, &config.locale).expect("sync schema");
 
         let registry = Registry::snapshot(&shared);
-        let runner = HookRunner::new(tmp.path(), shared, &config).expect("hook runner");
+        let runner = HookRunner::builder()
+            .config_dir(tmp.path())
+            .registry(shared)
+            .config(&config)
+            .build()
+            .expect("hook runner");
 
         let server = McpServer {
             pool: db_pool,
@@ -203,10 +208,7 @@ mod tests {
     }
 
     fn make_server() -> (tempfile::TempDir, McpServer) {
-        make_server_with(vec![CollectionDefinition {
-            slug: "posts".to_string(),
-            ..Default::default()
-        }])
+        make_server_with(vec![CollectionDefinition::new("posts")])
     }
 
     // ── protocol type helpers ──────────────────────────────────────────────

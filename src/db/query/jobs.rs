@@ -19,22 +19,12 @@ pub fn insert_job(
         rusqlite::params![id, slug, queue, data, max_attempts, scheduled_by],
     ).context("Failed to insert job run")?;
 
-    Ok(JobRun {
-        id,
-        slug: slug.to_string(),
-        status: JobStatus::Pending,
-        queue: queue.to_string(),
-        data: data.to_string(),
-        result: None,
-        error: None,
-        attempt: 0,
-        max_attempts,
-        scheduled_by: Some(scheduled_by.to_string()),
-        created_at: None,
-        started_at: None,
-        completed_at: None,
-        heartbeat_at: None,
-    })
+    Ok(JobRun::builder(id, slug)
+        .queue(queue)
+        .data(data)
+        .max_attempts(max_attempts)
+        .scheduled_by(scheduled_by)
+        .build())
 }
 
 /// Atomically claim up to `limit` pending jobs by setting them to running.
@@ -94,22 +84,19 @@ pub fn claim_pending_jobs(
 
         if affected > 0 {
             *extra_running.entry(slug.clone()).or_insert(0) += 1;
-            claimed.push(JobRun {
-                id,
-                slug,
-                status: JobStatus::Running,
-                queue,
-                data,
-                result: None,
-                error: None,
-                attempt: attempt + 1,
-                max_attempts,
-                scheduled_by,
-                created_at,
-                started_at: None,
-                completed_at: None,
-                heartbeat_at: None,
-            });
+            let mut b = JobRun::builder(id, slug)
+                .status(JobStatus::Running)
+                .queue(queue)
+                .data(data)
+                .attempt(attempt + 1)
+                .max_attempts(max_attempts);
+            if let Some(sb) = scheduled_by {
+                b = b.scheduled_by(sb);
+            }
+            if let Some(ca) = created_at {
+                b = b.created_at(ca);
+            }
+            claimed.push(b.build());
         }
     }
 
@@ -331,24 +318,38 @@ pub fn mark_stale(conn: &rusqlite::Connection, id: &str, error: &str) -> Result<
 }
 
 fn row_to_job_run(row: &rusqlite::Row) -> rusqlite::Result<JobRun> {
+    let id: String = row.get(0)?;
+    let slug: String = row.get(1)?;
     let status_str: String = row.get(2)?;
     let status = JobStatus::from_str(&status_str).unwrap_or(JobStatus::Pending);
-    Ok(JobRun {
-        id: row.get(0)?,
-        slug: row.get(1)?,
-        status,
-        queue: row.get(3)?,
-        data: row.get::<_, String>(4).unwrap_or_else(|_| "{}".to_string()),
-        result: row.get(5)?,
-        error: row.get(6)?,
-        attempt: row.get::<_, i64>(7).unwrap_or(0) as u32,
-        max_attempts: row.get::<_, i64>(8).unwrap_or(1) as u32,
-        scheduled_by: row.get(9)?,
-        created_at: row.get(10)?,
-        started_at: row.get(11)?,
-        completed_at: row.get(12)?,
-        heartbeat_at: row.get(13)?,
-    })
+    let mut b = JobRun::builder(id, slug)
+        .status(status)
+        .queue(row.get::<_, String>(3)?)
+        .data(row.get::<_, String>(4).unwrap_or_else(|_| "{}".to_string()))
+        .attempt(row.get::<_, i64>(7).unwrap_or(0) as u32)
+        .max_attempts(row.get::<_, i64>(8).unwrap_or(1) as u32);
+    if let Some(r) = row.get::<_, Option<String>>(5)? {
+        b = b.result(r);
+    }
+    if let Some(e) = row.get::<_, Option<String>>(6)? {
+        b = b.error(e);
+    }
+    if let Some(sb) = row.get::<_, Option<String>>(9)? {
+        b = b.scheduled_by(sb);
+    }
+    if let Some(ca) = row.get::<_, Option<String>>(10)? {
+        b = b.created_at(ca);
+    }
+    if let Some(sa) = row.get::<_, Option<String>>(11)? {
+        b = b.started_at(sa);
+    }
+    if let Some(ca) = row.get::<_, Option<String>>(12)? {
+        b = b.completed_at(ca);
+    }
+    if let Some(ha) = row.get::<_, Option<String>>(13)? {
+        b = b.heartbeat_at(ha);
+    }
+    Ok(b.build())
 }
 
 #[cfg(test)]

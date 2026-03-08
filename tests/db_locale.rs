@@ -1,10 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::collection::{
-    CollectionAccess, CollectionAdmin, CollectionDefinition, CollectionHooks,
-    CollectionLabels, GlobalDefinition,
-};
+use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition};
 use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType,
     RelationshipConfig,
@@ -31,28 +28,13 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
 // ── Locale-Aware Query Tests ──────────────────────────────────────────────────
 
 fn make_localized_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "localized_pages".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            FieldDefinition {
-                name: "title".to_string(),
-                localized: true,
-                ..Default::default()
-            },
-            make_field("slug_field", FieldType::Text),
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-            versions: None,
-            indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("localized_pages");
+    def.timestamps = true;
+    let mut title = FieldDefinition::default();
+    title.name = "title".to_string();
+    title.localized = true;
+    def.fields = vec![title, make_field("slug_field", FieldType::Text)];
+    def
 }
 
 fn setup_localized() -> (
@@ -224,13 +206,11 @@ fn filter_on_localized_field() {
     }
 
     // Filter on localized field
-    let q = query::FindQuery {
-        filters: vec![query::FilterClause::Single(query::Filter {
-            field: "title".to_string(),
-            op: query::FilterOp::Contains("Hello".to_string()),
-        })],
-        ..Default::default()
-    };
+    let mut q = query::FindQuery::new();
+    q.filters = vec![query::FilterClause::Single(query::Filter {
+        field: "title".to_string(),
+        op: query::FilterOp::Contains("Hello".to_string()),
+    })];
     let docs = ops::find_documents(&pool, "localized_pages", &def, &q, Some(&en_ctx))
         .expect("Find");
     assert_eq!(docs.len(), 1);
@@ -241,74 +221,42 @@ fn filter_on_localized_field() {
 
 /// Collection definition with localized join-table fields (has-many, array, blocks).
 fn make_localized_join_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "l10n_articles".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("slug_field", FieldType::Text),
-            // Localized has-many relationship
-            FieldDefinition {
-                name: "tags".to_string(),
-                field_type: FieldType::Relationship,
-                localized: true,
-                relationship: Some(RelationshipConfig {
-                    collection: "tags".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec![],
-                }),
-                ..Default::default()
-            },
-            // Localized array
-            FieldDefinition {
-                name: "links".to_string(),
-                field_type: FieldType::Array,
-                localized: true,
-                fields: vec![
-                    make_field("url", FieldType::Text),
-                    make_field("label", FieldType::Text),
-                ],
-                ..Default::default()
-            },
-            // Localized blocks
-            FieldDefinition {
-                name: "content".to_string(),
-                field_type: FieldType::Blocks,
-                localized: true,
-                blocks: vec![
-                    BlockDefinition {
-                        block_type: "paragraph".to_string(),
-                        fields: vec![make_field("text", FieldType::Textarea)],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-            // Non-localized blocks (control: should be unaffected by locale)
-            FieldDefinition {
-                name: "meta".to_string(),
-                field_type: FieldType::Blocks,
-                blocks: vec![
-                    BlockDefinition {
-                        block_type: "kv".to_string(),
-                        fields: vec![make_field("key", FieldType::Text)],
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-            indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("l10n_articles");
+    def.timestamps = true;
+    let mut tags_field = FieldDefinition::default();
+    tags_field.name = "tags".to_string();
+    tags_field.field_type = FieldType::Relationship;
+    tags_field.localized = true;
+    tags_field.relationship = Some(RelationshipConfig::new("tags", true));
+    let mut links_field = FieldDefinition::default();
+    links_field.name = "links".to_string();
+    links_field.field_type = FieldType::Array;
+    links_field.localized = true;
+    links_field.fields = vec![
+        make_field("url", FieldType::Text),
+        make_field("label", FieldType::Text),
+    ];
+    let mut content_field = FieldDefinition::default();
+    content_field.name = "content".to_string();
+    content_field.field_type = FieldType::Blocks;
+    content_field.localized = true;
+    content_field.blocks = vec![
+        BlockDefinition::new("paragraph", vec![make_field("text", FieldType::Textarea)]),
+    ];
+    let mut meta_field = FieldDefinition::default();
+    meta_field.name = "meta".to_string();
+    meta_field.field_type = FieldType::Blocks;
+    meta_field.blocks = vec![
+        BlockDefinition::new("kv", vec![make_field("key", FieldType::Text)]),
+    ];
+    def.fields = vec![
+        make_field("slug_field", FieldType::Text),
+        tags_field,
+        links_field,
+        content_field,
+        meta_field,
+    ];
+    def
 }
 
 fn setup_localized_joins() -> (
@@ -320,21 +268,9 @@ fn setup_localized_joins() -> (
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_localized_join_def();
-    let tags_def = CollectionDefinition {
-        slug: "tags".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![make_field("name", FieldType::Text)],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-            indexes: Vec::new(),
-    };
+    let mut tags_def = CollectionDefinition::new("tags");
+    tags_def.timestamps = true;
+    tags_def.fields = vec![make_field("name", FieldType::Text)];
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -1081,40 +1017,20 @@ fn join_fallback_default_locale_no_fallback_needed() {
 // ── Group + Locale Tests (Collections) ────────────────────────────────────────
 
 fn make_localized_group_def() -> CollectionDefinition {
-    CollectionDefinition {
-        slug: "pages_l10n".to_string(),
-        labels: CollectionLabels::default(),
-        timestamps: true,
-        fields: vec![
-            make_field("title", FieldType::Text),
-            FieldDefinition {
-                name: "seo".to_string(),
-                field_type: FieldType::Group,
-                fields: vec![
-                    FieldDefinition {
-                        name: "meta_title".to_string(),
-                        localized: true,
-                        ..Default::default()
-                    },
-                    FieldDefinition {
-                        name: "meta_description".to_string(),
-                        localized: true,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-        ],
-        admin: CollectionAdmin::default(),
-        hooks: CollectionHooks::default(),
-        auth: None,
-        upload: None,
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-            indexes: Vec::new(),
-    }
+    let mut def = CollectionDefinition::new("pages_l10n");
+    def.timestamps = true;
+    let mut meta_title = FieldDefinition::default();
+    meta_title.name = "meta_title".to_string();
+    meta_title.localized = true;
+    let mut meta_description = FieldDefinition::default();
+    meta_description.name = "meta_description".to_string();
+    meta_description.localized = true;
+    let mut seo = FieldDefinition::default();
+    seo.name = "seo".to_string();
+    seo.field_type = FieldType::Group;
+    seo.fields = vec![meta_title, meta_description];
+    def.fields = vec![make_field("title", FieldType::Text), seo];
+    def
 }
 
 fn locale_config() -> LocaleConfig {
@@ -1203,35 +1119,19 @@ fn collection_localized_group_write_and_read() {
 // ── Group + Locale Tests (Globals) ────────────────────────────────────────────
 
 fn make_global_with_localized_group() -> GlobalDefinition {
-    GlobalDefinition {
-        slug: "site_l10n".to_string(),
-        labels: CollectionLabels::default(),
-        fields: vec![
-            make_field("site_name", FieldType::Text),
-            FieldDefinition {
-                name: "seo".to_string(),
-                field_type: FieldType::Group,
-                fields: vec![
-                    FieldDefinition {
-                        name: "meta_title".to_string(),
-                        localized: true,
-                        ..Default::default()
-                    },
-                    FieldDefinition {
-                        name: "meta_description".to_string(),
-                        localized: true,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            },
-        ],
-        hooks: CollectionHooks::default(),
-        access: CollectionAccess::default(),
-        mcp: Default::default(),
-        live: None,
-        versions: None,
-    }
+    let mut def = GlobalDefinition::new("site_l10n");
+    let mut meta_title = FieldDefinition::default();
+    meta_title.name = "meta_title".to_string();
+    meta_title.localized = true;
+    let mut meta_description = FieldDefinition::default();
+    meta_description.name = "meta_description".to_string();
+    meta_description.localized = true;
+    let mut seo = FieldDefinition::default();
+    seo.name = "seo".to_string();
+    seo.field_type = FieldType::Group;
+    seo.fields = vec![meta_title, meta_description];
+    def.fields = vec![make_field("site_name", FieldType::Text), seo];
+    def
 }
 
 /// Global: localized group creates seo__meta_title__en, seo__meta_title__de columns.

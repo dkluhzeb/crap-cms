@@ -1,7 +1,7 @@
 //! Tonic gRPC service implementing all ContentAPI RPCs.
 
 mod auth;
-mod collection_ops;
+mod collection;
 mod convert;
 mod schema_ops;
 
@@ -135,11 +135,7 @@ impl ContentService {
         let def = self.registry.get_collection(&claims.collection)?.clone();
         let conn = self.pool.get().ok()?;
         let doc = query::find_by_id(&conn, &claims.collection, &def, &claims.sub, None).ok()??;
-        Some(AuthUser {
-            claims,
-            user_doc: doc,
-            ui_locale: "en".to_string(),
-        })
+        Some(AuthUser::new(claims, doc))
     }
 
     /// Check collection-level access, returning the AccessResult or a Status error.
@@ -168,10 +164,7 @@ impl ContentService {
 
     /// Extract an EventUser from the gRPC AuthUser (for SSE event attribution).
     fn event_user_from(auth_user: &Option<AuthUser>) -> Option<EventUser> {
-        auth_user.as_ref().map(|au| EventUser {
-            id: au.claims.sub.clone(),
-            email: au.claims.email.clone(),
-        })
+        auth_user.as_ref().map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
     }
 
     /// Strip field-level read-denied fields from a proto document.

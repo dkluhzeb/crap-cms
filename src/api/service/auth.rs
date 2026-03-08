@@ -5,6 +5,7 @@ use tonic::{Request, Response, Status};
 
 use crate::api::content;
 use crate::core::auth;
+use crate::core::auth::ClaimsBuilder;
 use crate::core::email;
 use crate::db::query;
 
@@ -116,12 +117,10 @@ impl ContentService {
             .map(|a| a.token_expiry)
             .unwrap_or(7200);
 
-        let claims = auth::Claims {
-            sub: user.id.clone(),
-            collection: req.collection.clone(),
-            email: user_email,
-            exp: (chrono::Utc::now().timestamp() as u64) + expiry,
-        };
+        let claims = ClaimsBuilder::new(&user.id, &req.collection)
+            .email(user_email)
+            .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+            .build();
 
         let token = auth::create_token(&claims, &self.jwt_secret)
             .map_err(|e| { tracing::error!("Token creation error: {}", e); Status::internal("Internal error") })?;

@@ -435,28 +435,17 @@ mod tests {
 
     #[test]
     fn build_collection_context_includes_all_fields() {
-        let def = CollectionDefinition {
-            slug: "posts".to_string(),
-            labels: crate::core::collection::CollectionLabels {
-                singular: Some(crate::core::field::LocalizedString::Plain("Post".to_string())),
-                plural: Some(crate::core::field::LocalizedString::Plain("Posts".to_string())),
-            },
-            timestamps: true,
-            fields: vec![FieldDefinition {
-                name: "title".to_string(),
-                required: true,
-                ..Default::default()
-            }],
-            admin: crate::core::collection::CollectionAdmin::default(),
-            hooks: crate::core::collection::CollectionHooks::default(),
-            auth: None,
-            upload: None,
-            access: crate::core::collection::CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
-            indexes: Vec::new(),
+        let mut def = CollectionDefinition::new("posts");
+        def.labels = crate::core::collection::CollectionLabels {
+            singular: Some(crate::core::field::LocalizedString::Plain("Post".to_string())),
+            plural: Some(crate::core::field::LocalizedString::Plain("Posts".to_string())),
         };
+        def.timestamps = true;
+        def.fields = vec![FieldDefinition {
+            name: "title".to_string(),
+            required: true,
+            ..Default::default()
+        }];
         let ctx = build_collection_context(&def);
         assert_eq!(ctx["slug"], "posts");
         assert_eq!(ctx["display_name"], "Posts");
@@ -475,22 +464,15 @@ mod tests {
 
     #[test]
     fn build_global_context_includes_all_fields() {
-        let def = crate::core::collection::GlobalDefinition {
-            slug: "settings".to_string(),
-            labels: crate::core::collection::CollectionLabels {
-                singular: Some(crate::core::field::LocalizedString::Plain("Settings".to_string())),
-                plural: None,
-            },
-            fields: vec![FieldDefinition {
-                name: "site_name".to_string(),
-                ..Default::default()
-            }],
-            hooks: crate::core::collection::CollectionHooks::default(),
-            access: crate::core::collection::CollectionAccess::default(),
-            mcp: Default::default(),
-            live: None,
-            versions: None,
+        let mut def = crate::core::collection::GlobalDefinition::new("settings");
+        def.labels = crate::core::collection::CollectionLabels {
+            singular: Some(crate::core::field::LocalizedString::Plain("Settings".to_string())),
+            plural: None,
         };
+        def.fields = vec![FieldDefinition {
+            name: "site_name".to_string(),
+            ..Default::default()
+        }];
         let ctx = build_global_context(&def);
         assert_eq!(ctx["slug"], "settings");
         assert_eq!(ctx["display_name"], "Settings");
@@ -731,14 +713,14 @@ mod tests {
 
     #[test]
     fn context_builder_document_with_status() {
-        let doc = crate::core::Document {
-            id: "doc1".to_string(),
-            fields: std::collections::HashMap::from([
+        use crate::core::document::DocumentBuilder;
+        let doc = DocumentBuilder::new("doc1")
+            .fields(std::collections::HashMap::from([
                 ("title".to_string(), json!("Hello")),
-            ]),
-            created_at: Some("2026-01-01".to_string()),
-            updated_at: Some("2026-01-02".to_string()),
-        };
+            ]))
+            .created_at("2026-01-01".to_string())
+            .updated_at("2026-01-02".to_string())
+            .build();
         let data = Map::new();
         let builder = ContextBuilder { data };
         let builder = builder.document_with_status(&doc, "draft");

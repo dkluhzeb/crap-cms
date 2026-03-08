@@ -11,6 +11,7 @@ use serde::Deserialize;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::AdminState;
 use crate::core::auth;
+use crate::core::auth::ClaimsBuilder;
 use crate::core::email;
 use crate::db::query;
 
@@ -152,12 +153,10 @@ pub async fn login_action(
         .unwrap_or(state.config.auth.token_expiry);
 
     // Create JWT
-    let claims = auth::Claims {
-        sub: user.id.clone(),
-        collection: form.collection.clone(),
-        email: user_email,
-        exp: (chrono::Utc::now().timestamp() as u64) + expiry,
-    };
+    let claims = ClaimsBuilder::new(&user.id, &form.collection)
+        .email(user_email)
+        .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+        .build();
 
     let token = match auth::create_token(&claims, &state.jwt_secret) {
         Ok(t) => t,
@@ -234,12 +233,10 @@ pub async fn session_refresh(
         .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
         .unwrap_or(state.config.auth.token_expiry);
 
-    let new_claims = auth::Claims {
-        sub: claims.sub,
-        collection: claims.collection,
-        email: claims.email,
-        exp: (chrono::Utc::now().timestamp() as u64) + expiry,
-    };
+    let new_claims = ClaimsBuilder::new(claims.sub, claims.collection)
+        .email(claims.email)
+        .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+        .build();
 
     let token = match auth::create_token(&new_claims, &state.jwt_secret) {
         Ok(t) => t,

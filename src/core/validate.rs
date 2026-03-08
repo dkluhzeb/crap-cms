@@ -10,6 +10,12 @@ pub struct FieldError {
     pub message: String,
 }
 
+impl FieldError {
+    pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self { field: field.into(), message: message.into() }
+    }
+}
+
 /// Structured validation error containing per-field messages.
 #[derive(Debug, Clone)]
 pub struct ValidationError {
@@ -17,6 +23,11 @@ pub struct ValidationError {
 }
 
 impl ValidationError {
+    pub fn new(errors: Vec<FieldError>) -> Self {
+        Self { errors }
+    }
+
+
     /// Convert errors into a field-name-keyed map for template rendering.
     pub fn to_field_map(&self) -> HashMap<String, String> {
         self.errors.iter()
