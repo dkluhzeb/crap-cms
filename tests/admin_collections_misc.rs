@@ -1305,3 +1305,40 @@ async fn delete_confirm_page_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+/// Regression: delete confirmation page should still render (200) even when
+/// the document's table has a schema mismatch (e.g., missing column), so that
+/// users can delete broken/orphaned documents.
+#[tokio::test]
+async fn delete_confirm_page_with_schema_mismatch_returns_200() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "delsm@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "delsm@test.com");
+
+    // Create a document normally
+    let mut conn = app.pool.get().unwrap();
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    let tx = conn.transaction().unwrap();
+    let data = std::collections::HashMap::from([("title".to_string(), "Broken Doc".to_string())]);
+    let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
+    tx.commit().unwrap();
+
+    // Simulate schema mismatch: rename the title column so SELECT fails
+    conn.execute_batch("ALTER TABLE posts RENAME COLUMN title TO title_old;").unwrap();
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get(format!("/admin/collections/posts/{}/delete", doc.id))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    // Should still render the delete confirmation page, not 500
+    assert_eq!(resp.status(), StatusCode::OK);
+}

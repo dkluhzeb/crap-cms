@@ -14,7 +14,7 @@ use crate::db::query::AccessResult;
 use super::{
     get_user_doc, get_event_user, check_access_or_forbid, extract_editor_locale,
     forbidden, htmx_redirect,
-    render_or_error, not_found, server_error,
+    render_or_error, not_found,
 };
 
 /// GET /admin/collections/{slug}/{id}/delete — delete confirmation page
@@ -39,15 +39,18 @@ pub async fn delete_confirm(
         _ => {}
     }
 
-    let document = match ops::find_document_by_id(&state.pool, &slug, &def, &id, None) {
-        Ok(Some(doc)) => doc,
+    let title_value = match ops::find_document_by_id(&state.pool, &slug, &def, &id, None) {
+        Ok(Some(doc)) => def.title_field()
+            .and_then(|f| doc.get_str(f))
+            .map(|s| s.to_string()),
         Ok(None) => return not_found(&state, &format!("Document '{}' not found", id)).into_response(),
-        Err(e) => { tracing::error!("Document delete query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
+        Err(e) => {
+            // Schema mismatch or other query error — still allow deletion.
+            // The DELETE query only needs the ID, not column definitions.
+            tracing::warn!("Could not load document for delete confirmation ({}), proceeding anyway: {}", id, e);
+            None
+        }
     };
-
-    let title_value = def.title_field()
-        .and_then(|f| document.get_str(f))
-        .map(|s| s.to_string());
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
