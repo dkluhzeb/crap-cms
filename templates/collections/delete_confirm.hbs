@@ -1,3 +1,20 @@
+{{#if back_references}}
+<div class="card card--warning">
+  <div class="card__body">
+    <p><strong>{{t "delete_has_references"}}</strong></p>
+    <ul>
+      {{#each back_references}}
+      <li>
+        <strong>{{this.owner_label}}</strong> — {{this.count}} {{t "documents"}}
+        <span class="text--muted">({{this.field_label}})</span>
+      </li>
+      {{/each}}
+    </ul>
+    <p class="text--muted">{{t "delete_references_warning"}}</p>
+  </div>
+</div>
+{{/if}}
+
 <div class="card">
   <div class="card__body">
     <p>{{t "confirm_delete" name=collection.singular_name}}</p>

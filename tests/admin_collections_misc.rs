@@ -1342,3 +1342,87 @@ async fn delete_confirm_page_with_schema_mismatch_returns_200() {
     // Should still render the delete confirmation page, not 500
     assert_eq!(resp.status(), StatusCode::OK);
 }
+
+// ── Back-reference warning on delete confirmation ────────────────────
+
+#[tokio::test]
+async fn delete_confirm_shows_back_references_warning() {
+    let media = CollectionDefinition::new("media");
+    let mut posts = CollectionDefinition::new("posts");
+    posts.labels = Labels {
+        singular: Some(LocalizedString::Plain("Post".to_string())),
+        plural: Some(LocalizedString::Plain("Posts".to_string())),
+    };
+    posts.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("image", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build(),
+    ];
+    let app = setup_app(vec![media, posts, make_users_def()], vec![]);
+
+    let user_id = create_test_user(&app, "admin@test.com", "password123");
+    let cookie = make_auth_cookie(&app, &user_id, "admin@test.com");
+
+    // Create a media document and a post referencing it
+    let conn = app.pool.get().unwrap();
+    conn.execute("INSERT INTO media (id) VALUES ('m1')", []).unwrap();
+    conn.execute(
+        "INSERT INTO posts (id, title, image) VALUES ('p1', 'My Post', 'm1')",
+        [],
+    ).unwrap();
+    drop(conn);
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin/collections/media/m1/delete")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    // Should contain the warning card with back-reference info
+    assert!(body.contains("card--warning"), "Should show warning card");
+    assert!(body.contains("Posts"), "Should mention the referencing collection");
+}
+
+#[tokio::test]
+async fn delete_confirm_no_warning_when_unreferenced() {
+    let media = CollectionDefinition::new("media");
+    let mut posts = CollectionDefinition::new("posts");
+    posts.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        FieldDefinition::builder("image", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build(),
+    ];
+    let app = setup_app(vec![media, posts, make_users_def()], vec![]);
+
+    let user_id = create_test_user(&app, "admin@test.com", "password123");
+    let cookie = make_auth_cookie(&app, &user_id, "admin@test.com");
+
+    // Create a media document with no references
+    let conn = app.pool.get().unwrap();
+    conn.execute("INSERT INTO media (id) VALUES ('m1')", []).unwrap();
+    drop(conn);
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin/collections/media/m1/delete")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(!body.contains("card--warning"), "Should NOT show warning when unreferenced");
+}

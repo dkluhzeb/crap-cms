@@ -9,7 +9,7 @@ use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType, Breadcrumb};
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::ops;
-use crate::db::query::AccessResult;
+use crate::db::query::{self, AccessResult};
 
 use super::{
     get_user_doc, get_event_user, check_access_or_forbid, extract_editor_locale,
@@ -52,6 +52,11 @@ pub async fn delete_confirm(
         }
     };
 
+    // Scan for back-references
+    let back_refs = state.pool.get().ok().map(|conn| {
+        query::find_back_references(&conn, &state.registry, &slug, &id, &state.config.locale)
+    }).unwrap_or_default();
+
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
@@ -62,6 +67,7 @@ pub async fn delete_confirm(
         .collection_def(&def)
         .set("document_id", serde_json::json!(id))
         .set("title_value", serde_json::json!(title_value))
+        .set("back_references", serde_json::json!(back_refs))
         .breadcrumbs(vec![
             Breadcrumb::link("Collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),

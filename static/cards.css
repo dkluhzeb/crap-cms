@@ -57,6 +57,11 @@ a.card:hover {
   color: var(--text-tertiary) !important;
 }
 
+.card--warning {
+  border-color: var(--color-warning);
+  background-color: var(--color-warning-bg);
+}
+
 .card__badge {
   display: inline-block;
   padding: 2px 8px;
