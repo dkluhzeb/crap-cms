@@ -114,7 +114,25 @@ pub async fn edit_form(
     }
 
     let values: HashMap<String, String> = document.fields.iter()
-        .map(|(k, v)| {
+        .flat_map(|(k, v)| {
+            // Group fields are hydrated as nested objects — flatten back to
+            // prefixed column names (e.g. location → location__venue_name)
+            // so that build_field_contexts can find the sub-field values.
+            if let serde_json::Value::Object(obj) = v {
+                if def.fields.iter().any(|f| f.name == *k && f.field_type == crate::core::field::FieldType::Group) {
+                    return obj.iter().map(|(sub_k, sub_v)| {
+                        let col = format!("{}__{}", k, sub_k);
+                        let s = match sub_v {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Number(n) => n.to_string(),
+                            serde_json::Value::Bool(b) => b.to_string(),
+                            serde_json::Value::Null => String::new(),
+                            other => other.to_string(),
+                        };
+                        (col, s)
+                    }).collect::<Vec<_>>();
+                }
+            }
             let s = match v {
                 serde_json::Value::String(s) => s.clone(),
                 serde_json::Value::Number(n) => n.to_string(),
@@ -122,7 +140,7 @@ pub async fn edit_form(
                 serde_json::Value::Null => String::new(),
                 other => other.to_string(),
             };
-            (k.clone(), s)
+            vec![(k.clone(), s)]
         })
         .collect();
 
