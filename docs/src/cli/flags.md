@@ -87,6 +87,19 @@ crap-cms user list ./my-project
 crap-cms user list ./my-project -c admins
 ```
 
+#### `user info`
+
+```bash
+crap-cms user info <CONFIG> [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
+```
+
+Shows detailed info for a single user: ID, email, locked/verified status, password status, timestamps, and all field values.
+
+```bash
+crap-cms user info ./my-project -e admin@example.com
+crap-cms user info ./my-project --id abc123
+```
+
 #### `user delete`
 
 ```bash
@@ -106,6 +119,15 @@ crap-cms user delete <CONFIG> [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-y]
 crap-cms user lock <CONFIG> [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 crap-cms user unlock <CONFIG> [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
 ```
+
+#### `user verify` / `user unverify`
+
+```bash
+crap-cms user verify <CONFIG> [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
+crap-cms user unverify <CONFIG> [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>]
+```
+
+Manually mark a user's email as verified or unverified. Only works on collections with `verify_email = true`. Useful when email is not configured.
 
 #### `user change-password`
 

@@ -208,6 +208,24 @@ pub enum UserAction {
         collection: String,
     },
 
+    /// Show detailed info for a single user
+    Info {
+        /// Path to the config directory
+        config: PathBuf,
+
+        /// Auth collection slug
+        #[arg(short, long, default_value = "users")]
+        collection: String,
+
+        /// User email
+        #[arg(short, long)]
+        email: Option<String>,
+
+        /// User ID
+        #[arg(long)]
+        id: Option<String>,
+    },
+
     /// Delete a user from an auth collection
     Delete {
         /// Path to the config directory
@@ -250,6 +268,42 @@ pub enum UserAction {
 
     /// Unlock a user account (allow login)
     Unlock {
+        /// Path to the config directory
+        config: PathBuf,
+
+        /// Auth collection slug
+        #[arg(short, long, default_value = "users")]
+        collection: String,
+
+        /// User email
+        #[arg(short, long)]
+        email: Option<String>,
+
+        /// User ID
+        #[arg(long)]
+        id: Option<String>,
+    },
+
+    /// Verify a user account (mark email as verified)
+    Verify {
+        /// Path to the config directory
+        config: PathBuf,
+
+        /// Auth collection slug
+        #[arg(short, long, default_value = "users")]
+        collection: String,
+
+        /// User email
+        #[arg(short, long)]
+        email: Option<String>,
+
+        /// User ID
+        #[arg(long)]
+        id: Option<String>,
+    },
+
+    /// Unverify a user account (mark email as unverified)
+    Unverify {
         /// Path to the config directory
         config: PathBuf,
 

@@ -19,6 +19,10 @@ pub fn run(action: super::UserAction) -> Result<()> {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_list(&pool, &registry, &collection)
         }
+        super::UserAction::Info { config, collection, email, id } => {
+            let (pool, registry) = super::load_config_and_sync(&config)?;
+            user_info(&pool, &registry, &collection, email, id)
+        }
         super::UserAction::Delete { config, collection, email, id, confirm } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_delete(&pool, &registry, &collection, email, id, confirm)
@@ -30,6 +34,14 @@ pub fn run(action: super::UserAction) -> Result<()> {
         super::UserAction::Unlock { config, collection, email, id } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_unlock(&pool, &registry, &collection, email, id)
+        }
+        super::UserAction::Verify { config, collection, email, id } => {
+            let (pool, registry) = super::load_config_and_sync(&config)?;
+            user_verify(&pool, &registry, &collection, email, id)
+        }
+        super::UserAction::Unverify { config, collection, email, id } => {
+            let (pool, registry) = super::load_config_and_sync(&config)?;
+            user_unverify(&pool, &registry, &collection, email, id)
         }
         super::UserAction::ChangePassword { config, collection, email, id, password } => {
             let cfg = crate::config::CrapConfig::load(&config)
@@ -305,6 +317,73 @@ pub fn user_list(
     Ok(())
 }
 
+/// Show detailed info for a single user.
+/// Untestable: depends on resolve_user which uses interactive dialoguer.
+#[cfg(not(tarpaulin_include))]
+pub fn user_info(
+    pool: &crate::db::DbPool,
+    registry: &crate::core::SharedRegistry,
+    collection: &str,
+    email: Option<String>,
+    id: Option<String>,
+) -> Result<()> {
+    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+
+    let verify_email = def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false);
+
+    let conn = pool.get().context("Failed to get database connection")?;
+
+    let locked = crate::db::query::is_locked(&conn, collection, &doc.id).unwrap_or(false);
+    let has_pw = crate::db::query::has_password(&conn, collection, &doc.id).unwrap_or(false);
+
+    let user_email = doc.fields.get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+
+    println!("User: {}", doc.id);
+    println!("Collection: {}", collection);
+    println!("Email: {}", user_email);
+
+    println!("\nStatus:");
+    println!("  Locked:    {}", if locked { "yes" } else { "no" });
+    if verify_email {
+        let verified = crate::db::query::is_verified(&conn, collection, &doc.id).unwrap_or(false);
+        println!("  Verified:  {}", if verified { "yes" } else { "no" });
+    }
+    println!("  Password:  {}", if has_pw { "set" } else { "not set" });
+
+    // Timestamps
+    let created = doc.fields.get("created_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    let updated = doc.fields.get("updated_at")
+        .and_then(|v| v.as_str())
+        .unwrap_or("-");
+    println!("\nTimestamps:");
+    println!("  Created:   {}", created);
+    println!("  Updated:   {}", updated);
+
+    // Extra fields (skip email, created_at, updated_at — already shown)
+    let skip = ["email", "created_at", "updated_at"];
+    let extra: Vec<_> = doc.fields.iter()
+        .filter(|(k, _)| !skip.contains(&k.as_str()))
+        .collect();
+
+    if !extra.is_empty() {
+        println!("\nFields:");
+        for (key, val) in &extra {
+            let display = match val {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Null => "-".to_string(),
+                other => other.to_string(),
+            };
+            println!("  {:<12} {}", format!("{}:", key), display);
+        }
+    }
+
+    Ok(())
+}
+
 /// Delete a user from an auth collection.
 /// Untestable: interactive confirmation via dialoguer::Confirm.
 #[cfg(not(tarpaulin_include))]
@@ -388,6 +467,62 @@ pub fn user_unlock(
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
     println!("Unlocked user {} ({}) in '{}'", doc.id, user_email, collection);
+
+    Ok(())
+}
+
+/// Verify a user account (mark email as verified).
+/// Untestable: depends on resolve_user which uses interactive dialoguer.
+#[cfg(not(tarpaulin_include))]
+pub fn user_verify(
+    pool: &crate::db::DbPool,
+    registry: &crate::core::SharedRegistry,
+    collection: &str,
+    email: Option<String>,
+    id: Option<String>,
+) -> Result<()> {
+    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+
+    if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
+        anyhow::bail!("Collection '{}' does not have email verification enabled (verify_email must be true)", collection);
+    }
+
+    let conn = pool.get().context("Failed to get database connection")?;
+    crate::db::query::mark_verified(&conn, collection, &doc.id)
+        .context("Failed to verify user")?;
+
+    let user_email = doc.fields.get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    println!("Verified user {} ({}) in '{}'", doc.id, user_email, collection);
+
+    Ok(())
+}
+
+/// Unverify a user account (mark email as unverified).
+/// Untestable: depends on resolve_user which uses interactive dialoguer.
+#[cfg(not(tarpaulin_include))]
+pub fn user_unverify(
+    pool: &crate::db::DbPool,
+    registry: &crate::core::SharedRegistry,
+    collection: &str,
+    email: Option<String>,
+    id: Option<String>,
+) -> Result<()> {
+    let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
+
+    if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
+        anyhow::bail!("Collection '{}' does not have email verification enabled (verify_email must be true)", collection);
+    }
+
+    let conn = pool.get().context("Failed to get database connection")?;
+    crate::db::query::mark_unverified(&conn, collection, &doc.id)
+        .context("Failed to unverify user")?;
+
+    let user_email = doc.fields.get("email")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    println!("Unverified user {} ({}) in '{}'", doc.id, user_email, collection);
 
     Ok(())
 }

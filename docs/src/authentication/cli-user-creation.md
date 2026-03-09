@@ -80,12 +80,19 @@ crap-cms user create ./example \
 ## Other User Commands
 
 ```bash
+# Show detailed info for a user
+crap-cms user info ./example -e admin@example.com
+
 # List all users
 crap-cms user list ./example
 
 # Lock/unlock a user
 crap-cms user lock ./example -e user@example.com
 crap-cms user unlock ./example -e user@example.com
+
+# Verify/unverify a user (requires verify_email: true on collection)
+crap-cms user verify ./example -e user@example.com
+crap-cms user unverify ./example -e user@example.com
 
 # Change password
 crap-cms user change-password ./example -e user@example.com

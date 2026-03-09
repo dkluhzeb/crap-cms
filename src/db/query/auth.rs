@@ -66,6 +66,24 @@ pub fn update_password(
     Ok(())
 }
 
+/// Check whether a user has a password set (non-NULL `_password_hash`).
+pub fn has_password(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    id: &str,
+) -> Result<bool> {
+    let sql = format!(
+        "SELECT _password_hash IS NOT NULL FROM {} WHERE id = ?1",
+        slug
+    );
+    let result = conn.query_row(&sql, [id], |row| row.get::<_, bool>(0));
+    match result {
+        Ok(v) => Ok(v),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
+        Err(e) => Err(e).context(format!("Failed to check password for {} in {}", id, slug)),
+    }
+}
+
 // ── Reset token functions ─────────────────────────────────────────────────
 
 /// Store a password reset token and expiry for a user.
@@ -185,6 +203,21 @@ pub fn mark_verified(
     );
     conn.execute(&sql, [user_id])
         .with_context(|| format!("Failed to mark user {} as verified in {}", user_id, slug))?;
+    Ok(())
+}
+
+/// Mark a user as unverified (set _verified = 0). Does NOT touch token fields.
+pub fn mark_unverified(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    user_id: &str,
+) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _verified = 0 WHERE id = ?1",
+        slug
+    );
+    conn.execute(&sql, [user_id])
+        .with_context(|| format!("Failed to mark user {} as unverified in {}", user_id, slug))?;
     Ok(())
 }
 
@@ -513,6 +546,35 @@ mod tests {
     }
 
     #[test]
+    fn mark_unverified_then_check() {
+        let conn = setup_auth_db();
+        // Start verified
+        mark_verified(&conn, "users", "user1").unwrap();
+        assert!(is_verified(&conn, "users", "user1").unwrap());
+
+        // Unverify
+        mark_unverified(&conn, "users", "user1").unwrap();
+        assert!(!is_verified(&conn, "users", "user1").unwrap(), "User should not be verified after mark_unverified");
+    }
+
+    #[test]
+    fn mark_verified_then_unverify_preserves_token() {
+        let conn = setup_auth_db();
+        let def = auth_def();
+        // Set a verification token, then verify, then unverify
+        set_verification_token(&conn, "users", "user1", "verify-tok", 9999999999).unwrap();
+        mark_verified(&conn, "users", "user1").unwrap();
+
+        // mark_verified clears token
+        let found = find_by_verification_token(&conn, "users", &def, "verify-tok").unwrap();
+        assert!(found.is_none(), "mark_verified should clear token");
+
+        // Unverify — should not re-create a token
+        mark_unverified(&conn, "users", "user1").unwrap();
+        assert!(!is_verified(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
     fn mark_verified_clears_token() {
         let conn = setup_auth_db();
         let def = auth_def();
@@ -529,6 +591,27 @@ mod tests {
         assert!(found_after.is_none(), "verification token should be cleared after mark_verified");
 
         assert!(is_verified(&conn, "users", "user1").unwrap());
+    }
+
+    // ── has_password tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn has_password_false_when_no_hash() {
+        let conn = setup_auth_db();
+        assert!(!has_password(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
+    fn has_password_true_after_set() {
+        let conn = setup_auth_db();
+        update_password(&conn, "users", "user1", "secret123").unwrap();
+        assert!(has_password(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
+    fn has_password_nonexistent_user() {
+        let conn = setup_auth_db();
+        assert!(!has_password(&conn, "users", "nonexistent").unwrap());
     }
 
     #[test]
