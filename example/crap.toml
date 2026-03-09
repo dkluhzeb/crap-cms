@@ -22,12 +22,13 @@ max_depth = 10
 max_file_size = "50MB"
 
 [email]
-# smtp_host = ""  # Set via CRAP_SMTP_HOST env var to enable
-# smtp_port = 587
-# smtp_username = ""
-# smtp_password = ""
-# from_address = "noreply@meridian.studio"
-# from_name = "Meridian Studio"
+smtp_host = "${CRAP_SMTP_HOST}"
+smtp_port = 587
+smtp_user = "${CRAP_SMTP_USER}"
+smtp_pass = "${CRAP_SMTP_PASS}"
+smtp_tls = "${CRAP_SMTP_TLS:-starttls}"
+from_address = "${CRAP_SMTP_FROM:-noreply@meridian.studio}"
+from_name = "Meridian Studio"
 
 [live]
 enabled = true

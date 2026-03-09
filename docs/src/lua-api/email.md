@@ -10,6 +10,7 @@ smtp_host = "smtp.example.com"
 smtp_port = 587
 smtp_user = "noreply@example.com"
 smtp_pass = "your-smtp-password"
+smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit), "none" (plain/test)
 from_address = "noreply@example.com"
 from_name = "My App"
 ```

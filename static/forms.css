@@ -980,6 +980,40 @@ select[multiple] {
   color: var(--text-primary);
 }
 
+/* Password toggle */
+.form__password-wrapper {
+  position: relative;
+}
+
+.form__password-wrapper input {
+  padding-right: 40px;
+}
+
+.form__password-toggle {
+  all: unset;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-tertiary);
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+}
+
+.form__password-toggle:hover {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.form__password-toggle span {
+  font-size: 20px;
+}
+
 /* Auth / Login page */
 .auth-page {
   display: flex;
@@ -1008,7 +1042,8 @@ select[multiple] {
 }
 
 .auth-card__icon {
-  font-size: 32px;
+  width: 32px;
+  height: 32px;
   color: var(--color-primary);
 }
 
@@ -1037,6 +1072,38 @@ select[multiple] {
 .auth-card__submit {
   width: 100%;
   margin-top: var(--space-sm);
+}
+
+.auth-card__success {
+  background: var(--color-success-bg, #dcfce7);
+  color: var(--color-success, #16a34a);
+  border: 1px solid var(--color-success, #16a34a);
+  border-radius: var(--radius-md);
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-lg);
+  font-size: var(--text-sm);
+}
+
+.auth-card__message {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  margin: 0 0 var(--space-md) 0;
+  text-align: center;
+}
+
+.auth-card__link {
+  text-align: center;
+  margin: var(--space-md) 0 0;
+  font-size: var(--text-sm);
+}
+
+.auth-card__link a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.auth-card__link a:hover {
+  text-decoration: underline;
 }
 
 .auth-card__subtitle {

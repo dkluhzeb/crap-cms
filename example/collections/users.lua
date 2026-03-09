@@ -2,6 +2,7 @@ crap.collections.define("users", {
   labels = { singular = "User", plural = "Users" },
   timestamps = true,
   auth = {
+    forgot_password = true,
     verify_email = false,
     strategies = {
       {

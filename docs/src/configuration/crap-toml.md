@@ -126,9 +126,10 @@ max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB",
 
 [email]
 smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
-smtp_port = 587          # SMTP port (587 for STARTTLS)
+smtp_port = 587          # SMTP port (587 for STARTTLS, 465 for TLS, 25/1025 for plain)
 smtp_user = ""           # SMTP username
 smtp_pass = ""           # SMTP password
+smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit TLS), "none" (plain/test)
 from_address = "noreply@example.com"  # Sender email address
 from_name = "Crap CMS"  # Sender display name
 # smtp_timeout = 30     # SMTP connection/send timeout in seconds (or "30s")

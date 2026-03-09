@@ -87,6 +87,7 @@ fn email_config_defaults() {
     assert_eq!(email.smtp_port, 587);
     assert!(email.smtp_user.is_empty());
     assert!(email.smtp_pass.is_empty());
+    assert_eq!(email.smtp_tls, SmtpTls::Starttls);
     assert_eq!(email.from_address, "noreply@example.com");
     assert_eq!(email.from_name, "Crap CMS");
 }

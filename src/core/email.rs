@@ -5,7 +5,7 @@ use handlebars::Handlebars;
 use include_dir::{include_dir, Dir};
 use std::path::Path;
 
-use crate::config::EmailConfig;
+use crate::config::{EmailConfig, SmtpTls};
 
 static EMAIL_TEMPLATES_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates/email");
 
@@ -128,14 +128,27 @@ fn send_email_smtp(
     };
 
     let creds = Credentials::new(config.smtp_user.clone(), config.smtp_pass.clone());
-
     let timeout = std::time::Duration::from_secs(config.smtp_timeout);
-    let transport = SmtpTransport::starttls_relay(&config.smtp_host)
-        .with_context(|| format!("Failed to create SMTP transport for {}", config.smtp_host))?
-        .port(config.smtp_port)
-        .credentials(creds)
-        .timeout(Some(timeout))
-        .build();
+
+    let transport = match config.smtp_tls {
+        SmtpTls::Starttls => SmtpTransport::starttls_relay(&config.smtp_host)
+            .with_context(|| format!("Failed to create SMTP STARTTLS transport for {}", config.smtp_host))?
+            .port(config.smtp_port)
+            .credentials(creds)
+            .timeout(Some(timeout))
+            .build(),
+        SmtpTls::Tls => SmtpTransport::relay(&config.smtp_host)
+            .with_context(|| format!("Failed to create SMTP TLS transport for {}", config.smtp_host))?
+            .port(config.smtp_port)
+            .credentials(creds)
+            .timeout(Some(timeout))
+            .build(),
+        SmtpTls::None => SmtpTransport::builder_dangerous(&config.smtp_host)
+            .port(config.smtp_port)
+            .credentials(creds)
+            .timeout(Some(timeout))
+            .build(),
+    };
 
     transport.send(&message)
         .with_context(|| format!("Failed to send email to {}", to))?;

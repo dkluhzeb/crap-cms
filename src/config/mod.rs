@@ -343,6 +343,24 @@ impl Default for UploadConfig {
     }
 }
 
+/// SMTP TLS mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SmtpTls {
+    /// Connect plain, upgrade via STARTTLS (port 587).
+    Starttls,
+    /// Implicit TLS from the start (port 465).
+    Tls,
+    /// No encryption (local/test servers, port 25/1025).
+    None,
+}
+
+impl Default for SmtpTls {
+    fn default() -> Self {
+        Self::Starttls
+    }
+}
+
 /// SMTP email configuration. Empty `smtp_host` disables email (no-op sends).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
@@ -359,6 +377,8 @@ pub struct EmailConfig {
     pub from_address: String,
     /// "From" display name (default "Crap CMS").
     pub from_name: String,
+    /// TLS mode: "starttls" (default), "tls" (implicit), "none" (plain).
+    pub smtp_tls: SmtpTls,
     /// SMTP connection/send timeout in seconds (default 30).
     #[serde(default = "default_smtp_timeout", with = "serde_duration")]
     pub smtp_timeout: u64,
@@ -377,6 +397,7 @@ impl Default for EmailConfig {
             smtp_pass: String::new(),
             from_address: "noreply@example.com".to_string(),
             from_name: "Crap CMS".to_string(),
+            smtp_tls: SmtpTls::default(),
             smtp_timeout: 30,
         }
     }
