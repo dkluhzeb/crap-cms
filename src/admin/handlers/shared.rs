@@ -10,10 +10,12 @@ use std::collections::HashMap;
 
 use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
+use crate::admin::translations::Translations;
 use crate::core::auth::AuthUser;
 use crate::core::collection::{CollectionDefinition, VersionsConfig};
 use crate::core::document::VersionSnapshot;
 use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::validate::ValidationError;
 use crate::db::query::{self, AccessResult, Filter, FilterClause, FilterOp, LocaleContext};
 use crate::db::DbPool;
 
@@ -379,6 +381,26 @@ pub(super) fn do_unpublish(
         }
     }
     Ok(())
+}
+
+/// Translate validation errors using the translation system.
+/// If a FieldError has a `key`, resolve it through `Translations::get_interpolated`;
+/// otherwise use the raw English `message` (custom Lua validator messages).
+pub(super) fn translate_validation_errors(
+    ve: &ValidationError,
+    translations: &Translations,
+    locale: &str,
+) -> HashMap<String, String> {
+    ve.errors.iter()
+        .map(|e| {
+            let msg = if let Some(ref key) = e.key {
+                translations.get_interpolated(locale, key, &e.params)
+            } else {
+                e.message.clone()
+            };
+            (e.field.clone(), msg)
+        })
+        .collect()
 }
 
 /// Render a 403 Forbidden page with the given message.
@@ -858,5 +880,47 @@ mod tests {
         headers.insert(axum::http::header::COOKIE, "crap_session=abc; crap_editor_locale=fr; other=xyz".parse().unwrap());
         let result = extract_editor_locale(&headers, &locale_config_enabled());
         assert_eq!(result, Some("fr".to_string()));
+    }
+
+    // --- translate_validation_errors tests ---
+
+    use crate::core::validate::FieldError;
+
+    fn test_translations() -> Translations {
+        Translations::load(std::path::Path::new("/nonexistent"))
+    }
+
+    #[test]
+    fn translate_with_key_uses_translation() {
+        let translations = test_translations();
+        let mut params = HashMap::new();
+        params.insert("field".to_string(), "Title".to_string());
+        let ve = ValidationError::new(vec![
+            FieldError::with_key("title", "title is required", "validation.required", params),
+        ]);
+        let map = translate_validation_errors(&ve, &translations, "en");
+        assert_eq!(map.get("title").unwrap(), "Title is required");
+    }
+
+    #[test]
+    fn translate_without_key_uses_raw_message() {
+        let translations = test_translations();
+        let ve = ValidationError::new(vec![
+            FieldError::new("title", "custom lua error"),
+        ]);
+        let map = translate_validation_errors(&ve, &translations, "en");
+        assert_eq!(map.get("title").unwrap(), "custom lua error");
+    }
+
+    #[test]
+    fn translate_german_locale() {
+        let translations = test_translations();
+        let mut params = HashMap::new();
+        params.insert("field".to_string(), "Titel".to_string());
+        let ve = ValidationError::new(vec![
+            FieldError::with_key("title", "title is required", "validation.required", params),
+        ]);
+        let map = translate_validation_errors(&ve, &translations, "de");
+        assert_eq!(map.get("title").unwrap(), "Titel ist erforderlich");
     }
 }

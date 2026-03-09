@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::FieldError;
 
@@ -21,12 +22,12 @@ pub(crate) fn check_numeric_bounds(
     if let Some(v) = num_val {
         if let Some(min_val) = field.min {
             if v < min_val {
-                errors.push(FieldError::new(data_key.to_owned(), format!("{} must be at least {}", field.name, min_val)));
+                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be at least {}", field.name, min_val), "validation.min_value", HashMap::from([("field".to_string(), field.name.clone()), ("min".to_string(), min_val.to_string())])));
             }
         }
         if let Some(max_val) = field.max {
             if v > max_val {
-                errors.push(FieldError::new(data_key.to_owned(), format!("{} must be at most {}", field.name, max_val)));
+                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be at most {}", field.name, max_val), "validation.max_value", HashMap::from([("field".to_string(), field.name.clone()), ("max".to_string(), max_val.to_string())])));
             }
         }
     }

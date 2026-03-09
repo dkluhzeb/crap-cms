@@ -21,6 +21,7 @@ use super::{
     extract_editor_locale, build_locale_template_data, is_non_default_locale,
     build_field_contexts, enrich_field_contexts,
     apply_display_conditions, split_sidebar_fields,
+    translate_validation_errors,
     fetch_version_sidebar_data,
     forbidden, redirect_response, htmx_redirect, html_with_toast,
     render_or_error, not_found, server_error,
@@ -528,7 +529,11 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         }
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let error_map = ve.to_field_map();
+                let locale = auth_user.as_ref()
+                    .map(|Extension(au)| au.ui_locale.as_str())
+                    .unwrap_or("en");
+                let error_map = translate_validation_errors(ve, &state.translations, locale);
+                let toast_msg = state.translations.get(locale, "validation.error_summary");
                 let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
                 enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, state, true, false, &error_map, Some(id));
                 let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
@@ -549,7 +554,7 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
                 if def.is_upload_collection() {
                     data["upload_hidden_fields"] = collect_upload_hidden_fields(&def.fields, &form_data_clone);
                 }
-                html_with_toast(state, "collections/edit", &data, &e.to_string())
+                html_with_toast(state, "collections/edit", &data, toast_msg)
             } else {
                 tracing::error!("Update error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/{}", slug, id))

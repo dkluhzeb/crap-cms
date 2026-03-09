@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::FieldError;
 
@@ -14,19 +15,19 @@ pub(crate) fn check_date_field(
     }
     if let Some(serde_json::Value::String(s)) = value {
         if !is_valid_date_format(s) {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} is not a valid date format", field.name)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} is not a valid date format", field.name), "validation.invalid_date", HashMap::from([("field".to_string(), field.name.clone())])));
         }
         // Date bounds validation (ISO dates sort lexicographically)
         if let Some(ref min_date) = field.min_date {
             let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
             if date_part < min_date.as_str() {
-                errors.push(FieldError::new(data_key.to_owned(), format!("{} must be on or after {}", field.name, min_date)));
+                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be on or after {}", field.name, min_date), "validation.date_min", HashMap::from([("field".to_string(), field.name.clone()), ("min".to_string(), min_date.clone())])));
             }
         }
         if let Some(ref max_date) = field.max_date {
             let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
             if date_part > max_date.as_str() {
-                errors.push(FieldError::new(data_key.to_owned(), format!("{} must be on or before {}", field.name, max_date)));
+                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be on or before {}", field.name, max_date), "validation.date_max", HashMap::from([("field".to_string(), field.name.clone()), ("max".to_string(), max_date.clone())])));
             }
         }
     }

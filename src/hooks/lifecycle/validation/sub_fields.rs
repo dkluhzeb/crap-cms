@@ -33,13 +33,13 @@ pub(super) fn validate_sub_fields_inner(
         let qualified_name = format!("{}[{}][{}]", parent_name, idx, sf.name);
 
         if sf.required && sf_empty && sf.field_type != FieldType::Checkbox {
-            errors.push(FieldError::new(qualified_name.clone(), format!("{} is required", sf.name)));
+            errors.push(FieldError::with_key(qualified_name.clone(), format!("{} is required", sf.name), "validation.required", HashMap::from([("field".to_string(), sf.name.clone())])));
         }
 
         if sf.field_type == FieldType::Date && !sf_empty {
             if let Some(serde_json::Value::String(s)) = sf_value {
                 if !is_valid_date_format(s) {
-                    errors.push(FieldError::new(qualified_name.clone(), format!("{} is not a valid date format", sf.name)));
+                    errors.push(FieldError::with_key(qualified_name.clone(), format!("{} is not a valid date format", sf.name), "validation.invalid_date", HashMap::from([("field".to_string(), sf.name.clone())])));
                 }
             }
         }
@@ -147,14 +147,14 @@ fn validate_leaf_sub_field(
 
     // 1. Required check (skip for Checkbox — absent/false is valid)
     if sf.required && is_empty && sf.field_type != FieldType::Checkbox {
-        errors.push(FieldError::new(qualified_name.to_owned(), format!("{} is required", sf.name)));
+        errors.push(FieldError::with_key(qualified_name.to_owned(), format!("{} is required", sf.name), "validation.required", HashMap::from([("field".to_string(), sf.name.clone())])));
     }
 
     // 2. Date format check
     if sf.field_type == FieldType::Date && !is_empty {
         if let Some(serde_json::Value::String(s)) = value {
             if !is_valid_date_format(s) {
-                errors.push(FieldError::new(qualified_name.to_owned(), format!("{} is not a valid date format", sf.name)));
+                errors.push(FieldError::with_key(qualified_name.to_owned(), format!("{} is not a valid date format", sf.name), "validation.invalid_date", HashMap::from([("field".to_string(), sf.name.clone())])));
             }
         }
     }

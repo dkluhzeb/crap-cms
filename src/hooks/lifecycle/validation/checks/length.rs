@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::FieldError;
 
@@ -17,12 +18,12 @@ pub(crate) fn check_length_bounds(
         let len = s.len();
         if let Some(min_len) = field.min_length {
             if len < min_len {
-                errors.push(FieldError::new(data_key.to_owned(), format!("{} must be at least {} characters", field.name, min_len)));
+                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be at least {} characters", field.name, min_len), "validation.min_length", HashMap::from([("field".to_string(), field.name.clone()), ("min".to_string(), min_len.to_string())])));
             }
         }
         if let Some(max_len) = field.max_length {
             if len > max_len {
-                errors.push(FieldError::new(data_key.to_owned(), format!("{} must be at most {} characters", field.name, max_len)));
+                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be at most {} characters", field.name, max_len), "validation.max_length", HashMap::from([("field".to_string(), field.name.clone()), ("max".to_string(), max_len.to_string())])));
             }
         }
     }

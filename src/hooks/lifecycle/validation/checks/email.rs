@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::FieldError;
 
@@ -14,7 +15,7 @@ pub(crate) fn check_email_format(
     }
     if let Some(serde_json::Value::String(s)) = value {
         if !is_valid_email_format(s) {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} is not a valid email address", field.name)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} is not a valid email address", field.name), "validation.email", HashMap::from([("field".to_string(), field.name.clone())])));
         }
     }
 }

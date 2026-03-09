@@ -20,6 +20,7 @@ pub(super) use super::shared::{
     extract_where_params,
     build_field_contexts, enrich_field_contexts,
     apply_display_conditions, split_sidebar_fields,
+    translate_validation_errors,
     version_to_json, fetch_version_sidebar_data,
     forbidden, redirect_response, htmx_redirect, html_with_toast,
     render_or_error, not_found, server_error,

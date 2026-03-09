@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::FieldError;
 
@@ -18,12 +19,12 @@ pub(crate) fn check_row_bounds(
     };
     if let Some(min) = field.min_rows {
         if row_count < min {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} requires at least {} item(s)", field.name, min)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} requires at least {} item(s)", field.name, min), "validation.min_rows", HashMap::from([("field".to_string(), field.name.clone()), ("min".to_string(), min.to_string())])));
         }
     }
     if let Some(max) = field.max_rows {
         if row_count > max {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} allows at most {} item(s)", field.name, max)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} allows at most {} item(s)", field.name, max), "validation.max_rows", HashMap::from([("field".to_string(), field.name.clone()), ("max".to_string(), max.to_string())])));
         }
     }
 }

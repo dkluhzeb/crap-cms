@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::FieldError;
 
@@ -25,7 +26,7 @@ pub(crate) fn check_required(
             _ => false,
         };
         if !has_items {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} is required", field.name)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} is required", field.name), "validation.required", HashMap::from([("field".to_string(), field.name.clone())])));
         }
     } else if field.has_many {
         let has_items = match value {
@@ -37,10 +38,10 @@ pub(crate) fn check_required(
             _ => false,
         };
         if !has_items {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} is required", field.name)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} is required", field.name), "validation.required", HashMap::from([("field".to_string(), field.name.clone())])));
         }
     } else if is_empty {
-        errors.push(FieldError::new(data_key.to_owned(), format!("{} is required", field.name)));
+        errors.push(FieldError::with_key(data_key.to_owned(), format!("{} is required", field.name), "validation.required", HashMap::from([("field".to_string(), field.name.clone())])));
     }
 }
 

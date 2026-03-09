@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::FieldError;
 use crate::db::query;
@@ -23,7 +24,7 @@ pub(crate) fn check_unique(
     };
     match query::count_where_field_eq(conn, table, data_key, &value_str, exclude_id) {
         Ok(count) if count > 0 => {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} must be unique", field.name)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be unique", field.name), "validation.unique", HashMap::from([("field".to_string(), field.name.clone())])));
         }
         Ok(_) => {}
         Err(e) => {

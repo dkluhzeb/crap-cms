@@ -142,5 +142,27 @@
   "clear_search": "Clear search",
   "sort": "Sort",
   "sorted_ascending": "Sorted ascending",
-  "sorted_descending": "Sorted descending"
+  "sorted_descending": "Sorted descending",
+
+  "validation.error_summary": "Please fix the errors below.",
+  "validation.required": "{{field}} is required",
+  "validation.unique": "{{field}} must be unique",
+  "validation.email": "{{field}} is not a valid email address",
+  "validation.min_length": "{{field}} must be at least {{min}} characters",
+  "validation.max_length": "{{field}} must be at most {{max}} characters",
+  "validation.min_value": "{{field}} must be at least {{min}}",
+  "validation.max_value": "{{field}} must be at most {{max}}",
+  "validation.invalid_option": "{{field}} has an invalid option",
+  "validation.invalid_option_value": "{{field}} has an invalid option: {{value}}",
+  "validation.invalid_date": "{{field}} is not a valid date format",
+  "validation.date_min": "{{field}} must be on or after {{min}}",
+  "validation.date_max": "{{field}} must be on or before {{max}}",
+  "validation.min_rows": "{{field}} requires at least {{min}} item(s)",
+  "validation.max_rows": "{{field}} allows at most {{max}} item(s)",
+  "validation.has_many_min_rows": "{{field}} must have at least {{min}} values",
+  "validation.has_many_max_rows": "{{field}} must have at most {{max}} values",
+  "validation.has_many_min_length": "{{field}}: '{{value}}' must be at least {{min}} characters",
+  "validation.has_many_max_length": "{{field}}: '{{value}}' must be at most {{max}} characters",
+  "validation.has_many_min_value": "{{field}}: {{value}} must be at least {{min}}",
+  "validation.has_many_max_value": "{{field}}: {{value}} must be at most {{max}}"
 }

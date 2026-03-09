@@ -142,5 +142,27 @@
   "clear_search": "Suche löschen",
   "sort": "Sortieren",
   "sorted_ascending": "Aufsteigend sortiert",
-  "sorted_descending": "Absteigend sortiert"
+  "sorted_descending": "Absteigend sortiert",
+
+  "validation.error_summary": "Bitte beheben Sie die folgenden Fehler.",
+  "validation.required": "{{field}} ist erforderlich",
+  "validation.unique": "{{field}} muss eindeutig sein",
+  "validation.email": "{{field}} ist keine gültige E-Mail-Adresse",
+  "validation.min_length": "{{field}} muss mindestens {{min}} Zeichen lang sein",
+  "validation.max_length": "{{field}} darf höchstens {{max}} Zeichen lang sein",
+  "validation.min_value": "{{field}} muss mindestens {{min}} betragen",
+  "validation.max_value": "{{field}} darf höchstens {{max}} betragen",
+  "validation.invalid_option": "{{field}} hat eine ungültige Option",
+  "validation.invalid_option_value": "{{field}} hat eine ungültige Option: {{value}}",
+  "validation.invalid_date": "{{field}} hat kein gültiges Datumsformat",
+  "validation.date_min": "{{field}} muss am oder nach dem {{min}} liegen",
+  "validation.date_max": "{{field}} muss am oder vor dem {{max}} liegen",
+  "validation.min_rows": "{{field}} benötigt mindestens {{min}} Einträge",
+  "validation.max_rows": "{{field}} erlaubt höchstens {{max}} Einträge",
+  "validation.has_many_min_rows": "{{field}} muss mindestens {{min}} Werte haben",
+  "validation.has_many_max_rows": "{{field}} darf höchstens {{max}} Werte haben",
+  "validation.has_many_min_length": "{{field}}: '{{value}}' muss mindestens {{min}} Zeichen lang sein",
+  "validation.has_many_max_length": "{{field}}: '{{value}}' darf höchstens {{max}} Zeichen lang sein",
+  "validation.has_many_min_value": "{{field}}: {{value}} muss mindestens {{min}} betragen",
+  "validation.has_many_max_value": "{{field}}: {{value}} darf höchstens {{max}} betragen"
 }

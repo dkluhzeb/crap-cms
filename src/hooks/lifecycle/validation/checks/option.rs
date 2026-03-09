@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::FieldError;
 
@@ -20,13 +21,13 @@ pub(crate) fn check_option_valid(
             if let Ok(values) = serde_json::from_str::<Vec<String>>(s) {
                 for v in &values {
                     if !field.options.iter().any(|opt| opt.value == *v) {
-                        errors.push(FieldError::new(data_key.to_owned(), format!("{} has an invalid option: {}", field.name, v)));
+                        errors.push(FieldError::with_key(data_key.to_owned(), format!("{} has an invalid option: {}", field.name, v), "validation.invalid_option_value", HashMap::from([("field".to_string(), field.name.clone()), ("value".to_string(), v.clone())])));
                         break;
                     }
                 }
             }
         } else if !field.options.iter().any(|opt| opt.value == *s) {
-            errors.push(FieldError::new(data_key.to_owned(), format!("{} has an invalid option", field.name)));
+            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} has an invalid option", field.name), "validation.invalid_option", HashMap::from([("field".to_string(), field.name.clone())])));
         }
     }
 }

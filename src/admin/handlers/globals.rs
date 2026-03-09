@@ -22,6 +22,7 @@ use super::shared::{
     is_non_default_locale,
     build_field_contexts, enrich_field_contexts,
     apply_display_conditions, split_sidebar_fields,
+    translate_validation_errors,
     version_to_json, fetch_version_sidebar_data, do_unpublish,
     forbidden, redirect_response, htmx_redirect, html_with_toast,
     render_or_error, not_found, server_error,
@@ -279,7 +280,11 @@ pub async fn update_action(
         }
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let error_map = ve.to_field_map();
+                let locale = auth_user.as_ref()
+                    .map(|Extension(au)| au.ui_locale.as_str())
+                    .unwrap_or("en");
+                let error_map = translate_validation_errors(ve, &state.translations, locale);
+                let toast_msg = state.translations.get(locale, "validation.error_summary");
                 let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, false, false);
 
                 // Enrich relationship/array/blocks fields with options and join data
@@ -301,7 +306,7 @@ pub async fn update_action(
                     .fields(main_fields)
                     .set("sidebar_fields", serde_json::json!(sidebar_fields))
                     .build();
-                html_with_toast(&state, "globals/edit", &data, &e.to_string())
+                html_with_toast(&state, "globals/edit", &data, toast_msg)
             } else {
                 tracing::error!("Global update error: {}", e);
                 redirect_response(&format!("/admin/globals/{}", slug))
