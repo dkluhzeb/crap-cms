@@ -168,3 +168,5 @@ The context table contains:
 | `collection` | string | Collection slug |
 | `field_name` | string | Name of the field being validated |
 | `data` | table | Full document data |
+| `user` | table/nil | Authenticated user document (nil if unauthenticated) |
+| `ui_locale` | string/nil | Admin UI locale code (e.g., `"en"`, `"de"`) |

@@ -51,7 +51,7 @@ impl ContentService {
         let doc = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &slug, "get_global", HashMap::new())?;
             let doc = ops::get_global(&pool, &slug, &def, locale_ctx.as_ref())?;
-            let doc = runner.apply_after_read(&hooks, &fields, &slug, "get_global", doc);
+            let doc = runner.apply_after_read(&hooks, &fields, &slug, "get_global", doc, None, None);
             Ok::<_, anyhow::Error>(doc)
         })
         .await
@@ -122,12 +122,14 @@ impl ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+        let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
         let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             crate::service::update_global_document(
                 &pool, &runner, &slug, &def_owned,
                 crate::service::WriteInput {
                     data, join_data: &join_data, password: None,
                     locale_ctx: locale_ctx.as_ref(), locale: None, draft: false,
+                    ui_locale,
                 },
                 user_doc.as_ref(),
             )

@@ -70,6 +70,10 @@ pub(crate) struct UserContext(pub(crate) Option<Document>);
 unsafe impl Send for UserContext {}
 unsafe impl Sync for UserContext {}
 
+/// Admin UI locale injected alongside TxContext/UserContext.
+/// Lua hooks read this to get the current user's preferred UI language.
+pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
+
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
 pub(crate) struct HookDepth(pub(crate) u32);

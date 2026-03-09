@@ -757,7 +757,7 @@ fn service_create_published_creates_version() {
         pool, runner, "articles", &def,
         service::WriteInput {
             data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -787,7 +787,7 @@ fn service_create_draft_creates_draft_version() {
         pool, runner, "articles", &def,
         service::WriteInput {
             data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: true,
+            locale_ctx: None, locale: None, draft: true, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -817,7 +817,7 @@ fn service_update_draft_is_version_only() {
         pool, runner, "articles", &def,
         service::WriteInput {
             data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -830,7 +830,7 @@ fn service_update_draft_is_version_only() {
         pool, runner, "articles", &doc.id, &def,
         service::WriteInput {
             data: update_data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: true,
+            locale_ctx: None, locale: None, draft: true, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -868,7 +868,7 @@ fn service_update_publish_updates_main_table() {
         pool, runner, "articles", &def,
         service::WriteInput {
             data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: true, // create as draft
+            locale_ctx: None, locale: None, draft: true, ui_locale: None, // create as draft
         },
         None,
     ).unwrap();
@@ -881,7 +881,7 @@ fn service_update_publish_updates_main_table() {
         pool, runner, "articles", &doc.id, &def,
         service::WriteInput {
             data: update_data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -905,7 +905,7 @@ fn service_nonversioned_create_no_version_created() {
         pool, runner, "notes", &def,
         service::WriteInput {
             data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -945,7 +945,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
         pool, runner, "articles", &def,
         service::WriteInput {
             data, join_data: &join_data, password: None,
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -961,7 +961,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
         pool, runner, "articles", &doc.id, &def,
         service::WriteInput {
             data: update_data, join_data: &draft_join_data, password: None,
-            locale_ctx: None, locale: None, draft: true,
+            locale_ctx: None, locale: None, draft: true, ui_locale: None,
         },
         None,
     ).unwrap();

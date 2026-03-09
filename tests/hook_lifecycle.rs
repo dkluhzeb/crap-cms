@@ -70,6 +70,8 @@ fn before_change_hook_modifies_data() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -82,6 +84,7 @@ fn before_change_hook_modifies_data() {
         crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
         ctx,
         &tx,
+        None,
         None,
     ).expect("Hook execution failed");
 
@@ -110,6 +113,8 @@ fn before_validate_trims_title() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -120,6 +125,7 @@ fn before_validate_trims_title() {
         crap_cms::hooks::lifecycle::HookEvent::BeforeValidate,
         ctx,
         &tx,
+        None,
         None,
     ).expect("Hook execution failed");
 
@@ -152,6 +158,7 @@ fn field_before_change_transforms_value() {
         "create",
         &tx,
         None,
+        None,
     ).expect("Field hook failed");
 
     // The slug field hook should have generated a slug from the title
@@ -177,6 +184,8 @@ fn registered_hook_fires_for_all_collections() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -187,6 +196,7 @@ fn registered_hook_fires_for_all_collections() {
         crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
         ctx,
         &tx,
+        None,
         None,
     ).expect("Hook execution failed");
 
@@ -238,13 +248,15 @@ fn run_before_write_full_lifecycle() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false,
+        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false, None,
     ).expect("run_before_write failed");
 
     // Title should be trimmed (before_validate hook)
@@ -275,13 +287,15 @@ fn run_before_write_fails_on_validation_error() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false,
+        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false, None,
     );
     assert!(result.is_err(), "run_before_write should fail when validation fails");
 }
@@ -560,7 +574,7 @@ fn apply_after_read_transforms_doc() {
 
     // apply_after_read should run the after_read hook which adds _was_read marker
     let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc.clone(),
+        &def.hooks, &def.fields, "articles", "find", doc.clone(), None, None,
     );
 
     assert_eq!(
@@ -596,7 +610,7 @@ fn apply_after_read_many_transforms_all() {
 
     let docs = vec![doc1, doc2];
     let transformed = runner.apply_after_read_many(
-        &def.hooks, &def.fields, "articles", "find", docs,
+        &def.hooks, &def.fields, "articles", "find", docs, None, None,
     );
 
     assert_eq!(transformed.len(), 2, "Should return same number of docs");
@@ -626,7 +640,7 @@ fn apply_after_read_no_hooks_returns_same() {
     let original_title = doc.fields.get("title").cloned();
 
     let result = runner.apply_after_read(
-        &empty_hooks, &empty_fields, "articles", "find", doc,
+        &empty_hooks, &empty_fields, "articles", "find", doc, None, None,
     );
 
     assert_eq!(result.id, original_id, "ID should be unchanged");

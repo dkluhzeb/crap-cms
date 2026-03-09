@@ -41,6 +41,7 @@ pub struct WriteInput<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
     pub locale: Option<String>,
     pub draft: bool,
+    pub ui_locale: Option<String>,
 }
 
 /// Build the hook data map from form data + structured join data.
@@ -65,10 +66,14 @@ pub(crate) fn build_before_ctx(
     hook_data: HashMap<String, serde_json::Value>,
     locale: Option<String>,
     is_draft: bool,
+    user: Option<&Document>,
+    ui_locale: Option<&str>,
 ) -> HookContext {
     let mut builder = HookContext::builder(slug, operation)
         .data(hook_data)
-        .draft(is_draft);
+        .draft(is_draft)
+        .user(user)
+        .ui_locale(ui_locale);
     if let Some(l) = locale {
         builder = builder.locale(l);
     }
@@ -77,6 +82,7 @@ pub(crate) fn build_before_ctx(
 
 /// Run after-change hooks and return the request-scoped context.
 /// This pattern is repeated across create, update, unpublish, and global update.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_after_change_hooks(
     runner: &HookRunner,
     hooks: &crate::core::collection::Hooks,
@@ -89,19 +95,22 @@ pub(crate) fn run_after_change_hooks(
     req_context: HashMap<String, serde_json::Value>,
     tx: &rusqlite::Connection,
     user: Option<&Document>,
+    ui_locale: Option<&str>,
 ) -> Result<HashMap<String, serde_json::Value>> {
     let mut after_data = doc.fields.clone();
     after_data.insert("id".to_string(), serde_json::Value::String(doc.id.clone()));
     let mut builder = HookContext::builder(slug, operation)
         .data(after_data)
         .draft(is_draft)
-        .context(req_context);
+        .context(req_context)
+        .user(user)
+        .ui_locale(ui_locale);
     if let Some(l) = locale {
         builder = builder.locale(l);
     }
     let after_ctx = builder.build();
     let after_result = runner.run_after_write(
-        hooks, fields, HookEvent::AfterChange, after_ctx, tx, user,
+        hooks, fields, HookEvent::AfterChange, after_ctx, tx, user, ui_locale,
     )?;
     Ok(after_result.context)
 }

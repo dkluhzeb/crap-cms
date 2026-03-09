@@ -1191,7 +1191,7 @@ fn service_update_draft_uses_locale_context() {
         &db_pool, &hook_runner, "articles", &def,
         service::WriteInput {
             data, join_data: &HashMap::new(), password: None,
-            locale_ctx: Some(&en_ctx), locale: Some("en".to_string()), draft: false,
+            locale_ctx: Some(&en_ctx), locale: Some("en".to_string()), draft: false, ui_locale: None,
         },
         None,
     ).unwrap();
@@ -1213,7 +1213,7 @@ fn service_update_draft_uses_locale_context() {
         &db_pool, &hook_runner, "articles", &doc.id, &def,
         service::WriteInput {
             data: draft_data, join_data: &HashMap::new(), password: None,
-            locale_ctx: Some(&de_ctx), locale: Some("de".to_string()), draft: true,
+            locale_ctx: Some(&de_ctx), locale: Some("de".to_string()), draft: true, ui_locale: None,
         },
         None,
     ).unwrap();

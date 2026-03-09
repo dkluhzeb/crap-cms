@@ -33,10 +33,11 @@ pub fn create_document(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("Start transaction")?;
 
+    let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
-    let hook_ctx = build_before_ctx(slug, "create", hook_data, input.locale.clone(), is_draft);
+    let hook_ctx = build_before_ctx(slug, "create", hook_data, input.locale.clone(), is_draft, user, ui_locale);
     let final_ctx = runner.run_before_write(
-        &def.hooks, &def.fields, hook_ctx, &tx, slug, None, user, is_draft,
+        &def.hooks, &def.fields, hook_ctx, &tx, slug, None, user, is_draft, ui_locale,
     )?;
     let final_data = final_ctx.to_string_map(&def.fields);
     let doc = super::persist_create(
@@ -46,7 +47,7 @@ pub fn create_document(
 
     let ctx = run_after_change_hooks(
         runner, &def.hooks, &def.fields, slug, "create",
-        &doc, input.locale, is_draft, final_ctx.context, &tx, user,
+        &doc, input.locale, is_draft, final_ctx.context, &tx, user, ui_locale,
     )?;
 
     tx.commit().context("Commit transaction")?;
@@ -74,10 +75,11 @@ pub fn update_document(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
         .context("Start transaction")?;
 
+    let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
-    let hook_ctx = build_before_ctx(slug, "update", hook_data, input.locale.clone(), is_draft);
+    let hook_ctx = build_before_ctx(slug, "update", hook_data, input.locale.clone(), is_draft, user, ui_locale);
     let final_ctx = runner.run_before_write(
-        &def.hooks, &def.fields, hook_ctx, &tx, slug, Some(id), user, is_draft,
+        &def.hooks, &def.fields, hook_ctx, &tx, slug, Some(id), user, is_draft, ui_locale,
     )?;
     let final_data = final_ctx.to_string_map(&def.fields);
 
@@ -92,7 +94,7 @@ pub fn update_document(
 
     let ctx = run_after_change_hooks(
         runner, &def.hooks, &def.fields, slug, "update",
-        &doc, input.locale, is_draft, final_ctx.context, &tx, user,
+        &doc, input.locale, is_draft, final_ctx.context, &tx, user, ui_locale,
     )?;
 
     tx.commit().context("Commit transaction")?;
@@ -118,16 +120,16 @@ pub fn unpublish_document(
     let doc = crate::db::query::find_by_id_raw(&tx, slug, def, id, None)?
         .ok_or_else(|| anyhow::anyhow!("Document {} not found in {}", id, slug))?;
 
-    let hook_ctx = build_before_ctx(slug, "update", doc.fields.clone(), None, false);
+    let hook_ctx = build_before_ctx(slug, "update", doc.fields.clone(), None, false, user, None);
     let final_ctx = runner.run_hooks_with_conn(
-        &def.hooks, HookEvent::BeforeChange, hook_ctx, &tx, user,
+        &def.hooks, HookEvent::BeforeChange, hook_ctx, &tx, user, None,
     )?;
 
     super::persist_unpublish(&tx, slug, id, def)?;
 
     run_after_change_hooks(
         runner, &def.hooks, &def.fields, slug, "update",
-        &doc, None, false, final_ctx.context, &tx, user,
+        &doc, None, false, final_ctx.context, &tx, user, None,
     )?;
 
     tx.commit().context("Commit transaction")?;
@@ -169,9 +171,10 @@ pub fn delete_document(
 
     let hook_ctx = HookContext::builder(slug, "delete")
         .data([("id".to_string(), serde_json::Value::String(id.to_string()))].into())
+        .user(user)
         .build();
     let final_ctx = runner.run_hooks_with_conn(
-        &def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx, user,
+        &def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx, user, None,
     )?;
     crate::db::query::delete(&tx, slug, id)?;
     crate::db::query::fts::fts_delete(&tx, slug, id)?;
@@ -179,9 +182,10 @@ pub fn delete_document(
     let after_ctx = HookContext::builder(slug, "delete")
         .data([("id".to_string(), serde_json::Value::String(id.to_string()))].into())
         .context(final_ctx.context)
+        .user(user)
         .build();
     let after_result = runner.run_hooks_with_conn(
-        &def.hooks, HookEvent::AfterDelete, after_ctx, &tx, user,
+        &def.hooks, HookEvent::AfterDelete, after_ctx, &tx, user, None,
     )?;
 
     tx.commit().context("Commit transaction")?;

@@ -59,7 +59,7 @@ pub async fn edit_form(
     let read_result = tokio::task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "get_global", HashMap::new())?;
         let doc = ops::get_global(&pool, &slug_owned, &def_owned, locale_ctx.as_ref())?;
-        let doc = runner.apply_after_read(&hooks, &fields, &slug_owned, "get_global", doc);
+        let doc = runner.apply_after_read(&hooks, &fields, &slug_owned, "get_global", doc, None, None);
         Ok::<_, anyhow::Error>(doc)
     }).await;
 
@@ -242,6 +242,7 @@ pub async fn update_action(
         query::LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
+    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
     let action_owned = action.clone();
     let result = tokio::task::spawn_blocking(move || {
         // Handle unpublish: set _status to 'draft' and create a version
@@ -258,7 +259,7 @@ pub async fn update_action(
                 &pool, &runner, &slug_owned, &def_owned,
                 crate::service::WriteInput {
                     data: form_data, join_data: &join_data, password: None,
-                    locale_ctx: locale_ctx.as_ref(), locale, draft,
+                    locale_ctx: locale_ctx.as_ref(), locale, draft, ui_locale,
                 },
                 user_doc.as_ref(),
             )

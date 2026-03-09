@@ -9,7 +9,7 @@ use crate::db::query::{self, AccessResult, FindQuery, Filter, FilterOp, FilterCl
 use crate::db::query::filter::normalize_filter_fields;
 
 use super::get_tx_conn;
-use crate::hooks::lifecycle::{UserContext, HookContext, HookEvent};
+use crate::hooks::lifecycle::{UserContext, UiLocaleContext, HookContext, HookEvent};
 use crate::hooks::lifecycle::execution::{run_hooks_inner, apply_after_read_inner};
 use crate::hooks::lifecycle::access::{check_access_with_lua, check_field_read_access_with_lua};
 use crate::hooks::lifecycle::converters::*;
@@ -31,6 +31,9 @@ pub(super) fn register_find(
     let find_fn = lua.create_function(move |lua, (collection, query_table): (String, Option<mlua::Table>)| {
         let conn_ptr = get_tx_conn(lua)?;
         let conn = unsafe { &*conn_ptr };
+
+        let hook_user = lua.app_data_ref::<UserContext>().and_then(|uc| uc.0.clone());
+        let hook_ui_locale = lua.app_data_ref::<UiLocaleContext>().and_then(|uc| uc.0.clone());
 
         let depth: i32 = query_table.as_ref()
             .and_then(|qt| qt.get::<i32>("depth").ok())
@@ -107,7 +110,10 @@ pub(super) fn register_find(
         }
 
         // Fire before_read hooks
-        let before_ctx = HookContext::builder(&collection, "find").build();
+        let before_ctx = HookContext::builder(&collection, "find")
+            .user(hook_user.as_ref())
+            .ui_locale(hook_ui_locale.as_deref())
+            .build();
         run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
             .map_err(|e| mlua::Error::RuntimeError(format!("before_read hook error: {}", e)))?;
 
@@ -171,7 +177,7 @@ pub(super) fn register_find(
 
         // Run after_read hooks
         let docs: Vec<_> = docs.into_iter()
-            .map(|doc| apply_after_read_inner(lua, &def.hooks, &def.fields, &collection, "find", doc))
+            .map(|doc| apply_after_read_inner(lua, &def.hooks, &def.fields, &collection, "find", doc, hook_user.as_ref(), hook_ui_locale.as_deref()))
             .collect();
 
         let limit = find_query.limit.unwrap_or(pg_default);
@@ -250,6 +256,9 @@ pub(super) fn register_find_by_id(
         let conn_ptr = get_tx_conn(lua)?;
         let conn = unsafe { &*conn_ptr };
 
+        let hook_user = lua.app_data_ref::<UserContext>().and_then(|uc| uc.0.clone());
+        let hook_ui_locale = lua.app_data_ref::<UiLocaleContext>().and_then(|uc| uc.0.clone());
+
         let depth: i32 = opts.as_ref()
             .and_then(|o| o.get::<i32>("depth").ok())
             .unwrap_or(0)
@@ -283,7 +292,10 @@ pub(super) fn register_find_by_id(
             .map(|t| t.sequence_values::<String>().filter_map(|r| r.ok()).collect());
 
         // Fire before_read hooks
-        let before_ctx = HookContext::builder(&collection, "find_by_id").build();
+        let before_ctx = HookContext::builder(&collection, "find_by_id")
+            .user(hook_user.as_ref())
+            .ui_locale(hook_ui_locale.as_deref())
+            .build();
         run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
             .map_err(|e| mlua::Error::RuntimeError(format!("before_read hook error: {}", e)))?;
 
@@ -348,7 +360,7 @@ pub(super) fn register_find_by_id(
         }
 
         // Run after_read hooks
-        let doc = doc.map(|d| apply_after_read_inner(lua, &def.hooks, &def.fields, &collection, "find_by_id", d));
+        let doc = doc.map(|d| apply_after_read_inner(lua, &def.hooks, &def.fields, &collection, "find_by_id", d, hook_user.as_ref(), hook_ui_locale.as_deref()));
 
         match doc {
             Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

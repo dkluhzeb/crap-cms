@@ -639,6 +639,8 @@ crap.collections.define("items", {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().expect("conn");
@@ -646,7 +648,7 @@ crap.collections.define("items", {
 
     // Run before_validate
     let ctx = runner.run_hooks_with_conn(
-        &def.hooks, HookEvent::BeforeValidate, ctx, &tx, None,
+        &def.hooks, HookEvent::BeforeValidate, ctx, &tx, None, None,
     ).expect("before_validate");
 
     assert_eq!(
@@ -657,7 +659,7 @@ crap.collections.define("items", {
 
     // Run before_change -- should see context from before_validate
     let ctx = runner.run_hooks_with_conn(
-        &def.hooks, HookEvent::BeforeChange, ctx, &tx, None,
+        &def.hooks, HookEvent::BeforeChange, ctx, &tx, None, None,
     ).expect("before_change");
 
     assert_eq!(
@@ -688,6 +690,8 @@ fn context_starts_empty() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     assert!(ctx.context.is_empty(), "Context should start empty");
@@ -728,9 +732,11 @@ fn after_hook_has_crud_access() {
         locale: None,
         draft: None,
         context: std::collections::HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
     let result = runner.run_after_write(
-        &hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None,
+        &hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None, None,
     );
     assert!(result.is_ok(), "after_change hook with CRUD should succeed: {:?}", result.err());
 
@@ -784,9 +790,11 @@ fn after_hook_error_rolls_back() {
         locale: None,
         draft: None,
         context: std::collections::HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
     let result = runner.run_after_write(
-        &hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None,
+        &hooks, &def.fields, HookEvent::AfterChange, ctx, &tx, None, None,
     );
     assert!(result.is_err(), "after_change hook error should propagate");
 
@@ -831,10 +839,12 @@ fn context_flows_to_after_hooks() {
         locale: None,
         draft: None,
         context: req_context,
+        user: None,
+        ui_locale: None,
     };
 
     let result = runner.run_after_write(
-        &hooks, &[], HookEvent::AfterChange, ctx, &tx, None,
+        &hooks, &[], HookEvent::AfterChange, ctx, &tx, None, None,
     );
     assert!(result.is_ok(), "after_change hook should succeed");
 

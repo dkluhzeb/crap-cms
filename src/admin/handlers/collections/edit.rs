@@ -85,7 +85,7 @@ pub async fn edit_form(
                 }
             }
         }
-        let doc = doc.map(|d| runner.apply_after_read(&hooks, &fields, &slug_owned, "find_by_id", d));
+        let doc = doc.map(|d| runner.apply_after_read(&hooks, &fields, &slug_owned, "find_by_id", d, None, None));
         Ok::<_, anyhow::Error>(doc)
     }).await;
 
@@ -459,6 +459,7 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         crate::db::query::LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
+    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
     let action_owned = action.clone();
     let result = tokio::task::spawn_blocking(move || {
         // Handle unpublish: set _status to 'draft' and create a version
@@ -477,6 +478,7 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
                     locale_ctx: locale_ctx.as_ref(),
                     locale,
                     draft,
+                    ui_locale,
                 },
                 user_doc.as_ref(),
             )

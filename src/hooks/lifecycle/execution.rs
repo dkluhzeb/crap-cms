@@ -23,6 +23,8 @@ pub(crate) fn apply_after_read_inner(
     collection: &str,
     operation: &str,
     doc: Document,
+    user: Option<&Document>,
+    ui_locale: Option<&str>,
 ) -> Document {
     let has_field_hooks = fields.iter()
         .any(|f| !f.hooks.after_read.is_empty());
@@ -56,6 +58,8 @@ pub(crate) fn apply_after_read_inner(
 
     let ctx = HookContext::builder(collection, operation)
         .data(data)
+        .user(user)
+        .ui_locale(ui_locale)
         .build();
 
     // Run collection-level + global registered hooks
@@ -498,7 +502,7 @@ mod tests {
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-02".to_string());
 
-        let result = apply_after_read_inner(&lua, &hooks, &fields, "posts", "find", doc.clone());
+        let result = apply_after_read_inner(&lua, &hooks, &fields, "posts", "find", doc.clone(), None, None);
         assert_eq!(result.id, "doc1");
         assert_eq!(result.get_str("title"), Some("Hello"));
     }

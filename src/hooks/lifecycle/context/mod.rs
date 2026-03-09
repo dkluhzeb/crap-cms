@@ -7,6 +7,7 @@ pub use builder::HookContextBuilder;
 use mlua::{Lua, Value};
 use std::collections::HashMap;
 
+use crate::core::Document;
 use crate::core::field::{FieldDefinition, FieldType};
 
 use super::HookDepth;
@@ -24,6 +25,10 @@ pub struct HookContext {
     /// Hooks can read/write this to share state within one request lifecycle.
     /// Only JSON-compatible values survive (no functions, userdata, etc.).
     pub context: HashMap<String, serde_json::Value>,
+    /// Authenticated user document, if any. Exposed as `ctx.user` in Lua hooks.
+    pub user: Option<Document>,
+    /// Admin UI locale (e.g. "en", "de"). Exposed as `ctx.ui_locale` in Lua hooks.
+    pub ui_locale: Option<String>,
 }
 
 impl HookContext {
@@ -62,6 +67,17 @@ impl HookContext {
         // Expose current hook depth so hooks can make manual decisions
         let depth = lua.app_data_ref::<HookDepth>().map(|d| d.0).unwrap_or(0);
         ctx_table.set("hook_depth", depth)?;
+
+        // Authenticated user document
+        if let Some(ref user_doc) = self.user {
+            let user_tbl = crate::hooks::lifecycle::converters::document_to_lua_table(lua, user_doc)?;
+            ctx_table.set("user", user_tbl)?;
+        }
+
+        // Admin UI locale
+        if let Some(ref ui_locale) = self.ui_locale {
+            ctx_table.set("ui_locale", ui_locale.as_str())?;
+        }
 
         Ok(ctx_table)
     }

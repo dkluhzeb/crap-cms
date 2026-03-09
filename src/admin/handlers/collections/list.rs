@@ -467,7 +467,7 @@ pub async fn list_items(
                 }
             }
         }
-        let docs = runner.apply_after_read_many(&hooks, &fields, &slug_owned, "find", docs);
+        let docs = runner.apply_after_read_many(&hooks, &fields, &slug_owned, "find", docs, None, None);
         Ok::<_, anyhow::Error>((docs, total))
     }).await;
 

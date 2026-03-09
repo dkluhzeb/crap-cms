@@ -31,10 +31,11 @@ pub fn update_global_document(
 
     let global_table = format!("_global_{}", slug);
 
+    let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
-    let hook_ctx = build_before_ctx(slug, "update", hook_data, input.locale.clone(), is_draft);
+    let hook_ctx = build_before_ctx(slug, "update", hook_data, input.locale.clone(), is_draft, user, ui_locale);
     let final_ctx = runner.run_before_write(
-        &def.hooks, &def.fields, hook_ctx, &tx, &global_table, Some("default"), user, is_draft,
+        &def.hooks, &def.fields, hook_ctx, &tx, &global_table, Some("default"), user, is_draft, ui_locale,
     )?;
     let final_data = final_ctx.to_string_map(&def.fields);
 
@@ -61,7 +62,7 @@ pub fn update_global_document(
 
     let ctx = run_after_change_hooks(
         runner, &def.hooks, &def.fields, slug, "update",
-        &doc, input.locale, is_draft, final_ctx.context, &tx, user,
+        &doc, input.locale, is_draft, final_ctx.context, &tx, user, ui_locale,
     )?;
 
     tx.commit().context("Commit transaction")?;

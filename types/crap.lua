@@ -100,6 +100,8 @@ crap = {}
 --- @field collection  string              Collection slug.
 --- @field operation   string              The operation: "create", "update", "find", "find_by_id", etc.
 --- @field data        table<string, any>  Full document data (read-only snapshot).
+--- @field user?       table               Authenticated user document (nil if unauthenticated or no auth collection).
+--- @field ui_locale?  string              Admin UI locale code (e.g., "en", "de"). Nil if not set.
 ---
 --- Note: before_validate, before_change, and after_change field hooks have full
 --- CRUD access (crap.collections.find/create/update/delete) via the parent transaction.
@@ -563,6 +565,8 @@ function crap.fields.join(config) end
 --- @field context    table<string, any>     Request-scoped shared table. Persists from before_validate through after_change within one request. Only JSON-compatible values survive (no functions/userdata).
 --- @field hook_depth integer                Current recursion depth. 0 = top-level API/admin call, 1+ = from Lua CRUD inside hooks. Hooks are skipped when this reaches `hooks.max_depth` (default: 3).
 --- @field draft?     boolean                True when this is a draft save (only set for collections with `versions.drafts` enabled).
+--- @field user?      table                  Authenticated user document (nil if unauthenticated or no auth collection). Contains all fields of the user's auth collection document.
+--- @field ui_locale? string                 Admin UI locale code (e.g., "en", "de"). Nil if not set or called from gRPC without locale context.
 
 --- @class crap.FieldAccess
 --- @field read?   string Hook ref for field read access control.

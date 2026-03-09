@@ -109,7 +109,7 @@ fn field_after_read_hook_transforms_value() {
 
     // Apply after_read hooks (collection-level after_read adds _was_read marker)
     let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc,
+        &def.hooks, &def.fields, "articles", "find", doc, None, None,
     );
     assert_eq!(
         transformed.fields.get("_was_read").and_then(|v| v.as_str()),
@@ -137,6 +137,8 @@ fn run_after_write_runs_hooks_with_crud_access() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
     let result = runner.run_after_write(
         &def.hooks,
@@ -144,6 +146,7 @@ fn run_after_write_runs_hooks_with_crud_access() {
         crap_cms::hooks::lifecycle::HookEvent::AfterChange,
         ctx,
         &tx,
+        None,
         None,
     );
     // Should succeed (no after_change hooks defined in the fixture = no-op)
@@ -237,6 +240,8 @@ fn validate_required_field_errors() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().expect("DB connection");
@@ -245,7 +250,7 @@ fn validate_required_field_errors() {
     // run_before_write runs field hooks, validation, then collection hooks.
     // It should fail because "title" is required.
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false,
+        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false, None,
     );
     assert!(result.is_err(), "Should fail when required field 'title' is missing");
 
@@ -275,7 +280,7 @@ fn after_read_hooks_fire() {
 
     // The articles collection has an after_read hook that adds _was_read = "true"
     let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc.clone(),
+        &def.hooks, &def.fields, "articles", "find", doc.clone(), None, None,
     );
 
     // Verify the after_read hook ran
@@ -360,7 +365,7 @@ fn field_after_read_hooks_transform_values() {
     // apply_after_read should run field-level after_read hooks (uppercase_value on title)
     // AND collection-level after_read hooks (_was_read marker)
     let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc,
+        &def.hooks, &def.fields, "articles", "find", doc, None, None,
     );
 
     // Field hook uppercases the title
@@ -394,7 +399,7 @@ fn field_after_read_hooks_with_apply_after_read_many() {
     drop(reg);
 
     let results = runner.apply_after_read_many(
-        &def.hooks, &def.fields, "articles", "find", vec![doc1, doc2],
+        &def.hooks, &def.fields, "articles", "find", vec![doc1, doc2], None, None,
     );
 
     assert_eq!(results.len(), 2);
@@ -427,6 +432,8 @@ fn run_after_write_runs_field_after_change_hooks() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -439,6 +446,7 @@ fn run_after_write_runs_field_after_change_hooks() {
         HookEvent::AfterChange,
         ctx,
         &tx,
+        None,
         None,
     ).expect("run_after_write failed");
 
@@ -467,6 +475,8 @@ fn run_after_write_with_non_after_change_event() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -479,6 +489,7 @@ fn run_after_write_with_non_after_change_event() {
         HookEvent::AfterDelete,
         ctx,
         &tx,
+        None,
         None,
     );
     assert!(result.is_ok());
@@ -533,6 +544,8 @@ fn hook_context_passes_locale_and_draft() {
         locale: Some("en".to_string()),
         draft: Some(true),
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -544,6 +557,7 @@ fn hook_context_passes_locale_and_draft() {
         HookEvent::BeforeChange,
         ctx,
         &tx,
+        None,
         None,
     ).expect("Hook execution failed");
 
@@ -573,6 +587,8 @@ fn hook_context_table_flows_through() {
         locale: None,
         draft: None,
         context,
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().unwrap();
@@ -584,6 +600,7 @@ fn hook_context_table_flows_through() {
         HookEvent::BeforeChange,
         ctx,
         &tx,
+        None,
         None,
     ).expect("Hook execution failed");
 
@@ -614,6 +631,7 @@ fn field_before_validate_hook_trims_title() {
         "articles",
         "create",
         &tx,
+        None,
         None,
     ).expect("Field hook failed");
 
@@ -669,6 +687,7 @@ fn multiple_field_hooks_run_in_sequence() {
         "create",
         &tx,
         None,
+        None,
     ).expect("before_validate field hook");
 
     assert_eq!(data.get("title").and_then(|v| v.as_str()), Some("hello"));
@@ -714,13 +733,15 @@ fn run_before_write_with_user_context() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
 
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, Some(&user), false,
+        &def.hooks, &def.fields, ctx, &tx, "articles", None, Some(&user), false, None,
     ).expect("run_before_write with user failed");
 
     assert!(result.data.contains_key("title"));
@@ -737,7 +758,7 @@ fn apply_after_read_many_empty_hooks_passthrough() {
     let hooks = Hooks::default();
     let fields: Vec<FieldDefinition> = Vec::new();
     let docs = vec![doc.clone()];
-    let result = runner.apply_after_read_many(&hooks, &fields, "articles", "find", docs);
+    let result = runner.apply_after_read_many(&hooks, &fields, "articles", "find", docs, None, None);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].id, doc.id);
 }

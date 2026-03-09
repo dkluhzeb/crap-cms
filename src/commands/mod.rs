@@ -1,17 +1,17 @@
 //! CLI command handlers. Each submodule handles one top-level subcommand.
 
-pub mod serve;
-pub mod init;
-pub mod status;
-pub mod user;
-pub mod make;
-pub mod jobs;
-pub mod images;
 pub mod db;
 pub mod export;
+pub mod images;
+pub mod init;
+pub mod jobs;
+pub mod make;
+pub mod mcp;
+pub mod serve;
+pub mod status;
 pub mod templates;
 pub mod typegen;
-pub mod mcp;
+pub mod user;
 
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
@@ -19,7 +19,8 @@ use std::path::{Path, PathBuf};
 
 /// Parse a key=value pair for --field arguments.
 pub fn parse_key_val(s: &str) -> Result<(String, String), String> {
-    let pos = s.find('=')
+    let pos = s
+        .find('=')
         .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
     Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
 }
@@ -455,6 +456,32 @@ pub enum ImagesAction {
     },
 }
 
+/// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.
+pub fn load_config_and_sync(
+    config_dir: &Path,
+) -> Result<(crate::db::DbPool, crate::core::SharedRegistry)> {
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
+
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+
+    // Check crap_version compatibility
+    if let Some(warning) = cfg.check_version() {
+        tracing::warn!("{}", warning);
+    }
+
+    let registry =
+        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
+    let pool = crate::db::pool::create_pool(&config_dir, &cfg)
+        .context("Failed to create database pool")?;
+
+    crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
+        .context("Failed to sync database schema")?;
+
+    Ok((pool, registry))
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_key_val;
@@ -500,27 +527,4 @@ mod tests {
             Ok((String::new(), "value".to_string()))
         );
     }
-}
-
-/// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.
-pub fn load_config_and_sync(config_dir: &Path) -> Result<(crate::db::DbPool, crate::core::SharedRegistry)> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
-
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
-
-    // Check crap_version compatibility
-    if let Some(warning) = cfg.check_version() {
-        tracing::warn!("{}", warning);
-    }
-
-    let registry = crate::hooks::init_lua(&config_dir, &cfg)
-        .context("Failed to initialize Lua VM")?;
-    let pool = crate::db::pool::create_pool(&config_dir, &cfg)
-        .context("Failed to create database pool")?;
-
-    crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
-        .context("Failed to sync database schema")?;
-
-    Ok((pool, registry))
 }

@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use crate::core::Document;
+
 use super::HookContext;
 
 /// Builder for `HookContext`. Created via [`HookContext::builder`].
@@ -12,6 +14,8 @@ pub struct HookContextBuilder {
     locale: Option<String>,
     draft: Option<bool>,
     context: HashMap<String, serde_json::Value>,
+    user: Option<Document>,
+    ui_locale: Option<String>,
 }
 
 impl HookContextBuilder {
@@ -23,6 +27,8 @@ impl HookContextBuilder {
             locale: None,
             draft: None,
             context: HashMap::new(),
+            user: None,
+            ui_locale: None,
         }
     }
 
@@ -46,6 +52,16 @@ impl HookContextBuilder {
         self
     }
 
+    pub fn user(mut self, user: Option<&Document>) -> Self {
+        self.user = user.cloned();
+        self
+    }
+
+    pub fn ui_locale(mut self, ui_locale: Option<&str>) -> Self {
+        self.ui_locale = ui_locale.map(|s| s.to_string());
+        self
+    }
+
     pub fn build(self) -> HookContext {
         HookContext {
             collection: self.collection,
@@ -54,6 +70,8 @@ impl HookContextBuilder {
             locale: self.locale,
             draft: self.draft,
             context: self.context,
+            user: self.user,
+            ui_locale: self.ui_locale,
         }
     }
 }
@@ -73,6 +91,8 @@ mod tests {
         assert!(ctx.locale.is_none());
         assert!(ctx.draft.is_none());
         assert!(ctx.context.is_empty());
+        assert!(ctx.user.is_none());
+        assert!(ctx.ui_locale.is_none());
     }
 
     #[test]

@@ -436,6 +436,8 @@ fn run_hooks_no_conn_fires_collection_and_registered() {
         locale: None,
         draft: None,
         context: HashMap::new(),
+        user: None,
+        ui_locale: None,
     };
 
     let result = runner.run_hooks(

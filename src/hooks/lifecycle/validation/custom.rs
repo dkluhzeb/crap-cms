@@ -4,6 +4,7 @@ use anyhow::Result;
 use mlua::{Lua, Value};
 
 use super::super::execution::resolve_hook_function;
+use crate::hooks::lifecycle::{UserContext, UiLocaleContext};
 
 /// Inner implementation of `run_validate_function` — operates on a locked `&Lua`.
 /// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
@@ -25,6 +26,16 @@ pub(super) fn run_validate_function_inner(
         data_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
     }
     ctx_table.set("data", data_table)?;
+
+    // Add user document and UI locale to validation context
+    if let Some(user_doc) = lua.app_data_ref::<UserContext>().and_then(|uc| uc.0.clone()) {
+        if let Ok(user_tbl) = crate::hooks::lifecycle::converters::document_to_lua_table(lua, &user_doc) {
+            let _ = ctx_table.set("user", user_tbl);
+        }
+    }
+    if let Some(ui_locale) = lua.app_data_ref::<UiLocaleContext>().and_then(|uc| uc.0.clone()) {
+        let _ = ctx_table.set("ui_locale", ui_locale.as_str());
+    }
 
     let result: Value = func.call((lua_value, ctx_table))?;
     match result {

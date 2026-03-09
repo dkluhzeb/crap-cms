@@ -8,7 +8,7 @@ use crate::db::query::{self, AccessResult, FindQuery, Filter, FilterOp, FilterCl
 use crate::db::query::filter::normalize_filter_fields;
 
 use super::get_tx_conn;
-use crate::hooks::lifecycle::{UserContext, HookDepth, MaxHookDepth};
+use crate::hooks::lifecycle::{UserContext, UiLocaleContext, HookDepth, MaxHookDepth};
 use crate::hooks::lifecycle::{HookContext, HookEvent};
 use crate::hooks::lifecycle::execution::run_hooks_inner;
 use crate::hooks::lifecycle::access::check_access_with_lua;
@@ -25,6 +25,9 @@ pub(super) fn register_delete(
     let delete_fn = lua.create_function(move |lua, (collection, id, opts): (String, String, Option<mlua::Table>)| {
         let conn_ptr = get_tx_conn(lua)?;
         let conn = unsafe { &*conn_ptr };
+
+        let hook_user = lua.app_data_ref::<UserContext>().and_then(|uc| uc.0.clone());
+        let hook_ui_locale = lua.app_data_ref::<UiLocaleContext>().and_then(|uc| uc.0.clone());
 
         let override_access: bool = opts.as_ref()
             .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
@@ -73,6 +76,8 @@ pub(super) fn register_delete(
 
             let hook_ctx = HookContext::builder(&collection, "delete")
                 .data([("id".to_string(), serde_json::Value::String(id.clone()))].into())
+                .user(hook_user.as_ref())
+                .ui_locale(hook_ui_locale.as_deref())
                 .build();
             run_hooks_inner(lua, &def.hooks, HookEvent::BeforeDelete, hook_ctx)
                 .map_err(|e| mlua::Error::RuntimeError(format!("before_delete hook error: {}", e)))?;
@@ -88,6 +93,8 @@ pub(super) fn register_delete(
         if hooks_enabled {
             let after_ctx = HookContext::builder(&collection, "delete")
                 .data([("id".to_string(), serde_json::Value::String(id.clone()))].into())
+                .user(hook_user.as_ref())
+                .ui_locale(hook_ui_locale.as_deref())
                 .build();
             run_hooks_inner(lua, &def.hooks, HookEvent::AfterDelete, after_ctx)
                 .map_err(|e| mlua::Error::RuntimeError(format!("after_delete hook error: {}", e)))?;

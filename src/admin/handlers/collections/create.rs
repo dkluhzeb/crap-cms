@@ -264,6 +264,7 @@ pub async fn create_action(
         crate::db::query::LocaleMode::Single(l) => Some(l.clone()),
         _ => None,
     });
+    let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
     let result = tokio::task::spawn_blocking(move || {
         crate::service::create_document(
             &pool, &runner, &slug_owned, &def_owned,
@@ -274,6 +275,7 @@ pub async fn create_action(
                 locale_ctx: locale_ctx.as_ref(),
                 locale,
                 draft,
+                ui_locale,
             },
             user_doc.as_ref(),
         )

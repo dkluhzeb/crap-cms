@@ -14,7 +14,7 @@ use crate::hooks::lifecycle::execution::{
     call_hook_ref,
 };
 use crate::hooks::lifecycle::types::{
-    TxContext, UserContext, HookEvent, FieldHookEvent,
+    TxContext, UserContext, UiLocaleContext, HookEvent, FieldHookEvent,
 };
 
 use super::HookRunner;
@@ -55,6 +55,7 @@ impl HookRunner {
     /// to Lua hooks and share the provided connection for transaction atomicity.
     /// `user` is the authenticated user (if any) — propagated to CRUD closures
     /// for `overrideAccess = false` enforcement.
+    #[allow(clippy::too_many_arguments)]
     pub fn run_hooks_with_conn(
         &self,
         hooks: &Hooks,
@@ -62,6 +63,7 @@ impl HookRunner {
         mut context: HookContext,
         conn: &rusqlite::Connection,
         user: Option<&Document>,
+        ui_locale: Option<&str>,
     ) -> Result<HookContext> {
         let hook_refs = get_hook_refs(hooks, &event);
 
@@ -77,6 +79,7 @@ impl HookRunner {
         // the Lua mutex so no concurrent access is possible.
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(user.cloned()));
+        lua.set_app_data(UiLocaleContext(ui_locale.map(|s| s.to_string())));
 
         let result = (|| -> Result<HookContext> {
             for hook_ref in hook_refs {
@@ -91,6 +94,7 @@ impl HookRunner {
         // Always clean up the connection pointer, even on error.
         lua.remove_app_data::<TxContext>();
         lua.remove_app_data::<UserContext>();
+        lua.remove_app_data::<UiLocaleContext>();
 
         result
     }
@@ -110,6 +114,7 @@ impl HookRunner {
 
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(None));
+        lua.set_app_data(UiLocaleContext(None));
 
         let result = (|| -> Result<()> {
             for hook_ref in refs {
@@ -122,6 +127,7 @@ impl HookRunner {
 
         lua.remove_app_data::<TxContext>();
         lua.remove_app_data::<UserContext>();
+        lua.remove_app_data::<UiLocaleContext>();
 
         result
     }
@@ -160,6 +166,7 @@ impl HookRunner {
         operation: &str,
         conn: &rusqlite::Connection,
         user: Option<&Document>,
+        ui_locale: Option<&str>,
     ) -> Result<()> {
         // Skip VM acquisition if no fields have hooks for this event
         if !has_field_hooks_for_event(fields, &event) {
@@ -171,12 +178,14 @@ impl HookRunner {
         // Inject the connection pointer so CRUD functions can use it.
         lua.set_app_data(TxContext(conn as *const _));
         lua.set_app_data(UserContext(user.cloned()));
+        lua.set_app_data(UiLocaleContext(ui_locale.map(|s| s.to_string())));
 
         let result = run_field_hooks_inner(&lua, fields, &event, data, collection, operation);
 
         // Always clean up, even on error.
         lua.remove_app_data::<TxContext>();
         lua.remove_app_data::<UserContext>();
+        lua.remove_app_data::<UiLocaleContext>();
 
         result
     }

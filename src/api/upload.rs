@@ -158,10 +158,11 @@ async fn create_upload(
     let slug_owned = slug.clone();
     let def_owned = def.clone();
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
+    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
     let result = tokio::task::spawn_blocking(move || {
         crate::service::create_document(
             &pool, &runner, &slug_owned, &def_owned,
-            crate::service::WriteInput { data: form_data, join_data: &join_data, password: password.as_deref(), locale_ctx: None, locale: None, draft },
+            crate::service::WriteInput { data: form_data, join_data: &join_data, password: password.as_deref(), locale_ctx: None, locale: None, draft, ui_locale },
             user_doc_owned.as_ref(),
         )
     }).await;
@@ -303,10 +304,11 @@ async fn update_upload(
     let id_owned = id.clone();
     let def_owned = def.clone();
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
+    let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
     let result = tokio::task::spawn_blocking(move || {
         crate::service::update_document(
             &pool, &runner, &slug_owned, &id_owned, &def_owned,
-            crate::service::WriteInput { data: form_data, join_data: &join_data, password: password.as_deref(), locale_ctx: None, locale: None, draft },
+            crate::service::WriteInput { data: form_data, join_data: &join_data, password: password.as_deref(), locale_ctx: None, locale: None, draft, ui_locale },
             user_doc_owned.as_ref(),
         )
     }).await;

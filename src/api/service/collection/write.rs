@@ -67,6 +67,7 @@ impl ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+        let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
         let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             // Strip field-level create-denied fields inside spawn_blocking
             // to avoid pool.get() on the async thread
@@ -84,6 +85,7 @@ impl ContentService {
                     data.remove(name);
                 }
             }
+            let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
             crate::service::create_document(
                 &pool,
                 &runner,
@@ -96,6 +98,7 @@ impl ContentService {
                     locale_ctx: locale_ctx.as_ref(),
                     locale: None,
                     draft: req.draft.unwrap_or(false),
+                    ui_locale,
                 },
                 user_doc.as_ref(),
             )
@@ -271,6 +274,7 @@ impl ContentService {
         let def_fields = def.fields.clone();
         let def_owned = def;
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+        let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
         let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             // Strip field-level update-denied fields inside spawn_blocking
             // to avoid pool.get() on the async thread
@@ -288,6 +292,7 @@ impl ContentService {
                     data.remove(name);
                 }
             }
+            let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
             crate::service::update_document(
                 &pool,
                 &runner,
@@ -301,6 +306,7 @@ impl ContentService {
                     locale_ctx: locale_ctx.as_ref(),
                     locale: None,
                     draft: req.draft.unwrap_or(false),
+                    ui_locale,
                 },
                 user_doc.as_ref(),
             )

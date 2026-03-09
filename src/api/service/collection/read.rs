@@ -164,7 +164,7 @@ impl ContentService {
                 }
             }
             let docs =
-                runner.apply_after_read_many(&hooks, &fields, &collection, "find", docs);
+                runner.apply_after_read_many(&hooks, &fields, &collection, "find", docs, None, None);
             // Populate relationships if depth > 0 (batch for efficiency)
             if depth > 0 {
                 let mut docs = docs;
@@ -302,7 +302,7 @@ impl ContentService {
                 }
             }
             let mut doc = doc.map(|d| {
-                runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d)
+                runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d, None, None)
             });
             let select_slice = select.as_deref();
             // Populate relationships if depth > 0

@@ -43,6 +43,8 @@ impl HookRunner {
         collection: &str,
         operation: &str,
         doc: Document,
+        user: Option<&Document>,
+        ui_locale: Option<&str>,
     ) -> Document {
         let lua = match self.pool.acquire() {
             Ok(l) => l,
@@ -51,7 +53,7 @@ impl HookRunner {
                 return doc;
             }
         };
-        apply_after_read_inner(&lua, hooks, fields, collection, operation, doc)
+        apply_after_read_inner(&lua, hooks, fields, collection, operation, doc, user, ui_locale)
     }
 
     /// Fire after_read hooks on a list of documents.
@@ -63,6 +65,8 @@ impl HookRunner {
         collection: &str,
         operation: &str,
         docs: Vec<Document>,
+        user: Option<&Document>,
+        ui_locale: Option<&str>,
     ) -> Vec<Document> {
         let has_field_hooks = fields.iter().any(|f| !f.hooks.after_read.is_empty());
         let has_collection_hooks = !hooks.after_read.is_empty();
@@ -82,7 +86,7 @@ impl HookRunner {
         };
 
         docs.into_iter()
-            .map(|doc| apply_after_read_inner(&lua, hooks, fields, collection, operation, doc))
+            .map(|doc| apply_after_read_inner(&lua, hooks, fields, collection, operation, doc, user, ui_locale))
             .collect()
     }
 
@@ -105,6 +109,7 @@ impl HookRunner {
         exclude_id: Option<&str>,
         user: Option<&Document>,
         is_draft: bool,
+        ui_locale: Option<&str>,
     ) -> Result<HookContext> {
         // Field-level before_validate (normalize inputs, CRUD available)
         self.run_field_hooks_with_conn(
@@ -115,9 +120,10 @@ impl HookRunner {
             &ctx.operation,
             conn,
             user,
+            ui_locale,
         )?;
         // Collection-level before_validate
-        let ctx = self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, conn, user)?;
+        let ctx = self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, conn, user, ui_locale)?;
         // Validation (skip required checks for drafts)
         self.validate_fields(fields, &ctx.data, conn, table, exclude_id, is_draft)?;
         // Field-level before_change (post-validation transforms, CRUD available)
@@ -130,9 +136,10 @@ impl HookRunner {
             &ctx.operation,
             conn,
             user,
+            ui_locale,
         )?;
         // Collection-level before_change
-        self.run_hooks_with_conn(hooks, HookEvent::BeforeChange, ctx, conn, user)
+        self.run_hooks_with_conn(hooks, HookEvent::BeforeChange, ctx, conn, user, ui_locale)
     }
 
     /// Run after-write hooks inside the transaction (with CRUD access).
@@ -147,6 +154,7 @@ impl HookRunner {
         ctx: HookContext,
         conn: &rusqlite::Connection,
         user: Option<&Document>,
+        ui_locale: Option<&str>,
     ) -> Result<HookContext> {
         // Run field-level after_change hooks (with CRUD access)
         if matches!(event, HookEvent::AfterChange) {
@@ -161,12 +169,13 @@ impl HookRunner {
                     &ctx.operation,
                     conn,
                     user,
+                    ui_locale,
                 )?;
             }
         }
 
         // Run collection-level + registered hooks (with CRUD access)
-        self.run_hooks_with_conn(hooks, event, ctx, conn, user)
+        self.run_hooks_with_conn(hooks, event, ctx, conn, user, ui_locale)
     }
 
     /// Validate field data against field definitions.

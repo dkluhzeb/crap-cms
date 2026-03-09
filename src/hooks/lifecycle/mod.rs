@@ -14,5 +14,5 @@ pub use context::{HookContext, HookContextBuilder};
 pub use runner::{HookRunner, HookRunnerBuilder};
 pub use types::{DisplayConditionResult, HookEvent, FieldHookEvent};
 // Internal types needed by sibling submodules (crud.rs, access.rs, context.rs).
-pub(crate) use types::{TxContext, UserContext, HookDepth, MaxHookDepth, DefaultDeny};
+pub(crate) use types::{TxContext, UserContext, UiLocaleContext, HookDepth, MaxHookDepth, DefaultDeny};
 pub use validation::evaluate_condition_table;

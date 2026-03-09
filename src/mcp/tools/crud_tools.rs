@@ -250,7 +250,7 @@ pub(super) fn exec_create(
         pool, runner, slug, def,
         crate::service::WriteInput {
             data, join_data: &join_data, password: password.as_deref(),
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     )?;
@@ -304,7 +304,7 @@ pub(super) fn exec_update(
         pool, runner, slug, id, def,
         crate::service::WriteInput {
             data, join_data: &join_data, password: password.as_deref(),
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     )?;
@@ -382,7 +382,7 @@ pub(super) fn exec_update_global(
         pool, runner, slug, def,
         crate::service::WriteInput {
             data, join_data: &join_data, password: None,
-            locale_ctx: None, locale: None, draft: false,
+            locale_ctx: None, locale: None, draft: false, ui_locale: None,
         },
         None,
     )?;

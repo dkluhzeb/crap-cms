@@ -26,6 +26,8 @@ end
 | `collection` | string | Collection slug |
 | `operation` | string | `"create"`, `"update"`, `"find"`, `"find_by_id"` |
 | `data` | table | Full document data (read-only snapshot) |
+| `user` | table/nil | Authenticated user document (nil if unauthenticated) |
+| `ui_locale` | string/nil | Admin UI locale code (e.g., `"en"`, `"de"`) |
 
 ### Typed Contexts
 

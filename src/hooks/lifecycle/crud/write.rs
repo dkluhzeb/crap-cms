@@ -9,7 +9,7 @@ use crate::core::SharedRegistry;
 use crate::db::query::{self, AccessResult, LocaleContext};
 
 use super::get_tx_conn;
-use crate::hooks::lifecycle::{UserContext, HookDepth, MaxHookDepth};
+use crate::hooks::lifecycle::{UserContext, UiLocaleContext, HookDepth, MaxHookDepth};
 use crate::hooks::lifecycle::{HookContext, HookEvent, FieldHookEvent};
 use crate::hooks::lifecycle::execution::{run_hooks_inner, run_field_hooks_inner};
 use crate::hooks::lifecycle::validation::validate_fields_inner;
@@ -29,6 +29,9 @@ pub(super) fn register_create(
     let create_fn = lua.create_function(move |lua, (collection, data_table, opts): (String, mlua::Table, Option<mlua::Table>)| {
         let conn_ptr = get_tx_conn(lua)?;
         let conn = unsafe { &*conn_ptr };
+
+        let hook_user = lua.app_data_ref::<UserContext>().and_then(|uc| uc.0.clone());
+        let hook_ui_locale = lua.app_data_ref::<UiLocaleContext>().and_then(|uc| uc.0.clone());
 
         let locale_str: Option<String> = opts.as_ref()
             .and_then(|o| o.get::<Option<String>>("locale").ok().flatten());
@@ -127,7 +130,9 @@ pub(super) fn register_create(
             // Collection-level before_validate
             let mut builder = HookContext::builder(collection.clone(), "create")
                 .data(hook_data.clone())
-                .draft(is_draft);
+                .draft(is_draft)
+                .user(hook_user.as_ref())
+                .ui_locale(hook_ui_locale.as_deref());
             if let Some(ref l) = locale_str {
                 builder = builder.locale(l.clone());
             }
@@ -153,7 +158,9 @@ pub(super) fn register_create(
             // Collection-level before_change
             let mut builder = HookContext::builder(collection.clone(), "create")
                 .data(hook_data.clone())
-                .draft(is_draft);
+                .draft(is_draft)
+                .user(hook_user.as_ref())
+                .ui_locale(hook_ui_locale.as_deref());
             if let Some(ref l) = locale_str {
                 builder = builder.locale(l.clone());
             }
@@ -184,7 +191,9 @@ pub(super) fn register_create(
 
             let mut builder = HookContext::builder(collection.clone(), "create")
                 .data(doc.fields.clone())
-                .draft(is_draft);
+                .draft(is_draft)
+                .user(hook_user.as_ref())
+                .ui_locale(hook_ui_locale.as_deref());
             if let Some(ref l) = locale_str {
                 builder = builder.locale(l.clone());
             }
@@ -219,6 +228,9 @@ pub(super) fn register_update(
     let update_fn = lua.create_function(move |lua, (collection, id, data_table, opts): (String, String, mlua::Table, Option<mlua::Table>)| {
         let conn_ptr = get_tx_conn(lua)?;
         let conn = unsafe { &*conn_ptr };
+
+        let hook_user = lua.app_data_ref::<UserContext>().and_then(|uc| uc.0.clone());
+        let hook_ui_locale = lua.app_data_ref::<UiLocaleContext>().and_then(|uc| uc.0.clone());
 
         let locale_str: Option<String> = opts.as_ref()
             .and_then(|o| o.get::<Option<String>>("locale").ok().flatten());
@@ -302,7 +314,9 @@ pub(super) fn register_update(
                 lua.set_app_data(HookDepth(current_depth + 1));
                 let mut builder = HookContext::builder(collection.clone(), "update")
                     .data(existing_doc.fields.clone())
-                    .draft(false);
+                    .draft(false)
+                    .user(hook_user.as_ref())
+                    .ui_locale(hook_ui_locale.as_deref());
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -317,7 +331,9 @@ pub(super) fn register_update(
             if hooks_enabled {
                 let mut builder = HookContext::builder(collection.clone(), "update")
                     .data(existing_doc.fields.clone())
-                    .draft(false);
+                    .draft(false)
+                    .user(hook_user.as_ref())
+                    .ui_locale(hook_ui_locale.as_deref());
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -363,7 +379,9 @@ pub(super) fn register_update(
 
             let mut builder = HookContext::builder(collection.clone(), "update")
                 .data(hook_data.clone())
-                .draft(is_draft);
+                .draft(is_draft)
+                .user(hook_user.as_ref())
+                .ui_locale(hook_ui_locale.as_deref());
             if let Some(ref l) = locale_str {
                 builder = builder.locale(l.clone());
             }
@@ -386,7 +404,9 @@ pub(super) fn register_update(
 
             let mut builder = HookContext::builder(collection.clone(), "update")
                 .data(hook_data.clone())
-                .draft(is_draft);
+                .draft(is_draft)
+                .user(hook_user.as_ref())
+                .ui_locale(hook_ui_locale.as_deref());
             if let Some(ref l) = locale_str {
                 builder = builder.locale(l.clone());
             }
@@ -409,7 +429,9 @@ pub(super) fn register_update(
             if hooks_enabled {
                 let mut builder = HookContext::builder(collection.clone(), "update")
                     .data(existing_doc.fields.clone())
-                    .draft(is_draft);
+                    .draft(is_draft)
+                    .user(hook_user.as_ref())
+                    .ui_locale(hook_ui_locale.as_deref());
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -439,7 +461,9 @@ pub(super) fn register_update(
 
                 let mut builder = HookContext::builder(collection.clone(), "update")
                     .data(doc.fields.clone())
-                    .draft(is_draft);
+                    .draft(is_draft)
+                    .user(hook_user.as_ref())
+                    .ui_locale(hook_ui_locale.as_deref());
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
