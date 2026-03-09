@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use super::queued_conversion::QueuedConversion;
 use super::size_result::SizeResult;
@@ -17,6 +18,7 @@ pub struct ProcessedUploadBuilder {
     url: String,
     sizes: HashMap<String, SizeResult>,
     queued_conversions: Vec<QueuedConversion>,
+    created_files: Vec<PathBuf>,
 }
 
 impl ProcessedUploadBuilder {
@@ -30,6 +32,7 @@ impl ProcessedUploadBuilder {
             height: None,
             sizes: HashMap::new(),
             queued_conversions: Vec::new(),
+            created_files: Vec::new(),
         }
     }
 
@@ -63,6 +66,11 @@ impl ProcessedUploadBuilder {
         self
     }
 
+    pub fn created_files(mut self, files: Vec<PathBuf>) -> Self {
+        self.created_files = files;
+        self
+    }
+
     pub fn build(self) -> ProcessedUpload {
         ProcessedUpload {
             filename: self.filename,
@@ -73,6 +81,7 @@ impl ProcessedUploadBuilder {
             url: self.url,
             sizes: self.sizes,
             queued_conversions: self.queued_conversions,
+            created_files: self.created_files,
         }
     }
 }

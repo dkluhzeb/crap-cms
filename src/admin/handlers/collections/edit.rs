@@ -31,6 +31,41 @@ use crate::core::upload::inject_upload_metadata;
 use super::forms::{extract_join_data_from_form, parse_multipart_form, transform_select_has_many};
 use super::create::collect_upload_hidden_fields;
 
+/// Delete a list of files, ignoring errors (best-effort orphan cleanup).
+fn cleanup_created_files(files: &[std::path::PathBuf]) {
+    for path in files {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Render the upload error page (edit form with toast).
+fn render_edit_upload_error(
+    state: &AdminState,
+    def: &crate::core::collection::CollectionDefinition,
+    form_data: &HashMap<String, String>,
+    id: &str,
+    auth_user: &Option<Extension<AuthUser>>,
+    err_msg: &str,
+) -> axum::response::Response {
+    let mut fields = build_field_contexts(&def.fields, form_data, &HashMap::new(), true, false);
+    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new(), Some(id));
+    let form_json = serde_json::json!(form_data.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
+    apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
+    let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
+    let data = ContextBuilder::new(state, None)
+        .locale_from_auth(auth_user)
+        .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
+        .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
+        .collection_def(def)
+        .document_stub(id)
+        .fields(main_fields)
+        .set("sidebar_fields", serde_json::json!(sidebar_fields))
+        .set("editing", serde_json::json!(true))
+        .set("has_drafts", serde_json::json!(def.has_drafts()))
+        .build();
+    html_with_toast(state, "collections/edit", &data, err_msg)
+}
+
 /// GET /admin/collections/{slug}/{id} — show edit form
 pub async fn edit_form(
     State(state): State<AdminState>,
@@ -361,8 +396,9 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
     // For upload collections, if a new file was uploaded, process it and delete old files
     let mut old_doc_fields: Option<HashMap<String, serde_json::Value>> = None;
     let mut queued_conversions = Vec::new();
+    let mut created_files: Vec<std::path::PathBuf> = Vec::new();
     if let Some(f) = file {
-        if let Some(ref upload_config) = def.upload {
+        if let Some(upload_config) = def.upload.clone() {
             // Load old document to get old file paths for cleanup
             if let Ok(conn) = state.pool.get() {
                 if let Ok(Some(old_doc)) = query::find_by_id(&conn, slug, &def, id, locale_ctx.as_ref()) {
@@ -370,33 +406,25 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
                 }
             }
 
-            match upload::process_upload(
-                &f, upload_config, &state.config_dir, slug,
-                state.config.upload.max_file_size,
-            ) {
-                Ok(processed) => {
+            let config_dir = state.config_dir.clone();
+            let slug_for_upload = slug.to_string();
+            let global_max = state.config.upload.max_file_size;
+            let upload_result = tokio::task::spawn_blocking(move || {
+                upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+            }).await;
+            match upload_result {
+                Ok(Ok(processed)) => {
                     queued_conversions = processed.queued_conversions.clone();
+                    created_files = processed.created_files.clone();
                     inject_upload_metadata(&mut form_data, &processed);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("Upload processing error: {}", e);
-                    let mut fields = build_field_contexts(&def.fields, &form_data, &HashMap::new(), true, false);
-                    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new(), Some(id));
-                    let form_json = serde_json::json!(form_data.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
-                    apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
-                    let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
-                    let data = ContextBuilder::new(state, None)
-                        .locale_from_auth(auth_user)
-                        .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
-                        .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
-                        .collection_def(&def)
-                        .document_stub(id)
-                        .fields(main_fields)
-                        .set("sidebar_fields", serde_json::json!(sidebar_fields))
-                        .set("editing", serde_json::json!(true))
-                        .set("has_drafts", serde_json::json!(def.has_drafts()))
-                        .build();
-                    return html_with_toast(state, "collections/edit", &data, &e.to_string());
+                    return render_edit_upload_error(state, &def, &form_data, id, auth_user, &e.to_string());
+                }
+                Err(e) => {
+                    tracing::error!("Upload task error: {}", e);
+                    return render_edit_upload_error(state, &def, &form_data, id, auth_user, &e.to_string());
                 }
             }
         }
@@ -528,6 +556,7 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
             htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
         }
         Ok(Err(e)) => {
+            cleanup_created_files(&created_files);
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let locale = auth_user.as_ref()
                     .map(|Extension(au)| au.ui_locale.as_str())
@@ -561,6 +590,7 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
             }
         }
         Err(e) => {
+            cleanup_created_files(&created_files);
             tracing::error!("Update task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/{}", slug, id))
         }

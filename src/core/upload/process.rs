@@ -45,8 +45,10 @@ impl Drop for CleanupGuard {
 }
 
 /// Process an uploaded file: validate, save to disk, generate image sizes + format variants.
+///
+/// Takes `UploadedFile` by value so this function can be moved into `spawn_blocking`.
 pub fn process_upload(
-    file: &UploadedFile,
+    file: UploadedFile,
     upload_config: &CollectionUpload,
     config_dir: &std::path::Path,
     collection_slug: &str,
@@ -192,12 +194,14 @@ pub fn process_upload(
         }
     }
 
+    let created_files = guard.files.clone();
     guard.commit();
     let mut builder = ProcessedUploadBuilder::new(unique_filename, url)
         .mime_type(file.content_type.clone())
         .filesize(filesize)
         .sizes(sizes)
-        .queued_conversions(queued_conversions);
+        .queued_conversions(queued_conversions)
+        .created_files(created_files);
     if let Some(w) = width {
         builder = builder.width(w);
     }
@@ -240,7 +244,7 @@ mod tests {
             .build();
         let upload_config = CollectionUpload::default();
         let tmp = tempfile::tempdir().unwrap();
-        let result = process_upload(&file, &upload_config, tmp.path(), "test", 10_000_000);
+        let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("does not match claimed type"), "Error: {}", err);
@@ -257,7 +261,7 @@ mod tests {
         upload_config.mime_types = vec!["image/*".into()];
         let tmp = tempfile::tempdir().unwrap();
         // Won't fully succeed (no valid full PNG) but passes the MIME check
-        let result = process_upload(&file, &upload_config, tmp.path(), "test", 10_000_000);
+        let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
         // Should pass MIME validation (might fail later on image processing, that's OK)
         let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
         assert!(!err_msg.contains("does not match claimed type"), "Unexpected mismatch: {}", err_msg);
@@ -271,7 +275,7 @@ mod tests {
             .build();
         let upload_config = CollectionUpload::default();
         let tmp = tempfile::tempdir().unwrap();
-        let result = process_upload(&file, &upload_config, tmp.path(), "test", 10_000_000);
+        let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
         let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
         assert!(!err_msg.contains("does not match claimed type"), "Unexpected mismatch: {}", err_msg);
     }
@@ -285,7 +289,7 @@ mod tests {
         let mut config = CollectionUpload::default();
         config.enabled = true;
         config.mime_types = vec!["image/*".into()];
-        let result = process_upload(&file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
+        let result = process_upload(file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("text/plain"), "Error should mention the rejected MIME type");
@@ -300,7 +304,7 @@ mod tests {
         let mut config = CollectionUpload::default();
         config.enabled = true;
         config.max_file_size = Some(512); // only allow 512 bytes
-        let result = process_upload(&file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
+        let result = process_upload(file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("exceeds"), "Error should mention size exceeded");
@@ -315,7 +319,7 @@ mod tests {
         let mut config = CollectionUpload::default();
         config.enabled = true;
         // Global max is 512 bytes
-        let result = process_upload(&file, &config, tmp.path(), "posts", 512);
+        let result = process_upload(file, &config, tmp.path(), "posts", 512);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("exceeds"));
     }
@@ -328,7 +332,7 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        let result = process_upload(&file, &config, tmp.path(), "docs", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "docs", 50 * 1024 * 1024)
             .expect("should succeed for non-image");
         assert!(result.url.starts_with("/uploads/docs/"));
         assert!(result.url.ends_with("document.pdf"));
@@ -351,7 +355,7 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed for image");
         assert_eq!(result.mime_type, "image/png");
         assert_eq!(result.width, Some(50));
@@ -371,7 +375,7 @@ mod tests {
         config.image_sizes = vec![
             ImageSizeBuilder::new("thumb").width(50).height(50).fit(ImageFit::Cover).build(),
         ];
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         assert_eq!(result.width, Some(200));
         assert_eq!(result.height, Some(200));
@@ -402,7 +406,7 @@ mod tests {
             webp: Some(FormatQuality::new(80, false)),
             avif: None,
         };
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(small.formats.contains_key("webp"), "WebP format should be generated");
@@ -426,7 +430,7 @@ mod tests {
             webp: None,
             avif: Some(FormatQuality::new(50, false)),
         };
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(small.formats.contains_key("avif"), "AVIF format should be generated");
@@ -450,7 +454,7 @@ mod tests {
             webp: Some(FormatQuality::new(80, false)),
             avif: Some(FormatQuality::new(50, false)),
         };
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let icon = &result.sizes["icon"];
         assert!(icon.formats.contains_key("webp"));
@@ -466,7 +470,7 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed even without extension");
         // The filename should have the nanoid prefix and sanitized name
         assert!(result.filename.contains("noext"));
@@ -487,7 +491,7 @@ mod tests {
         config.image_sizes = vec![
             ImageSizeBuilder::new("thumb").width(30).height(30).fit(ImageFit::Cover).build(),
         ];
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let thumb = &result.sizes["thumb"];
         assert!(thumb.url.ends_with("_thumb.png"), "Size URL should have .png extension: {}", thumb.url);
@@ -509,7 +513,7 @@ mod tests {
             webp: Some(FormatQuality::new(80, true)),
             avif: Some(FormatQuality::new(50, true)),
         };
-        let result = process_upload(&file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
 
         // Sizes should be created but format variants should NOT exist on disk

@@ -108,19 +108,23 @@ async fn create_upload(
         None => return json_error(StatusCode::BAD_REQUEST, "No file provided (use field name '_file')"),
     };
 
-    // Process the upload (validate, save to disk, generate sizes)
+    // Process the upload (validate, save to disk, generate sizes) — runs on blocking thread
     let upload_config = match def.upload.as_ref() {
-        Some(c) => c,
+        Some(c) => c.clone(),
         None => return json_error(StatusCode::INTERNAL_SERVER_ERROR, "Upload config missing"),
     };
-    let processed = match upload::process_upload(
-        &file, upload_config, &state.config_dir, &slug,
-        state.config.upload.max_file_size,
-    ) {
-        Ok(p) => p,
-        Err(e) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+    let config_dir = state.config_dir.clone();
+    let slug_for_upload = slug.clone();
+    let global_max = state.config.upload.max_file_size;
+    let processed = match tokio::task::spawn_blocking(move || {
+        upload::process_upload(file, &upload_config, &config_dir, &slug_for_upload, global_max)
+    }).await {
+        Ok(Ok(p)) => p,
+        Ok(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Task error: {}", e)),
     };
     let queued_conversions = processed.queued_conversions.clone();
+    let created_files = processed.created_files.clone();
     inject_upload_metadata(&mut form_data, &processed);
 
     // Strip field-level create-denied fields
@@ -190,8 +194,14 @@ async fn create_upload(
             let body = serde_json::json!({ "document": doc });
             json_ok(StatusCode::CREATED, &body)
         }
-        Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Task error: {}", e)),
+        Ok(Err(e)) => {
+            cleanup_files(&created_files);
+            json_error(StatusCode::BAD_REQUEST, &e.to_string())
+        }
+        Err(e) => {
+            cleanup_files(&created_files);
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Task error: {}", e))
+        }
     }
 }
 
@@ -254,19 +264,24 @@ async fn update_upload(
         }
     }
 
-    // Process upload if a new file was provided
+    // Process upload if a new file was provided — runs on blocking thread
     let mut queued_conversions = Vec::new();
+    let mut created_files: Vec<std::path::PathBuf> = Vec::new();
     if let Some(f) = file {
-        if let Some(ref upload_config) = def.upload {
-            match upload::process_upload(
-                &f, upload_config, &state.config_dir, &slug,
-                state.config.upload.max_file_size,
-            ) {
-                Ok(processed) => {
+        if let Some(upload_config) = def.upload.clone() {
+            let config_dir = state.config_dir.clone();
+            let slug_for_upload = slug.clone();
+            let global_max = state.config.upload.max_file_size;
+            match tokio::task::spawn_blocking(move || {
+                upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+            }).await {
+                Ok(Ok(processed)) => {
                     queued_conversions = processed.queued_conversions.clone();
+                    created_files = processed.created_files.clone();
                     inject_upload_metadata(&mut form_data, &processed);
                 }
-                Err(e) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+                Ok(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+                Err(e) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Task error: {}", e)),
             }
         }
     }
@@ -341,8 +356,21 @@ async fn update_upload(
             let body = serde_json::json!({ "document": doc });
             json_ok(StatusCode::OK, &body)
         }
-        Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
-        Err(e) => json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Task error: {}", e)),
+        Ok(Err(e)) => {
+            cleanup_files(&created_files);
+            json_error(StatusCode::BAD_REQUEST, &e.to_string())
+        }
+        Err(e) => {
+            cleanup_files(&created_files);
+            json_error(StatusCode::INTERNAL_SERVER_ERROR, &format!("Task error: {}", e))
+        }
+    }
+}
+
+/// Delete a list of files, ignoring errors (best-effort orphan cleanup).
+fn cleanup_files(files: &[std::path::PathBuf]) {
+    for path in files {
+        let _ = std::fs::remove_file(path);
     }
 }
 

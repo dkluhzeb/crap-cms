@@ -188,6 +188,28 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         }
     }
 
+    // Warn about per-collection max_file_size exceeding the global body limit
+    {
+        let reg = registry.read()
+            .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        let global_max = cfg.upload.max_file_size;
+        for (slug, def) in &reg.collections {
+            if let Some(ref upload_cfg) = def.upload {
+                if let Some(collection_max) = upload_cfg.max_file_size {
+                    if collection_max > global_max {
+                        warn!(
+                            "Collection '{}' has max_file_size ({}) exceeding global limit ({}). \
+                             Axum's body limit will reject uploads before the per-collection check.",
+                            slug,
+                            crate::core::upload::format_filesize(collection_max),
+                            crate::core::upload::format_filesize(global_max),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     // Snapshot the registry for hot-path consumers (admin UI + gRPC).
     // HookRunner + scheduler keep the SharedRegistry (which is only read at runtime anyway).
     let registry_snapshot = crate::core::Registry::snapshot(&registry);

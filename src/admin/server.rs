@@ -312,6 +312,18 @@ async fn csrf_middleware(
 ) -> axum::response::Response {
     let method = request.method().clone();
     let dev_mode = state.config.admin.dev_mode;
+
+    // Bearer-authenticated API clients can't use double-submit cookies.
+    // CSRF protects browser sessions (cookies); Bearer tokens aren't auto-attached
+    // by browsers, so CSRF is irrelevant for them.
+    let has_bearer = request.headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("Bearer "));
+    if has_bearer {
+        return next.run(request).await;
+    }
+
     let cookie_header = request.headers()
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
@@ -321,7 +333,7 @@ async fn csrf_middleware(
         .map(|s| s.to_string());
 
     // On mutating methods, validate CSRF token
-    if matches!(method, Method::POST | Method::PUT | Method::DELETE) {
+    if matches!(method, Method::POST | Method::PUT | Method::DELETE | Method::PATCH) {
         let cookie_value = match &csrf_cookie {
             Some(v) if !v.is_empty() => v.as_str(),
             _ => {

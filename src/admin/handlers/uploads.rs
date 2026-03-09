@@ -5,6 +5,8 @@ use axum::{
     http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 use crate::admin::AdminState;
 use crate::admin::server::{extract_cookie, load_auth_user};
@@ -77,6 +79,7 @@ pub async fn serve_upload(
         return serve_file(
             &state, &collection_slug, &filename,
             "private, no-store", accepts_avif, accepts_webp,
+            request,
         ).await;
     }
 
@@ -84,6 +87,7 @@ pub async fn serve_upload(
     serve_file(
         &state, &collection_slug, &filename,
         "public, max-age=31536000, immutable", accepts_avif, accepts_webp,
+        request,
     ).await
 }
 
@@ -129,30 +133,34 @@ async fn serve_file(
     cache_control: &str,
     accepts_avif: bool,
     accepts_webp: bool,
+    original_request: axum::http::Request<axum::body::Body>,
 ) -> Response {
     let upload_dir = state.config_dir.join("uploads").join(collection_slug);
+
+    // Extract conditional headers from original request for ServeFile forwarding
+    let conditional_headers = extract_conditional_headers(&original_request);
 
     // Content negotiation: try serving a more efficient format variant
     for (variant_name, variant_mime) in negotiate_variants(filename, accepts_avif, accepts_webp) {
         let variant_path = upload_dir.join(&variant_name);
-        if let Ok(bytes) = tokio::fs::read(&variant_path).await {
-            return serve_bytes(bytes, variant_mime, cache_control, true);
+        if variant_path.exists() {
+            let req = build_serve_request(&conditional_headers);
+            return serve_with_headers(&variant_path, req, cache_control, true, variant_mime).await;
         }
     }
 
     // Serve the original file
     let file_path = upload_dir.join(filename);
-    let bytes = match tokio::fs::read(&file_path).await {
-        Ok(b) => b,
-        Err(_) => return StatusCode::NOT_FOUND.into_response(),
-    };
+    if !file_path.exists() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
 
     let requested_mime = mime_guess::from_path(filename)
         .first_or_octet_stream()
         .to_string();
-    // Always set Vary: Accept for images so caches don't serve the wrong format
     let is_image = requested_mime.starts_with("image/");
-    serve_bytes(bytes, &requested_mime, cache_control, is_image)
+    let req = build_serve_request(&conditional_headers);
+    serve_with_headers(&file_path, req, cache_control, is_image, &requested_mime).await
 }
 
 /// Given a filename and accepted formats, return candidate variant filenames to try.
@@ -182,29 +190,68 @@ fn negotiate_variants(filename: &str, accepts_avif: bool, accepts_webp: bool) ->
     variants
 }
 
-fn serve_bytes(bytes: Vec<u8>, content_type: &str, cache_control: &str, varied: bool) -> Response {
-    let len = bytes.len();
-    // Content-Disposition: inline for images (render in browser), attachment for everything else
-    let disposition = if content_type.starts_with("image/") {
-        "inline".to_string()
-    } else {
-        "attachment".to_string()
-    };
-    let mut builder = axum::http::Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, content_type)
-        .header(header::CONTENT_LENGTH, len.to_string())
-        .header(header::CACHE_CONTROL, cache_control)
-        .header(header::CONTENT_DISPOSITION, disposition);
+/// Conditional headers extracted from the original request, forwarded to ServeFile.
+struct ConditionalHeaders {
+    range: Option<axum::http::HeaderValue>,
+    if_none_match: Option<axum::http::HeaderValue>,
+    if_modified_since: Option<axum::http::HeaderValue>,
+}
 
-    // Vary: Accept tells caches that the response depends on the Accept header
-    if varied {
-        builder = builder.header(header::VARY, "Accept");
+fn extract_conditional_headers(req: &axum::http::Request<axum::body::Body>) -> ConditionalHeaders {
+    ConditionalHeaders {
+        range: req.headers().get(header::RANGE).cloned(),
+        if_none_match: req.headers().get(header::IF_NONE_MATCH).cloned(),
+        if_modified_since: req.headers().get(header::IF_MODIFIED_SINCE).cloned(),
     }
+}
 
-    builder.body(axum::body::Body::from(bytes))
-        .expect("in-memory body builder")
-        .into_response()
+fn build_serve_request(headers: &ConditionalHeaders) -> axum::http::Request<axum::body::Body> {
+    let mut builder = axum::http::Request::builder().uri("/");
+    if let Some(ref v) = headers.range {
+        builder = builder.header(header::RANGE, v);
+    }
+    if let Some(ref v) = headers.if_none_match {
+        builder = builder.header(header::IF_NONE_MATCH, v);
+    }
+    if let Some(ref v) = headers.if_modified_since {
+        builder = builder.header(header::IF_MODIFIED_SINCE, v);
+    }
+    builder.body(axum::body::Body::empty()).expect("static request builder")
+}
+
+/// Serve a file via `tower_http::services::ServeFile` with custom headers.
+/// Provides Range, ETag, Last-Modified, and conditional GET support for free.
+async fn serve_with_headers(
+    path: &std::path::Path,
+    request: axum::http::Request<axum::body::Body>,
+    cache_control: &str,
+    varied: bool,
+    mime: &str,
+) -> Response {
+    let service = ServeFile::new(path);
+    let mut response = match service.oneshot(request).await {
+        Ok(r) => r.into_response(),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    // Override Cache-Control for our needs
+    response.headers_mut().insert(header::CACHE_CONTROL, cache_control.parse().expect("valid cache-control"));
+    // SVGs get attachment + CSP sandbox to prevent stored XSS
+    let disposition = if mime.starts_with("image/") && mime != "image/svg+xml" {
+        "inline"
+    } else {
+        "attachment"
+    };
+    response.headers_mut().insert(header::CONTENT_DISPOSITION, disposition.parse().expect("valid disposition"));
+    if mime == "image/svg+xml" {
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            "sandbox".parse().expect("valid csp"),
+        );
+    }
+    if varied {
+        response.headers_mut().insert(header::VARY, "Accept".parse().expect("valid vary"));
+    }
+    response
 }
 
 #[cfg(test)]
@@ -265,32 +312,85 @@ mod tests {
         assert_eq!(variants[0], ("icon.webp".to_string(), "image/webp"));
     }
 
-    #[test]
-    fn serve_bytes_image_content_disposition_inline() {
-        let resp = serve_bytes(vec![1, 2, 3], "image/png", "public", false);
+    #[tokio::test]
+    async fn serve_with_headers_image_disposition_inline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.png");
+        std::fs::write(&path, b"fake png").unwrap();
+        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let resp = serve_with_headers(&path, req, "public", false, "image/png").await;
         let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
         assert_eq!(disposition, "inline");
     }
 
-    #[test]
-    fn serve_bytes_pdf_content_disposition_attachment() {
-        let resp = serve_bytes(vec![1, 2, 3], "application/pdf", "public", false);
+    #[tokio::test]
+    async fn serve_with_headers_pdf_disposition_attachment() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.pdf");
+        std::fs::write(&path, b"fake pdf").unwrap();
+        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let resp = serve_with_headers(&path, req, "public", false, "application/pdf").await;
         let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
         assert_eq!(disposition, "attachment");
     }
 
-    #[test]
-    fn serve_bytes_sets_content_type_and_length() {
-        let data = vec![0u8; 42];
-        let resp = serve_bytes(data, "text/plain", "no-cache", false);
-        assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), "text/plain");
-        assert_eq!(resp.headers().get(header::CONTENT_LENGTH).unwrap(), "42");
-        assert!(resp.headers().get(header::VARY).is_none());
+    #[tokio::test]
+    async fn serve_with_headers_varied_sets_vary() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.jpg");
+        std::fs::write(&path, b"fake jpg").unwrap();
+        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let resp = serve_with_headers(&path, req, "public", true, "image/jpeg").await;
+        assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept");
+    }
+
+    #[tokio::test]
+    async fn serve_with_headers_no_vary_when_not_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.txt");
+        std::fs::write(&path, b"hello").unwrap();
+        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let resp = serve_with_headers(&path, req, "no-cache", false, "text/plain").await;
+        // ServeFile may set Vary internally, but we don't set it
+        assert!(!resp.headers().get_all(header::VARY).iter().any(|v| v == "Accept"));
+    }
+
+    #[tokio::test]
+    async fn serve_with_headers_svg_attachment_and_csp() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("test.svg");
+        std::fs::write(&path, b"<svg></svg>").unwrap();
+        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let resp = serve_with_headers(&path, req, "public", false, "image/svg+xml").await;
+        let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
+        assert_eq!(disposition, "attachment");
+        let csp = resp.headers().get(header::CONTENT_SECURITY_POLICY).unwrap().to_str().unwrap();
+        assert_eq!(csp, "sandbox");
     }
 
     #[test]
-    fn serve_bytes_varied_sets_vary_header() {
-        let resp = serve_bytes(vec![1], "image/jpeg", "public", true);
-        assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept");
+    fn extract_conditional_headers_captures_range() {
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .header(header::RANGE, "bytes=0-99")
+            .header(header::IF_NONE_MATCH, "\"abc\"")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let headers = extract_conditional_headers(&req);
+        assert_eq!(headers.range.unwrap().to_str().unwrap(), "bytes=0-99");
+        assert_eq!(headers.if_none_match.unwrap().to_str().unwrap(), "\"abc\"");
+        assert!(headers.if_modified_since.is_none());
+    }
+
+    #[test]
+    fn build_serve_request_forwards_headers() {
+        let cond = ConditionalHeaders {
+            range: Some("bytes=0-99".parse().unwrap()),
+            if_none_match: None,
+            if_modified_since: None,
+        };
+        let req = build_serve_request(&cond);
+        assert_eq!(req.headers().get(header::RANGE).unwrap(), "bytes=0-99");
+        assert!(req.headers().get(header::IF_NONE_MATCH).is_none());
     }
 }
