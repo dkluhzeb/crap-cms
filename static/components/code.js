@@ -88,12 +88,12 @@ class CrapCode extends HTMLElement {
     // Theme: match admin CSS variables
     extensions.push(CM.EditorView.theme({
       '&': {
-        fontSize: '13px',
+        fontSize: 'var(--text-sm, 13px)',
         fontFamily: 'monospace',
       },
       '.cm-content': {
         fontFamily: 'monospace',
-        padding: '8px 0',
+        padding: 'var(--space-sm, 8px) 0',
       },
       '.cm-gutters': {
         backgroundColor: 'var(--bg-secondary, #fafafa)',

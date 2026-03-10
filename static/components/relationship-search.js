@@ -460,11 +460,11 @@ class CrapRelationshipSearch extends HTMLElement {
     Object.assign(searchInput.style, {
       width: '100%',
       boxSizing: 'border-box',
-      padding: '8px 12px',
+      padding: 'var(--space-sm, 8px) var(--space-md, 12px)',
       border: '1px solid var(--border-color, #e5e7eb)',
       borderRadius: 'var(--radius-md, 6px)',
       fontSize: 'var(--text-sm, 0.875rem)',
-      marginBottom: '12px',
+      marginBottom: 'var(--space-md, 12px)',
       background: 'var(--input-bg, #fff)',
       color: 'var(--text-primary, rgba(0, 0, 0, 0.88))',
     });
@@ -476,13 +476,13 @@ class CrapRelationshipSearch extends HTMLElement {
       Object.assign(results.style, {
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-        gap: '10px',
+        gap: 'var(--space-md, 10px)',
       });
     } else {
       Object.assign(results.style, {
         display: 'flex',
         flexDirection: 'column',
-        gap: '4px',
+        gap: 'var(--space-xs, 4px)',
       });
     }
     body.appendChild(results);
@@ -494,8 +494,8 @@ class CrapRelationshipSearch extends HTMLElement {
     Object.assign(loadMore.style, {
       display: 'none',
       width: '100%',
-      padding: '8px',
-      marginTop: '12px',
+      padding: 'var(--space-sm, 8px)',
+      marginTop: 'var(--space-md, 12px)',
       border: '1px solid var(--border-color, #e5e7eb)',
       borderRadius: 'var(--radius-md, 6px)',
       background: 'transparent',
@@ -574,13 +574,13 @@ function createUploadCard(item, currentIds, hasMany, container, drawer) {
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: '6px',
-    padding: '10px',
+    gap: 'var(--space-sm, 6px)',
+    padding: 'var(--space-md, 10px)',
     border: `2px solid ${isSelected ? 'var(--color-primary, #6366f1)' : 'var(--border-color, #e5e7eb)'}`,
     borderRadius: 'var(--radius-md, 6px)',
     background: isSelected ? 'var(--color-primary-bg, rgba(99, 102, 241, 0.08))' : 'var(--surface-primary, #fff)',
     cursor: 'pointer',
-    transition: 'border-color 0.15s, background 0.15s',
+    transition: 'border-color var(--transition-fast, 0.15s), background var(--transition-fast, 0.15s)',
     minHeight: '100px',
     position: 'relative',
     overflow: 'hidden',
@@ -595,7 +595,7 @@ function createUploadCard(item, currentIds, hasMany, container, drawer) {
       width: '100%',
       height: '80px',
       objectFit: 'contain',
-      borderRadius: '4px',
+      borderRadius: 'var(--radius-sm, 4px)',
     });
     card.appendChild(img);
   } else {
@@ -629,8 +629,8 @@ function createUploadCard(item, currentIds, hasMany, container, drawer) {
     Object.assign(check.style, {
       fontFamily: "'Material Symbols Outlined'",
       position: 'absolute',
-      top: '4px',
-      right: '4px',
+      top: 'var(--space-xs, 4px)',
+      right: 'var(--space-xs, 4px)',
       fontSize: '18px',
       color: 'var(--color-primary, #6366f1)',
     });
@@ -669,12 +669,12 @@ function createListItem(item, currentIds, hasMany, container, drawer) {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '8px 12px',
+    padding: 'var(--space-sm, 8px) var(--space-md, 12px)',
     border: `1px solid ${isSelected ? 'var(--color-primary, #6366f1)' : 'var(--border-color, #e5e7eb)'}`,
     borderRadius: 'var(--radius-md, 6px)',
     background: isSelected ? 'var(--color-primary-bg, rgba(99, 102, 241, 0.08))' : 'var(--surface-primary, #fff)',
     cursor: 'pointer',
-    transition: 'border-color 0.15s, background 0.15s',
+    transition: 'border-color var(--transition-fast, 0.15s), background var(--transition-fast, 0.15s)',
     fontSize: 'var(--text-sm, 0.875rem)',
     color: 'var(--text-primary, rgba(0, 0, 0, 0.88))',
   });

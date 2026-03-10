@@ -68,7 +68,7 @@ class CrapUploadPreview extends HTMLElement {
     if (info) {
       if (filename) {
         info.innerHTML =
-          '<span class="material-symbols-outlined" style="font-size: 16px;">description</span>' +
+          '<span class="material-symbols-outlined icon--sm">description</span>' +
           '<span class="upload-field__filename">' + filename + '</span>';
         info.style.display = '';
       } else {
