@@ -16,6 +16,31 @@ pub fn is_valid_identifier(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// Sanitize a locale string for safe use in SQL identifiers (column names, defaults).
+/// Only allows alphanumeric characters, underscores, and dashes.
+pub fn sanitize_locale(locale: &str) -> String {
+    locale.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect()
+}
+
+/// Validate a slug: lowercase alphanumeric + underscores, not empty, no leading underscore.
+pub fn validate_slug(slug: &str) -> Result<()> {
+    if slug.is_empty() {
+        bail!("Slug cannot be empty");
+    }
+    if !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+        bail!(
+            "Invalid slug '{}' — use lowercase letters, digits, and underscores only",
+            slug
+        );
+    }
+    if slug.starts_with('_') {
+        bail!("Slug cannot start with underscore");
+    }
+    Ok(())
+}
+
 /// Validate that a field name exists in the set of valid columns.
 pub fn validate_field_name(field: &str, valid_columns: &HashSet<String>) -> Result<()> {
     if !valid_columns.contains(field) {
@@ -151,5 +176,28 @@ mod tests {
             .iter().map(|s| s.to_string()).collect();
         let err = validate_field_name("nonexistent", &valid).unwrap_err();
         assert!(err.to_string().contains("Invalid field 'nonexistent'"));
+    }
+
+    #[test]
+    fn sanitize_locale_strips_dangerous_chars() {
+        assert_eq!(sanitize_locale("en"), "en");
+        assert_eq!(sanitize_locale("de-DE"), "de-DE");
+        assert_eq!(sanitize_locale("en_US"), "en_US");
+        assert_eq!(sanitize_locale("'; DROP TABLE --"), "DROPTABLE--");
+    }
+
+    #[test]
+    fn validate_slug_accepts_valid() {
+        assert!(validate_slug("posts").is_ok());
+        assert!(validate_slug("site_settings").is_ok());
+        assert!(validate_slug("v2_users").is_ok());
+    }
+
+    #[test]
+    fn validate_slug_rejects_invalid() {
+        assert!(validate_slug("").is_err());
+        assert!(validate_slug("Posts").is_err());
+        assert!(validate_slug("my-slug").is_err());
+        assert!(validate_slug("_private").is_err());
     }
 }

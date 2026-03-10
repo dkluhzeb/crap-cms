@@ -22,13 +22,15 @@ pub fn get_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<Has
     Ok(columns)
 }
 
+pub use crate::db::query::sanitize_locale;
+
 /// Ensure a `_locale` column exists on a junction table (for ALTER TABLE on existing tables).
 pub(super) fn ensure_locale_column(conn: &rusqlite::Connection, table_name: &str, default_locale: &str) -> Result<()> {
     let existing = get_table_columns(conn, table_name)?;
     if !existing.contains("_locale") {
         let sql = format!(
             "ALTER TABLE {} ADD COLUMN _locale TEXT NOT NULL DEFAULT '{}'",
-            table_name, default_locale
+            table_name, sanitize_locale(default_locale)
         );
         tracing::info!("Adding _locale column to {}", table_name);
         conn.execute(&sql, [])
@@ -156,7 +158,7 @@ pub(super) fn sync_join_tables(
                                         _locale TEXT NOT NULL DEFAULT '{}', \
                                         PRIMARY KEY (parent_id, related_id{}, _locale)\
                                     )",
-                                    table_name, collection_slug, poly_col, locale_config.default_locale, poly_pk
+                                    table_name, collection_slug, poly_col, sanitize_locale(&locale_config.default_locale), poly_pk
                                 )
                             } else {
                                 format!(
@@ -195,7 +197,7 @@ pub(super) fn sync_join_tables(
                         "_order INTEGER NOT NULL DEFAULT 0".to_string(),
                     ];
                     if has_locale_col {
-                        columns.push(format!("_locale TEXT NOT NULL DEFAULT '{}'", locale_config.default_locale));
+                        columns.push(format!("_locale TEXT NOT NULL DEFAULT '{}'", sanitize_locale(&locale_config.default_locale)));
                     }
                     for sub_field in &flat_subs {
                         columns.push(format!("{} {}", sub_field.name, sub_field.field_type.sqlite_type()));
@@ -231,7 +233,7 @@ pub(super) fn sync_join_tables(
                 let table_name = format!("{}_{}", collection_slug, field.name);
                 if !table_exists(conn, &table_name)? {
                     let locale_col = if has_locale_col {
-                        format!(", _locale TEXT NOT NULL DEFAULT '{}'", locale_config.default_locale)
+                        format!(", _locale TEXT NOT NULL DEFAULT '{}'", sanitize_locale(&locale_config.default_locale))
                     } else {
                         String::new()
                     };

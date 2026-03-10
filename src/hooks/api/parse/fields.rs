@@ -20,6 +20,11 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         let field_tbl = pair?;
         let name: String = get_string_val(&field_tbl, "name")
             .map_err(|_| anyhow::anyhow!("Field missing 'name'"))?;
+        
+        if !crate::db::query::is_valid_identifier(&name) {
+            anyhow::bail!("Invalid field name '{}' — use alphanumeric and underscores only", name);
+        }
+
         let type_str: String = get_string_val(&field_tbl, "type").unwrap_or_else(|_| "text".to_string());
         let field_type = FieldType::from_str(&type_str);
 

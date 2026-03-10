@@ -6,6 +6,7 @@ use rusqlite::params_from_iter;
 use crate::config::LocaleConfig;
 use crate::core::collection::{CollectionDefinition, GlobalDefinition};
 use crate::core::field::FieldDefinition;
+use crate::db::query::sanitize_locale;
 
 use super::crud::{create_version, set_document_status};
 use super::snapshot::{collect_join_data_from_snapshot, extract_snapshot_data};
@@ -232,7 +233,7 @@ fn restore_locale_columns(
     idx: &mut usize,
 ) {
     for locale in &locale_config.locales {
-        let col = format!("{}__{}", field_name, locale);
+        let col = format!("{}__{}", field_name, sanitize_locale(locale));
         if *locale == locale_config.default_locale {
             // Set default locale from snapshot
             match snapshot_val {

@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result};
 
 use crate::config::LocaleConfig;
 use crate::core::field::FieldType;
+use crate::db::migrate::helpers::sanitize_locale;
 
 pub fn create_collection_table(
     conn: &rusqlite::Connection,
@@ -16,7 +17,7 @@ pub fn create_collection_table(
     for spec in &crate::db::migrate::helpers::collect_column_specs(&def.fields, locale_config) {
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, locale);
+                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
                 let mut col = format!("{} {}", col_name, spec.field.field_type.sqlite_type());
                 if spec.field.required && *locale == locale_config.default_locale && !def.has_drafts() {
                     col.push_str(" NOT NULL");

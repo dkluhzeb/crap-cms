@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 
 use crate::config::LocaleConfig;
 
-use super::helpers::{table_exists, get_table_columns, sync_join_tables, sync_versions_table};
+use super::helpers::{table_exists, get_table_columns, sync_join_tables, sync_versions_table, sanitize_locale};
 
 pub(super) fn sync_global_table(
     conn: &rusqlite::Connection,
@@ -21,7 +21,7 @@ pub(super) fn sync_global_table(
         for spec in &super::helpers::collect_column_specs(&def.fields, locale_config) {
             if spec.is_localized {
                 for locale in &locale_config.locales {
-                    let col = format!("{}__{} {}", spec.col_name, locale, spec.field.field_type.sqlite_type());
+                    let col = format!("{}__{} {}", spec.col_name, sanitize_locale(locale), spec.field.field_type.sqlite_type());
                     columns.push(col);
                 }
             } else {
@@ -60,7 +60,7 @@ pub(super) fn sync_global_table(
         for spec in &super::helpers::collect_column_specs(&def.fields, locale_config) {
             if spec.is_localized {
                 for locale in &locale_config.locales {
-                    let col_name = format!("{}__{}", spec.col_name, locale);
+                    let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
                     if !existing_columns.contains(&col_name) {
                         let sql = format!(
                             "ALTER TABLE {} ADD COLUMN {} {}",

@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 
 use crate::config::LocaleConfig;
-use crate::db::migrate::helpers::collect_column_specs;
+use crate::db::migrate::helpers::{collect_column_specs, sanitize_locale};
 
 /// Sync B-tree indexes for a collection table: field-level `index: true` and
 /// collection-level compound `indexes`. Idempotent — creates missing indexes,
@@ -25,7 +25,7 @@ pub(super) fn sync_indexes(
         }
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col = format!("{}__{}", spec.col_name, locale);
+                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale));
                 let idx_name = format!("idx_{}_{}", slug, col);
                 create_stmts.push(format!(
                     "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
@@ -64,7 +64,7 @@ pub(super) fn sync_indexes(
             match spec {
                 Some(s) if s.is_localized => {
                     // For localized fields in compound indexes, use default locale column
-                    expanded_cols.push(format!("{}__{}", field_name, locale_config.default_locale));
+                    expanded_cols.push(format!("{}__{}", field_name, sanitize_locale(&locale_config.default_locale)));
                 }
                 _ => {
                     expanded_cols.push(field_name.clone());

@@ -150,10 +150,12 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
     }
 
     if let Some(limit) = query.limit {
-        sql.push_str(&format!(" LIMIT {}", limit));
+        params.push(Box::new(limit));
+        sql.push_str(&format!(" LIMIT ?{}", params.len()));
     }
     if let Some(offset) = query.offset {
-        sql.push_str(&format!(" OFFSET {}", offset));
+        params.push(Box::new(offset));
+        sql.push_str(&format!(" OFFSET ?{}", params.len()));
     }
 
     let mut stmt = conn.prepare(&sql)

@@ -5,6 +5,7 @@ use std::collections::HashSet;
 
 use crate::config::LocaleConfig;
 use crate::core::field::FieldType;
+use crate::db::migrate::helpers::sanitize_locale;
 
 pub(super) fn alter_collection_table(
     conn: &rusqlite::Connection,
@@ -18,7 +19,7 @@ pub(super) fn alter_collection_table(
     for spec in &crate::db::migrate::helpers::collect_column_specs(&def.fields, locale_config) {
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, locale);
+                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
                 if !existing_columns.contains(&col_name) {
                     let mut col_def = spec.field.field_type.sqlite_type().to_string();
                     super::create::append_default_value(&mut col_def, &spec.field.default_value, &spec.field.field_type);

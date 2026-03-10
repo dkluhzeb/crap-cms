@@ -7,7 +7,7 @@ use crate::core::field::{FieldDefinition, FieldType};
 use super::super::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode};
 use super::operators::{build_filter_condition, build_op_condition};
 use super::resolve::{resolve_filter, ResolvedFilter, SubqueryCondition};
-use super::super::is_valid_identifier;
+use super::super::{is_valid_identifier, sanitize_locale};
 
 // ── Subquery SQL generation ──────────────────────────────────────────────
 
@@ -176,7 +176,7 @@ pub fn resolve_filter_column(
         if ctx.config.is_enabled() {
             for field in &def.fields {
                 if let Some(locale) = check_field_locale(field, field_name, ctx) {
-                    return format!("{}__{}", field_name, locale);
+                    return format!("{}__{}", field_name, sanitize_locale(locale));
                 }
             }
         }

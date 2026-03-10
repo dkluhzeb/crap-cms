@@ -3,6 +3,7 @@
 use crate::config::LocaleConfig;
 use crate::core::CollectionDefinition;
 use crate::core::field::FieldType;
+use crate::db::query::sanitize_locale;
 
 /// Determine which logical fields should be indexed in the FTS5 table.
 ///
@@ -50,7 +51,7 @@ pub fn get_fts_columns(def: &CollectionDefinition, locale_config: &LocaleConfig)
 
         if is_localized {
             for locale in &locale_config.locales {
-                columns.push(format!("{}__{}", field_name, locale));
+                columns.push(format!("{}__{}", field_name, sanitize_locale(locale)));
             }
         } else {
             columns.push(field_name.clone());

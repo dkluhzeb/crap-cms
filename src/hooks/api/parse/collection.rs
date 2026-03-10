@@ -47,6 +47,7 @@ pub(super) fn warn_deep_nesting(kind: &str, slug: &str, fields: &[FieldDefinitio
 
 /// Parse a Lua table into a `CollectionDefinition`, extracting fields, hooks, auth, upload, etc.
 pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Result<CollectionDefinition> {
+    crate::db::query::validate_slug(slug)?;
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {
         Labels {
             singular: get_localized_string(&labels_tbl, "singular"),
@@ -153,6 +154,7 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
 
 /// Parse a Lua table into a `GlobalDefinition`, extracting fields, hooks, and access config.
 pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
+    crate::db::query::validate_slug(slug)?;
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {
         Labels {
             singular: get_localized_string(&labels_tbl, "singular"),

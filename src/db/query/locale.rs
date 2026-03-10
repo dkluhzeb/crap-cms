@@ -4,6 +4,8 @@ use crate::config::LocaleConfig;
 use crate::core::Document;
 use crate::core::field::{FieldDefinition, FieldType};
 
+use super::validation::sanitize_locale;
+
 /// How to handle localized fields in a query.
 #[derive(Debug, Clone)]
 pub enum LocaleMode {
@@ -121,16 +123,23 @@ fn add_locale_columns(
 ) {
     match &locale_ctx.mode {
         LocaleMode::Default => {
-            let locale = &locale_ctx.config.default_locale;
+            let locale = sanitize_locale(&locale_ctx.config.default_locale);
             select_exprs.push(format!("{}__{} AS {}", field_name, locale, field_name));
             result_names.push(field_name.to_string());
         }
-        LocaleMode::Single(locale) => {
-            if locale_ctx.config.fallback && *locale != locale_ctx.config.default_locale {
+        LocaleMode::Single(req_locale) => {
+            let locale = if locale_ctx.config.locales.contains(req_locale) {
+                req_locale
+            } else {
+                &locale_ctx.config.default_locale
+            };
+            let locale = sanitize_locale(locale);
+
+            if locale_ctx.config.fallback && locale != sanitize_locale(&locale_ctx.config.default_locale) {
                 select_exprs.push(format!(
                     "COALESCE({}__{}, {}__{}) AS {}",
                     field_name, locale,
-                    field_name, locale_ctx.config.default_locale,
+                    field_name, sanitize_locale(&locale_ctx.config.default_locale),
                     field_name
                 ));
             } else {
@@ -140,6 +149,7 @@ fn add_locale_columns(
         }
         LocaleMode::All => {
             for locale in &locale_ctx.config.locales {
+                let locale = sanitize_locale(locale);
                 let col = format!("{}__{}", field_name, locale);
                 select_exprs.push(col.clone());
                 result_names.push(col);
@@ -193,7 +203,7 @@ fn group_locale_fields_inner(
                 };
                 let mut locale_map = serde_json::Map::new();
                 for locale in &locale_config.locales {
-                    let col = format!("{}__{}", base, locale);
+                    let col = format!("{}__{}", base, sanitize_locale(locale));
                     if let Some(val) = doc.fields.remove(&col) {
                         locale_map.insert(locale.clone(), val);
                     }
@@ -210,11 +220,16 @@ fn group_locale_fields_inner(
 pub(crate) fn locale_write_column(field_name: &str, field: &FieldDefinition, locale_ctx: &Option<&LocaleContext>) -> String {
     if let Some(ctx) = locale_ctx {
         if field.localized && ctx.config.is_enabled() {
-            let locale = match &ctx.mode {
+            let req_locale = match &ctx.mode {
                 LocaleMode::Single(l) => l.as_str(),
                 _ => ctx.config.default_locale.as_str(),
             };
-            return format!("{}__{}", field_name, locale);
+            let locale = if ctx.config.locales.iter().any(|l| l == req_locale) {
+                req_locale
+            } else {
+                ctx.config.default_locale.as_str()
+            };
+            return format!("{}__{}", field_name, sanitize_locale(locale));
         }
     }
     field_name.to_string()

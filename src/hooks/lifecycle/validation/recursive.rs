@@ -5,6 +5,7 @@ use mlua::Lua;
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::FieldError;
 use crate::db::query::{LocaleContext, LocaleMode};
+use crate::db::query::sanitize_locale;
 
 use super::checks;
 use super::sub_fields::validate_sub_fields_inner;
@@ -133,7 +134,7 @@ fn validate_scalar_field(
             LocaleMode::Single(l) => l.as_str(),
             _ => ctx.config.default_locale.as_str(),
         };
-        format!("{}__{}", data_key, locale)
+        format!("{}__{}", data_key, sanitize_locale(locale))
     } else {
         data_key.clone()
     };

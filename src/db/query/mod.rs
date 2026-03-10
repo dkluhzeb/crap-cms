@@ -23,7 +23,7 @@ mod helpers;
 pub use types::*;
 pub use locale::{LocaleMode, LocaleContext, get_locale_select_columns};
 pub use columns::get_column_names;
-pub use validation::{is_valid_identifier, validate_field_name, validate_query_fields, get_valid_filter_paths};
+pub use validation::{is_valid_identifier, sanitize_locale, validate_field_name, validate_query_fields, validate_slug, get_valid_filter_paths};
 pub use helpers::{apply_pagination_limits, normalize_date_value};
 
 pub(crate) use locale::{group_locale_fields, locale_write_column};
