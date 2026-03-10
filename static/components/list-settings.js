@@ -81,7 +81,7 @@ class CrapListSettings extends HTMLElement {
    * which equals `header-height + content-height + padding-top`.
    */
   _measureStickyHeader() {
-    const wrapper = this.querySelector('.list-sticky-header');
+    const wrapper = this.querySelector('crap-sticky-header');
     if (!wrapper) return;
     const update = () => {
       const top = parseFloat(getComputedStyle(wrapper).getPropertyValue('top')) || 0;

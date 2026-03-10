@@ -22,6 +22,15 @@ crap-list-settings .table th {
   box-shadow: 0 -2px 0 var(--bg-body);
 }
 
+/* Sticky table header on pages with <crap-sticky-header> but no <crap-list-settings> */
+.main > .table th,
+.main > crap-sticky-header ~ .table th {
+  position: sticky;
+  top: var(--sticky-header-bottom, var(--header-height));
+  z-index: 4;
+  box-shadow: 0 -2px 0 var(--bg-body);
+}
+
 .table td {
   padding: 6px var(--space-md);
   border-bottom: 1px solid var(--border-color);

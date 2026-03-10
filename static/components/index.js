@@ -38,4 +38,5 @@ import './conditions.js';
 import './dirty-form.js';
 import './scroll.js';
 import './live-events.js';
+import './sticky-header.js';
 import './list-settings.js';

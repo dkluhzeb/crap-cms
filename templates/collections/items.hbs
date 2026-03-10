@@ -1,6 +1,6 @@
 {{#> layout/base}}
 <crap-list-settings>
-<div class="list-sticky-header">
+<crap-sticky-header>
 <div class="page-header">
   <h1>{{collection.display_name}}</h1>
   <a class="button button--primary" href="/admin/collections/{{collection.slug}}/create"
@@ -73,7 +73,7 @@
   {{/each}}
 </div>
 {{/if}}
-</div><!-- /.list-sticky-header -->
+</crap-sticky-header>
 
 {{#if items}}
 {{> collections/items_table}}
