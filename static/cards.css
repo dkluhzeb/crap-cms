@@ -62,7 +62,7 @@ a.card:hover {
   background-color: var(--color-warning-bg);
 }
 
-.card + .card {
+:not(.cards) > .card + .card {
   margin-top: var(--space-md);
 }
 

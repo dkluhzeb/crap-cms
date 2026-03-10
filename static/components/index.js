@@ -1,9 +1,8 @@
 /**
  * Crap CMS Components — ES module entry point.
  *
- * Pure import manifest. Each module is self-contained: web components
- * register themselves, behaviors bind their own listeners, actions
- * register via the delegation system.
+ * Pure import manifest. Each module is a self-contained web component
+ * that registers itself via `customElements.define()`.
  *
  * To override a single component, place a replacement file at the same
  * path in your config directory's static/ folder (overlay pattern).
@@ -12,10 +11,7 @@
 // ── i18n ──
 import './i18n.js';
 
-// ── Event delegation ──
-import './actions.js';
-
-// ── Web Components ──
+// ── Shadow DOM Web Components ──
 import './toast.js';
 import './confirm.js';
 import './confirm-dialog.js';
@@ -24,24 +20,22 @@ import './code.js';
 import './tags.js';
 import './drawer.js';
 import './relationship-search.js';
-
-// ── Behaviors ──
-import './sidebar-toggle.js';
 import './session-guard.js';
-import './dirty-form.js';
-import './uploads.js';
-import './focal-point.js';
-import './block-picker.js';
-import './conditions.js';
-import './live-events.js';
+
+// ── Light DOM Web Components ──
 import './time-format.js';
-import './scroll.js';
 import './theme.js';
 import './locale-picker.js';
 import './ui-locale-picker.js';
-
-// ── Actions ──
-import './list-settings.js';
-import './tabs.js';
+import './focal-point.js';
+import './sidebar-toggle.js';
+import './uploads.js';
 import './groups.js';
+import './tabs.js';
+import './block-picker.js';
 import './array-fields.js';
+import './conditions.js';
+import './dirty-form.js';
+import './scroll.js';
+import './live-events.js';
+import './list-settings.js';

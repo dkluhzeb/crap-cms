@@ -1,42 +1,47 @@
 /**
- * Editor locale picker — sets crap_editor_locale cookie and reloads.
+ * Editor locale picker — `<crap-locale-picker>`.
+ *
+ * Sets crap_editor_locale cookie and reloads the page.
+ *
+ * @module locale-picker
  */
 
-import { registerInit } from './actions.js';
-
-/**
- * Initialize locale picker UI. Safe to call multiple times (idempotent).
- */
-function initLocalePicker() {
-  document.querySelectorAll('[data-locale-picker]').forEach((picker) => {
-    if (/** @type {HTMLElement} */ (picker).dataset.localeInit) return;
-    /** @type {HTMLElement} */ (picker).dataset.localeInit = '1';
-
-    const toggle = picker.querySelector('[data-locale-toggle]');
-    const dropdown = picker.querySelector('[data-locale-dropdown]');
+class CrapLocalePicker extends HTMLElement {
+  connectedCallback() {
+    const toggle = this.querySelector('[data-locale-toggle]');
+    const dropdown = this.querySelector('[data-locale-dropdown]');
     if (!toggle || !dropdown) return;
 
-    toggle.addEventListener('click', (e) => {
+    this._onToggle = (e) => {
       e.stopPropagation();
       dropdown.classList.toggle('locale-picker__dropdown--open');
-    });
+    };
 
-    dropdown.addEventListener('click', (e) => {
+    this._onSelect = (e) => {
       const btn = /** @type {HTMLElement} */ (e.target).closest('[data-locale-value]');
       if (!btn) return;
       const locale = /** @type {HTMLElement} */ (btn).dataset.localeValue;
       if (!locale) return;
       document.cookie = `crap_editor_locale=${locale};path=/;max-age=31536000;SameSite=Lax`;
       location.reload();
-    });
+    };
 
-    // Close on outside click
-    document.addEventListener('click', (e) => {
-      if (!picker.contains(/** @type {Node} */ (e.target))) {
+    this._onOutsideClick = (e) => {
+      if (!this.contains(/** @type {Node} */ (e.target))) {
         dropdown.classList.remove('locale-picker__dropdown--open');
       }
-    });
-  });
+    };
+
+    toggle.addEventListener('click', this._onToggle);
+    dropdown.addEventListener('click', this._onSelect);
+    document.addEventListener('click', this._onOutsideClick);
+  }
+
+  disconnectedCallback() {
+    if (this._onOutsideClick) {
+      document.removeEventListener('click', this._onOutsideClick);
+    }
+  }
 }
 
-registerInit(initLocalePicker);
+customElements.define('crap-locale-picker', CrapLocalePicker);

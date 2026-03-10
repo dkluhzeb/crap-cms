@@ -20,7 +20,7 @@
   </div>
   <div class="header__actions">
     {{#if has_editor_locales}}
-    <div class="locale-picker" data-locale-picker>
+    <crap-locale-picker class="locale-picker">
       <button type="button" class="locale-picker__toggle" aria-label="Change content language" data-locale-toggle>
         <span class="locale-picker__badge">{{editor_locale}}</span>
       </button>
@@ -31,10 +31,10 @@
         </button>
         {{/each}}
       </div>
-    </div>
+    </crap-locale-picker>
     {{/if}}
     {{#if available_locales}}
-    <div class="locale-picker" data-ui-locale-picker>
+    <crap-ui-locale-picker class="locale-picker">
       <button type="button" class="locale-picker__toggle" aria-label="Change UI language" data-ui-locale-toggle>
         <span class="material-symbols-outlined icon--md">translate</span>
       </button>
@@ -45,9 +45,9 @@
         </button>
         {{/each}}
       </div>
-    </div>
+    </crap-ui-locale-picker>
     {{/if}}
-    <div class="theme-picker" data-theme-picker>
+    <crap-theme-picker class="theme-picker">
       <button type="button" class="theme-picker__toggle" aria-label="Change theme" data-theme-toggle>
         <span class="material-symbols-outlined icon--md">palette</span>
       </button>
@@ -73,7 +73,7 @@
           Gruvbox Dark
         </button>
       </div>
-    </div>
+    </crap-theme-picker>
     {{#if user}}
     <span class="header__email">{{user.email}}</span>
     <form method="POST" action="/admin/logout" class="header__logout-form">

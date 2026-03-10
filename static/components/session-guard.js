@@ -6,6 +6,9 @@
  * 5 minutes before expiry and shows a styled dialog offering "Stay logged in"
  * (refreshes the session) or "Log out".
  *
+ * Instance-safe: all timer logic and event listeners live inside the component.
+ * connectedCallback starts monitoring, disconnectedCallback cleans everything up.
+ *
  * No polling — just one setTimeout per session, re-scheduled on refresh or
  * HTMX navigation (which may deliver fresh cookies from the server).
  */
@@ -14,11 +17,27 @@ import { t } from './i18n.js';
 
 const WARNING_SECONDS = 5 * 60;
 
+/**
+ * Read a cookie value by name.
+ * @param {string} name
+ * @returns {string | null}
+ */
+function readCookie(name) {
+  const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
+  return match ? match[1] : null;
+}
+
 // ── Web Component ────────────────────────────────────────────────────────
 
 class CrapSessionDialog extends HTMLElement {
   constructor() {
     super();
+
+    /** @type {number | null} */
+    this._timerId = null;
+    /** @type {number | null} */
+    this._countdownId = null;
+
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.innerHTML = `
       <style>
@@ -130,157 +149,128 @@ class CrapSessionDialog extends HTMLElement {
   close() {
     this.shadowRoot.querySelector('dialog').close();
   }
-}
 
-customElements.define('crap-session-dialog', CrapSessionDialog);
+  /** @returns {void} */
+  connectedCallback() {
+    if (document.querySelector('[data-admin-layout]')) {
+      this._scheduleWarning();
+    }
 
-// ── Cookie reader ────────────────────────────────────────────────────────
-
-/**
- * Read a cookie value by name.
- * @param {string} name
- * @returns {string | null}
- */
-function readCookie(name) {
-  const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + name + '=([^;]*)'));
-  return match ? match[1] : null;
-}
-
-// ── Timer logic ──────────────────────────────────────────────────────────
-
-/** @type {number | null} */
-let timerId = null;
-
-/** @type {CrapSessionDialog | null} */
-let dialogInstance = null;
-
-/** Get or create the shared dialog instance. */
-function getDialog() {
-  if (!dialogInstance || !dialogInstance.isConnected) {
-    dialogInstance = /** @type {CrapSessionDialog} */ (
-      document.createElement('crap-session-dialog')
-    );
-    document.body.appendChild(dialogInstance);
-  }
-  return dialogInstance;
-}
-
-/** Schedule (or re-schedule) the session expiry warning. */
-function scheduleWarning() {
-  if (timerId !== null) {
-    clearTimeout(timerId);
-    timerId = null;
+    this._handleAfterSettle = () => this._scheduleWarning();
+    document.addEventListener('htmx:afterSettle', this._handleAfterSettle);
   }
 
-  const expStr = readCookie('crap_session_exp');
-  if (!expStr) return; // no session
-
-  const exp = parseInt(expStr, 10);
-  if (isNaN(exp)) return;
-
-  const nowSec = Math.floor(Date.now() / 1000);
-  const secsLeft = exp - nowSec;
-
-  if (secsLeft <= 0) {
-    // Already expired — redirect to login
-    window.location.href = '/admin/login';
-    return;
+  /** @returns {void} */
+  disconnectedCallback() {
+    if (this._timerId !== null) { clearTimeout(this._timerId); this._timerId = null; }
+    if (this._countdownId !== null) { clearInterval(this._countdownId); this._countdownId = null; }
+    document.removeEventListener('htmx:afterSettle', this._handleAfterSettle);
   }
 
-  const warnIn = secsLeft - WARNING_SECONDS;
+  /** Schedule (or re-schedule) the session expiry warning. */
+  _scheduleWarning() {
+    if (this._timerId !== null) {
+      clearTimeout(this._timerId);
+      this._timerId = null;
+    }
 
-  if (warnIn <= 0) {
-    // Less than 5 minutes left — show immediately
-    showWarning(secsLeft);
-  } else {
-    timerId = window.setTimeout(() => {
-      // Re-read cookie in case it was refreshed by another tab
-      const freshExp = parseInt(readCookie('crap_session_exp') || '0', 10);
-      const freshNow = Math.floor(Date.now() / 1000);
-      const freshLeft = freshExp - freshNow;
-      if (freshLeft <= 0) {
-        window.location.href = '/admin/login';
-      } else if (freshLeft <= WARNING_SECONDS) {
-        showWarning(freshLeft);
-      } else {
-        // Cookie was refreshed — re-schedule
-        scheduleWarning();
-      }
-    }, warnIn * 1000);
-  }
-}
+    const expStr = readCookie('crap_session_exp');
+    if (!expStr) return;
 
-/** @type {number | null} */
-let countdownId = null;
+    const exp = parseInt(expStr, 10);
+    if (isNaN(exp)) return;
 
-/**
- * Show the warning dialog with a live countdown.
- * When the session expires while the dialog is open, redirect to login.
- * @param {number} secsLeft - Seconds remaining before expiry.
- */
-function showWarning(secsLeft) {
-  const expStr = readCookie('crap_session_exp');
-  const exp = expStr ? parseInt(expStr, 10) : Math.floor(Date.now() / 1000) + secsLeft;
-
-  const dialog = getDialog();
-
-  function updateMessage() {
     const nowSec = Math.floor(Date.now() / 1000);
-    const remaining = exp - nowSec;
-    if (remaining <= 0) {
-      if (countdownId !== null) { clearInterval(countdownId); countdownId = null; }
+    const secsLeft = exp - nowSec;
+
+    if (secsLeft <= 0) {
       window.location.href = '/admin/login';
       return;
     }
-    const mins = Math.max(1, Math.round(remaining / 60));
-    const unit = mins === 1 ? t('minute') : t('minutes');
-    const p = dialog.shadowRoot && dialog.shadowRoot.querySelector('p');
-    if (p) p.textContent = t('session_expiry_warning', { mins, unit });
+
+    const warnIn = secsLeft - WARNING_SECONDS;
+
+    if (warnIn <= 0) {
+      this._showWarning(secsLeft);
+    } else {
+      this._timerId = window.setTimeout(() => {
+        const freshExp = parseInt(readCookie('crap_session_exp') || '0', 10);
+        const freshNow = Math.floor(Date.now() / 1000);
+        const freshLeft = freshExp - freshNow;
+        if (freshLeft <= 0) {
+          window.location.href = '/admin/login';
+        } else if (freshLeft <= WARNING_SECONDS) {
+          this._showWarning(freshLeft);
+        } else {
+          this._scheduleWarning();
+        }
+      }, warnIn * 1000);
+    }
   }
 
-  updateMessage();
-  if (countdownId !== null) clearInterval(countdownId);
-  countdownId = window.setInterval(updateMessage, 30_000);
+  /**
+   * Show the warning dialog with a live countdown.
+   * @param {number} secsLeft - Seconds remaining before expiry.
+   */
+  _showWarning(secsLeft) {
+    const expStr = readCookie('crap_session_exp');
+    const exp = expStr ? parseInt(expStr, 10) : Math.floor(Date.now() / 1000) + secsLeft;
 
-  dialog.show(t('session_expiry_warning', {
-    mins: Math.max(1, Math.round(secsLeft / 60)),
-    unit: secsLeft <= 90 ? t('minute') : t('minutes'),
-  }), {
-    onStay: () => { if (countdownId !== null) { clearInterval(countdownId); countdownId = null; } handleStay(); },
-    onLogout: () => { if (countdownId !== null) { clearInterval(countdownId); countdownId = null; } handleLogout(); },
-  });
-}
+    const updateMessage = () => {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const remaining = exp - nowSec;
+      if (remaining <= 0) {
+        if (this._countdownId !== null) { clearInterval(this._countdownId); this._countdownId = null; }
+        window.location.href = '/admin/login';
+        return;
+      }
+      const mins = Math.max(1, Math.round(remaining / 60));
+      const unit = mins === 1 ? t('minute') : t('minutes');
+      const p = this.shadowRoot && this.shadowRoot.querySelector('p');
+      if (p) p.textContent = t('session_expiry_warning', { mins, unit });
+    };
 
-/** POST to the refresh endpoint, then re-schedule. */
-async function handleStay() {
-  const csrf = readCookie('crap_csrf');
-  try {
-    const res = await fetch('/admin/api/session-refresh', {
-      method: 'POST',
-      headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+    updateMessage();
+    if (this._countdownId !== null) clearInterval(this._countdownId);
+    this._countdownId = window.setInterval(updateMessage, 30_000);
+
+    this.show(t('session_expiry_warning', {
+      mins: Math.max(1, Math.round(secsLeft / 60)),
+      unit: secsLeft <= 90 ? t('minute') : t('minutes'),
+    }), {
+      onStay: () => {
+        if (this._countdownId !== null) { clearInterval(this._countdownId); this._countdownId = null; }
+        this._handleStay();
+      },
+      onLogout: () => {
+        if (this._countdownId !== null) { clearInterval(this._countdownId); this._countdownId = null; }
+        this._handleLogout();
+      },
     });
-    if (res.ok) {
-      scheduleWarning();
-    } else {
+  }
+
+  /** POST to the refresh endpoint, then re-schedule. */
+  async _handleStay() {
+    const csrf = readCookie('crap_csrf');
+    try {
+      const res = await fetch('/admin/api/session-refresh', {
+        method: 'POST',
+        headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+      });
+      if (res.ok) {
+        this._scheduleWarning();
+      } else {
+        window.location.href = '/admin/login';
+      }
+    } catch {
       window.location.href = '/admin/login';
     }
-  } catch {
-    window.location.href = '/admin/login';
+  }
+
+  /** @returns {void} */
+  _handleLogout() {
+    window.location.href = '/admin/logout';
   }
 }
 
-function handleLogout() {
-  window.location.href = '/admin/logout';
-}
-
-// ── Lifecycle ────────────────────────────────────────────────────────────
-
-// Start on page load if we're inside the admin layout
-if (document.querySelector('[data-admin-layout]')) {
-  scheduleWarning();
-}
-
-// Re-schedule after HTMX navigations (server may have refreshed cookies)
-document.addEventListener('htmx:afterSettle', () => {
-  scheduleWarning();
-});
+customElements.define('crap-session-dialog', CrapSessionDialog);

@@ -12,6 +12,18 @@
 @import url("/static/badges.css");
 @import url("/static/themes.css");
 
+/* Light DOM web component wrappers — layout-invisible */
+crap-sidebar,
+crap-collapsible,
+crap-array-field,
+crap-conditions,
+crap-dirty-form,
+crap-scroll-restore,
+crap-live-events,
+crap-list-settings {
+  display: contents;
+}
+
 :root {
   color-scheme: light;
 

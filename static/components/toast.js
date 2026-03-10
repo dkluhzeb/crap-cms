@@ -5,6 +5,9 @@
  * and auto-dismiss. Listens for HTMX responses with `X-Crap-Toast`
  * header to auto-show server-driven toasts.
  *
+ * Instance-safe: each connected instance registers its own event
+ * listeners via connectedCallback/disconnectedCallback.
+ *
  * @example HTML:  <crap-toast></crap-toast>
  * @example JS:    window.CrapToast.show('Item created', 'success');
  * @example Header: X-Crap-Toast: {"message": "Saved", "type": "success"}
@@ -90,26 +93,42 @@ class CrapToast extends HTMLElement {
 
   /** @returns {void} */
   connectedCallback() {
+    /** @param {CustomEvent} e - Programmatic show request */
+    this._handleToastEvent = (e) => {
+      if (e.detail._handled) return;
+      e.detail._handled = true;
+      const { message, type, duration } = e.detail;
+      this.show(message, type, duration);
+    };
+    document.addEventListener('crap:toast', this._handleToastEvent);
+
     /** @param {CustomEvent} e - HTMX afterRequest event */
-    const handler = (e) => {
+    this._handleAfterRequest = (e) => {
+      if (e.detail._crapToastHandled) return;
       const xhr = /** @type {XMLHttpRequest | null} */ (e.detail.xhr);
       if (!xhr) return;
 
       const header = xhr.getResponseHeader('X-Crap-Toast');
-      if (header) {
-        const isError = xhr.status >= 400;
-        const fallbackType = isError ? 'error' : 'success';
-        try {
-          /** @type {{ message: string, type?: string }} */
-          const data = JSON.parse(header);
-          this.show(data.message, /** @type {any} */ (data.type || fallbackType));
-        } catch {
-          this.show(header, fallbackType);
-        }
+      if (!header) return;
+      e.detail._crapToastHandled = true;
+
+      const isError = xhr.status >= 400;
+      const fallbackType = isError ? 'error' : 'success';
+      try {
+        /** @type {{ message: string, type?: string }} */
+        const data = JSON.parse(header);
+        this.show(data.message, /** @type {any} */ (data.type || fallbackType));
+      } catch {
+        this.show(header, fallbackType);
       }
     };
+    document.body.addEventListener('htmx:afterRequest', this._handleAfterRequest);
+  }
 
-    document.body.addEventListener('htmx:afterRequest', handler);
+  /** @returns {void} */
+  disconnectedCallback() {
+    document.removeEventListener('crap:toast', this._handleToastEvent);
+    document.body.removeEventListener('htmx:afterRequest', this._handleAfterRequest);
   }
 }
 
@@ -117,7 +136,7 @@ customElements.define('crap-toast', CrapToast);
 
 /**
  * Global toast API.
- * Finds or creates the <crap-toast> element and delegates to its show() method.
+ * Dispatches a CustomEvent that the connected <crap-toast> instance handles.
  * @namespace
  */
 window.CrapToast = {
@@ -128,12 +147,8 @@ window.CrapToast = {
    * @returns {void}
    */
   show(message, type = 'info', duration = 3000) {
-    /** @type {CrapToast | null} */
-    let el = document.querySelector('crap-toast');
-    if (!el) {
-      el = /** @type {CrapToast} */ (document.createElement('crap-toast'));
-      document.body.appendChild(el);
-    }
-    el.show(message, type, duration);
+    document.dispatchEvent(new CustomEvent('crap:toast', {
+      detail: { message, type, duration },
+    }));
   },
 };

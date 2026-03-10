@@ -2,7 +2,10 @@
  * <crap-drawer> — Slide-in drawer panel using native <dialog>.
  *
  * Uses Shadow DOM with CSS custom properties from :root for theming.
- * A single shared instance is created lazily and reused.
+ *
+ * Instance-safe: each connected instance self-registers via
+ * connectedCallback/disconnectedCallback. The getDrawer() helper
+ * dispatches a synchronous event to find a connected instance.
  *
  * API:
  *   const drawer = getDrawer();
@@ -313,23 +316,32 @@ class CrapDrawer extends HTMLElement {
   get body() {
     return this.shadowRoot.querySelector('.body');
   }
+
+  /** @returns {void} */
+  connectedCallback() {
+    this._handleRequest = (e) => {
+      if (!e.detail.instance) e.detail.instance = this;
+    };
+    document.addEventListener('crap:drawer-request', this._handleRequest);
+  }
+
+  /** @returns {void} */
+  disconnectedCallback() {
+    document.removeEventListener('crap:drawer-request', this._handleRequest);
+  }
 }
 
 customElements.define('crap-drawer', CrapDrawer);
 
-/* ── Shared singleton ────────────────────────────────────────── */
-
-/** @type {CrapDrawer | null} */
-let instance = null;
+/* ── Public API ──────────────────────────────────────────────── */
 
 /**
- * Lazily create (or reuse) a shared <crap-drawer> element.
- * @returns {CrapDrawer}
+ * Get a connected <crap-drawer> instance.
+ * Uses a synchronous CustomEvent so each instance self-registers.
+ * @returns {CrapDrawer | null}
  */
 export function getDrawer() {
-  if (!instance || !instance.isConnected) {
-    instance = /** @type {CrapDrawer} */ (document.createElement('crap-drawer'));
-    document.body.appendChild(instance);
-  }
-  return instance;
+  const evt = new CustomEvent('crap:drawer-request', { detail: {} });
+  document.dispatchEvent(evt);
+  return /** @type {CrapDrawer | null} */ (evt.detail.instance || null);
 }

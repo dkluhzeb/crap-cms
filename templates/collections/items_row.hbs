@@ -11,7 +11,7 @@
   {{#each this.cells}}
   <td>
     {{#if this.is_badge}}<span class="badge badge--{{this.value}}">{{this.value}}</span>{{/if}}
-    {{#if this.is_date}}<time datetime="{{this.value}}">{{this.value}}</time>{{/if}}
+    {{#if this.is_date}}<crap-time datetime="{{this.value}}">{{this.value}}</crap-time>{{/if}}
     {{#if this.is_bool}}
       {{#if this.value}}<span class="material-symbols-outlined icon--success">check</span>{{else}}<span class="material-symbols-outlined icon--muted">remove</span>{{/if}}
     {{/if}}

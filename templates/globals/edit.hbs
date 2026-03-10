@@ -3,6 +3,9 @@
 <div class="page-header">
   <h1>{{global.display_name}}</h1>
 </div>
+<crap-dirty-form>
+<crap-scroll-restore>
+<crap-conditions collection="{{global.slug}}">
 <form id="edit-form"
       hx-post="/admin/globals/{{global.slug}}"
       action="/admin/globals/{{global.slug}}"
@@ -25,4 +28,7 @@
     </div>
   </div>
 </form>
+</crap-conditions>
+</crap-scroll-restore>
+</crap-dirty-form>
 {{/layout/base}}

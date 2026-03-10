@@ -2,14 +2,13 @@
  * <crap-confirm-dialog> — Standalone confirmation dialog for HTMX actions.
  *
  * Replaces the native `window.confirm()` used by `hx-confirm` with a styled
- * dialog. A single shared instance is created lazily and reused.
+ * dialog. All styles are encapsulated in Shadow DOM. CSS custom properties
+ * from :root pierce the shadow boundary for theming support.
  *
- * All styles are encapsulated in Shadow DOM. CSS custom properties from :root
- * pierce the shadow boundary for theming support.
+ * Instance-safe: each connected instance registers its own htmx:confirm
+ * listener via connectedCallback/disconnectedCallback.
  *
  * Usage: Add `hx-confirm="Are you sure?"` to any HTMX-powered element.
- * The global `htmx:confirm` listener (registered below) will intercept
- * the native confirm and show this dialog instead.
  */
 import { t } from './i18n.js';
 
@@ -131,37 +130,49 @@ class CrapConfirmDialog extends HTMLElement {
       dialog.showModal();
     });
   }
+
+  /** @returns {void} */
+  connectedCallback() {
+    // Respond to getConfirmDialog() requests
+    this._handleRequest = (e) => {
+      if (!e.detail.instance) e.detail.instance = this;
+    };
+    document.addEventListener('crap:confirm-dialog-request', this._handleRequest);
+
+    // Intercept HTMX's native confirm() and show a styled dialog instead
+    this._handleHtmxConfirm = (evt) => {
+      if (evt._crapHandled) return;
+      const question = evt.detail.question;
+      if (!question) return;
+
+      evt._crapHandled = true;
+      evt.preventDefault();
+
+      this.prompt(question).then((confirmed) => {
+        if (confirmed) evt.detail.issueRequest();
+      });
+    };
+    document.addEventListener('htmx:confirm', this._handleHtmxConfirm);
+  }
+
+  /** @returns {void} */
+  disconnectedCallback() {
+    document.removeEventListener('crap:confirm-dialog-request', this._handleRequest);
+    document.removeEventListener('htmx:confirm', this._handleHtmxConfirm);
+  }
 }
 
 customElements.define('crap-confirm-dialog', CrapConfirmDialog);
 
-/* ── htmx:confirm integration ─────────────────────────────────── */
-
-/** @type {CrapConfirmDialog | null} */
-let instance = null;
-
-/** Lazily create (or reuse) a shared <crap-confirm-dialog> element. */
-export function getConfirmDialog() {
-  if (!instance || !instance.isConnected) {
-    instance = /** @type {CrapConfirmDialog} */ (
-      document.createElement('crap-confirm-dialog')
-    );
-    document.body.appendChild(instance);
-  }
-  return instance;
-}
+/* ── Public API ──────────────────────────────────────────────── */
 
 /**
- * Intercept HTMX's native confirm() and show a styled dialog instead.
- * Elements with `hx-confirm="..."` trigger this automatically.
+ * Get a connected <crap-confirm-dialog> instance.
+ * Uses a synchronous CustomEvent so each instance self-registers.
+ * @returns {CrapConfirmDialog | null}
  */
-document.addEventListener('htmx:confirm', (evt) => {
-  const question = evt.detail.question;
-  if (!question) return;
-
-  evt.preventDefault();
-
-  getConfirmDialog().prompt(question).then((confirmed) => {
-    if (confirmed) evt.detail.issueRequest();
-  });
-});
+export function getConfirmDialog() {
+  const evt = new CustomEvent('crap:confirm-dialog-request', { detail: {} });
+  document.dispatchEvent(evt);
+  return /** @type {CrapConfirmDialog | null} */ (evt.detail.instance || null);
+}

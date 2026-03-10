@@ -1,30 +1,34 @@
 /**
- * Tab field switching.
+ * Tab field switching — `<crap-tabs>`.
  *
- * Registers a `switch-tab` action via the delegation system.
- * State persistence is handled by scroll.js (snapshot before form save,
- * restore after same-page HTMX settle).
+ * Handles tab switching via click delegation on `[data-action="switch-tab"]`.
+ * State persistence is handled by `<crap-scroll-restore>`.
+ *
+ * @module tabs
  */
 
-import { registerAction } from './actions.js';
+class CrapTabs extends HTMLElement {
+  connectedCallback() {
+    this.addEventListener('click', (e) => {
+      const btn = /** @type {HTMLElement} */ (e.target).closest('[data-action="switch-tab"]');
+      if (!btn) return;
+      const index = /** @type {HTMLElement} */ (btn).dataset.tabIndex;
+      if (index == null) return;
 
-/**
- * Switch to a tab panel by index.
- *
- * @param {HTMLElement} button - The tab button clicked.
- * @param {string} index - The tab panel index.
- */
-function switchTab(button, index) {
-  const tabs = button.closest('.form__tabs');
-  if (!tabs) return;
-  tabs.querySelectorAll('.form__tabs-tab').forEach(t => {
-    t.classList.remove('form__tabs-tab--active');
-    t.setAttribute('aria-selected', 'false');
-  });
-  tabs.querySelectorAll('.form__tabs-panel').forEach(p => p.classList.add('form__tabs-panel--hidden'));
-  button.classList.add('form__tabs-tab--active');
-  button.setAttribute('aria-selected', 'true');
-  tabs.querySelector(`[data-tab-panel="${index}"]`).classList.remove('form__tabs-panel--hidden');
+      this.querySelectorAll('.form__tabs-tab').forEach((t) => {
+        t.classList.remove('form__tabs-tab--active');
+        t.setAttribute('aria-selected', 'false');
+      });
+      this.querySelectorAll('.form__tabs-panel').forEach((p) => {
+        p.classList.add('form__tabs-panel--hidden');
+      });
+
+      btn.classList.add('form__tabs-tab--active');
+      btn.setAttribute('aria-selected', 'true');
+      const panel = this.querySelector(`[data-tab-panel="${index}"]`);
+      if (panel) panel.classList.remove('form__tabs-panel--hidden');
+    });
+  }
 }
 
-registerAction('switch-tab', (el) => switchTab(el, el.dataset.tabIndex));
+customElements.define('crap-tabs', CrapTabs);

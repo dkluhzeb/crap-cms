@@ -3,6 +3,9 @@
 <div class="page-header">
   <h1>{{#if editing}}{{t "edit"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}</h1>
 </div>
+<crap-dirty-form>
+<crap-scroll-restore>
+<crap-conditions collection="{{collection.slug}}">
 <form
   id="edit-form"
   {{#if editing}}
@@ -38,4 +41,7 @@
     </div>
   </div>
 </form>
+</crap-conditions>
+</crap-scroll-restore>
+</crap-dirty-form>
 {{/layout/base}}

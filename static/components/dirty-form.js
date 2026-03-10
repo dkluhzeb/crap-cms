@@ -1,111 +1,129 @@
 /**
- * Dirty Form Guard — warns users before navigating away from unsaved changes.
+ * Dirty Form Guard — `<crap-dirty-form>`.
  *
+ * Warns users before navigating away from unsaved changes.
  * Tracks changes on #edit-form via input/change events, custom crap:change
- * events (relationship/upload components), and array/block row mutations.
- * Guards HTMX navigation (configRequest), browser history (popstate), and
- * native navigation (beforeunload) using the styled <crap-confirm-dialog>.
+ * events, and array/block row mutations.
+ *
+ * @module dirty-form
  */
 
-import { registerInit } from './actions.js';
 import { getConfirmDialog } from './confirm-dialog.js';
 import { t } from './i18n.js';
 
-/** @type {boolean} */
-let dirty = false;
+class CrapDirtyForm extends HTMLElement {
+  constructor() {
+    super();
+    /** @type {boolean} */
+    this._dirty = false;
+    /** @type {boolean} */
+    this._bypassing = false;
+    /** @type {string} */
+    this._formUrl = '';
+  }
 
-/** @type {boolean} */
-let bypassing = false;
+  connectedCallback() {
+    this._formUrl = location.href;
+    this._dirty = false;
+    /** @type {boolean} */
+    this._armed = false;
 
-/** @type {string} */
-let formUrl = '';
+    this._markDirty = () => { if (this._armed) this._dirty = true; };
 
-function markDirty() { dirty = true; }
+    // Defer arming until after all child components have initialized.
+    // This prevents crap:change events fired during <crap-relationship-search>
+    // setup from marking the form dirty.
+    requestAnimationFrame(() => { this._armed = true; });
 
-/**
- * Show the styled leave-page dialog.
- * @returns {Promise<boolean>}
- */
-function askLeave() {
-  return getConfirmDialog().prompt(
-    t('unsaved_changes'),
-    { confirmLabel: t('leave'), cancelLabel: t('stay') },
-  );
+    // Track form input/change
+    const form = this.querySelector('#edit-form');
+    if (form) {
+      form.addEventListener('input', this._markDirty);
+      form.addEventListener('change', this._markDirty);
+    }
+
+    // Custom component changes (relationship search, uploads)
+    document.addEventListener('crap:change', this._markDirty);
+
+    // Array/block row mutations
+    this._onRowAction = (e) => {
+      if (!this._armed) return;
+      const action = /** @type {HTMLElement} */ (e.target).closest('[data-action]');
+      if (!action) return;
+      const name = action.getAttribute('data-action');
+      if (['remove-array-row', 'add-array-row', 'duplicate-row',
+           'move-row-up', 'move-row-down'].includes(name)) {
+        this._dirty = true;
+      }
+    };
+    document.addEventListener('click', this._onRowAction);
+
+    // Intercept HTMX GET navigation when form is dirty
+    this._onConfigRequest = (e) => {
+      if (!this._dirty || this._bypassing) return;
+      if ((e.detail.verb || '').toUpperCase() !== 'GET') return;
+      if (!this.querySelector('#edit-form')) return;
+
+      e.preventDefault();
+      this._askLeave().then((confirmed) => {
+        if (confirmed) {
+          this._dirty = false;
+          this._bypassing = true;
+          window.location.href = e.detail.path;
+          setTimeout(() => { this._bypassing = false; }, 500);
+        }
+      }).catch(() => { this._dirty = false; });
+    };
+    document.addEventListener('htmx:configRequest', this._onConfigRequest);
+
+    // Intercept browser back/forward
+    this._onPopState = () => {
+      if (!this._dirty || this._bypassing) return;
+      history.pushState(null, '', this._formUrl);
+      this._askLeave().then((confirmed) => {
+        if (confirmed) {
+          this._dirty = false;
+          this._bypassing = true;
+          history.back();
+          setTimeout(() => { this._bypassing = false; }, 500);
+        }
+      }).catch(() => { this._dirty = false; });
+    };
+    window.addEventListener('popstate', this._onPopState);
+
+    // Clear dirty on form save (non-GET = POST/PUT submit)
+    this._onBeforeRequest = (e) => {
+      if ((e.detail.verb || '').toUpperCase() !== 'GET') {
+        this._dirty = false;
+      }
+    };
+    document.addEventListener('htmx:beforeRequest', this._onBeforeRequest);
+
+    // Native navigation guard (close tab, external URL)
+    this._onBeforeUnload = (e) => {
+      if (this._dirty) e.preventDefault();
+    };
+    window.addEventListener('beforeunload', this._onBeforeUnload);
+  }
+
+  disconnectedCallback() {
+    document.removeEventListener('crap:change', this._markDirty);
+    document.removeEventListener('click', this._onRowAction);
+    document.removeEventListener('htmx:configRequest', this._onConfigRequest);
+    window.removeEventListener('popstate', this._onPopState);
+    document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+    window.removeEventListener('beforeunload', this._onBeforeUnload);
+  }
+
+  /**
+   * @returns {Promise<boolean>}
+   */
+  _askLeave() {
+    return getConfirmDialog().prompt(
+      t('unsaved_changes'),
+      { confirmLabel: t('leave'), cancelLabel: t('stay') },
+    );
+  }
 }
 
-function init() {
-  const form = document.getElementById('edit-form');
-  if (!form) { dirty = false; return; }
-  dirty = false;
-  formUrl = location.href;
-
-  form.addEventListener('input', markDirty);
-  form.addEventListener('change', markDirty);
-}
-
-// Custom component changes (relationship search, uploads)
-document.addEventListener('crap:change', markDirty);
-
-// Array/block row mutations — action buttons
-document.addEventListener('click', (e) => {
-  const action = e.target.closest('[data-action]');
-  if (!action) return;
-  const name = action.getAttribute('data-action');
-  if (['remove-array-row', 'add-array-row', 'duplicate-row',
-       'move-up', 'move-down'].includes(name)) {
-    dirty = true;
-  }
-});
-
-// Intercept HTMX GET navigation when form is dirty
-document.addEventListener('htmx:configRequest', (e) => {
-  if (!dirty || bypassing) return;
-  if ((e.detail.verb || '').toUpperCase() !== 'GET') return;
-  if (!document.getElementById('edit-form')) return;
-
-  e.preventDefault();
-  askLeave().then((confirmed) => {
-    if (confirmed) {
-      dirty = false;
-      bypassing = true;
-      window.location.href = e.detail.path;
-      setTimeout(() => { bypassing = false; }, 500);
-    }
-  }).catch(() => {
-    // Safety net — if dialog fails, don't permanently lock navigation
-    dirty = false;
-  });
-});
-
-// Intercept browser back/forward when form is dirty
-window.addEventListener('popstate', () => {
-  if (!dirty || bypassing) return;
-
-  // Browser already changed the URL — push it back to stay on the form page
-  history.pushState(null, '', formUrl);
-
-  askLeave().then((confirmed) => {
-    if (confirmed) {
-      dirty = false;
-      bypassing = true;
-      history.back();
-      setTimeout(() => { bypassing = false; }, 500);
-    }
-  }).catch(() => {
-    dirty = false;
-  });
-});
-
-// Clear dirty on form save (non-GET = POST/PUT submit)
-document.addEventListener('htmx:beforeRequest', (e) => {
-  if ((e.detail.verb || '').toUpperCase() !== 'GET') {
-    dirty = false;
-  }
-});
-
-// Native navigation guard (close tab, external URL)
-window.addEventListener('beforeunload', (e) => {
-  if (dirty) { e.preventDefault(); }
-});
-
-registerInit(init);
+customElements.define('crap-dirty-form', CrapDirtyForm);

@@ -27,7 +27,7 @@
   {{/unless}}
 </div>
 {{else}}
-<div class="upload-field" data-upload-field>
+<crap-upload-preview class="upload-field">
   <div class="upload-field__preview" {{#unless selected_preview_url}}style="display: none;"{{/unless}}>
     {{#if selected_preview_url}}
     <img src="{{selected_preview_url}}" alt="Preview" />
@@ -68,7 +68,7 @@
   </div>
   {{/if}}
   {{/if}}
-</div>
+</crap-upload-preview>
 {{/if}}
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
 {{#if description}}<p class="form__help">{{description}}</p>{{/if}}

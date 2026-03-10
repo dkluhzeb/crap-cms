@@ -14,7 +14,7 @@
     </div>
     <div class="card__body">
       <p class="card__stat">{{this.count}} {{#if (eq this.count 1)}}{{this.singular_name}}{{else}}{{this.display_name}}{{/if}}</p>
-      {{#if this.last_updated}}<p class="card__meta">{{t "last_updated"}} <time datetime="{{this.last_updated}}">{{this.last_updated}}</time></p>{{/if}}
+      {{#if this.last_updated}}<p class="card__meta">{{t "last_updated"}} <crap-time datetime="{{this.last_updated}}">{{this.last_updated}}</crap-time></p>{{/if}}
     </div>
   </a>
   {{/each}}
@@ -33,7 +33,7 @@
     </div>
     {{#if this.last_updated}}
     <div class="card__body">
-      <p class="card__meta">{{t "last_updated"}} <time datetime="{{this.last_updated}}">{{this.last_updated}}</time></p>
+      <p class="card__meta">{{t "last_updated"}} <crap-time datetime="{{this.last_updated}}">{{this.last_updated}}</crap-time></p>
     </div>
     {{/if}}
   </a>

@@ -14,7 +14,7 @@
           <span class="edit-sidebar__version-number">v{{this.version}}</span>
           <span class="badge badge--{{this.status}}">{{this.status}}</span>
         </div>
-        <div class="edit-sidebar__version-meta"><time datetime="{{this.created_at}}">{{this.created_at}}</time></div>
+        <div class="edit-sidebar__version-meta"><crap-time datetime="{{this.created_at}}">{{this.created_at}}</crap-time></div>
         {{#unless this.latest}}
         <a class="button button--ghost button--small"
           href="{{../restore_url_prefix}}/versions/{{this.id}}/restore"
