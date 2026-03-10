@@ -11,6 +11,15 @@
   font-size: var(--text-sm);
   font-weight: 500;
   white-space: nowrap;
+  background: var(--bg-body);
+}
+
+/* Sticky table header on list pages — top offset set by JS (<crap-list-settings>) */
+crap-list-settings .table th {
+  position: sticky;
+  top: var(--list-header-height, 0px);
+  z-index: 4;
+  box-shadow: 0 -2px 0 var(--bg-body);
 }
 
 .table td {

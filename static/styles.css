@@ -99,6 +99,7 @@ crap-list-settings {
 
   /* Layout */
   --sidebar-width: 13rem;
+  --header-height: 41px;
 
   /* Semantic - Sidebar */
   --sidebar-bg: transparent;
