@@ -1,23 +1,23 @@
 //! Shared helper functions for admin handlers (collections + globals).
 
 use axum::{
+    Extension,
     http::StatusCode,
     response::{Html, IntoResponse, Redirect},
-    Extension,
 };
 use serde::Deserialize;
 use std::collections::HashMap;
 
+use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::translations::Translations;
-use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 use crate::core::collection::{CollectionDefinition, VersionsConfig};
 use crate::core::document::VersionSnapshot;
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::ValidationError;
-use crate::db::query::{self, AccessResult, Filter, FilterClause, FilterOp, LocaleContext};
 use crate::db::DbPool;
+use crate::db::query::{self, AccessResult, Filter, FilterClause, FilterOp, LocaleContext};
 
 // Re-export field context functions from the dedicated module.
 pub(super) use super::field_context::{
@@ -242,11 +242,7 @@ pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<St
             .fields
             .iter()
             .any(|f| f.name == field_name && is_column_eligible(&f.field_type));
-    if valid {
-        Some(sort.to_string())
-    } else {
-        None
-    }
+    if valid { Some(sort.to_string()) } else { None }
 }
 
 /// Check if a field type is eligible for display as a list column.

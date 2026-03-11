@@ -2,14 +2,14 @@
 
 use axum::{
     extract::{Path, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{IntoResponse, Response},
 };
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-use crate::admin::server::{extract_cookie, load_auth_user};
 use crate::admin::AdminState;
+use crate::admin::server::{extract_cookie, load_auth_user};
 use crate::core::auth;
 use crate::db::query::AccessResult;
 
@@ -407,11 +407,13 @@ mod tests {
             .unwrap();
         let resp = serve_with_headers(&path, req, "no-cache", false, "text/plain").await;
         // ServeFile may set Vary internally, but we don't set it
-        assert!(!resp
-            .headers()
-            .get_all(header::VARY)
-            .iter()
-            .any(|v| v == "Accept"));
+        assert!(
+            !resp
+                .headers()
+                .get_all(header::VARY)
+                .iter()
+                .any(|v| v == "Accept")
+        );
     }
 
     #[tokio::test]

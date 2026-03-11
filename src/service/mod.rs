@@ -17,9 +17,9 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
+use crate::core::CollectionDefinition;
 use crate::core::document::Document;
 use crate::core::field::FieldDefinition;
-use crate::core::CollectionDefinition;
 use crate::db::query::{self, LocaleContext};
 use crate::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
 
@@ -337,9 +337,11 @@ mod tests {
     fn persist_create_with_upload_metadata() {
         let conn = Connection::open_in_memory().unwrap();
 
-        let mut fields = vec![FieldDefinition::builder("alt", FieldType::Text)
-            .required(true)
-            .build()];
+        let mut fields = vec![
+            FieldDefinition::builder("alt", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
 
         let upload_fields = vec![
             FieldDefinition::builder("filename", FieldType::Text)

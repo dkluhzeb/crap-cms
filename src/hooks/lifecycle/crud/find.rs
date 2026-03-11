@@ -1,8 +1,8 @@
 //! Registration of `crap.collections.find`, `find_by_id`, and `count` Lua functions.
 
 use crate::config::{LocaleConfig, PaginationConfig};
-use crate::core::upload;
 use crate::core::SharedRegistry;
+use crate::core::upload;
 use crate::db::query::filter::normalize_filter_fields;
 use crate::db::query::{
     self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
@@ -122,7 +122,7 @@ pub(super) fn register_find(
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()))
+                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => find_query.filters.extend(extra),
                     AccessResult::Allowed => {}
@@ -383,7 +383,7 @@ pub(super) fn register_find_by_id(
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()))
+                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => Some(extra),
                     AccessResult::Allowed => None,
@@ -542,7 +542,7 @@ pub(super) fn register_count(
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()))
+                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => filters.extend(extra),
                     AccessResult::Allowed => {}

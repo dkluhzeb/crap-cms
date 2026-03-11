@@ -1,7 +1,7 @@
 use crap_cms::config::LocaleConfig;
-use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::CollectionDefinition;
-use crap_cms::db::query::{find, FindQuery, LocaleContext, LocaleMode};
+use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::db::query::{FindQuery, LocaleContext, LocaleMode, find};
 use rusqlite::Connection;
 
 #[test]
@@ -18,9 +18,11 @@ fn test_sql_injection_locale_sanitization() {
 
     let mut def = CollectionDefinition::new("posts");
     def.timestamps = false;
-    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
-        .localized(true)
-        .build()];
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .localized(true)
+            .build(),
+    ];
 
     let config = LocaleConfig {
         default_locale: "en".to_string(),
@@ -83,9 +85,11 @@ fn test_sql_injection_via_union_in_locale() {
 
     let mut def = CollectionDefinition::new("posts");
     def.timestamps = false;
-    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
-        .localized(true)
-        .build()];
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .localized(true)
+            .build(),
+    ];
 
     let config = LocaleConfig {
         default_locale: "en".to_string(),

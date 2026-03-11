@@ -1,12 +1,12 @@
-use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::query;
 use crate::db::query::AccessResult;
 use axum::{
+    Extension,
     extract::{Path, State},
     response::IntoResponse,
-    Extension,
 };
 
 use crate::admin::handlers::shared::{
@@ -34,7 +34,7 @@ pub async fn restore_confirm(
     match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to update this global")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}

@@ -960,12 +960,16 @@ mod tests {
 
     #[test]
     fn test_hook_type_valid_positions() {
-        assert!(HookType::Collection
-            .valid_positions()
-            .contains(&"before_validate"));
-        assert!(HookType::Collection
-            .valid_positions()
-            .contains(&"before_broadcast"));
+        assert!(
+            HookType::Collection
+                .valid_positions()
+                .contains(&"before_validate")
+        );
+        assert!(
+            HookType::Collection
+                .valid_positions()
+                .contains(&"before_broadcast")
+        );
         assert!(HookType::Field.valid_positions().contains(&"after_read"));
         assert!(HookType::Access.valid_positions().contains(&"read"));
         assert!(HookType::Condition.valid_positions().contains(&"table"));

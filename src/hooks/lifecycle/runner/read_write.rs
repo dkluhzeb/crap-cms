@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 
+use crate::core::Document;
 use crate::core::collection::Hooks;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::{FieldError, ValidationError};
-use crate::core::Document;
 use crate::db::query::LocaleContext;
 use crate::hooks::lifecycle::context::HookContext;
 use crate::hooks::lifecycle::execution::apply_after_read_inner;

@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::CollectionDefinition;
+use crate::core::field::{FieldDefinition, FieldType};
 
 use super::locale::LocaleContext;
 

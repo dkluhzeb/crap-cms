@@ -1,12 +1,12 @@
 use axum::{
+    Extension,
     extract::{Form, FromRequest, Path, State},
     response::IntoResponse,
-    Extension,
 };
 use std::collections::HashMap;
 
-use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{ContextBuilder, PageType};
 use crate::core::auth::AuthUser;
 use crate::core::event::{EventOperation, EventTarget};
 use crate::core::upload;
@@ -47,7 +47,7 @@ pub async fn create_action(
                 &state,
                 "You don't have permission to create items in this collection",
             )
-            .into_response()
+            .into_response();
         }
         Err(resp) => return resp,
         _ => {}
@@ -275,10 +275,12 @@ pub async fn create_action(
                     &error_map,
                     None,
                 );
-                let form_json = serde_json::json!(form_data_clone
-                    .iter()
-                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                    .collect::<serde_json::Map<String, serde_json::Value>>());
+                let form_json = serde_json::json!(
+                    form_data_clone
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect::<serde_json::Map<String, serde_json::Value>>()
+                );
                 apply_display_conditions(
                     &mut fields,
                     &def.fields,

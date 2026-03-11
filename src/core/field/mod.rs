@@ -14,8 +14,8 @@ pub use block_definition::{BlockDefinition, FieldTab};
 pub use field_admin::FieldAdmin;
 pub use field_admin_builder::FieldAdminBuilder;
 pub use field_definition::{
-    flatten_array_sub_fields, to_title_case, FieldAccess, FieldDefinition, FieldHooks,
-    McpFieldConfig,
+    FieldAccess, FieldDefinition, FieldHooks, McpFieldConfig, flatten_array_sub_fields,
+    to_title_case,
 };
 pub use field_definition_builder::FieldDefinitionBuilder;
 pub use field_type::FieldType;

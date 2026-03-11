@@ -12,8 +12,8 @@ use crate::hooks::lifecycle::crud::register_crud_functions;
 use crate::hooks::lifecycle::execution::scan_registered_events;
 use crate::hooks::lifecycle::types::{DefaultDeny, HookDepth, MaxHookDepth};
 
-use super::vm_pool::VmPool;
 use super::HookRunner;
+use super::vm_pool::VmPool;
 
 /// Builder for [`HookRunner`]. Created via [`HookRunner::builder`].
 pub struct HookRunnerBuilder<'a> {

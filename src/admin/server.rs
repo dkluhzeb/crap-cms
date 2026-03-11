@@ -4,26 +4,26 @@ use anyhow::Result;
 use axum::http::{Method, StatusCode};
 use axum::routing::MethodRouter;
 use axum::{
+    Router,
     extract::{DefaultBodyLimit, State},
     middleware::{self, Next},
     response::{IntoResponse, Redirect},
     routing::{get, post},
-    Router,
 };
 use std::path::PathBuf;
 
+use super::AdminState;
 use super::context::ContextBuilder;
 use super::handlers::{
     auth as auth_handlers, collections, dashboard, events, globals, static_assets, uploads,
 };
-use super::AdminState;
 use crate::config::{CompressionMode, CrapConfig};
+use crate::core::Registry;
 use crate::core::auth::ClaimsBuilder;
 use crate::core::auth::{self, AuthUser};
 use crate::core::event::EventBus;
-use crate::core::Registry;
-use crate::db::query;
 use crate::db::DbPool;
+use crate::db::query;
 use crate::hooks::lifecycle::HookRunner;
 
 /// Start the admin HTTP server (Axum) with all routes, middleware, and static file serving.

@@ -212,11 +212,9 @@ mod tests {
     fn extract_snapshot_data_group_fields() {
         let fields = vec![
             FieldDefinition::builder("seo", crate::core::field::FieldType::Group)
-                .fields(vec![FieldDefinition::builder(
-                    "title",
-                    crate::core::field::FieldType::Text,
-                )
-                .build()])
+                .fields(vec![
+                    FieldDefinition::builder("title", crate::core::field::FieldType::Text).build(),
+                ])
                 .build(),
         ];
 
@@ -236,26 +234,22 @@ mod tests {
     #[test]
     fn extract_snapshot_data_tabs_promotes_sub_fields() {
         // Fields inside Tabs should be promoted as top-level columns (no prefix)
-        let fields =
-            vec![
-                FieldDefinition::builder("page_settings", crate::core::field::FieldType::Tabs)
-                    .tabs(vec![crate::core::field::FieldTab::new(
-                        "Settings",
-                        vec![
-                            FieldDefinition::builder(
-                                "template",
-                                crate::core::field::FieldType::Select,
-                            )
+        let fields = vec![
+            FieldDefinition::builder("page_settings", crate::core::field::FieldType::Tabs)
+                .tabs(vec![crate::core::field::FieldTab::new(
+                    "Settings",
+                    vec![
+                        FieldDefinition::builder("template", crate::core::field::FieldType::Select)
                             .build(),
-                            FieldDefinition::builder(
-                                "show_in_nav",
-                                crate::core::field::FieldType::Checkbox,
-                            )
-                            .build(),
-                        ],
-                    )])
-                    .build(),
-            ];
+                        FieldDefinition::builder(
+                            "show_in_nav",
+                            crate::core::field::FieldType::Checkbox,
+                        )
+                        .build(),
+                    ],
+                )])
+                .build(),
+        ];
 
         let obj: serde_json::Map<String, serde_json::Value> =
             serde_json::from_value(serde_json::json!({"template": "landing", "show_in_nav": true}))
@@ -270,11 +264,10 @@ mod tests {
     fn extract_snapshot_data_row_promotes_sub_fields() {
         let fields = vec![
             FieldDefinition::builder("main_row", crate::core::field::FieldType::Row)
-                .fields(vec![FieldDefinition::builder(
-                    "width",
-                    crate::core::field::FieldType::Number,
-                )
-                .build()])
+                .fields(vec![
+                    FieldDefinition::builder("width", crate::core::field::FieldType::Number)
+                        .build(),
+                ])
                 .build(),
         ];
 
@@ -289,25 +282,29 @@ mod tests {
     fn extract_snapshot_data_nested_row_in_tabs() {
         // Regression: Row inside Tabs at the collection top level was not recursed
         use crate::core::field::FieldTab;
-        let fields =
-            vec![
-                FieldDefinition::builder("layout", crate::core::field::FieldType::Tabs)
-                    .tabs(vec![FieldTab::new(
-                        "General",
-                        vec![FieldDefinition::builder(
-                            "inner_row",
-                            crate::core::field::FieldType::Row,
-                        )
-                        .fields(vec![
-                            FieldDefinition::builder("title", crate::core::field::FieldType::Text)
+        let fields = vec![
+            FieldDefinition::builder("layout", crate::core::field::FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "General",
+                    vec![
+                        FieldDefinition::builder("inner_row", crate::core::field::FieldType::Row)
+                            .fields(vec![
+                                FieldDefinition::builder(
+                                    "title",
+                                    crate::core::field::FieldType::Text,
+                                )
                                 .build(),
-                            FieldDefinition::builder("slug", crate::core::field::FieldType::Text)
+                                FieldDefinition::builder(
+                                    "slug",
+                                    crate::core::field::FieldType::Text,
+                                )
                                 .build(),
-                        ])
-                        .build()],
-                    )])
-                    .build(),
-            ];
+                            ])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
 
         let obj: serde_json::Map<String, serde_json::Value> =
             serde_json::from_value(serde_json::json!({"title": "Hello", "slug": "hello"})).unwrap();
@@ -329,11 +326,10 @@ mod tests {
             FieldDefinition::builder("page_settings", crate::core::field::FieldType::Tabs)
                 .tabs(vec![crate::core::field::FieldTab::new(
                     "Content",
-                    vec![FieldDefinition::builder(
-                        "content",
-                        crate::core::field::FieldType::Blocks,
-                    )
-                    .build()],
+                    vec![
+                        FieldDefinition::builder("content", crate::core::field::FieldType::Blocks)
+                            .build(),
+                    ],
                 )])
                 .build(),
         ];
@@ -365,19 +361,19 @@ mod tests {
     fn collect_join_data_from_snapshot_row_and_collapsible() {
         let fields = vec![
             FieldDefinition::builder("row_wrapper", crate::core::field::FieldType::Row)
-                .fields(vec![FieldDefinition::builder(
-                    "items",
-                    crate::core::field::FieldType::Array,
-                )
-                .build()])
+                .fields(vec![
+                    FieldDefinition::builder("items", crate::core::field::FieldType::Array).build(),
+                ])
                 .build(),
             FieldDefinition::builder("advanced", crate::core::field::FieldType::Collapsible)
-                .fields(vec![FieldDefinition::builder(
-                    "related",
-                    crate::core::field::FieldType::Relationship,
-                )
-                .relationship(crate::core::field::RelationshipConfig::new("tags", true))
-                .build()])
+                .fields(vec![
+                    FieldDefinition::builder(
+                        "related",
+                        crate::core::field::FieldType::Relationship,
+                    )
+                    .relationship(crate::core::field::RelationshipConfig::new("tags", true))
+                    .build(),
+                ])
                 .build(),
         ];
 

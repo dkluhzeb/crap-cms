@@ -9,8 +9,8 @@ use std::sync::LazyLock;
 
 use anyhow::{Context as _, Result};
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
     Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 pub use claims::Claims;
 pub use claims_builder::ClaimsBuilder;

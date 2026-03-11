@@ -59,12 +59,14 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, color TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("color", FieldType::Select)
-            .options(vec![
-                SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
-                SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
-            ])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("color", FieldType::Select)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
+                    SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
+                ])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("color".to_string(), json!("red"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -77,19 +79,23 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, color TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("color", FieldType::Select)
-            .options(vec![SelectOption::new(
-                LocalizedString::Plain("Red".to_string()),
-                "red",
-            )])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("color", FieldType::Select)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Red".to_string()),
+                    "red",
+                )])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("color".to_string(), json!("green"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("invalid option"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("invalid option")
+        );
     }
 
     #[test]
@@ -98,12 +104,14 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, color TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("color", FieldType::Select)
-            .options(vec![SelectOption::new(
-                LocalizedString::Plain("Red".to_string()),
-                "red",
-            )])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("color", FieldType::Select)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Red".to_string()),
+                    "red",
+                )])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("color".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -119,12 +127,14 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, size TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("size", FieldType::Radio)
-            .options(vec![
-                SelectOption::new(LocalizedString::Plain("Small".to_string()), "sm"),
-                SelectOption::new(LocalizedString::Plain("Large".to_string()), "lg"),
-            ])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("size", FieldType::Radio)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("Small".to_string()), "sm"),
+                    SelectOption::new(LocalizedString::Plain("Large".to_string()), "lg"),
+                ])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("size".to_string(), json!("sm"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -137,19 +147,23 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, size TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("size", FieldType::Radio)
-            .options(vec![SelectOption::new(
-                LocalizedString::Plain("Small".to_string()),
-                "sm",
-            )])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("size", FieldType::Radio)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Small".to_string()),
+                    "sm",
+                )])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("size".to_string(), json!("xl"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err(), "Invalid radio option should fail");
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("invalid option"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("invalid option")
+        );
     }
 
     #[test]
@@ -158,12 +172,14 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, size TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("size", FieldType::Radio)
-            .options(vec![SelectOption::new(
-                LocalizedString::Plain("Small".to_string()),
-                "sm",
-            )])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("size", FieldType::Radio)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Small".to_string()),
+                    "sm",
+                )])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("size".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);

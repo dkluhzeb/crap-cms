@@ -7,17 +7,17 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use prost_types::{value::Kind, ListValue, Struct, Value};
+use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
 use crap_cms::api::service::ContentService;
 use crap_cms::config::*;
+use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
-use crap_cms::core::Registry;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -253,11 +253,9 @@ fn make_products_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![FieldDefinition::builder(
-                "meta_title",
-                FieldType::Text,
-            )
-            .build()])
+            .fields(vec![
+                FieldDefinition::builder("meta_title", FieldType::Text).build(),
+            ])
             .build(),
         FieldDefinition::builder("variants", FieldType::Array)
             .fields(vec![
@@ -282,7 +280,7 @@ fn make_products_def() -> CollectionDefinition {
                         FieldDefinition::builder("heading", FieldType::Text).build(),
                         FieldDefinition::builder("meta", FieldType::Group)
                             .fields(vec![
-                                FieldDefinition::builder("author", FieldType::Text).build()
+                                FieldDefinition::builder("author", FieldType::Text).build(),
                             ])
                             .build(),
                     ],
@@ -300,9 +298,11 @@ fn make_categories_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Categories".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![FieldDefinition::builder("name", FieldType::Text)
-        .required(true)
-        .build()];
+    def.fields = vec![
+        FieldDefinition::builder("name", FieldType::Text)
+            .required(true)
+            .build(),
+    ];
     def
 }
 

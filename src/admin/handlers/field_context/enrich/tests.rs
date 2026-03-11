@@ -575,7 +575,7 @@ fn enriched_sub_field_nested_blocks_unknown_type() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["_block_type"], "unknown_type");
     assert_eq!(rows[0]["block_label"], "unknown_type"); // falls back to block_type string
-                                                        // sub_fields should be empty since block_def is not found
+    // sub_fields should be empty since block_def is not found
     let sub_fields = rows[0]["sub_fields"].as_array().unwrap();
     assert!(sub_fields.is_empty());
 }
@@ -1120,12 +1120,14 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
 
     // Array "items" with sub-fields inside a Tabs wrapper
     let mut arr_field = make_field("items", FieldType::Array);
-    arr_field.fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-        .tabs(vec![
-            FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
-            FieldTab::new("Content", vec![make_field("body", FieldType::Textarea)]),
-        ])
-        .build()];
+    arr_field.fields = vec![
+        FieldDefinition::builder("layout", FieldType::Tabs)
+            .tabs(vec![
+                FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
+                FieldTab::new("Content", vec![make_field("body", FieldType::Textarea)]),
+            ])
+            .build(),
+    ];
 
     // Simulate hydrated data: flat JSON (as it comes from the join table)
     let row_data = serde_json::json!([
@@ -1182,12 +1184,14 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
 fn enriched_sub_field_row_in_array_transparent_names() {
     // Array "items" with sub-fields inside a Row wrapper
     let mut arr_field = make_field("items", FieldType::Array);
-    arr_field.fields = vec![FieldDefinition::builder("row_wrap", FieldType::Row)
-        .fields(vec![
-            make_field("x", FieldType::Text),
-            make_field("y", FieldType::Text),
-        ])
-        .build()];
+    arr_field.fields = vec![
+        FieldDefinition::builder("row_wrap", FieldType::Row)
+            .fields(vec![
+                make_field("x", FieldType::Text),
+                make_field("y", FieldType::Text),
+            ])
+            .build(),
+    ];
 
     let row_data = serde_json::json!([
         {"id": "r1", "x": "10", "y": "20"}
@@ -1238,26 +1242,28 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
 
     // Array "team_members" with Tabs containing Rows (double nesting)
     let mut arr_field = make_field("team_members", FieldType::Array);
-    arr_field.fields = vec![FieldDefinition::builder("member_tabs", FieldType::Tabs)
-        .tabs(vec![
-            FieldTab::new(
-                "Personal",
-                vec![
-                    FieldDefinition::builder("name_row", FieldType::Row)
-                        .fields(vec![
-                            make_field("first_name", FieldType::Text),
-                            make_field("last_name", FieldType::Text),
-                        ])
-                        .build(),
-                    make_field("email", FieldType::Email),
-                ],
-            ),
-            FieldTab::new(
-                "Professional",
-                vec![make_field("job_title", FieldType::Text)],
-            ),
-        ])
-        .build()];
+    arr_field.fields = vec![
+        FieldDefinition::builder("member_tabs", FieldType::Tabs)
+            .tabs(vec![
+                FieldTab::new(
+                    "Personal",
+                    vec![
+                        FieldDefinition::builder("name_row", FieldType::Row)
+                            .fields(vec![
+                                make_field("first_name", FieldType::Text),
+                                make_field("last_name", FieldType::Text),
+                            ])
+                            .build(),
+                        make_field("email", FieldType::Email),
+                    ],
+                ),
+                FieldTab::new(
+                    "Professional",
+                    vec![make_field("job_title", FieldType::Text)],
+                ),
+            ])
+            .build(),
+    ];
 
     let row_data = serde_json::json!([
         {"id": "r1", "first_name": "John", "last_name": "Doe", "email": "john@example.com", "job_title": "Dev"}

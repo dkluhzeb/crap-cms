@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
-use crap_cms::db::{migrate, pool, query, DbPool};
+use crap_cms::db::{DbPool, migrate, pool, query};
 use crap_cms::hooks;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -805,9 +805,11 @@ fn try_load_field_infos_returns_infos() {
     let status_info = infos.iter().find(|i| i.name == "status").unwrap();
     assert_eq!(status_info.field_type, "select");
     assert!(status_info.select_options.contains(&"draft".to_string()));
-    assert!(status_info
-        .select_options
-        .contains(&"published".to_string()));
+    assert!(
+        status_info
+            .select_options
+            .contains(&"published".to_string())
+    );
 }
 
 #[test]

@@ -610,9 +610,9 @@ pub fn find_orphan_columns(
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
+    use crate::core::Registry;
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldType};
-    use crate::core::Registry;
 
     fn no_locale() -> LocaleConfig {
         LocaleConfig::default()
@@ -708,9 +708,11 @@ mod tests {
             "posts".to_string(),
             simple_collection(
                 "posts",
-                vec![FieldDefinition::builder("seo", FieldType::Group)
-                    .fields(vec![text_field("meta_title"), text_field("meta_desc")])
-                    .build()],
+                vec![
+                    FieldDefinition::builder("seo", FieldType::Group)
+                        .fields(vec![text_field("meta_title"), text_field("meta_desc")])
+                        .build(),
+                ],
             ),
         );
 
@@ -731,9 +733,11 @@ mod tests {
             "posts".to_string(),
             simple_collection(
                 "posts",
-                vec![FieldDefinition::builder("title", FieldType::Text)
-                    .localized(true)
-                    .build()],
+                vec![
+                    FieldDefinition::builder("title", FieldType::Text)
+                        .localized(true)
+                        .build(),
+                ],
             ),
         );
 

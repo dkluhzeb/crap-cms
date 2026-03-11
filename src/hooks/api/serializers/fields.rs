@@ -289,11 +289,13 @@ mod tests {
         .blocks(vec![{
             let mut b = crate::core::field::BlockDefinition::new(
                 "text",
-                vec![crate::core::field::FieldDefinition::builder(
-                    "body",
-                    crate::core::field::FieldType::Text,
-                )
-                .build()],
+                vec![
+                    crate::core::field::FieldDefinition::builder(
+                        "body",
+                        crate::core::field::FieldType::Text,
+                    )
+                    .build(),
+                ],
             );
             b.label = Some(crate::core::field::LocalizedString::Plain(
                 "Text Block".to_string(),
@@ -535,11 +537,13 @@ mod tests {
             {
                 let mut t = crate::core::field::FieldTab::new(
                     "General",
-                    vec![crate::core::field::FieldDefinition::builder(
-                        "title",
-                        crate::core::field::FieldType::Text,
-                    )
-                    .build()],
+                    vec![
+                        crate::core::field::FieldDefinition::builder(
+                            "title",
+                            crate::core::field::FieldType::Text,
+                        )
+                        .build(),
+                    ],
                 );
                 t.description = Some("General settings".to_string());
                 t

@@ -7,9 +7,9 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use super::single::populate_relationships_cached;
-use super::{document_to_json, PopulateCache, PopulateContext, PopulateOpts};
-use crate::core::field::FieldType;
+use super::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
 use crate::core::Document;
+use crate::core::field::FieldType;
 use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
 
 /// Batch-populate relationship fields across a slice of documents.

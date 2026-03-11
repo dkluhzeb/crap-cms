@@ -2,9 +2,9 @@
 
 use std::fmt::Write;
 
+use crate::core::Registry;
 use crate::core::collection::{CollectionDefinition, GlobalDefinition};
 use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::Registry;
 use crate::db::query::get_column_names;
 
 use super::{is_optional, rel_has_many, to_pascal_case};
@@ -500,9 +500,11 @@ mod tests {
     #[test]
     fn render_global_array_row() {
         let mut global = GlobalDefinition::new("navigation");
-        global.fields = vec![FieldDefinition::builder("main_nav", FieldType::Array)
-            .fields(vec![text_field("label", true), text_field("url", true)])
-            .build()];
+        global.fields = vec![
+            FieldDefinition::builder("main_nav", FieldType::Array)
+                .fields(vec![text_field("label", true), text_field("url", true)])
+                .build(),
+        ];
 
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -618,10 +620,12 @@ mod tests {
         let mut rc = crate::core::field::RelationshipConfig::new("posts", false);
         rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let mut col = CollectionDefinition::new("comments");
-        col.fields = vec![FieldDefinition::builder("subject", FieldType::Relationship)
-            .required(true)
-            .relationship(rc)
-            .build()];
+        col.fields = vec![
+            FieldDefinition::builder("subject", FieldType::Relationship)
+                .required(true)
+                .relationship(rc)
+                .build(),
+        ];
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(
@@ -727,9 +731,11 @@ mod tests {
     #[test]
     fn render_collection_with_array_subtype() {
         let mut col = CollectionDefinition::new("posts");
-        col.fields = vec![FieldDefinition::builder("items", FieldType::Array)
-            .fields(vec![text_field("label", true), text_field("desc", false)])
-            .build()];
+        col.fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("label", true), text_field("desc", false)])
+                .build(),
+        ];
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("---@class crap.array_row.Items"));
@@ -852,26 +858,29 @@ mod tests {
         // Arrays nested inside Row, Group, and Tabs containers should be discovered
         let fields = vec![
             FieldDefinition::builder("row_container", FieldType::Row)
-                .fields(vec![FieldDefinition::builder(
-                    "row_items",
-                    FieldType::Array,
-                )
-                .fields(vec![text_field("val", true)])
-                .build()])
+                .fields(vec![
+                    FieldDefinition::builder("row_items", FieldType::Array)
+                        .fields(vec![text_field("val", true)])
+                        .build(),
+                ])
                 .build(),
             FieldDefinition::builder("tab_container", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
                     "T",
-                    vec![FieldDefinition::builder("tab_items", FieldType::Array)
-                        .fields(vec![text_field("name", true)])
-                        .build()],
+                    vec![
+                        FieldDefinition::builder("tab_items", FieldType::Array)
+                            .fields(vec![text_field("name", true)])
+                            .build(),
+                    ],
                 )])
                 .build(),
             // Nested array inside an array (recursion)
             FieldDefinition::builder("outer", FieldType::Array)
-                .fields(vec![FieldDefinition::builder("inner", FieldType::Array)
-                    .fields(vec![text_field("x", true)])
-                    .build()])
+                .fields(vec![
+                    FieldDefinition::builder("inner", FieldType::Array)
+                        .fields(vec![text_field("x", true)])
+                        .build(),
+                ])
                 .build(),
         ];
         let result = collect_array_fields(&fields);

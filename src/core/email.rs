@@ -2,7 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use handlebars::Handlebars;
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use std::path::Path;
 
 use crate::config::{EmailConfig, SmtpTls};
@@ -95,9 +95,9 @@ fn send_email_smtp(
     text: Option<&str>,
 ) -> Result<()> {
     use lettre::{
-        message::{header::ContentType, Mailbox, MultiPart, SinglePart},
-        transport::smtp::authentication::Credentials,
         Message, SmtpTransport, Transport,
+        message::{Mailbox, MultiPart, SinglePart, header::ContentType},
+        transport::smtp::authentication::Credentials,
     };
 
     let from: Mailbox = format!("{} <{}>", config.from_name, config.from_address)

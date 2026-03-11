@@ -290,11 +290,13 @@ mod tests {
         reg.register_collection(posts);
         let mut settings = crate::core::collection::GlobalDefinition::new("settings");
         settings.labels.singular = Some(LocalizedString::Plain("Setting".to_string()));
-        settings.fields = vec![crate::core::field::FieldDefinition::builder(
-            "site_name",
-            crate::core::field::FieldType::Text,
-        )
-        .build()];
+        settings.fields = vec![
+            crate::core::field::FieldDefinition::builder(
+                "site_name",
+                crate::core::field::FieldType::Text,
+            )
+            .build(),
+        ];
         reg.register_global(settings);
         Arc::new(RwLock::new(reg))
     }

@@ -56,9 +56,11 @@ mod tests {
              INSERT INTO test (id, email) VALUES ('existing', 'taken@test.com');",
         )
         .unwrap();
-        let fields = vec![FieldDefinition::builder("email", FieldType::Text)
-            .unique(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("email", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("taken@test.com"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -75,9 +77,11 @@ mod tests {
              INSERT INTO test (id, email) VALUES ('self', 'me@test.com');",
         )
         .unwrap();
-        let fields = vec![FieldDefinition::builder("email", FieldType::Text)
-            .unique(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("email", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("me@test.com"));
         let result = validate_fields_inner(
@@ -102,9 +106,11 @@ mod tests {
              INSERT INTO test (id, slug) VALUES ('a', '');",
         )
         .unwrap();
-        let fields = vec![FieldDefinition::builder("slug", FieldType::Text)
-            .unique(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -123,9 +129,11 @@ mod tests {
              INSERT INTO test (id, rank) VALUES ('existing', 42);",
         )
         .unwrap();
-        let fields = vec![FieldDefinition::builder("rank", FieldType::Number)
-            .unique(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("rank", FieldType::Number)
+                .unique(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("rank".to_string(), json!(42));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -142,9 +150,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
-            .unique(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .unique(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!(["a", "b"]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -163,10 +173,12 @@ mod tests {
             "CREATE TABLE test (id TEXT PRIMARY KEY, slug__en TEXT, slug__de TEXT);
              INSERT INTO test (id, slug__en, slug__de) VALUES ('existing', 'taken-en', 'taken-de');"
         ).unwrap();
-        let fields = vec![FieldDefinition::builder("slug", FieldType::Text)
-            .unique(true)
-            .localized(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .localized(true)
+                .build(),
+        ];
         let locale_cfg = crate::config::LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
@@ -223,12 +235,16 @@ mod tests {
              INSERT INTO test (id, seo__slug__en) VALUES ('existing', 'taken');",
         )
         .unwrap();
-        let fields = vec![FieldDefinition::builder("seo", FieldType::Group)
-            .localized(true)
-            .fields(vec![FieldDefinition::builder("slug", FieldType::Text)
-                .unique(true)
-                .build()])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("slug", FieldType::Text)
+                        .unique(true)
+                        .build(),
+                ])
+                .build(),
+        ];
         let locale_cfg = crate::config::LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
@@ -280,10 +296,12 @@ mod tests {
              INSERT INTO test (id, slug) VALUES ('existing', 'taken');",
         )
         .unwrap();
-        let fields = vec![FieldDefinition::builder("slug", FieldType::Text)
-            .unique(true)
-            .localized(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .localized(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!("taken"));
         // No locale_ctx → falls back to bare column

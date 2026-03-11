@@ -73,9 +73,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("name", FieldType::Text)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("name", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -91,9 +93,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("name", FieldType::Text)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("name", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!(null));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -106,9 +110,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("name", FieldType::Text)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("name", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
@@ -121,10 +127,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship)
-            .required(true)
-            .relationship(crate::core::field::RelationshipConfig::new("tags", true))
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .required(true)
+                .relationship(crate::core::field::RelationshipConfig::new("tags", true))
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!([]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -138,10 +146,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship)
-            .required(true)
-            .relationship(crate::core::field::RelationshipConfig::new("tags", true))
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .required(true)
+                .relationship(crate::core::field::RelationshipConfig::new("tags", true))
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(["t1", "t2"]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -154,9 +164,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("name", FieldType::Text)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("name", FieldType::Text)
+                .required(true)
+                .build(),
+        ];
         let data = HashMap::new();
         let result =
             validate_fields_inner(&lua, &fields, &data, &conn, "test", Some("p1"), false, None);
@@ -169,9 +181,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, active INTEGER)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("active", FieldType::Checkbox)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("active", FieldType::Checkbox)
+                .required(true)
+                .build(),
+        ];
         let data = HashMap::new();
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_ok());
@@ -183,9 +197,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .required(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -202,9 +218,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .required(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"x": 1}]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);

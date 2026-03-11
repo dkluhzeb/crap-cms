@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::Document;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::{FieldDefinition, FieldType};
-use crap_cms::core::Document;
 use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
@@ -237,10 +237,12 @@ fn hook_error_rolls_back_conceptually() {
     let conn = pool.get().expect("DB connection");
     let result = runner.eval_lua_with_conn(r#"error("intentional hook error")"#, &conn, None);
     assert!(result.is_err(), "Lua error should propagate as Rust error");
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("intentional hook error"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("intentional hook error")
+    );
 }
 
 // ── Run before_write lifecycle (integrated) ──────────────────────────────────

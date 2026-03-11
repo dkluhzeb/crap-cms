@@ -159,10 +159,12 @@ mod tests {
         reg.register_richtext_node(
             RichtextNodeDef::builder("cta", "Call to Action")
                 .inline(false)
-                .attrs(vec![NodeAttr::builder("text", "Button Text")
-                    .attr_type(NodeAttrType::Text)
-                    .required(true)
-                    .build()])
+                .attrs(vec![
+                    NodeAttr::builder("text", "Button Text")
+                        .attr_type(NodeAttrType::Text)
+                        .required(true)
+                        .build(),
+                ])
                 .searchable_attrs(vec!["text".to_string()])
                 .has_render(false)
                 .build(),

@@ -56,10 +56,12 @@ fn init_lua_loads_example_config() {
         .find(|f| f.name == "settings_tabs")
         .expect("settings_tabs field not found");
     assert!(!tabs_field.tabs.is_empty(), "tabs should have entries");
-    assert!(tabs_field.tabs[0]
-        .fields
-        .iter()
-        .any(|f| f.name == "site_name"));
+    assert!(
+        tabs_field.tabs[0]
+            .fields
+            .iter()
+            .any(|f| f.name == "site_name")
+    );
 
     // Check posts collection has versioning config
     assert!(posts.has_versions(), "posts should have versions enabled");

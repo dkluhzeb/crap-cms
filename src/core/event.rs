@@ -1,8 +1,8 @@
 //! Real-time event bus for broadcasting mutation events to subscribers.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::Serialize;
 use tokio::sync::broadcast;

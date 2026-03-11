@@ -5,7 +5,7 @@ use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
 use super::super::read::find_by_id_raw;
-use super::super::{coerce_value, locale_write_column, LocaleContext};
+use super::super::{LocaleContext, coerce_value, locale_write_column};
 use crate::core::field::FieldType;
 use crate::core::{CollectionDefinition, Document};
 
@@ -317,13 +317,13 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("settings", FieldType::Group)
-            .fields(vec![FieldDefinition::builder(
-                "featured",
-                FieldType::Checkbox,
-            )
-            .build()])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("settings", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("featured", FieldType::Checkbox).build(),
+                ])
+                .build(),
+        ];
         let def = def;
 
         // Create without providing the checkbox group sub-field — should default to 0
@@ -348,12 +348,14 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("extra", FieldType::Collapsible)
-            .fields(vec![
-                FieldDefinition::builder("notes", FieldType::Text).build(),
-                FieldDefinition::builder("footer", FieldType::Text).build(),
-            ])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("extra", FieldType::Collapsible)
+                .fields(vec![
+                    FieldDefinition::builder("notes", FieldType::Text).build(),
+                    FieldDefinition::builder("footer", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -380,18 +382,20 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new(
-                    "Content",
-                    vec![FieldDefinition::builder("body", FieldType::Text).build()],
-                ),
-                FieldTab::new(
-                    "Meta",
-                    vec![FieldDefinition::builder("slug", FieldType::Text).build()],
-                ),
-            ])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![
+                    FieldTab::new(
+                        "Content",
+                        vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                    ),
+                    FieldTab::new(
+                        "Meta",
+                        vec![FieldDefinition::builder("slug", FieldType::Text).build()],
+                    ),
+                ])
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -419,23 +423,27 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new(
-                    "Social",
-                    vec![FieldDefinition::builder("social", FieldType::Group)
-                        .fields(vec![
-                            FieldDefinition::builder("github", FieldType::Text).build(),
-                            FieldDefinition::builder("twitter", FieldType::Text).build(),
-                        ])
-                        .build()],
-                ),
-                FieldTab::new(
-                    "Content",
-                    vec![FieldDefinition::builder("body", FieldType::Text).build()],
-                ),
-            ])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![
+                    FieldTab::new(
+                        "Social",
+                        vec![
+                            FieldDefinition::builder("social", FieldType::Group)
+                                .fields(vec![
+                                    FieldDefinition::builder("github", FieldType::Text).build(),
+                                    FieldDefinition::builder("twitter", FieldType::Text).build(),
+                                ])
+                                .build(),
+                        ],
+                    ),
+                    FieldTab::new(
+                        "Content",
+                        vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                    ),
+                ])
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -467,21 +475,25 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new(
-                "Advanced",
-                vec![FieldDefinition::builder("advanced", FieldType::Collapsible)
-                    .fields(vec![
-                        FieldDefinition::builder("og", FieldType::Group)
+        def.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Advanced",
+                    vec![
+                        FieldDefinition::builder("advanced", FieldType::Collapsible)
                             .fields(vec![
-                                FieldDefinition::builder("image", FieldType::Text).build()
+                                FieldDefinition::builder("og", FieldType::Group)
+                                    .fields(vec![
+                                        FieldDefinition::builder("image", FieldType::Text).build(),
+                                    ])
+                                    .build(),
+                                FieldDefinition::builder("canonical", FieldType::Text).build(),
                             ])
                             .build(),
-                        FieldDefinition::builder("canonical", FieldType::Text).build(),
-                    ])
-                    .build()],
-            )])
-            .build()];
+                    ],
+                )])
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -508,14 +520,18 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+        def.fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
                 .fields(vec![
-                    FieldDefinition::builder("title", FieldType::Text).build(),
-                    FieldDefinition::builder("slug", FieldType::Text).build(),
+                    FieldDefinition::builder("r", FieldType::Row)
+                        .fields(vec![
+                            FieldDefinition::builder("title", FieldType::Text).build(),
+                            FieldDefinition::builder("slug", FieldType::Text).build(),
+                        ])
+                        .build(),
                 ])
-                .build()])
-            .build()];
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -542,20 +558,26 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("settings", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new(
-                        "General",
-                        vec![FieldDefinition::builder("theme", FieldType::Text).build()],
-                    ),
-                    FieldTab::new(
-                        "Advanced",
-                        vec![FieldDefinition::builder("cache_ttl", FieldType::Text).build()],
-                    ),
+        def.fields = vec![
+            FieldDefinition::builder("settings", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("layout", FieldType::Tabs)
+                        .tabs(vec![
+                            FieldTab::new(
+                                "General",
+                                vec![FieldDefinition::builder("theme", FieldType::Text).build()],
+                            ),
+                            FieldTab::new(
+                                "Advanced",
+                                vec![
+                                    FieldDefinition::builder("cache_ttl", FieldType::Text).build(),
+                                ],
+                            ),
+                        ])
+                        .build(),
                 ])
-                .build()])
-            .build()];
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -581,18 +603,24 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("outer", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
-                .tabs(vec![FieldTab::new(
-                    "Tab",
-                    vec![FieldDefinition::builder("inner", FieldType::Group)
-                        .fields(vec![
-                            FieldDefinition::builder("deep", FieldType::Text).build()
-                        ])
-                        .build()],
-                )])
-                .build()])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("outer", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("t", FieldType::Tabs)
+                        .tabs(vec![FieldTab::new(
+                            "Tab",
+                            vec![
+                                FieldDefinition::builder("inner", FieldType::Group)
+                                    .fields(vec![
+                                        FieldDefinition::builder("deep", FieldType::Text).build(),
+                                    ])
+                                    .build(),
+                            ],
+                        )])
+                        .build(),
+                ])
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();

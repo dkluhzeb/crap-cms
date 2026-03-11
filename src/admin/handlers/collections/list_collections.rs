@@ -1,8 +1,8 @@
-use axum::{extract::State, response::IntoResponse, Extension};
+use axum::{Extension, extract::State, response::IntoResponse};
 
+use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::handlers::shared::{extract_editor_locale, render_or_error};
-use crate::admin::AdminState;
 use crate::core::auth::Claims;
 
 /// GET /admin/collections — list all registered collections

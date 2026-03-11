@@ -88,11 +88,13 @@ mod tests {
             upload.enabled = true;
             upload.mime_types = vec!["image/png".to_string()];
             upload.max_file_size = Some(1000000);
-            upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
-                .width(200)
-                .height(200)
-                .fit(crate::core::upload::ImageFit::Cover)
-                .build()];
+            upload.image_sizes = vec![
+                ImageSizeBuilder::new("thumb")
+                    .width(200)
+                    .height(200)
+                    .fit(crate::core::upload::ImageFit::Cover)
+                    .build(),
+            ];
             upload.admin_thumbnail = Some("thumb".to_string());
             upload.format_options = crate::core::upload::FormatOptions {
                 webp: Some(crate::core::upload::FormatQuality::new(80, false)),
@@ -170,11 +172,13 @@ mod tests {
             def.timestamps = false;
             let mut upload = CollectionUpload::default();
             upload.enabled = true;
-            upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
-                .width(100)
-                .height(100)
-                .fit(fit)
-                .build()];
+            upload.image_sizes = vec![
+                ImageSizeBuilder::new("thumb")
+                    .width(100)
+                    .height(100)
+                    .fit(fit)
+                    .build(),
+            ];
             def.upload = Some(upload);
             let tbl = collection_config_to_lua(&lua, &def).unwrap();
             let upload: mlua::Table = tbl.get("upload").unwrap();

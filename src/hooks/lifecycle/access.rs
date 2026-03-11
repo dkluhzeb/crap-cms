@@ -4,13 +4,13 @@ use anyhow::Result;
 use mlua::{Lua, Value};
 use std::collections::HashMap;
 
-use crate::core::field::FieldDefinition;
 use crate::core::Document;
+use crate::core::field::FieldDefinition;
 use crate::db::query::{AccessResult, Filter, FilterClause, FilterOp};
 
+use super::DefaultDeny;
 use super::converters::{document_to_lua_table, lua_parse_filter_op};
 use super::execution::resolve_hook_function;
-use super::DefaultDeny;
 
 /// Check collection-level access using an already-held `&Lua` reference.
 /// Does NOT lock the VM or manage TxContext — caller must ensure those are set.

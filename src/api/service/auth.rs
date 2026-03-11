@@ -9,8 +9,8 @@ use crate::core::auth::ClaimsBuilder;
 use crate::core::email;
 use crate::db::query;
 
-use super::convert::document_to_proto;
 use super::ContentService;
+use super::convert::document_to_proto;
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/grpc_integration.rs.

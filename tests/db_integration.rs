@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::Registry;
 use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
-use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
 
 fn make_posts_def() -> CollectionDefinition {
@@ -232,10 +232,12 @@ fn filter_rejects_invalid_field_name() {
 
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid field 'nonexistent'"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid field 'nonexistent'")
+    );
 }
 
 #[test]
@@ -254,10 +256,12 @@ fn order_by_rejects_invalid_field_name() {
 
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid field 'nonexistent'"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid field 'nonexistent'")
+    );
 }
 
 #[test]

@@ -1,3 +1,4 @@
+use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::handlers::collections::forms::{
     extract_join_data_from_form, transform_select_has_many,
@@ -8,21 +9,20 @@ use crate::admin::handlers::shared::{
     html_with_toast, htmx_redirect, is_column_eligible, redirect_response, server_error,
     split_sidebar_fields, translate_validation_errors, url_decode,
 };
-use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 use crate::core::collection::CollectionDefinition;
 use crate::core::document::Document;
 use crate::core::event::{EventOperation, EventTarget};
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::upload::{
-    delete_upload_files, enqueue_conversions, inject_upload_metadata, process_upload, UploadedFile,
+    UploadedFile, delete_upload_files, enqueue_conversions, inject_upload_metadata, process_upload,
 };
 use crate::core::validate::ValidationError;
 use crate::db::query::{self, AccessResult, FilterClause, FilterOp, LocaleContext, LocaleMode};
 use crate::service;
 use anyhow::Context;
-use axum::response::IntoResponse;
 use axum::Extension;
+use axum::response::IntoResponse;
 use std::collections::HashMap;
 
 /// Get the display label for a field (admin label or auto-generated from name).
@@ -447,10 +447,12 @@ pub(super) fn render_edit_upload_error(
         &HashMap::new(),
         Some(id),
     );
-    let form_json = serde_json::json!(form_data
-        .iter()
-        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-        .collect::<serde_json::Map<String, serde_json::Value>>());
+    let form_json = serde_json::json!(
+        form_data
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            .collect::<serde_json::Map<String, serde_json::Value>>()
+    );
     apply_display_conditions(
         &mut fields,
         &def.fields,
@@ -510,7 +512,7 @@ pub(super) async fn do_update(
     ) {
         Ok(AccessResult::Denied) => {
             return forbidden(state, "You don't have permission to update this item")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}
@@ -747,10 +749,12 @@ pub(super) async fn do_update(
                     &error_map,
                     Some(id),
                 );
-                let form_json = serde_json::json!(form_data_clone
-                    .iter()
-                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                    .collect::<serde_json::Map<String, serde_json::Value>>());
+                let form_json = serde_json::json!(
+                    form_data_clone
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect::<serde_json::Map<String, serde_json::Value>>()
+                );
                 apply_display_conditions(
                     &mut fields,
                     &def.fields,
@@ -816,7 +820,7 @@ pub(super) async fn delete_action_impl(
     ) {
         Ok(AccessResult::Denied) => {
             return forbidden(state, "You don't have permission to delete this item")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}
@@ -1162,15 +1166,18 @@ mod tests {
         let arr = result.as_array().unwrap();
 
         assert_eq!(arr.len(), 3);
-        assert!(arr
-            .iter()
-            .any(|f| f["name"] == "mime_type" && f["value"] == "image/jpeg"));
-        assert!(arr
-            .iter()
-            .any(|f| f["name"] == "url" && f["value"] == "/uploads/media/test.jpg"));
-        assert!(arr
-            .iter()
-            .any(|f| f["name"] == "width" && f["value"] == "1920"));
+        assert!(
+            arr.iter()
+                .any(|f| f["name"] == "mime_type" && f["value"] == "image/jpeg")
+        );
+        assert!(
+            arr.iter()
+                .any(|f| f["name"] == "url" && f["value"] == "/uploads/media/test.jpg")
+        );
+        assert!(
+            arr.iter()
+                .any(|f| f["name"] == "width" && f["value"] == "1920")
+        );
     }
 
     #[test]

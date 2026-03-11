@@ -7,8 +7,8 @@ pub use builder::HookContextBuilder;
 use mlua::{Lua, Value};
 use std::collections::HashMap;
 
-use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::Document;
+use crate::core::field::{FieldDefinition, FieldType};
 
 use super::HookDepth;
 

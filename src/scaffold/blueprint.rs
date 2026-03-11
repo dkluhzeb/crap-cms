@@ -157,7 +157,10 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
     if !source.exists() {
         let available = list_blueprint_names()?;
         if available.is_empty() {
-            anyhow::bail!("Blueprint '{}' not found. No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>", name);
+            anyhow::bail!(
+                "Blueprint '{}' not found. No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>",
+                name
+            );
         } else {
             anyhow::bail!(
                 "Blueprint '{}' not found. Available blueprints: {}",

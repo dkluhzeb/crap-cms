@@ -75,9 +75,11 @@ mod tests {
         let lua = Lua::new();
         let result = get_tx_conn(&lua);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("only available inside hooks"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only available inside hooks")
+        );
     }
 }

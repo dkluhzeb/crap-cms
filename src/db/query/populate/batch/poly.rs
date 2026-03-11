@@ -5,11 +5,11 @@ use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_batch_cached;
 use crate::core::Document;
+use crate::db::query::LocaleContext;
 use crate::db::query::populate::{
-    document_to_json, parse_poly_ref, PopulateCache, PopulateContext, PopulateOpts,
+    PopulateCache, PopulateContext, PopulateOpts, document_to_json, parse_poly_ref,
 };
 use crate::db::query::read::find_by_ids;
-use crate::db::query::LocaleContext;
 
 /// Batch fetch and distribute for polymorphic has-many fields.
 pub(super) fn batch_poly_has_many(

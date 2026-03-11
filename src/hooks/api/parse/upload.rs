@@ -302,11 +302,13 @@ mod tests {
         let mut fields = Vec::new();
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
-            .width(200)
-            .height(200)
-            .fit(ImageFit::Cover)
-            .build()];
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(200)
+                .height(200)
+                .fit(ImageFit::Cover)
+                .build(),
+        ];
         inject_upload_fields(&mut fields, &upload);
         assert_eq!(fields.len(), 11);
         assert_eq!(fields[8].name, "thumb_url");
@@ -319,11 +321,13 @@ mod tests {
         let mut fields = Vec::new();
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![ImageSizeBuilder::new("card")
-            .width(400)
-            .height(300)
-            .fit(ImageFit::Cover)
-            .build()];
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("card")
+                .width(400)
+                .height(300)
+                .fit(ImageFit::Cover)
+                .build(),
+        ];
         upload.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: Some(FormatQuality::new(60, false)),

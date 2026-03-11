@@ -9,15 +9,15 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
-use crap_cms::admin::AdminState;
 use crap_cms::config::CrapConfig;
+use crap_cms::core::Registry;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
-use crap_cms::core::Registry;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -30,9 +30,11 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
-        .required(true)
-        .build()];
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
+    ];
     def
 }
 

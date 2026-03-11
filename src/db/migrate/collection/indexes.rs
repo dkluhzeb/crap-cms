@@ -141,9 +141,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("status", FieldType::Text)
-                .index(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("status", FieldType::Text)
+                    .index(true)
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
@@ -161,10 +163,12 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("slug", FieldType::Text)
-                .unique(true)
-                .index(true) // should be skipped because unique=true
-                .build()],
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .index(true) // should be skipped because unique=true
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
@@ -253,10 +257,12 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("title", FieldType::Text)
-                .localized(true)
-                .index(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("title", FieldType::Text)
+                    .localized(true)
+                    .index(true)
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
         sync_indexes(&conn, "posts", &def, &locale_en_de()).unwrap();
@@ -278,9 +284,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("status", FieldType::Text)
-                .index(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("status", FieldType::Text)
+                    .index(true)
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 

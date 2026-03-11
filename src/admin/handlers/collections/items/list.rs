@@ -1,13 +1,13 @@
 use anyhow::Context as _;
 use axum::{
+    Extension,
     extract::{Path, Query, State},
     response::IntoResponse,
-    Extension,
 };
 use std::collections::HashMap;
 
-use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
 use crate::core::upload;
 use crate::db::query;
@@ -17,9 +17,9 @@ use crate::admin::handlers::collections::shared::{
     build_column_options, build_filter_fields, build_filter_pills, compute_cells, resolve_columns,
 };
 use crate::admin::handlers::shared::{
-    build_list_url, check_access_or_forbid, extract_editor_locale, extract_where_params, forbidden,
-    get_user_doc, not_found, parse_where_params, render_or_error, server_error, validate_sort,
-    PaginationParams,
+    PaginationParams, build_list_url, check_access_or_forbid, extract_editor_locale,
+    extract_where_params, forbidden, get_user_doc, not_found, parse_where_params, render_or_error,
+    server_error, validate_sort,
 };
 
 /// GET /admin/collections/{slug} — list items in a collection
@@ -35,7 +35,7 @@ pub async fn list_items(
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
         None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response()
+            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response();
         }
     };
 

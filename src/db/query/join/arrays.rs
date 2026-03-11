@@ -279,18 +279,20 @@ mod tests {
         .unwrap();
 
         // Sub-fields wrapped in Tabs
-        let sub_fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new(
-                    "General",
-                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
-                ),
-                FieldTab::new(
-                    "Content",
-                    vec![FieldDefinition::builder("body", FieldType::Text).build()],
-                ),
-            ])
-            .build()];
+        let sub_fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![
+                    FieldTab::new(
+                        "General",
+                        vec![FieldDefinition::builder("title", FieldType::Text).build()],
+                    ),
+                    FieldTab::new(
+                        "Content",
+                        vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                    ),
+                ])
+                .build(),
+        ];
 
         let mut row = HashMap::new();
         row.insert("title".to_string(), "Hello".to_string());
@@ -319,12 +321,14 @@ mod tests {
         )
         .unwrap();
 
-        let sub_fields = vec![FieldDefinition::builder("row_wrap", FieldType::Row)
-            .fields(vec![
-                FieldDefinition::builder("x", FieldType::Text).build(),
-                FieldDefinition::builder("y", FieldType::Text).build(),
-            ])
-            .build()];
+        let sub_fields = vec![
+            FieldDefinition::builder("row_wrap", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("x", FieldType::Text).build(),
+                    FieldDefinition::builder("y", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
 
         let mut row = HashMap::new();
         row.insert("x".to_string(), "10".to_string());

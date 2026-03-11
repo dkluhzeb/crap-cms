@@ -135,10 +135,12 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let result = parse_job_definition("bad-job", &tbl);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing required 'handler'"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required 'handler'")
+        );
     }
 
     #[test]
@@ -149,10 +151,12 @@ mod tests {
         tbl.set("schedule", "not a cron").unwrap();
         let result = parse_job_definition("bad-job", &tbl);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("invalid cron expression"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("invalid cron expression")
+        );
     }
 
     #[test]

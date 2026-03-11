@@ -1,15 +1,15 @@
 use axum::{
+    Extension,
     extract::{Form, Path, State},
     response::IntoResponse,
-    Extension,
 };
 use std::collections::HashMap;
 
+use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::handlers::collections::forms::{
     extract_join_data_from_form, transform_select_has_many,
 };
-use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 use crate::core::event::{EventOperation, EventTarget};
 use crate::core::validate::ValidationError;
@@ -38,7 +38,7 @@ pub async fn update_action(
     match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to update this global")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}

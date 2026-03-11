@@ -1,15 +1,15 @@
 //! Static asset serving with config-dir overlay over compiled-in defaults.
 
 use axum::{
+    Router,
     body::Body,
     handler::HandlerWithoutStateExt,
-    http::{header, HeaderValue, StatusCode, Uri},
+    http::{HeaderValue, StatusCode, Uri, header},
     middleware,
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use std::path::Path as StdPath;
 use tower_http::services::ServeDir;
 

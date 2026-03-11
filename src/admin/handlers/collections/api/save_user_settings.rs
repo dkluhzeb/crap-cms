@@ -1,32 +1,37 @@
 use anyhow::Context as _;
+use anyhow::Error;
 use axum::{
+    Extension, Form,
     extract::{Path, State},
+    http::StatusCode,
     response::IntoResponse,
-    Extension,
 };
+use serde_json::{Value, from_str, json, to_string};
 use std::collections::HashMap;
+use tokio::task;
 
-use crate::admin::handlers::shared::is_column_eligible;
-use crate::admin::AdminState;
-use crate::core::auth::AuthUser;
-use crate::db::query;
+use crate::{
+    admin::{AdminState, handlers::shared::is_column_eligible},
+    core::auth::AuthUser,
+    db::query,
+};
 
 /// POST /admin/api/user-settings/{slug} — save user column preferences
 pub async fn save_user_settings(
     State(state): State<AdminState>,
     Path(collection_slug): Path<String>,
     auth_user: Option<Extension<AuthUser>>,
-    axum::Form(form): axum::Form<HashMap<String, String>>,
+    Form(form): Form<HashMap<String, String>>,
 ) -> impl IntoResponse {
     let auth_user = match auth_user {
         Some(Extension(au)) => au,
-        None => return axum::http::StatusCode::UNAUTHORIZED.into_response(),
+        None => return StatusCode::UNAUTHORIZED,
     };
 
     // Validate collection exists
     let def = match state.registry.get_collection(&collection_slug) {
         Some(d) => d.clone(),
-        None => return axum::http::StatusCode::NOT_FOUND.into_response(),
+        None => return StatusCode::NOT_FOUND,
     };
 
     // Parse columns from form (comma-separated or multiple "columns" fields)
@@ -57,24 +62,26 @@ pub async fn save_user_settings(
     // Load existing settings, merge, save
     let pool = state.pool.clone();
     let user_id = auth_user.claims.sub.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = task::spawn_blocking(move || {
         let conn = pool.get().context("Failed to get DB connection")?;
         let existing = query::auth::get_user_settings(&conn, &user_id)?;
-        let mut settings: serde_json::Value = existing
+        let mut settings: Value = existing
             .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_else(|| serde_json::json!({}));
+            .and_then(|s| from_str(s).ok())
+            .unwrap_or_else(|| json!({}));
 
-        settings[&collection_slug] = serde_json::json!({ "columns": valid_columns });
+        settings[&collection_slug] = json!({ "columns": valid_columns });
 
-        let json_str = serde_json::to_string(&settings)?;
+        let json_str = to_string(&settings)?;
+
         query::auth::set_user_settings(&conn, &user_id, &json_str)?;
-        Ok::<_, anyhow::Error>(())
+
+        Ok::<_, Error>(())
     })
     .await;
 
     match result {
-        Ok(Ok(())) => axum::http::StatusCode::NO_CONTENT.into_response(),
-        _ => axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        Ok(Ok(())) => StatusCode::NO_CONTENT,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }

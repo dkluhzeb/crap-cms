@@ -254,9 +254,11 @@ mod tests {
 
         let result = init(Some(target), &InitOptions::default());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("refusing to overwrite"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("refusing to overwrite")
+        );
     }
 }

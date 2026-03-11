@@ -174,10 +174,11 @@ fn validate_unique_fails_on_duplicate() {
         "Unique validation should fail for duplicate title"
     );
     let err = result.unwrap_err();
-    assert!(err
-        .errors
-        .iter()
-        .any(|e| e.field == "title" && e.message.contains("unique")));
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.field == "title" && e.message.contains("unique"))
+    );
 }
 
 #[test]
@@ -329,9 +330,11 @@ fn validate_blocks_required_subfield_passes_when_present() {
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
         .blocks(vec![crap_cms::core::field::BlockDefinition::new(
             "text",
-            vec![FieldDefinition::builder("title", FieldType::Text)
-                .required(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("title", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ],
         )])
         .build();
 
@@ -359,9 +362,11 @@ fn validate_blocks_skips_required_for_drafts() {
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
         .blocks(vec![crap_cms::core::field::BlockDefinition::new(
             "text",
-            vec![FieldDefinition::builder("title", FieldType::Text)
-                .required(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("title", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ],
         )])
         .build();
 
@@ -387,9 +392,11 @@ fn validate_array_required_subfield_fails_when_empty() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("items", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("label", FieldType::Text)
-            .required(true)
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("label", FieldType::Text)
+                .required(true)
+                .build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -428,12 +435,11 @@ fn validate_group_required_subfield_fails() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let group_field = FieldDefinition::builder("seo", FieldType::Group)
-        .fields(vec![FieldDefinition::builder(
-            "meta_title",
-            FieldType::Text,
-        )
-        .required(true)
-        .build()])
+        .fields(vec![
+            FieldDefinition::builder("meta_title", FieldType::Text)
+                .required(true)
+                .build(),
+        ])
         .build();
 
     let fields = vec![group_field];
@@ -460,12 +466,11 @@ fn validate_group_required_subfield_passes() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let group_field = FieldDefinition::builder("seo", FieldType::Group)
-        .fields(vec![FieldDefinition::builder(
-            "meta_title",
-            FieldType::Text,
-        )
-        .required(true)
-        .build()])
+        .fields(vec![
+            FieldDefinition::builder("meta_title", FieldType::Text)
+                .required(true)
+                .build(),
+        ])
         .build();
 
     let fields = vec![group_field];
@@ -485,12 +490,11 @@ fn validate_group_skips_for_drafts() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let group_field = FieldDefinition::builder("seo", FieldType::Group)
-        .fields(vec![FieldDefinition::builder(
-            "meta_title",
-            FieldType::Text,
-        )
-        .required(true)
-        .build()])
+        .fields(vec![
+            FieldDefinition::builder("meta_title", FieldType::Text)
+                .required(true)
+                .build(),
+        ])
         .build();
 
     let fields = vec![group_field];
@@ -514,7 +518,7 @@ fn validate_min_rows_fails() {
     let array_field = FieldDefinition::builder("items", FieldType::Array)
         .min_rows(2)
         .fields(vec![
-            FieldDefinition::builder("label", FieldType::Text).build()
+            FieldDefinition::builder("label", FieldType::Text).build(),
         ])
         .build();
 
@@ -531,10 +535,11 @@ fn validate_min_rows_fails() {
     let result = runner.validate_fields(&fields, &data, &conn, "test_table", None, false, None);
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err
-        .errors
-        .iter()
-        .any(|e| e.field == "items" && e.message.contains("at least 2")));
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.field == "items" && e.message.contains("at least 2"))
+    );
 }
 
 #[test]
@@ -544,7 +549,7 @@ fn validate_max_rows_fails() {
     let array_field = FieldDefinition::builder("items", FieldType::Array)
         .max_rows(1)
         .fields(vec![
-            FieldDefinition::builder("label", FieldType::Text).build()
+            FieldDefinition::builder("label", FieldType::Text).build(),
         ])
         .build();
 
@@ -562,10 +567,11 @@ fn validate_max_rows_fails() {
     let result = runner.validate_fields(&fields, &data, &conn, "test_table", None, false, None);
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err
-        .errors
-        .iter()
-        .any(|e| e.field == "items" && e.message.contains("at most 1")));
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.field == "items" && e.message.contains("at most 1"))
+    );
 }
 
 #[test]
@@ -576,7 +582,7 @@ fn validate_min_max_rows_passes_when_in_range() {
         .min_rows(1)
         .max_rows(3)
         .fields(vec![
-            FieldDefinition::builder("label", FieldType::Text).build()
+            FieldDefinition::builder("label", FieldType::Text).build(),
         ])
         .build();
 
@@ -602,7 +608,7 @@ fn validate_min_rows_skips_for_drafts() {
     let array_field = FieldDefinition::builder("items", FieldType::Array)
         .min_rows(5)
         .fields(vec![
-            FieldDefinition::builder("label", FieldType::Text).build()
+            FieldDefinition::builder("label", FieldType::Text).build(),
         ])
         .build();
 
@@ -629,54 +635,68 @@ fn validate_date_field_valid_formats() {
     // YYYY-MM-DD
     let mut data = HashMap::new();
     data.insert("due_date".to_string(), serde_json::json!("2024-01-15"));
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 
     // YYYY-MM-DDTHH:MM
     data.insert(
         "due_date".to_string(),
         serde_json::json!("2024-01-15T14:30"),
     );
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 
     // YYYY-MM-DDTHH:MM:SS
     data.insert(
         "due_date".to_string(),
         serde_json::json!("2024-01-15T14:30:00"),
     );
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 
     // Full ISO 8601
     data.insert(
         "due_date".to_string(),
         serde_json::json!("2024-01-15T14:30:00+00:00"),
     );
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 
     // Time only: HH:MM
     data.insert("due_date".to_string(), serde_json::json!("14:30"));
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 
     // Time only: HH:MM:SS
     data.insert("due_date".to_string(), serde_json::json!("14:30:00"));
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 
     // Month only: YYYY-MM
     data.insert("due_date".to_string(), serde_json::json!("2024-01"));
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 }
 
 #[test]
@@ -693,10 +713,11 @@ fn validate_date_field_invalid_format() {
     let result = runner.validate_fields(&fields, &data, &conn, "t", None, false, None);
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err
-        .errors
-        .iter()
-        .any(|e| e.field == "due_date" && e.message.contains("valid date")));
+    assert!(
+        err.errors
+            .iter()
+            .any(|e| e.field == "due_date" && e.message.contains("valid date"))
+    );
 }
 
 #[test]
@@ -711,15 +732,19 @@ fn validate_date_empty_is_ok() {
     // Empty string should not trigger date format validation (is_empty = true)
     let mut data = HashMap::new();
     data.insert("due_date".to_string(), serde_json::json!(""));
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 
     // Null should not trigger date format validation
     data.insert("due_date".to_string(), serde_json::Value::Null);
-    assert!(runner
-        .validate_fields(&fields, &data, &conn, "t", None, false, None)
-        .is_ok());
+    assert!(
+        runner
+            .validate_fields(&fields, &data, &conn, "t", None, false, None)
+            .is_ok()
+    );
 }
 
 // ── 6G. Validate: Sub-field Date and Validate in Array Rows ──────────────────
@@ -729,11 +754,9 @@ fn validate_date_subfield_in_array_rows() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("events", FieldType::Array)
-        .fields(vec![FieldDefinition::builder(
-            "event_date",
-            FieldType::Date,
-        )
-        .build()])
+        .fields(vec![
+            FieldDefinition::builder("event_date", FieldType::Date).build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -764,9 +787,11 @@ fn validate_custom_function_in_array_subfield() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("scores", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("value", FieldType::Number)
-            .validate("hooks.validators.positive_number")
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("value", FieldType::Number)
+                .validate("hooks.validators.positive_number")
+                .build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -797,11 +822,15 @@ fn validate_nested_array_in_array_rows() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let nested_array = FieldDefinition::builder("outer", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("inner", FieldType::Array)
-            .fields(vec![FieldDefinition::builder("value", FieldType::Text)
-                .required(true)
-                .build()])
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("inner", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("value", FieldType::Text)
+                        .required(true)
+                        .build(),
+                ])
+                .build(),
+        ])
         .build();
 
     let fields = vec![nested_array];
@@ -836,14 +865,18 @@ fn validate_nested_blocks_in_array_rows() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let outer = FieldDefinition::builder("sections", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("content", FieldType::Blocks)
-            .blocks(vec![BlockDefinition::new(
-                "text",
-                vec![FieldDefinition::builder("body", FieldType::Text)
-                    .required(true)
-                    .build()],
-            )])
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new(
+                    "text",
+                    vec![
+                        FieldDefinition::builder("body", FieldType::Text)
+                            .required(true)
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ])
         .build();
 
     let fields = vec![outer];
@@ -879,11 +912,15 @@ fn validate_group_in_array_row_required_subfield() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("items", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("author", FieldType::Text)
-                .required(true)
-                .build()])
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("author", FieldType::Text)
+                        .required(true)
+                        .build(),
+                ])
+                .build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -914,13 +951,13 @@ fn validate_group_date_subfield_in_array_row() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("items", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder(
-                "published_at",
-                FieldType::Date,
-            )
-            .build()])
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("published_at", FieldType::Date).build(),
+                ])
+                .build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -951,11 +988,15 @@ fn validate_group_custom_validate_in_array_row() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("items", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("score", FieldType::Number)
-                .validate("hooks.validators.positive_number")
-                .build()])
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("score", FieldType::Number)
+                        .validate("hooks.validators.positive_number")
+                        .build(),
+                ])
+                .build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -1012,9 +1053,11 @@ fn validate_required_field_on_update_skips_when_absent() {
 fn validate_required_field_checkbox_always_passes() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let fields = vec![FieldDefinition::builder("active", FieldType::Checkbox)
-        .required(true)
-        .build()];
+    let fields = vec![
+        FieldDefinition::builder("active", FieldType::Checkbox)
+            .required(true)
+            .build(),
+    ];
 
     // Checkbox with required=true should pass even with no data
     let data = HashMap::new();
@@ -1033,9 +1076,11 @@ fn custom_validate_returns_false_generic_message() {
     let (_tmp, pool, _registry, runner) = setup();
 
     // Create a field with a validate function that returns false (not a string)
-    let fields = vec![FieldDefinition::builder("title", FieldType::Text)
-        .validate("hooks.access.deny_all") // returns false
-        .build()];
+    let fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .validate("hooks.access.deny_all") // returns false
+            .build(),
+    ];
 
     let mut data = HashMap::new();
     data.insert("title".to_string(), serde_json::json!("any value"));
@@ -1059,10 +1104,12 @@ fn custom_validate_returns_false_generic_message() {
 fn validate_required_array_must_have_items() {
     let (_tmp, pool, _registry, runner) = setup();
 
-    let fields = vec![FieldDefinition::builder("tags", FieldType::Array)
-        .required(true)
-        .fields(vec![make_field("label", FieldType::Text)])
-        .build()];
+    let fields = vec![
+        FieldDefinition::builder("tags", FieldType::Array)
+            .required(true)
+            .fields(vec![make_field("label", FieldType::Text)])
+            .build(),
+    ];
 
     let conn = pool.get().expect("DB connection");
 
@@ -1087,9 +1134,11 @@ fn validate_blocks_unknown_block_type_skips() {
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
         .blocks(vec![BlockDefinition::new(
             "text",
-            vec![FieldDefinition::builder("body", FieldType::Text)
-                .required(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("body", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ],
         )])
         .build();
 
@@ -1118,12 +1167,11 @@ fn validate_checkbox_subfield_in_array_never_fails_required() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("items", FieldType::Array)
-        .fields(vec![FieldDefinition::builder(
-            "active",
-            FieldType::Checkbox,
-        )
-        .required(true)
-        .build()])
+        .fields(vec![
+            FieldDefinition::builder("active", FieldType::Checkbox)
+                .required(true)
+                .build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -1146,14 +1194,15 @@ fn validate_checkbox_group_subfield_in_array_never_fails_required() {
     let (_tmp, pool, _registry, runner) = setup();
 
     let array_field = FieldDefinition::builder("items", FieldType::Array)
-        .fields(vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder(
-                "featured",
-                FieldType::Checkbox,
-            )
-            .required(true)
-            .build()])
-            .build()])
+        .fields(vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("featured", FieldType::Checkbox)
+                        .required(true)
+                        .build(),
+                ])
+                .build(),
+        ])
         .build();
 
     let fields = vec![array_field];
@@ -1177,9 +1226,11 @@ fn validate_blocks_non_object_row_skips() {
     let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
         .blocks(vec![BlockDefinition::new(
             "text",
-            vec![FieldDefinition::builder("body", FieldType::Text)
-                .required(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("body", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ],
         )])
         .build();
 

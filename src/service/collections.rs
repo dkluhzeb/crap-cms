@@ -6,12 +6,12 @@ use std::collections::HashMap;
 
 use anyhow::{Context as _, Result};
 
-use crate::core::document::Document;
 use crate::core::CollectionDefinition;
+use crate::core::document::Document;
 use crate::db::DbPool;
 use crate::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
 
-use super::{build_before_ctx, build_hook_data, run_after_change_hooks, WriteInput, WriteResult};
+use super::{WriteInput, WriteResult, build_before_ctx, build_hook_data, run_after_change_hooks};
 
 /// Create a document within a single transaction: before-hooks → insert → after-hooks → commit.
 /// When `draft` is true and the collection has drafts enabled, the document is created with

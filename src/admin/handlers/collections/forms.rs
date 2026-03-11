@@ -4,7 +4,7 @@ use axum::extract::{FromRequest, Multipart};
 use std::collections::HashMap;
 
 use crate::admin::AdminState;
-use crate::core::field::{flatten_array_sub_fields, FieldDefinition, FieldType};
+use crate::core::field::{FieldDefinition, FieldType, flatten_array_sub_fields};
 use crate::core::upload::{UploadedFile, UploadedFileBuilder};
 
 /// Extract join table data from form submission for has-many relationships and array fields.
@@ -655,12 +655,14 @@ mod tests {
         form.insert("items[1][title]".to_string(), "Second".to_string());
         form.insert("items[1][body]".to_string(), "Content".to_string());
 
-        let sub_defs = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
-                FieldTab::new("Content", vec![make_field("body", FieldType::Text)]),
-            ])
-            .build()];
+        let sub_defs = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![
+                    FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
+                    FieldTab::new("Content", vec![make_field("body", FieldType::Text)]),
+                ])
+                .build(),
+        ];
 
         let result = parse_composite_form_data(&form, "items", &sub_defs);
         assert_eq!(result.len(), 2);
@@ -676,12 +678,14 @@ mod tests {
         form.insert("items[0][x]".to_string(), "10".to_string());
         form.insert("items[0][y]".to_string(), "20".to_string());
 
-        let sub_defs = vec![FieldDefinition::builder("row_wrap", FieldType::Row)
-            .fields(vec![
-                make_field("x", FieldType::Text),
-                make_field("y", FieldType::Text),
-            ])
-            .build()];
+        let sub_defs = vec![
+            FieldDefinition::builder("row_wrap", FieldType::Row)
+                .fields(vec![
+                    make_field("x", FieldType::Text),
+                    make_field("y", FieldType::Text),
+                ])
+                .build(),
+        ];
 
         let result = parse_composite_form_data(&form, "items", &sub_defs);
         assert_eq!(result.len(), 1);

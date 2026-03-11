@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
-use crap_cms::db::{migrate, ops, pool, query, DbPool};
+use crap_cms::db::{DbPool, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 use crap_cms::typegen;
@@ -373,9 +373,11 @@ return M
         migrate::record_migration(&tx, filename).unwrap();
         tx.commit().unwrap();
     }
-    assert!(migrate::get_applied_migrations(&db_pool)
-        .unwrap()
-        .contains(filename));
+    assert!(
+        migrate::get_applied_migrations(&db_pool)
+            .unwrap()
+            .contains(filename)
+    );
 
     // Rollback
     {
@@ -387,9 +389,11 @@ return M
         migrate::remove_migration(&tx, filename).unwrap();
         tx.commit().unwrap();
     }
-    assert!(!migrate::get_applied_migrations(&db_pool)
-        .unwrap()
-        .contains(filename));
+    assert!(
+        !migrate::get_applied_migrations(&db_pool)
+            .unwrap()
+            .contains(filename)
+    );
 }
 
 #[test]

@@ -212,33 +212,23 @@ fn pluralize(s: &str) -> String {
 /// Return type-specific Lua stub lines for complex field types.
 pub(crate) fn type_specific_stub(field_type: &str) -> Option<&'static str> {
     match field_type {
-        "select" | "radio" => Some(
-            "            options = { { label = \"Option 1\", value = \"option_1\" } },\n"
-        ),
-        "relationship" => Some(
-            "            relationship = { collection = \"TODO\" },\n"
-        ),
-        "upload" => Some(
-            "            relationship = { collection = \"media\" },\n"
-        ),
-        "array" => Some(
-            "            fields = { crap.fields.text({ name = \"item\" }) },\n"
-        ),
+        "select" | "radio" => {
+            Some("            options = { { label = \"Option 1\", value = \"option_1\" } },\n")
+        }
+        "relationship" => Some("            relationship = { collection = \"TODO\" },\n"),
+        "upload" => Some("            relationship = { collection = \"media\" },\n"),
+        "array" => Some("            fields = { crap.fields.text({ name = \"item\" }) },\n"),
         "blocks" => Some(
-            "            blocks = { { type = \"block_type\", label = \"Block\", fields = { crap.fields.text({ name = \"content\" }) } } },\n"
+            "            blocks = { { type = \"block_type\", label = \"Block\", fields = { crap.fields.text({ name = \"content\" }) } } },\n",
         ),
-        "group" | "collapsible" | "row" => Some(
-            "            fields = { crap.fields.text({ name = \"item\" }) },\n"
-        ),
+        "group" | "collapsible" | "row" => {
+            Some("            fields = { crap.fields.text({ name = \"item\" }) },\n")
+        }
         "tabs" => Some(
-            "            tabs = { { label = \"Tab 1\", fields = { crap.fields.text({ name = \"item\" }) } } },\n"
+            "            tabs = { { label = \"Tab 1\", fields = { crap.fields.text({ name = \"item\" }) } } },\n",
         ),
-        "join" => Some(
-            "            collection = \"TODO\",\n            on = \"TODO\",\n"
-        ),
-        "code" => Some(
-            "            admin = { language = \"javascript\" },\n"
-        ),
+        "join" => Some("            collection = \"TODO\",\n            on = \"TODO\",\n"),
+        "code" => Some("            admin = { language = \"javascript\" },\n"),
         _ => None,
     }
 }

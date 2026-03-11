@@ -3,8 +3,8 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
-use super::query::{self, Filter, FilterClause, FilterOp, FindQuery, LocaleContext};
 use super::DbPool;
+use super::query::{self, Filter, FilterClause, FilterOp, FindQuery, LocaleContext};
 use crate::core::collection::GlobalDefinition;
 use crate::core::document::DocumentBuilder;
 use crate::core::{CollectionDefinition, Document};

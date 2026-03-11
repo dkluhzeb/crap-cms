@@ -1,14 +1,14 @@
 use axum::{
+    Extension,
     extract::{Form, FromRequest, Path, State},
     response::IntoResponse,
-    Extension,
 };
 use std::collections::HashMap;
 
+use crate::admin::AdminState;
 use crate::admin::handlers::collections::forms::parse_multipart_form;
 use crate::admin::handlers::collections::shared::do_update;
 use crate::admin::handlers::shared::redirect_response;
-use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 
 /// POST handler for update/delete (HTML forms use _method override).

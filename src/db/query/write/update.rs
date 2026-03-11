@@ -5,7 +5,7 @@ use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
 use super::super::read::find_by_id_raw;
-use super::super::{coerce_value, locale_write_column, LocaleContext};
+use super::super::{LocaleContext, coerce_value, locale_write_column};
 use crate::core::field::FieldType;
 use crate::core::{CollectionDefinition, Document};
 
@@ -242,12 +242,14 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("color", FieldType::Text).build(),
-                FieldDefinition::builder("size", FieldType::Text).build(),
-            ])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("color", FieldType::Text).build(),
+                    FieldDefinition::builder("size", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -318,23 +320,27 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new(
-                    "Social",
-                    vec![FieldDefinition::builder("social", FieldType::Group)
-                        .fields(vec![
-                            FieldDefinition::builder("github", FieldType::Text).build(),
-                            FieldDefinition::builder("twitter", FieldType::Text).build(),
-                        ])
-                        .build()],
-                ),
-                FieldTab::new(
-                    "Content",
-                    vec![FieldDefinition::builder("body", FieldType::Text).build()],
-                ),
-            ])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![
+                    FieldTab::new(
+                        "Social",
+                        vec![
+                            FieldDefinition::builder("social", FieldType::Group)
+                                .fields(vec![
+                                    FieldDefinition::builder("github", FieldType::Text).build(),
+                                    FieldDefinition::builder("twitter", FieldType::Text).build(),
+                                ])
+                                .build(),
+                        ],
+                    ),
+                    FieldTab::new(
+                        "Content",
+                        vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                    ),
+                ])
+                .build(),
+        ];
         let def = def;
 
         // Only update twitter, leave github and body untouched
@@ -372,14 +378,18 @@ mod tests {
         .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+        def.fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
                 .fields(vec![
-                    FieldDefinition::builder("title", FieldType::Text).build(),
-                    FieldDefinition::builder("slug", FieldType::Text).build(),
+                    FieldDefinition::builder("r", FieldType::Row)
+                        .fields(vec![
+                            FieldDefinition::builder("title", FieldType::Text).build(),
+                            FieldDefinition::builder("slug", FieldType::Text).build(),
+                        ])
+                        .build(),
                 ])
-                .build()])
-            .build()];
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();

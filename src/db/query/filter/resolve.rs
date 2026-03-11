@@ -4,9 +4,9 @@
 //! - Group fields (`seo.meta_title`) → flat columns (`seo__meta_title`)
 //! - Array/Blocks/Relationship sub-fields → EXISTS subquery descriptors
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-use super::super::{is_valid_identifier, FilterClause};
+use super::super::{FilterClause, is_valid_identifier};
 use crate::core::field::{BlockDefinition, FieldDefinition, FieldType};
 
 // ── Dot notation normalization ───────────────────────────────────────────
@@ -159,7 +159,8 @@ fn resolve_array_filter(
             _ => {
                 bail!(
                     "Nested dot path '{}' in array '{}': only Group sub-fields support nested filtering",
-                    rest, root
+                    rest,
+                    root
                 );
             }
         }
@@ -623,17 +624,21 @@ mod tests {
         let fields = vec![make_has_many_field("tags", "tags")];
         let result = resolve_filter("tags.name", "posts", &fields);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("only be filtered by '.id'"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("only be filtered by '.id'")
+        );
     }
 
     #[test]
     fn resolve_filter_has_one_relationship_rejects_dot() {
-        let fields = vec![FieldDefinition::builder("author", FieldType::Relationship)
-            .relationship(RelationshipConfig::new("users", false))
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("users", false))
+                .build(),
+        ];
         let result = resolve_filter("author.name", "posts", &fields);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Has-one"));
@@ -644,10 +649,12 @@ mod tests {
         let fields = vec![make_field("title", FieldType::Text, false)];
         let result = resolve_filter("title.sub", "posts", &fields);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("does not support sub-field filtering"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("does not support sub-field filtering")
+        );
     }
 
     #[test]
@@ -655,10 +662,12 @@ mod tests {
         let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship).build()];
         let result = resolve_filter("tags.id", "posts", &fields);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing relationship config"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing relationship config")
+        );
     }
 
     #[test]
@@ -838,10 +847,12 @@ mod tests {
         let block_defs = vec![make_block_def("outer", vec![nested])];
         let result = walk_block_fields(&["nested"], &block_defs, "table");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must end on a scalar"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must end on a scalar")
+        );
     }
 
     #[test]
@@ -852,10 +863,12 @@ mod tests {
         )];
         let result = walk_block_fields(&["_block_type", "extra"], &block_defs, "table");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("_block_type must be the last segment"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("_block_type must be the last segment")
+        );
     }
 
     #[test]

@@ -12,8 +12,8 @@ mod static_tools;
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{bail, Result};
-use serde_json::{json, Value};
+use anyhow::{Result, bail};
+use serde_json::{Value, json};
 
 use crate::config::McpConfig;
 use crate::core::Registry;
@@ -21,7 +21,7 @@ use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 use super::protocol::ToolDefinition;
-use super::schema::{collection_input_schema, global_input_schema, CrudOp};
+use super::schema::{CrudOp, collection_input_schema, global_input_schema};
 
 use crud_tools::*;
 use static_tools::*;

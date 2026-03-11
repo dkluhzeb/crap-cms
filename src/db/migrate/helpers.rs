@@ -190,7 +190,11 @@ pub(super) fn sync_join_tables(
                                         _locale TEXT NOT NULL DEFAULT '{}', \
                                         PRIMARY KEY (parent_id, related_id{}, _locale)\
                                     )",
-                                    table_name, collection_slug, poly_col, sanitize_locale(&locale_config.default_locale), poly_pk
+                                    table_name,
+                                    collection_slug,
+                                    poly_col,
+                                    sanitize_locale(&locale_config.default_locale),
+                                    poly_pk
                                 )
                             } else {
                                 format!(
@@ -449,9 +453,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("tags", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("tags", true))
-                .build()],
+            vec![
+                FieldDefinition::builder("tags", FieldType::Relationship)
+                    .relationship(RelationshipConfig::new("tags", true))
+                    .build(),
+            ],
         );
         // Need parent table first for FK
         super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
@@ -471,9 +477,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("items", FieldType::Array)
-                .fields(vec![text_field("name")])
-                .build()],
+            vec![
+                FieldDefinition::builder("items", FieldType::Array)
+                    .fields(vec![text_field("name")])
+                    .build(),
+            ],
         );
         super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
             .unwrap();
@@ -596,10 +604,12 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("tags", FieldType::Relationship)
-                .localized(true)
-                .relationship(RelationshipConfig::new("tags", true))
-                .build()],
+            vec![
+                FieldDefinition::builder("tags", FieldType::Relationship)
+                    .localized(true)
+                    .relationship(RelationshipConfig::new("tags", true))
+                    .build(),
+            ],
         );
         super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
             .unwrap();
@@ -621,10 +631,12 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("items", FieldType::Array)
-                .localized(true)
-                .fields(vec![text_field("label")])
-                .build()],
+            vec![
+                FieldDefinition::builder("items", FieldType::Array)
+                    .localized(true)
+                    .fields(vec![text_field("label")])
+                    .build(),
+            ],
         );
         super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
             .unwrap();
@@ -643,9 +655,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("content", FieldType::Blocks)
-                .localized(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("content", FieldType::Blocks)
+                    .localized(true)
+                    .build(),
+            ],
         );
         super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
             .unwrap();
@@ -694,10 +708,12 @@ mod tests {
 
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("tags", FieldType::Relationship)
-                .localized(true)
-                .relationship(RelationshipConfig::new("tags", true))
-                .build()],
+            vec![
+                FieldDefinition::builder("tags", FieldType::Relationship)
+                    .localized(true)
+                    .relationship(RelationshipConfig::new("tags", true))
+                    .build(),
+            ],
         );
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
@@ -717,9 +733,11 @@ mod tests {
 
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("items", FieldType::Array)
-                .fields(vec![text_field("label"), text_field("value")])
-                .build()],
+            vec![
+                FieldDefinition::builder("items", FieldType::Array)
+                    .fields(vec![text_field("label"), text_field("value")])
+                    .build(),
+            ],
         );
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
@@ -745,9 +763,11 @@ mod tests {
 
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("content", FieldType::Blocks)
-                .localized(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("content", FieldType::Blocks)
+                    .localized(true)
+                    .build(),
+            ],
         );
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
@@ -767,10 +787,12 @@ mod tests {
 
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("items", FieldType::Array)
-                .localized(true)
-                .fields(vec![text_field("label")])
-                .build()],
+            vec![
+                FieldDefinition::builder("items", FieldType::Array)
+                    .localized(true)
+                    .fields(vec![text_field("label")])
+                    .build(),
+            ],
         );
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
@@ -782,11 +804,15 @@ mod tests {
 
     #[test]
     fn column_specs_group_containing_row() {
-        let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
-                .fields(vec![text_field("title"), text_field("slug")])
-                .build()])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("r", FieldType::Row)
+                        .fields(vec![text_field("title"), text_field("slug")])
+                        .build(),
+                ])
+                .build(),
+        ];
         let specs = collect_column_specs(&fields, &no_locale());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
         assert!(names.contains(&"meta__title"), "Group→Row: meta__title");
@@ -795,14 +821,18 @@ mod tests {
 
     #[test]
     fn column_specs_group_containing_tabs() {
-        let fields = vec![FieldDefinition::builder("settings", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("General", vec![text_field("theme")]),
-                    FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
+        let fields = vec![
+            FieldDefinition::builder("settings", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("t", FieldType::Tabs)
+                        .tabs(vec![
+                            FieldTab::new("General", vec![text_field("theme")]),
+                            FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
+                        ])
+                        .build(),
                 ])
-                .build()])
-            .build()];
+                .build(),
+        ];
         let specs = collect_column_specs(&fields, &no_locale());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
         assert!(
@@ -817,16 +847,22 @@ mod tests {
 
     #[test]
     fn column_specs_group_tabs_group_three_levels() {
-        let fields = vec![FieldDefinition::builder("outer", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
-                .tabs(vec![FieldTab::new(
-                    "Tab",
-                    vec![FieldDefinition::builder("inner", FieldType::Group)
-                        .fields(vec![text_field("deep")])
-                        .build()],
-                )])
-                .build()])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("outer", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("t", FieldType::Tabs)
+                        .tabs(vec![FieldTab::new(
+                            "Tab",
+                            vec![
+                                FieldDefinition::builder("inner", FieldType::Group)
+                                    .fields(vec![text_field("deep")])
+                                    .build(),
+                            ],
+                        )])
+                        .build(),
+                ])
+                .build(),
+        ];
         let specs = collect_column_specs(&fields, &no_locale());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
         assert!(
@@ -837,12 +873,16 @@ mod tests {
 
     #[test]
     fn column_specs_group_containing_localized_tabs() {
-        let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .localized(true)
-            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
-                .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
-                .build()])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .localized(true)
+                .fields(vec![
+                    FieldDefinition::builder("t", FieldType::Tabs)
+                        .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
+                        .build(),
+                ])
+                .build(),
+        ];
         let specs = collect_column_specs(&fields, &locale_en_de());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
         assert!(
@@ -895,9 +935,11 @@ mod tests {
         let conn = pool.get().unwrap();
 
         let array_field = FieldDefinition::builder("items", FieldType::Array)
-            .fields(vec![FieldDefinition::builder("row_wrap", FieldType::Row)
-                .fields(vec![text_field("x"), text_field("y")])
-                .build()])
+            .fields(vec![
+                FieldDefinition::builder("row_wrap", FieldType::Row)
+                    .fields(vec![text_field("x"), text_field("y")])
+                    .build(),
+            ])
             .build();
         let def = simple_collection("posts", vec![array_field]);
         super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())

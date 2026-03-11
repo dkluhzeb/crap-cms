@@ -2,10 +2,13 @@ use axum::{
     extract::{Query, State},
     response::Html,
 };
+use serde_json::json;
 
-use super::{all_disable_local, get_auth_collections, show_forgot_password, LoginPageQuery};
-use crate::admin::context::{ContextBuilder, PageType};
-use crate::admin::AdminState;
+use super::{LoginPageQuery, all_disable_local, get_auth_collections, show_forgot_password};
+use crate::admin::{
+    AdminState,
+    context::{ContextBuilder, PageType},
+};
 
 /// GET /admin/login — render the login page.
 pub async fn login_page(
@@ -18,17 +21,11 @@ pub async fn login_page(
 
     let data = ContextBuilder::auth(&state)
         .page(PageType::AuthLogin, "Login")
-        .set("collections", serde_json::json!(auth_collections))
-        .set(
-            "show_collection_picker",
-            serde_json::json!(auth_collections.len() > 1),
-        )
-        .set("disable_local", serde_json::json!(all_disable_local))
-        .set(
-            "show_forgot_password",
-            serde_json::json!(show_forgot_password),
-        )
-        .set("success", serde_json::json!(query.success.as_deref()))
+        .set("collections", json!(auth_collections))
+        .set("show_collection_picker", json!(auth_collections.len() > 1))
+        .set("disable_local", json!(all_disable_local))
+        .set("show_forgot_password", json!(show_forgot_password))
+        .set("success", json!(query.success.as_deref()))
         .build();
 
     let data = state.hook_runner.run_before_render(data);

@@ -8,8 +8,8 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use super::{PopulateCache, PopulateContext, PopulateOpts};
-use crate::core::field::FieldType;
 use crate::core::Document;
+use crate::core::field::FieldType;
 
 /// Recursively populate relationship fields with full document objects.
 /// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.

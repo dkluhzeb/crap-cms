@@ -3,13 +3,13 @@
 
 use std::path::Path;
 
-use anyhow::{bail, Context as _, Result};
-use serde_json::{json, Value};
+use anyhow::{Context as _, Result, bail};
+use serde_json::{Value, json};
 
 use crate::config::McpConfig;
 use crate::core::Registry;
 
-use super::super::schema::{collection_input_schema, global_input_schema, CrudOp};
+use super::super::schema::{CrudOp, collection_input_schema, global_input_schema};
 use super::should_include;
 
 pub(super) fn exec_list_collections(registry: &Registry, mcp_config: &McpConfig) -> Result<String> {

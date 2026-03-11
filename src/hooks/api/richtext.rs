@@ -3,10 +3,10 @@
 use anyhow::Result;
 use mlua::{Function, Lua, Table, Value};
 
+use crate::core::SharedRegistry;
 use crate::core::field::LocalizedString;
 use crate::core::field::SelectOption;
 use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
-use crate::core::SharedRegistry;
 
 /// Register the `crap.richtext` namespace on the `crap` global table.
 ///

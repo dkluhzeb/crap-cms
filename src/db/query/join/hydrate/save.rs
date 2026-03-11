@@ -307,9 +307,11 @@ mod tests {
 
         let mut refs_rel = RelationshipConfig::new("articles", true);
         refs_rel.polymorphic = vec!["articles".to_string(), "pages".to_string()];
-        let fields = vec![FieldDefinition::builder("refs", FieldType::Relationship)
-            .relationship(refs_rel)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("refs", FieldType::Relationship)
+                .relationship(refs_rel)
+                .build(),
+        ];
 
         let mut data = HashMap::new();
         data.insert(

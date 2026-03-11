@@ -1,13 +1,13 @@
 use anyhow::Context as _;
 use axum::{
+    Extension,
     extract::{Path, State},
     response::IntoResponse,
-    Extension,
 };
 use std::collections::HashMap;
 
-use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
 use crate::core::upload;
 use crate::db::query::AccessResult;
@@ -32,7 +32,7 @@ pub async fn edit_form(
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
         None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response()
+            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response();
         }
     };
 
@@ -97,7 +97,7 @@ pub async fn edit_form(
     let mut document = match read_result {
         Ok(Ok(Some(doc))) => doc,
         Ok(Ok(None)) => {
-            return not_found(&state, &format!("Document '{}' not found", id)).into_response()
+            return not_found(&state, &format!("Document '{}' not found", id)).into_response();
         }
         Ok(Err(e)) => {
             tracing::error!("Document edit query error: {}", e);

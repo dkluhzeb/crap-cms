@@ -1,7 +1,7 @@
 //! Build field context objects for template rendering (no DB access).
 
 use super::super::shared::auto_label_from_name;
-use super::{count_errors_in_fields, safe_template_id, MAX_FIELD_DEPTH};
+use super::{MAX_FIELD_DEPTH, count_errors_in_fields, safe_template_id};
 use crate::core::field::FieldType;
 use std::collections::HashMap;
 

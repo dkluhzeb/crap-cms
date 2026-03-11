@@ -10,8 +10,8 @@ use super::super::{LocaleContext, LocaleMode};
 use super::arrays::find_array_rows;
 use super::blocks::find_block_rows;
 use super::relationships::{find_polymorphic_related, find_related_ids};
-use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::Document;
+use crate::core::field::{FieldDefinition, FieldType};
 
 /// Resolve the effective locale string for a join table operation.
 /// Returns Some("en") when the field is localized and locale is enabled,
@@ -434,7 +434,7 @@ mod tests {
 
         let inner_group = FieldDefinition::builder("social", FieldType::Group)
             .fields(vec![
-                FieldDefinition::builder("og_title", FieldType::Text).build()
+                FieldDefinition::builder("og_title", FieldType::Text).build(),
             ])
             .build();
         let outer_group = FieldDefinition::builder("seo", FieldType::Group)
@@ -569,9 +569,11 @@ mod tests {
 
         let mut refs_rel = RelationshipConfig::new("articles", true);
         refs_rel.polymorphic = vec!["articles".to_string(), "pages".to_string()];
-        let fields = vec![FieldDefinition::builder("refs", FieldType::Relationship)
-            .relationship(refs_rel)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("refs", FieldType::Relationship)
+                .relationship(refs_rel)
+                .build(),
+        ];
 
         let mut doc = Document::new("p1".to_string());
         hydrate_document(&conn, "posts", &fields, &mut doc, None, None).unwrap();
@@ -793,7 +795,7 @@ mod tests {
         let items_field = FieldDefinition::builder("items", FieldType::Array)
             .localized(true)
             .fields(vec![
-                FieldDefinition::builder("label", FieldType::Text).build()
+                FieldDefinition::builder("label", FieldType::Text).build(),
             ])
             .build();
 

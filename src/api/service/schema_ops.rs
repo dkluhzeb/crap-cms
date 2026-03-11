@@ -5,18 +5,18 @@
 use anyhow::Context as _;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::pin::Pin;
-use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
+use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
 use tonic::{Request, Response, Status};
 
 use crate::api::content;
 use crate::db::query::{AccessResult, LocaleContext};
 use crate::db::{ops, query};
 
+use super::ContentService;
 use super::convert::{
     document_to_proto, field_def_to_proto, json_to_prost_value, prost_struct_to_hashmap,
     prost_struct_to_json_map,
 };
-use super::ContentService;
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.

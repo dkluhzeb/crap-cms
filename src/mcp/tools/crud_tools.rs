@@ -4,12 +4,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use crate::core::document::Document;
 use crate::core::Registry;
-use crate::db::query::{self, FindQuery};
+use crate::core::document::Document;
 use crate::db::DbPool;
+use crate::db::query::{self, FindQuery};
 use crate::hooks::lifecycle::HookRunner;
 
 /// Parse JSON `where` object into filter clauses.

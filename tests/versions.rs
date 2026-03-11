@@ -7,17 +7,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use prost_types::{value::Kind, Struct, Value};
+use prost_types::{Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
 use crap_cms::api::content::content_api_server::ContentApi;
 use crap_cms::api::service::ContentService;
 use crap_cms::config::*;
+use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
-use crap_cms::core::Registry;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service;

@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use rusqlite::params_from_iter;
 
 use super::super::{
-    get_column_names, get_locale_select_columns, group_locale_fields, LocaleContext, LocaleMode,
+    LocaleContext, LocaleMode, get_column_names, get_locale_select_columns, group_locale_fields,
 };
 use crate::core::{CollectionDefinition, Document};
 use crate::db::document::row_to_document;

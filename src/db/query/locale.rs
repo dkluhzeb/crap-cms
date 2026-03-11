@@ -1,8 +1,8 @@
 //! Locale types and functions for locale-aware queries.
 
 use crate::config::LocaleConfig;
-use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::Document;
+use crate::core::field::{FieldDefinition, FieldType};
 
 use super::validation::sanitize_locale;
 

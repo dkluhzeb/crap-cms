@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::McpConfig;
-use crate::core::{collection::GlobalDefinition, CollectionDefinition};
+use crate::core::{CollectionDefinition, collection::GlobalDefinition};
 use crate::db::query;
 
 fn make_registry() -> Registry {

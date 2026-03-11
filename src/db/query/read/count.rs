@@ -1,10 +1,10 @@
 //! `count`, `count_with_search`, `count_where_field_eq` — document counting.
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use rusqlite::params_from_iter;
 
 use super::super::filter::{build_where_clause, resolve_filters};
-use super::super::{is_valid_identifier, FilterClause, LocaleContext};
+use super::super::{FilterClause, LocaleContext, is_valid_identifier};
 use crate::core::CollectionDefinition;
 
 /// Count documents in a collection.
@@ -207,10 +207,12 @@ mod tests {
         let conn = setup_db();
         let result = count_where_field_eq(&conn, "posts", "bad field!", "val", None);
         assert!(result.is_err(), "Invalid field name should error");
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid field name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid field name")
+        );
     }
 
     // ── count_with_search: FTS search path without WHERE clause ──────────

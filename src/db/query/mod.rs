@@ -22,7 +22,7 @@ mod validation;
 
 pub use columns::get_column_names;
 pub use helpers::{apply_pagination_limits, normalize_date_value};
-pub use locale::{get_locale_select_columns, LocaleContext, LocaleMode};
+pub use locale::{LocaleContext, LocaleMode, get_locale_select_columns};
 pub use types::*;
 pub use validation::{
     get_valid_filter_paths, is_valid_identifier, sanitize_locale, validate_field_name,

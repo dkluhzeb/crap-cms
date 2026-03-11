@@ -2,9 +2,9 @@ use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 use crate::db::query::{self, AccessResult};
 use axum::{
+    Extension,
     extract::{Path, State},
     response::IntoResponse,
-    Extension,
 };
 
 use crate::admin::handlers::shared::{
@@ -36,7 +36,7 @@ pub async fn restore_version(
     ) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to update this item")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}

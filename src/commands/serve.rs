@@ -269,7 +269,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         // First signal: graceful shutdown
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm =
                 signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
             tokio::select! {
@@ -293,7 +293,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         // Second signal: force exit
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm =
                 signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
             tokio::select! {

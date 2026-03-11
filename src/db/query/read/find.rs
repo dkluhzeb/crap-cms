@@ -1,12 +1,12 @@
 //! `find()` — query multiple documents with filters, sorting, and cursor pagination.
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use rusqlite::params_from_iter;
 
 use super::super::filter::{build_where_clause, resolve_filter_column, resolve_filters};
 use super::super::{
-    get_column_names, get_locale_select_columns, group_locale_fields, validate_query_fields,
-    FindQuery, LocaleContext, LocaleMode,
+    FindQuery, LocaleContext, LocaleMode, get_column_names, get_locale_select_columns,
+    group_locale_fields, validate_query_fields,
 };
 use crate::core::{CollectionDefinition, Document};
 use crate::db::document::row_to_document;
@@ -143,11 +143,7 @@ pub fn find(
     // ORDER BY — for before_cursor, reverse the sort direction so the DB returns
     // rows in the opposite order, then we reverse them after fetching.
     let effective_dir: &str = if using_before {
-        if sort_dir == "DESC" {
-            "ASC"
-        } else {
-            "DESC"
-        }
+        if sort_dir == "DESC" { "ASC" } else { "DESC" }
     } else if sort_dir == "DESC" {
         "DESC"
     } else {
@@ -346,10 +342,12 @@ mod tests {
         query.offset = Some(10);
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("mutually exclusive"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("mutually exclusive")
+        );
     }
 
     #[test]
@@ -584,10 +582,12 @@ mod tests {
         query.before_cursor = Some(cursor);
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("mutually exclusive"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("mutually exclusive")
+        );
     }
 
     #[test]
@@ -677,9 +677,11 @@ mod tests {
         q.after_cursor = Some(cursor);
         let result = find(&conn, "posts", &def, &q, None).unwrap();
         // All posts have status=active, but cursor anchors after "Post 01"
-        assert!(result
-            .iter()
-            .all(|d| d.get_str("title").unwrap_or("") > "Post 01"));
+        assert!(
+            result
+                .iter()
+                .all(|d| d.get_str("title").unwrap_or("") > "Post 01")
+        );
     }
 
     #[test]

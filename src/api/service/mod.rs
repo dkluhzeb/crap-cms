@@ -14,15 +14,15 @@ use tonic::{Request, Response, Status};
 use crate::api::content;
 use crate::api::content::content_api_server::ContentApi;
 use crate::config::{EmailConfig, LocaleConfig, ServerConfig};
+use crate::core::Registry;
 use crate::core::auth::AuthUser;
 use crate::core::email::EmailRenderer;
 use crate::core::event::EventBus;
 use crate::core::event::EventUser;
 use crate::core::rate_limit::LoginRateLimiter;
-use crate::core::Registry;
+use crate::db::DbPool;
 use crate::db::query;
 use crate::db::query::AccessResult;
-use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).

@@ -1,18 +1,23 @@
-use axum::{extract::State, http::StatusCode, response::IntoResponse};
+use axum::{
+    body::Body,
+    extract::State,
+    http::{Request, StatusCode, header},
+    response::{IntoResponse, Response},
+};
+use chrono::Utc;
+use tokio::task;
 
 use super::session_cookies;
-use crate::admin::AdminState;
-use crate::core::auth;
-use crate::core::auth::ClaimsBuilder;
-use crate::db::query;
+use crate::{
+    admin::AdminState,
+    core::auth::{Claims, ClaimsBuilder, create_token},
+    db::query,
+};
 
 /// POST /admin/api/session-refresh — issue a fresh JWT if the current one is still valid.
-pub async fn session_refresh(
-    State(state): State<AdminState>,
-    request: axum::http::Request<axum::body::Body>,
-) -> axum::response::Response {
+pub async fn session_refresh(State(state): State<AdminState>, request: Request<Body>) -> Response {
     // Extract claims from request extensions (set by auth middleware)
-    let claims = match request.extensions().get::<auth::Claims>() {
+    let claims = match request.extensions().get::<Claims>() {
         Some(c) => c.clone(),
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };
@@ -22,7 +27,7 @@ pub async fn session_refresh(
     let slug = claims.collection.clone();
     let user_id = claims.sub.clone();
 
-    let locked = tokio::task::spawn_blocking(move || {
+    let locked = task::spawn_blocking(move || {
         let conn = pool.get()?;
         query::is_locked(&conn, &slug, &user_id)
     })
@@ -38,7 +43,8 @@ pub async fn session_refresh(
             tracing::error!("Session refresh task error: {}", e);
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        _ => {} // not locked, continue
+        // Not locked continue.
+        Ok(Ok(false)) => {}
     }
 
     // Compute fresh expiry (collection override or global config)
@@ -50,10 +56,10 @@ pub async fn session_refresh(
 
     let new_claims = ClaimsBuilder::new(claims.sub, claims.collection)
         .email(claims.email)
-        .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+        .exp((Utc::now().timestamp() as u64) + expiry)
         .build();
 
-    let token = match auth::create_token(&new_claims, &state.jwt_secret) {
+    let token = match create_token(&new_claims, &state.jwt_secret) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!("Session refresh token creation: {}", e);
@@ -63,11 +69,13 @@ pub async fn session_refresh(
 
     let cookies = session_cookies(&token, expiry, new_claims.exp, state.config.admin.dev_mode);
     let mut response = StatusCode::NO_CONTENT.into_response();
+
     for cookie in cookies {
         response.headers_mut().append(
-            axum::http::header::SET_COOKIE,
+            header::SET_COOKIE,
             cookie.parse().expect("cookie header is valid ASCII"),
         );
     }
+
     response
 }

@@ -4,10 +4,10 @@ use anyhow::{Context as _, Result};
 use mlua::{Lua, Value};
 use std::collections::{HashMap, HashSet};
 
+use crate::core::Document;
 use crate::core::collection::Hooks;
 use crate::core::document::DocumentBuilder;
 use crate::core::field::{FieldDefinition, FieldHooks};
-use crate::core::Document;
 
 use super::context::HookContext;
 use super::types::{DisplayConditionResult, FieldHookEvent, HookEvent};
@@ -711,12 +711,14 @@ mod tests {
         .exec()
         .unwrap();
 
-        let fields = vec![FieldDefinition::builder("title", FieldType::Text)
-            .hooks(FieldHooks {
-                before_validate: vec!["hooks.noop".to_string()],
-                ..Default::default()
-            })
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .hooks(FieldHooks {
+                    before_validate: vec!["hooks.noop".to_string()],
+                    ..Default::default()
+                })
+                .build(),
+        ];
 
         let mut data: HashMap<String, serde_json::Value> = HashMap::new();
         data.insert("content".to_string(), json!("updated"));
@@ -754,12 +756,14 @@ mod tests {
         .exec()
         .unwrap();
 
-        let fields = vec![FieldDefinition::builder("slug", FieldType::Text)
-            .hooks(FieldHooks {
-                before_validate: vec!["hooks.default_val".to_string()],
-                ..Default::default()
-            })
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("slug", FieldType::Text)
+                .hooks(FieldHooks {
+                    before_validate: vec!["hooks.default_val".to_string()],
+                    ..Default::default()
+                })
+                .build(),
+        ];
 
         let mut data: HashMap<String, serde_json::Value> = HashMap::new();
         data.insert("title".to_string(), json!("Hello"));

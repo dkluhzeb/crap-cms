@@ -2,8 +2,8 @@
 //! Also: check version snapshots for missing (deleted) relationship targets.
 
 use crate::config::LocaleConfig;
-use crate::core::field::{to_title_case, FieldDefinition, FieldType};
 use crate::core::Registry;
+use crate::core::field::{FieldDefinition, FieldType, to_title_case};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -965,9 +965,9 @@ fn collect_missing_in_blocks(
 mod tests {
     use super::*;
     use crate::config::LocaleConfig;
+    use crate::core::Registry;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use crate::core::Registry;
     use crate::db::{migrate, pool};
 
     fn no_locale() -> LocaleConfig {
@@ -1071,9 +1071,11 @@ mod tests {
     fn no_references_returns_empty() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("image", FieldType::Upload)
-            .relationship(RelationshipConfig::new("media", false))
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1089,9 +1091,11 @@ mod tests {
     fn has_many_finds_back_reference() {
         let tags = CollectionDefinition::new("tags");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("tags", FieldType::Relationship)
-            .relationship(RelationshipConfig::new("tags", true))
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[tags, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1153,14 +1157,16 @@ mod tests {
         let media = CollectionDefinition::new("media");
         let pages = CollectionDefinition::new("pages");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("related", FieldType::Relationship)
-            .relationship(RelationshipConfig {
-                collection: "media".to_string(),
-                has_many: true,
-                max_depth: None,
-                polymorphic: vec!["media".to_string(), "pages".to_string()],
-            })
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("related", FieldType::Relationship)
+                .relationship(RelationshipConfig {
+                    collection: "media".to_string(),
+                    has_many: true,
+                    max_depth: None,
+                    polymorphic: vec!["media".to_string(), "pages".to_string()],
+                })
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media, pages, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1183,11 +1189,15 @@ mod tests {
     fn group_nested_relationship_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("hero", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build()])
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("hero", FieldType::Upload)
+                        .relationship(RelationshipConfig::new("media", false))
+                        .build(),
+                ])
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1206,11 +1216,15 @@ mod tests {
     fn array_sub_field_relationship_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("slides", FieldType::Array)
-            .fields(vec![FieldDefinition::builder("image", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build()])
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("slides", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("image", FieldType::Upload)
+                        .relationship(RelationshipConfig::new("media", false))
+                        .build(),
+                ])
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1235,14 +1249,18 @@ mod tests {
     fn blocks_sub_field_relationship_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("content", FieldType::Blocks)
-            .blocks(vec![BlockDefinition::new(
-                "hero",
-                vec![FieldDefinition::builder("bg_image", FieldType::Upload)
-                    .relationship(RelationshipConfig::new("media", false))
-                    .build()],
-            )])
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new(
+                    "hero",
+                    vec![
+                        FieldDefinition::builder("bg_image", FieldType::Upload)
+                            .relationship(RelationshipConfig::new("media", false))
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1266,9 +1284,11 @@ mod tests {
     fn global_back_reference_found() {
         let media = CollectionDefinition::new("media");
         let mut settings = GlobalDefinition::new("settings");
-        settings.fields = vec![FieldDefinition::builder("logo", FieldType::Upload)
-            .relationship(RelationshipConfig::new("media", false))
-            .build()];
+        settings.fields = vec![
+            FieldDefinition::builder("logo", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media], &[settings], &no_locale());
         let conn = pool.get().unwrap();
@@ -1290,10 +1310,12 @@ mod tests {
     fn localized_has_one_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("hero", FieldType::Upload)
-            .localized(true)
-            .relationship(RelationshipConfig::new("media", false))
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("hero", FieldType::Upload)
+                .localized(true)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
         let locale = locale_en_de();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &locale);
@@ -1314,13 +1336,17 @@ mod tests {
     fn multiple_collections_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("image", FieldType::Upload)
-            .relationship(RelationshipConfig::new("media", false))
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
         let mut pages = CollectionDefinition::new("pages");
-        pages.fields = vec![FieldDefinition::builder("banner", FieldType::Upload)
-            .relationship(RelationshipConfig::new("media", false))
-            .build()];
+        pages.fields = vec![
+            FieldDefinition::builder("banner", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts, pages], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1342,9 +1368,11 @@ mod tests {
     fn unrelated_collection_not_included() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![FieldDefinition::builder("author", FieldType::Relationship)
-            .relationship(RelationshipConfig::new("users", false))
-            .build()];
+        posts.fields = vec![
+            FieldDefinition::builder("author", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("users", false))
+                .build(),
+        ];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1385,9 +1413,11 @@ mod tests {
     fn no_missing_returns_empty() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![FieldDefinition::builder("image", FieldType::Upload)
-            .relationship(RelationshipConfig::new("media", false))
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1403,9 +1433,11 @@ mod tests {
     fn missing_has_many_detected() {
         let tags = CollectionDefinition::new("tags");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship)
-            .relationship(RelationshipConfig::new("tags", true))
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(RelationshipConfig::new("tags", true))
+                .build(),
+        ];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[tags, posts], &[], &no_locale());
@@ -1451,11 +1483,15 @@ mod tests {
     fn missing_group_nested_relation() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("hero", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build()])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("hero", FieldType::Upload)
+                        .relationship(RelationshipConfig::new("media", false))
+                        .build(),
+                ])
+                .build(),
+        ];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1471,11 +1507,15 @@ mod tests {
     fn missing_array_sub_field_relation() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![FieldDefinition::builder("slides", FieldType::Array)
-            .fields(vec![FieldDefinition::builder("image", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build()])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("slides", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("image", FieldType::Upload)
+                        .relationship(RelationshipConfig::new("media", false))
+                        .build(),
+                ])
+                .build(),
+        ];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1499,14 +1539,18 @@ mod tests {
     fn missing_blocks_sub_field_relation() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![FieldDefinition::builder("content", FieldType::Blocks)
-            .blocks(vec![BlockDefinition::new(
-                "hero",
-                vec![FieldDefinition::builder("bg_image", FieldType::Upload)
-                    .relationship(RelationshipConfig::new("media", false))
-                    .build()],
-            )])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("content", FieldType::Blocks)
+                .blocks(vec![BlockDefinition::new(
+                    "hero",
+                    vec![
+                        FieldDefinition::builder("bg_image", FieldType::Upload)
+                            .relationship(RelationshipConfig::new("media", false))
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1526,9 +1570,11 @@ mod tests {
     fn empty_snapshot_returns_empty() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![FieldDefinition::builder("image", FieldType::Upload)
-            .relationship(RelationshipConfig::new("media", false))
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build(),
+        ];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());

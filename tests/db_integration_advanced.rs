@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::Registry;
 use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
-use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
 
 fn make_posts_def() -> CollectionDefinition {

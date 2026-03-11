@@ -227,12 +227,14 @@ mod tests {
             )),
         };
         def.timestamps = true;
-        def.fields = vec![crate::core::field::FieldDefinition::builder(
-            "title",
-            crate::core::field::FieldType::Text,
-        )
-        .required(true)
-        .build()];
+        def.fields = vec![
+            crate::core::field::FieldDefinition::builder(
+                "title",
+                crate::core::field::FieldType::Text,
+            )
+            .required(true)
+            .build(),
+        ];
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let labels: mlua::Table = tbl.get("labels").unwrap();
         let singular: String = labels.get("singular").unwrap();
@@ -298,11 +300,13 @@ mod tests {
             )),
             plural: None,
         };
-        def.fields = vec![crate::core::field::FieldDefinition::builder(
-            "site_name",
-            crate::core::field::FieldType::Text,
-        )
-        .build()];
+        def.fields = vec![
+            crate::core::field::FieldDefinition::builder(
+                "site_name",
+                crate::core::field::FieldType::Text,
+            )
+            .build(),
+        ];
         let tbl = global_config_to_lua(&lua, &def).unwrap();
         let labels: mlua::Table = tbl.get("labels").unwrap();
         let singular: String = labels.get("singular").unwrap();

@@ -13,7 +13,7 @@ pub mod tools;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::config::CrapConfig;
 use crate::core::Registry;
@@ -21,8 +21,8 @@ use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 use protocol::{
-    InitializeParams, JsonRpcRequest, JsonRpcResponse, ResourceReadParams, ToolCallParams,
-    INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, PROTOCOL_VERSION,
+    INTERNAL_ERROR, INVALID_PARAMS, InitializeParams, JsonRpcRequest, JsonRpcResponse,
+    METHOD_NOT_FOUND, PROTOCOL_VERSION, ResourceReadParams, ToolCallParams,
 };
 
 /// Shared state for the MCP server.
@@ -70,7 +70,7 @@ impl McpServer {
                         id,
                         INVALID_PARAMS,
                         format!("Invalid params: {}", e),
-                    )
+                    );
                 }
             },
             None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
@@ -110,7 +110,7 @@ impl McpServer {
                         id,
                         INVALID_PARAMS,
                         format!("Invalid params: {}", e),
-                    )
+                    );
                 }
             },
             None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
@@ -165,7 +165,7 @@ impl McpServer {
                         id,
                         INVALID_PARAMS,
                         format!("Invalid params: {}", e),
-                    )
+                    );
                 }
             },
             None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),

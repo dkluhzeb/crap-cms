@@ -1,12 +1,12 @@
 use axum::{
+    Extension,
     extract::{Path, State},
     response::IntoResponse,
-    Extension,
 };
 use std::collections::HashMap;
 
-use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::ops;
 use crate::db::query::AccessResult;
@@ -36,7 +36,7 @@ pub async fn edit_form(
     match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to view this global")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}

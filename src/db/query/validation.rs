@@ -2,10 +2,10 @@
 
 use std::collections::HashSet;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-use crate::core::field::FieldType;
 use crate::core::CollectionDefinition;
+use crate::core::field::FieldType;
 
 use super::columns::get_valid_filter_columns;
 use super::locale::LocaleContext;

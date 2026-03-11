@@ -1,17 +1,17 @@
-use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::query;
 use crate::db::query::AccessResult;
 use axum::{
+    Extension,
     extract::{Path, Query, State},
     response::IntoResponse,
-    Extension,
 };
 
 use crate::admin::handlers::shared::{
-    check_access_or_forbid, extract_editor_locale, forbidden, not_found, redirect_response,
-    render_or_error, server_error, version_to_json, PaginationParams,
+    PaginationParams, check_access_or_forbid, extract_editor_locale, forbidden, not_found,
+    redirect_response, render_or_error, server_error, version_to_json,
 };
 
 /// GET /admin/globals/{slug}/versions — dedicated version history page
@@ -36,7 +36,7 @@ pub async fn list_versions_page(
     match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to view this global")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}

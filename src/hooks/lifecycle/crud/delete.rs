@@ -196,7 +196,7 @@ pub(super) fn register_update_many(
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()))
+                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => find_query.filters.extend(extra),
                     AccessResult::Allowed => {}
@@ -325,7 +325,7 @@ pub(super) fn register_delete_many(
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()))
+                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => find_query.filters.extend(extra),
                     AccessResult::Allowed => {}

@@ -1,12 +1,12 @@
-use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::ops;
 use crate::db::query::{self, AccessResult};
 use axum::{
+    Extension,
     extract::{Path, State},
     response::IntoResponse,
-    Extension,
 };
 
 use crate::admin::handlers::shared::{
@@ -24,7 +24,7 @@ pub async fn delete_confirm(
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
         None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response()
+            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response();
         }
     };
 
@@ -38,7 +38,7 @@ pub async fn delete_confirm(
     ) {
         Ok(AccessResult::Denied) => {
             return forbidden(&state, "You don't have permission to delete this item")
-                .into_response()
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}
@@ -50,7 +50,7 @@ pub async fn delete_confirm(
             .and_then(|f| doc.get_str(f))
             .map(|s| s.to_string()),
         Ok(None) => {
-            return not_found(&state, &format!("Document '{}' not found", id)).into_response()
+            return not_found(&state, &format!("Document '{}' not found", id)).into_response();
         }
         Err(e) => {
             // Schema mismatch or other query error — still allow deletion.

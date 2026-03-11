@@ -67,9 +67,11 @@ mod tests {
         data.insert("name".to_string(), json!("ab"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("at least 5 characters"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("at least 5 characters")
+        );
     }
 
     #[test]
@@ -104,9 +106,11 @@ mod tests {
         data.insert("name".to_string(), json!("toolongvalue"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("at most 5 characters"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("at most 5 characters")
+        );
     }
 
     #[test]

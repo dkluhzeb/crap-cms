@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
-use crap_cms::db::{migrate, ops, pool, query, DbPool};
+use crap_cms::db::{DbPool, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 

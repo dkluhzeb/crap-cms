@@ -1,17 +1,17 @@
-use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::query::{AccessResult, LocaleContext};
 use crate::db::{ops, query};
 use axum::{
+    Extension,
     extract::{Path, Query, State},
     response::IntoResponse,
-    Extension,
 };
 
 use crate::admin::handlers::shared::{
-    check_access_or_forbid, extract_editor_locale, forbidden, not_found, redirect_response,
-    render_or_error, server_error, version_to_json, PaginationParams,
+    PaginationParams, check_access_or_forbid, extract_editor_locale, forbidden, not_found,
+    redirect_response, render_or_error, server_error, version_to_json,
 };
 
 /// GET /admin/collections/{slug}/{id}/versions — dedicated version history page
@@ -26,7 +26,7 @@ pub async fn list_versions_page(
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
         None => {
-            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response()
+            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response();
         }
     };
 
@@ -43,7 +43,8 @@ pub async fn list_versions_page(
         None,
     ) {
         Ok(AccessResult::Denied) => {
-            return forbidden(&state, "You don't have permission to view this item").into_response()
+            return forbidden(&state, "You don't have permission to view this item")
+                .into_response();
         }
         Err(resp) => return resp,
         _ => {}
@@ -57,7 +58,7 @@ pub async fn list_versions_page(
         match ops::find_document_by_id(&state.pool, &slug, &def, &id, locale_ctx.as_ref()) {
             Ok(Some(doc)) => doc,
             Ok(None) => {
-                return not_found(&state, &format!("Document '{}' not found", id)).into_response()
+                return not_found(&state, &format!("Document '{}' not found", id)).into_response();
             }
             Err(e) => {
                 tracing::error!("Document versions query error: {}", e);

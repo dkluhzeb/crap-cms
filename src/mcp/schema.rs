@@ -1,6 +1,6 @@
 //! JSON Schema generation from `FieldDefinition` and `CollectionDefinition`.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::core::collection::{CollectionDefinition, GlobalDefinition};
 use crate::core::field::{FieldDefinition, FieldType};
@@ -380,10 +380,12 @@ mod tests {
         def.fields = vec![text_field("title")];
         let s = collection_input_schema(&def, CrudOp::Update);
         assert!(s["properties"]["id"].is_object());
-        assert!(s["required"]
-            .as_array()
-            .unwrap()
-            .contains(&Value::String("id".to_string())));
+        assert!(
+            s["required"]
+                .as_array()
+                .unwrap()
+                .contains(&Value::String("id".to_string()))
+        );
     }
 
     #[test]
@@ -736,10 +738,12 @@ mod tests {
         let s = collection_input_schema(&def, CrudOp::Update);
         // password appears but is not required (optional change)
         assert!(s["properties"]["password"].is_object());
-        assert!(s["properties"]["password"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("empty"));
+        assert!(
+            s["properties"]["password"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("empty")
+        );
         // Only "id" is required for update
         let req = s["required"].as_array().unwrap();
         assert!(req.contains(&Value::String("id".to_string())));

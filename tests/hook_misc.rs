@@ -126,9 +126,11 @@ fn to_string_map_group_as_string_falls_through() {
 
     let ctx = HookContext::builder("test", "create").data(data).build();
 
-    let fields = vec![FieldDefinition::builder("seo", FieldType::Group)
-        .fields(vec![make_field("meta_title", FieldType::Text)])
-        .build()];
+    let fields = vec![
+        FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![make_field("meta_title", FieldType::Text)])
+            .build(),
+    ];
 
     let map = ctx.to_string_map(&fields);
     // When not an object, falls through to string insertion

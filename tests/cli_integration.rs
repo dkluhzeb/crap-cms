@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
-use crap_cms::db::{migrate, pool, query, DbPool};
+use crap_cms::db::{DbPool, migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 
@@ -288,10 +288,12 @@ fn init_refuses_existing() {
 
     let result = scaffold::init(Some(target), &scaffold::InitOptions::default());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("refusing to overwrite"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("refusing to overwrite")
+    );
 }
 
 #[test]
@@ -407,39 +409,36 @@ fn make_collection_force_overwrite() {
 #[test]
 fn make_collection_invalid_slug() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    assert!(scaffold::make_collection(
-        tmp.path(),
-        "Posts",
-        None,
-        false,
-        false,
-        false,
-        false,
-        false
-    )
-    .is_err());
-    assert!(scaffold::make_collection(
-        tmp.path(),
-        "my-slug",
-        None,
-        false,
-        false,
-        false,
-        false,
-        false
-    )
-    .is_err());
-    assert!(scaffold::make_collection(
-        tmp.path(),
-        "_private",
-        None,
-        false,
-        false,
-        false,
-        false,
-        false
-    )
-    .is_err());
+    assert!(
+        scaffold::make_collection(tmp.path(), "Posts", None, false, false, false, false, false)
+            .is_err()
+    );
+    assert!(
+        scaffold::make_collection(
+            tmp.path(),
+            "my-slug",
+            None,
+            false,
+            false,
+            false,
+            false,
+            false
+        )
+        .is_err()
+    );
+    assert!(
+        scaffold::make_collection(
+            tmp.path(),
+            "_private",
+            None,
+            false,
+            false,
+            false,
+            false,
+            false
+        )
+        .is_err()
+    );
     assert!(
         scaffold::make_collection(tmp.path(), "", None, false, false, false, false, false).is_err()
     );

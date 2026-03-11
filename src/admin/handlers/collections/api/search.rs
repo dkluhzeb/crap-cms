@@ -1,16 +1,15 @@
 //! Collection search handler for relationship field search.
 
-use crate::core::auth::{AuthUser, Claims};
-use crate::core::upload;
-use crate::db::query;
-use crate::db::query::{AccessResult, FindQuery};
-use axum::{
-    extract::{Path, State},
-    Extension,
+use crate::{
+    admin::{AdminState, handlers::shared::check_access_or_forbid},
+    core::{auth::AuthUser, upload},
+    db::query::{self, AccessResult, FindQuery, LocaleContext},
 };
-
-use crate::admin::handlers::shared::check_access_or_forbid;
-use crate::admin::AdminState;
+use axum::{
+    Extension, Json,
+    extract::{Path, Query, State},
+};
+use serde_json::{Value, json};
 
 /// Search query parameters for collection search.
 #[derive(serde::Deserialize)]
@@ -26,22 +25,22 @@ pub struct SearchQuery {
 pub async fn search_collection(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
-    axum::extract::Query(params): axum::extract::Query<SearchQuery>,
-    _claims: Option<Extension<Claims>>,
+    Query(params): Query<SearchQuery>,
     auth_user: Option<Extension<AuthUser>>,
-) -> axum::Json<serde_json::Value> {
+) -> Json<Value> {
     let Some(def) = state.registry.get_collection(&slug) else {
-        return axum::Json(serde_json::json!([]));
+        return Json(json!([]));
     };
 
     // Check read access
     let access_result =
         match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
             Ok(r) => r,
-            Err(_) => return axum::Json(serde_json::json!([])),
+            Err(_) => return Json(json!([])),
         };
+
     if matches!(access_result, AccessResult::Denied) {
-        return axum::Json(serde_json::json!([]));
+        return Json(json!([]));
     }
 
     let title_field = def.title_field().map(|s| s.to_string());
@@ -58,11 +57,12 @@ pub async fn search_collection(
         .and_then(|u| u.admin_thumbnail.as_ref().cloned());
 
     let Ok(conn) = state.pool.get() else {
-        return axum::Json(serde_json::json!([]));
+        return Json(json!([]));
     };
 
-    let locale_ctx =
-        crate::db::query::LocaleContext::from_locale_string(None, &state.config.locale);
+    let locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+
+    // Create FindQuery
     let mut find_query = FindQuery::new();
     find_query.limit = Some(limit as i64);
     find_query.search = if search_term.is_empty() {
@@ -77,15 +77,13 @@ pub async fn search_collection(
     }
 
     let Ok(mut docs) = query::find(&conn, &slug, def, &find_query, locale_ctx.as_ref()) else {
-        return axum::Json(serde_json::json!([]));
+        return Json(json!([]));
     };
 
     // Assemble sizes for upload collections so we can extract thumbnail URLs
-    if is_upload {
-        if let Some(ref upload_config) = def.upload {
-            for doc in &mut docs {
-                upload::assemble_sizes_object(doc, upload_config);
-            }
+    if is_upload && let Some(upload_config) = &def.upload {
+        for doc in &mut docs {
+            upload::assemble_sizes_object(doc, upload_config);
         }
     }
 
@@ -104,7 +102,7 @@ pub async fn search_collection(
                     .unwrap_or(&doc.id)
                     .to_string()
             };
-            let mut item = serde_json::json!({ "id": doc.id, "label": label });
+            let mut item = json!({ "id": doc.id, "label": label });
             if is_upload {
                 let mime = doc.get_str("mime_type").unwrap_or("");
                 let is_image = mime.starts_with("image/");
@@ -124,16 +122,16 @@ pub async fn search_collection(
                     None
                 };
                 if let Some(url) = thumb_url {
-                    item["thumbnail_url"] = serde_json::json!(url);
+                    item["thumbnail_url"] = json!(url);
                 }
-                item["filename"] = serde_json::json!(label);
+                item["filename"] = json!(label);
                 if is_image {
-                    item["is_image"] = serde_json::json!(true);
+                    item["is_image"] = json!(true);
                 }
             }
             item
         })
         .collect();
 
-    axum::Json(serde_json::json!(results))
+    Json(json!(results))
 }

@@ -3,7 +3,7 @@
 mod field_types;
 
 use crate::admin::handlers::field_context::builder::apply_field_type_extras;
-use crate::admin::handlers::field_context::{count_errors_in_fields, MAX_FIELD_DEPTH};
+use crate::admin::handlers::field_context::{MAX_FIELD_DEPTH, count_errors_in_fields};
 use crate::admin::handlers::shared::auto_label_from_name;
 use crate::core::field::FieldType;
 use std::collections::HashMap;

@@ -243,7 +243,9 @@ async fn main() -> Result<()> {
                         use dialoguer::Select;
                         let names = crap_cms::scaffold::list_blueprint_names()?;
                         if names.is_empty() {
-                            anyhow::bail!("No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>");
+                            anyhow::bail!(
+                                "No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>"
+                            );
                         }
                         let selection = Select::new()
                             .with_prompt("Select blueprint")

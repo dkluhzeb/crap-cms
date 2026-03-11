@@ -1,9 +1,9 @@
 //! MCP resource definitions and handlers.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::protocol::{ResourceContent, ResourceDefinition};
-use super::schema::{collection_input_schema, global_input_schema, CrudOp};
+use super::schema::{CrudOp, collection_input_schema, global_input_schema};
 use super::tools::should_include;
 use crate::config::CrapConfig;
 use crate::core::Registry;
@@ -126,9 +126,11 @@ mod tests {
     fn list_resources_returns_three() {
         let resources = list_resources();
         assert_eq!(resources.len(), 3);
-        assert!(resources
-            .iter()
-            .any(|r| r.uri == "crap://schema/collections"));
+        assert!(
+            resources
+                .iter()
+                .any(|r| r.uri == "crap://schema/collections")
+        );
         assert!(resources.iter().any(|r| r.uri == "crap://schema/globals"));
         assert!(resources.iter().any(|r| r.uri == "crap://config"));
     }

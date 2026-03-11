@@ -3,10 +3,10 @@
 use anyhow::Result;
 use std::collections::HashSet;
 
-use super::super::{document_to_json, PopulateCache, PopulateContext, PopulateOpts};
+use super::super::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
 use super::populate_relationships_cached;
-use crate::core::field::FieldType;
 use crate::core::Document;
+use crate::core::field::FieldType;
 use crate::db::query::read::find;
 use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
 
@@ -262,7 +262,7 @@ mod tests {
 
         // Join field should be skipped because it's not in select
         assert!(
-            doc.fields.get("posts").is_none(),
+            !doc.fields.get("posts"),
             "join field not in select should be skipped"
         );
     }

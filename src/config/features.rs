@@ -221,7 +221,10 @@ impl LocaleConfig {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
-            anyhow::bail!("Invalid locale code '{}': only ASCII alphanumeric, hyphens, and underscores allowed", code);
+            anyhow::bail!(
+                "Invalid locale code '{}': only ASCII alphanumeric, hyphens, and underscores allowed",
+                code
+            );
         }
         Ok(())
     }

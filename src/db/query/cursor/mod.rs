@@ -3,7 +3,7 @@
 //! Cursors are encoded as base64url(JSON). They contain the sort column,
 //! direction, last sort value, and document ID (tiebreaker).
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -128,10 +128,12 @@ mod tests {
         let encoded = B64.encode(b"not json");
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid cursor JSON"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid cursor JSON")
+        );
     }
 
     #[test]
@@ -140,10 +142,12 @@ mod tests {
         let encoded = B64.encode(json.as_bytes());
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing required fields"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required fields")
+        );
     }
 
     #[test]
@@ -152,10 +156,12 @@ mod tests {
         let encoded = B64.encode(json.as_bytes());
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("sort_dir must be ASC or DESC"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("sort_dir must be ASC or DESC")
+        );
     }
 
     #[test]
@@ -233,10 +239,12 @@ mod tests {
         let encoded = B64.encode(json.as_bytes());
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("missing required fields"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("missing required fields")
+        );
     }
 
     #[test]
@@ -245,10 +253,12 @@ mod tests {
         let encoded = B64.encode(bad_bytes);
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid cursor UTF-8"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid cursor UTF-8")
+        );
     }
 
     #[test]

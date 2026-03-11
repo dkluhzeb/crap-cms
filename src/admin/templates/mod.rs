@@ -4,7 +4,7 @@ mod helpers;
 
 use anyhow::{Context as _, Result};
 use handlebars::Handlebars;
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 use std::path::Path;
 use std::sync::Arc;
 

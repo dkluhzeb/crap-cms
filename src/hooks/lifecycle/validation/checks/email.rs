@@ -72,9 +72,11 @@ mod tests {
         data.insert("email".to_string(), json!("not-an-email"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("valid email"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("valid email")
+        );
     }
 
     #[test]

@@ -7,11 +7,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::config::JobsConfig;
-use crate::core::job::JobDefinition;
 use crate::core::SharedRegistry;
+use crate::core::job::JobDefinition;
+use crate::db::DbPool;
 use crate::db::query::images as image_query;
 use crate::db::query::jobs as job_query;
-use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 /// Start the scheduler background loop. Runs until the task is cancelled.
@@ -606,10 +606,11 @@ mod tests {
     #[test]
     fn recover_stale_jobs_marks_running_as_stale() {
         let conn = setup_jobs_db();
-        let registry =
-            make_registry_with_jobs(vec![JobDefinition::builder("my_job", "some.handler")
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("my_job", "some.handler")
                 .timeout(120)
-                .build()]);
+                .build(),
+        ]);
 
         // Insert a running job (simulates server crash with running job)
         job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
@@ -622,11 +623,13 @@ mod tests {
 
         let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
         assert_eq!(jobs.len(), 1);
-        assert!(jobs[0]
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("stale: server restarted"));
+        assert!(
+            jobs[0]
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("stale: server restarted")
+        );
         assert!(jobs[0].error.as_ref().unwrap().contains("timeout=300s"));
     }
 
@@ -763,13 +766,14 @@ mod tests {
     #[test]
     fn check_cron_schedules_fires_due_job() {
         let pool = make_test_pool();
-        let registry =
-            make_registry_with_jobs(vec![JobDefinition::builder("cron_job", "some.handler")
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("cron_job", "some.handler")
                 .schedule("* * * * *") // every minute
                 .retries(0)
                 .queue("default")
                 .skip_if_running(false)
-                .build()]);
+                .build(),
+        ]);
 
         // Set last_check to 2 minutes ago, now to current — schedule should fire
         let now = chrono::Utc::now();
@@ -804,10 +808,11 @@ mod tests {
     #[test]
     fn check_cron_schedules_skips_not_due() {
         let pool = make_test_pool();
-        let registry =
-            make_registry_with_jobs(vec![JobDefinition::builder("hourly_job", "some.handler")
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("hourly_job", "some.handler")
                 .schedule("0 * * * *") // every hour at :00
-                .build()]);
+                .build(),
+        ]);
 
         // Set the window to just 1 second — unlikely an hour boundary is crossed
         let now = chrono::Utc::now();
@@ -826,11 +831,12 @@ mod tests {
     #[test]
     fn check_cron_schedules_skip_if_running() {
         let pool = make_test_pool();
-        let registry =
-            make_registry_with_jobs(vec![JobDefinition::builder("skip_job", "some.handler")
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("skip_job", "some.handler")
                 .schedule("* * * * *")
                 .skip_if_running(true)
-                .build()]);
+                .build(),
+        ]);
 
         // Insert a running job for this slug
         {
@@ -855,11 +861,12 @@ mod tests {
     #[test]
     fn check_cron_schedules_no_skip_if_running_false() {
         let pool = make_test_pool();
-        let registry =
-            make_registry_with_jobs(vec![JobDefinition::builder("noskip_job", "some.handler")
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("noskip_job", "some.handler")
                 .schedule("* * * * *")
                 .skip_if_running(false)
-                .build()]);
+                .build(),
+        ]);
 
         // Insert a running job
         {
@@ -884,10 +891,11 @@ mod tests {
     #[test]
     fn check_cron_schedules_invalid_cron_expression() {
         let pool = make_test_pool();
-        let registry =
-            make_registry_with_jobs(vec![JobDefinition::builder("bad_cron", "some.handler")
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("bad_cron", "some.handler")
                 .schedule("not a valid cron")
-                .build()]);
+                .build(),
+        ]);
 
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
@@ -903,13 +911,14 @@ mod tests {
     #[test]
     fn check_cron_schedules_retries_stored() {
         let pool = make_test_pool();
-        let registry =
-            make_registry_with_jobs(vec![JobDefinition::builder("retried_cron", "some.handler")
+        let registry = make_registry_with_jobs(vec![
+            JobDefinition::builder("retried_cron", "some.handler")
                 .schedule("* * * * *")
                 .retries(3)
                 .queue("special")
                 .skip_if_running(false)
-                .build()]);
+                .build(),
+        ]);
 
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);

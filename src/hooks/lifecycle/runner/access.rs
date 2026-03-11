@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use anyhow::Result;
 use mlua::Value;
 
+use crate::core::Document;
 use crate::core::document::DocumentBuilder;
 use crate::core::field::FieldDefinition;
-use crate::core::Document;
 use crate::db::query::AccessResult;
 use crate::hooks::lifecycle::access::{
     check_access_with_lua, check_field_read_access_with_lua, check_field_write_access_with_lua,

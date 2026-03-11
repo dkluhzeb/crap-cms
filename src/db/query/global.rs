@@ -4,10 +4,10 @@ use anyhow::{Context as _, Result};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
-use super::{coerce_value, group_locale_fields, locale_write_column, LocaleContext, LocaleMode};
+use super::{LocaleContext, LocaleMode, coerce_value, group_locale_fields, locale_write_column};
+use crate::core::Document;
 use crate::core::collection::GlobalDefinition;
 use crate::core::field::FieldType;
-use crate::core::Document;
 use crate::db::document::row_to_document;
 
 /// Get the single global document from `_global_{slug}`.
@@ -265,7 +265,7 @@ mod tests {
                 .build(),
             FieldDefinition::builder("social", FieldType::Group)
                 .fields(vec![
-                    FieldDefinition::builder("github", FieldType::Text).build()
+                    FieldDefinition::builder("github", FieldType::Text).build(),
                 ])
                 .build(),
         ];
@@ -400,12 +400,14 @@ mod tests {
         .unwrap();
 
         let mut def = GlobalDefinition::new("branding");
-        def.fields = vec![FieldDefinition::builder("colors", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("primary", FieldType::Text).build(),
-                FieldDefinition::builder("secondary", FieldType::Text).build(),
-            ])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("colors", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("primary", FieldType::Text).build(),
+                    FieldDefinition::builder("secondary", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -460,14 +462,18 @@ mod tests {
         .unwrap();
 
         let mut def = GlobalDefinition::new("branding");
-        def.fields = vec![FieldDefinition::builder("colors", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+        def.fields = vec![
+            FieldDefinition::builder("colors", FieldType::Group)
                 .fields(vec![
-                    FieldDefinition::builder("primary", FieldType::Text).build(),
-                    FieldDefinition::builder("secondary", FieldType::Text).build(),
+                    FieldDefinition::builder("r", FieldType::Row)
+                        .fields(vec![
+                            FieldDefinition::builder("primary", FieldType::Text).build(),
+                            FieldDefinition::builder("secondary", FieldType::Text).build(),
+                        ])
+                        .build(),
                 ])
-                .build()])
-            .build()];
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -504,20 +510,26 @@ mod tests {
         .unwrap();
 
         let mut def = GlobalDefinition::new("settings");
-        def.fields = vec![FieldDefinition::builder("config", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new(
-                        "General",
-                        vec![FieldDefinition::builder("theme", FieldType::Text).build()],
-                    ),
-                    FieldTab::new(
-                        "Perf",
-                        vec![FieldDefinition::builder("cache_ttl", FieldType::Text).build()],
-                    ),
+        def.fields = vec![
+            FieldDefinition::builder("config", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("t", FieldType::Tabs)
+                        .tabs(vec![
+                            FieldTab::new(
+                                "General",
+                                vec![FieldDefinition::builder("theme", FieldType::Text).build()],
+                            ),
+                            FieldTab::new(
+                                "Perf",
+                                vec![
+                                    FieldDefinition::builder("cache_ttl", FieldType::Text).build(),
+                                ],
+                            ),
+                        ])
+                        .build(),
                 ])
-                .build()])
-            .build()];
+                .build(),
+        ];
         let def = def;
 
         let mut data = HashMap::new();
@@ -537,14 +549,18 @@ mod tests {
     fn get_global_column_names_group_containing_tabs() {
         use crate::core::field::FieldTab;
         let mut def = GlobalDefinition::new("settings");
-        def.fields = vec![FieldDefinition::builder("config", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
-                .tabs(vec![FieldTab::new(
-                    "Tab",
-                    vec![FieldDefinition::builder("value", FieldType::Text).build()],
-                )])
-                .build()])
-            .build()];
+        def.fields = vec![
+            FieldDefinition::builder("config", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("t", FieldType::Tabs)
+                        .tabs(vec![FieldTab::new(
+                            "Tab",
+                            vec![FieldDefinition::builder("value", FieldType::Text).build()],
+                        )])
+                        .build(),
+                ])
+                .build(),
+        ];
         let def = def;
 
         let names = get_global_column_names(&def);

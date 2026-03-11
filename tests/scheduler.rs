@@ -154,11 +154,13 @@ fn execute_job_failing_handler_marks_failed() {
     let conn = pool.get().expect("DB connection");
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Failed);
-    assert!(fetched
-        .error
-        .as_ref()
-        .unwrap()
-        .contains("intentional failure"));
+    assert!(
+        fetched
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("intentional failure")
+    );
 }
 
 // ── execute_job: failing handler with retry ─────────────────────────────

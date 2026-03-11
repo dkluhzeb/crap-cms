@@ -2,11 +2,18 @@ use axum::{
     extract::{Query, State},
     response::Html,
 };
+use chrono::Utc;
+use serde_json::json;
+use tokio::task;
 
 use super::ResetPasswordQuery;
-use crate::admin::context::{ContextBuilder, PageType};
-use crate::admin::AdminState;
-use crate::db::query;
+use crate::{
+    admin::{
+        AdminState,
+        context::{ContextBuilder, PageType},
+    },
+    db::query,
+};
 
 /// GET /admin/reset-password?token=xxx — validate token, show reset form.
 pub async fn reset_password_page(
@@ -18,18 +25,20 @@ pub async fn reset_password_page(
     let registry = state.registry.clone();
     let token = query.token.clone();
 
-    let valid = tokio::task::spawn_blocking(move || {
+    let valid = task::spawn_blocking(move || {
         let conn = match pool.get() {
             Ok(c) => c,
             Err(_) => return false,
         };
+
         for def in registry.collections.values() {
             if !def.is_auth_collection() {
                 continue;
             }
+
             match query::find_by_reset_token(&conn, &def.slug, def, &token) {
                 Ok(Some((_, exp))) => {
-                    return chrono::Utc::now().timestamp() < exp;
+                    return Utc::now().timestamp() < exp;
                 }
                 _ => continue,
             }
@@ -42,9 +51,9 @@ pub async fn reset_password_page(
     let mut builder = ContextBuilder::auth(&state).page(PageType::AuthReset, "Reset Password");
 
     if valid {
-        builder = builder.set("token", serde_json::json!(query.token));
+        builder = builder.set("token", json!(query.token));
     } else {
-        builder = builder.set("error", serde_json::json!("error_reset_link_invalid"));
+        builder = builder.set("error", json!("error_reset_link_invalid"));
     }
 
     let data = builder.build();

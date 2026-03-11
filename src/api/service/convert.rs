@@ -211,7 +211,7 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                             return Err(format!(
                                 "or field '{}': value must be string or operator object",
                                 f
-                            ))
+                            ));
                         }
                     }
                 }
@@ -242,7 +242,7 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                 return Err(format!(
                     "field '{}': value must be string or operator object",
                     field
-                ))
+                ));
             }
         }
     }
@@ -296,11 +296,11 @@ pub(super) fn value_to_string(v: &serde_json::Value) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Document;
     use crate::core::field::{
         BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
         SelectOption,
     };
-    use crate::core::Document;
     use crate::db::query::{FilterClause, FilterOp};
     use serde_json::json;
     use std::collections::BTreeMap;
@@ -689,9 +689,11 @@ mod tests {
     fn parse_where_json_invalid_value_type() {
         let result = parse_where_json(r#"{"field": 42}"#);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("value must be string or operator object"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("value must be string or operator object")
+        );
     }
 
     // ── parse_filter_op ────────────────────────────────────────────────────
@@ -806,17 +808,21 @@ mod tests {
     fn value_to_string_error_on_array() {
         let result = value_to_string(&json!([1, 2]));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("must be string, number, or boolean"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("must be string, number, or boolean")
+        );
     }
 
     #[test]
     fn value_to_string_error_on_object() {
         let result = value_to_string(&json!({"a": 1}));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("must be string, number, or boolean"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("must be string, number, or boolean")
+        );
     }
 }

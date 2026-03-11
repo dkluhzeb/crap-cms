@@ -2,9 +2,9 @@
 
 use std::fmt::Write;
 
+use crate::core::Registry;
 use crate::core::collection::{CollectionDefinition, GlobalDefinition};
 use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::Registry;
 
 use super::{
     is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
@@ -248,9 +248,11 @@ mod tests {
     fn rust_relationship_has_many() {
         let col = make_col(
             "posts",
-            vec![FieldDefinition::builder("tags", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("tags", true))
-                .build()],
+            vec![
+                FieldDefinition::builder("tags", FieldType::Relationship)
+                    .relationship(RelationshipConfig::new("tags", true))
+                    .build(),
+            ],
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -263,10 +265,12 @@ mod tests {
         rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let col = make_col(
             "comments",
-            vec![FieldDefinition::builder("subject", FieldType::Relationship)
-                .required(true)
-                .relationship(rc)
-                .build()],
+            vec![
+                FieldDefinition::builder("subject", FieldType::Relationship)
+                    .required(true)
+                    .relationship(rc)
+                    .build(),
+            ],
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -299,9 +303,11 @@ mod tests {
         rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
         let col = make_col(
             "posts",
-            vec![FieldDefinition::builder("related", FieldType::Relationship)
-                .relationship(rc)
-                .build()],
+            vec![
+                FieldDefinition::builder("related", FieldType::Relationship)
+                    .relationship(rc)
+                    .build(),
+            ],
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -332,10 +338,12 @@ mod tests {
     fn rust_relationship_has_one_required() {
         let col = make_col(
             "posts",
-            vec![FieldDefinition::builder("author", FieldType::Relationship)
-                .required(true)
-                .relationship(RelationshipConfig::new("users", false))
-                .build()],
+            vec![
+                FieldDefinition::builder("author", FieldType::Relationship)
+                    .required(true)
+                    .relationship(RelationshipConfig::new("users", false))
+                    .build(),
+            ],
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -365,9 +373,11 @@ mod tests {
     fn rust_array_with_subfields() {
         let col = make_col(
             "posts",
-            vec![FieldDefinition::builder("items", FieldType::Array)
-                .fields(vec![text_field("label", true)])
-                .build()],
+            vec![
+                FieldDefinition::builder("items", FieldType::Array)
+                    .fields(vec![text_field("label", true)])
+                    .build(),
+            ],
         );
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -439,10 +449,12 @@ mod tests {
     fn upload_has_many_generates_array_type() {
         let col = make_col(
             "items",
-            vec![FieldDefinition::builder("images", FieldType::Upload)
-                .required(true)
-                .relationship(RelationshipConfig::new("", true))
-                .build()],
+            vec![
+                FieldDefinition::builder("images", FieldType::Upload)
+                    .required(true)
+                    .relationship(RelationshipConfig::new("", true))
+                    .build(),
+            ],
         );
         let mut out = String::new();
         render_collection(&mut out, &col);

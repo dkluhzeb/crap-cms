@@ -30,11 +30,7 @@ fn get_fts_table_columns(conn: &rusqlite::Connection, fts_table: &str) -> Option
         .filter(|name| name != "id")
         .collect();
 
-    if cols.is_empty() {
-        None
-    } else {
-        Some(cols)
-    }
+    if cols.is_empty() { None } else { Some(cols) }
 }
 
 /// Drop and recreate the FTS5 virtual table, then bulk-populate from the main table.
@@ -374,7 +370,7 @@ mod tests {
             .unwrap();
 
         let def = simple_def(vec![
-            FieldDefinition::builder("count", FieldType::Number).build()
+            FieldDefinition::builder("count", FieldType::Number).build(),
         ]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
@@ -514,13 +510,12 @@ mod tests {
         ))
         .unwrap();
 
-        let mut def = simple_def(vec![FieldDefinition::builder(
-            "content",
-            FieldType::Richtext,
-        )
-        .localized(true)
-        .admin(FieldAdmin::builder().richtext_format("json").build())
-        .build()]);
+        let mut def = simple_def(vec![
+            FieldDefinition::builder("content", FieldType::Richtext)
+                .localized(true)
+                .admin(FieldAdmin::builder().richtext_format("json").build())
+                .build(),
+        ]);
         def.admin.list_searchable_fields = vec!["content".into()];
 
         let locale_config = LocaleConfig {
@@ -588,9 +583,11 @@ mod tests {
         );
 
         fts_delete(&conn, "posts", "1").unwrap();
-        assert!(fts_search(&conn, "posts", "Searchable", 10)
-            .unwrap()
-            .is_empty());
+        assert!(
+            fts_search(&conn, "posts", "Searchable", 10)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -675,7 +672,7 @@ mod tests {
 
     #[test]
     fn fts_upsert_with_registry_extracts_node_attrs() {
-        use crate::core::{richtext::RichtextNodeDef, Registry};
+        use crate::core::{Registry, richtext::RichtextNodeDef};
 
         let conn = setup_db();
         conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT")

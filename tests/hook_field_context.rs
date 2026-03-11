@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
+use crap_cms::core::Document;
 use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::FieldDefinition;
-use crap_cms::core::Document;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{FieldHookEvent, HookContext, HookEvent, HookRunner};

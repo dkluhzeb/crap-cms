@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
-use include_dir::{include_dir, Dir};
+use include_dir::{Dir, include_dir};
 
 /// Embedded default templates — compiled into the binary.
 static EMBEDDED_TEMPLATES: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/templates");

@@ -15,10 +15,10 @@ pub mod templates;
 pub use self::blueprint::{
     blueprint_list, blueprint_remove, blueprint_save, blueprint_use, list_blueprint_names,
 };
-pub use self::collection::{make_collection, VALID_FIELD_TYPES};
+pub use self::collection::{VALID_FIELD_TYPES, make_collection};
 pub use self::global::make_global;
-pub use self::hook::{make_hook, ConditionFieldInfo, HookType, MakeHookOptions};
-pub use self::init::{init, InitOptions};
+pub use self::hook::{ConditionFieldInfo, HookType, MakeHookOptions, make_hook};
+pub use self::init::{InitOptions, init};
 pub use self::job::make_job;
 pub use self::migration::make_migration;
 pub use self::templates::{proto_export, templates_extract, templates_list};

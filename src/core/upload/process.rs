@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 
 use super::collection_upload::CollectionUpload;
 use super::format::FormatResult;
@@ -413,11 +413,13 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![ImageSizeBuilder::new("thumb")
-            .width(50)
-            .height(50)
-            .fit(ImageFit::Cover)
-            .build()];
+        config.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(50)
+                .height(50)
+                .fit(ImageFit::Cover)
+                .build(),
+        ];
         let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         assert_eq!(result.width, Some(200));
@@ -442,11 +444,13 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![ImageSizeBuilder::new("small")
-            .width(30)
-            .height(30)
-            .fit(ImageFit::Cover)
-            .build()];
+        config.image_sizes = vec![
+            ImageSizeBuilder::new("small")
+                .width(30)
+                .height(30)
+                .fit(ImageFit::Cover)
+                .build(),
+        ];
         config.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: None,
@@ -471,11 +475,13 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![ImageSizeBuilder::new("small")
-            .width(30)
-            .height(30)
-            .fit(ImageFit::Cover)
-            .build()];
+        config.image_sizes = vec![
+            ImageSizeBuilder::new("small")
+                .width(30)
+                .height(30)
+                .fit(ImageFit::Cover)
+                .build(),
+        ];
         config.format_options = FormatOptions {
             webp: None,
             avif: Some(FormatQuality::new(50, false)),
@@ -500,11 +506,13 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![ImageSizeBuilder::new("icon")
-            .width(20)
-            .height(20)
-            .fit(ImageFit::Fill)
-            .build()];
+        config.image_sizes = vec![
+            ImageSizeBuilder::new("icon")
+                .width(20)
+                .height(20)
+                .fit(ImageFit::Fill)
+                .build(),
+        ];
         config.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: Some(FormatQuality::new(50, false)),
@@ -543,11 +551,13 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![ImageSizeBuilder::new("thumb")
-            .width(30)
-            .height(30)
-            .fit(ImageFit::Cover)
-            .build()];
+        config.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(30)
+                .height(30)
+                .fit(ImageFit::Cover)
+                .build(),
+        ];
         let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let thumb = &result.sizes["thumb"];
@@ -567,11 +577,13 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![ImageSizeBuilder::new("small")
-            .width(30)
-            .height(30)
-            .fit(ImageFit::Cover)
-            .build()];
+        config.image_sizes = vec![
+            ImageSizeBuilder::new("small")
+                .width(30)
+                .height(30)
+                .fit(ImageFit::Cover)
+                .build(),
+        ];
         config.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, true)),
             avif: Some(FormatQuality::new(50, true)),

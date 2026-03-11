@@ -4,11 +4,11 @@ use anyhow::{Context as _, Result};
 
 use crate::core::collection::GlobalDefinition;
 use crate::core::document::Document;
-use crate::db::query;
 use crate::db::DbPool;
+use crate::db::query;
 use crate::hooks::lifecycle::HookRunner;
 
-use super::{build_before_ctx, build_hook_data, run_after_change_hooks, WriteInput, WriteResult};
+use super::{WriteInput, WriteResult, build_before_ctx, build_hook_data, run_after_change_hooks};
 
 /// Update a global document within a single transaction: before-hooks → update → after-hooks.
 /// When `draft` is true and the global has drafts enabled, creates a version-only save.

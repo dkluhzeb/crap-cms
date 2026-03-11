@@ -428,10 +428,12 @@ mod tests {
     fn test_filter_op_unknown() {
         let result = lua_parse_filter_op("bogus", &Value::Nil);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unknown filter operator"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("unknown filter operator")
+        );
     }
 
     // --- lua_table_to_hashmap tests ---
@@ -508,13 +510,13 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         // No "seo" key at all
 
-        let fields = vec![FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![FieldDefinition::builder(
-                "meta_title",
-                FieldType::Text,
-            )
-            .build()])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("meta_title", FieldType::Text).build(),
+                ])
+                .build(),
+        ];
 
         let mut data = HashMap::new();
         flatten_lua_groups(&tbl, &fields, &mut data).unwrap();
@@ -530,12 +532,14 @@ mod tests {
         metrics.set("rating", 4.5).unwrap();
         tbl.set("metrics", metrics).unwrap();
 
-        let fields = vec![FieldDefinition::builder("metrics", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("views", FieldType::Number).build(),
-                FieldDefinition::builder("rating", FieldType::Number).build(),
-            ])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("metrics", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("views", FieldType::Number).build(),
+                    FieldDefinition::builder("rating", FieldType::Number).build(),
+                ])
+                .build(),
+        ];
 
         let mut data = HashMap::new();
         flatten_lua_groups(&tbl, &fields, &mut data).unwrap();

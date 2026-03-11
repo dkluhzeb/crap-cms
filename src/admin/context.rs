@@ -3,7 +3,7 @@
 //! Every admin page receives a structured context built through `ContextBuilder`.
 //! This replaces the ad-hoc `serde_json::json!()` calls in individual handlers.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::admin::AdminState;
 use crate::core::auth::Claims;
@@ -566,10 +566,9 @@ mod tests {
             )),
             plural: None,
         };
-        def.fields =
-            vec![
-                FieldDefinition::builder("site_name", crate::core::field::FieldType::Text).build(),
-            ];
+        def.fields = vec![
+            FieldDefinition::builder("site_name", crate::core::field::FieldType::Text).build(),
+        ];
         let ctx = build_global_context(&def);
         assert_eq!(ctx["slug"], "settings");
         assert_eq!(ctx["display_name"], "Settings");

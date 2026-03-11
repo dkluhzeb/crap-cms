@@ -1,9 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition};
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
-use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {

@@ -1,29 +1,34 @@
 use axum::{
     extract::{Form, State},
-    response::{IntoResponse, Redirect},
+    http::header,
+    response::{IntoResponse, Redirect, Response},
 };
+use tokio::task;
 
-use super::{login_error, session_cookies, LoginForm};
-use crate::admin::AdminState;
-use crate::core::auth;
-use crate::core::auth::ClaimsBuilder;
-use crate::db::query;
+use super::{LoginForm, login_error, session_cookies};
+use crate::{
+    admin::AdminState,
+    core::auth::{ClaimsBuilder, create_token, dummy_verify, verify_password},
+    db::query,
+};
 
 /// POST /admin/login — verify credentials, set cookie, redirect.
 pub async fn login_action(
     State(state): State<AdminState>,
     Form(form): Form<LoginForm>,
-) -> axum::response::Response {
+) -> Response {
     // Check rate limit before doing any work
     if state.login_limiter.is_blocked(&form.email) {
         return login_error(&state, "error_too_many_attempts", &form.email);
     }
 
-    let def = state.registry.get_collection(&form.collection).cloned();
-
-    let def = match def {
-        Some(d) if d.is_auth_collection() => d,
-        _ => return login_error(&state, "error_invalid_collection", &form.email),
+    let Some(def) = state
+        .registry
+        .get_collection(&form.collection)
+        .cloned()
+        .filter(|d| d.is_auth_collection())
+    else {
+        return login_error(&state, "error_invalid_collection", &form.email);
     };
 
     let pool = state.pool.clone();
@@ -33,30 +38,22 @@ pub async fn login_action(
     let def_owned = def.clone();
     let verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = task::spawn_blocking(move || {
         let conn = pool.get()?;
 
         // Find user by email
-        let user = query::find_by_email(&conn, &slug, &def_owned, &email)?;
-        let user = match user {
-            Some(u) => u,
-            None => {
-                auth::dummy_verify();
-                return Ok(None);
-            }
+        let Some(user) = query::find_by_email(&conn, &slug, &def_owned, &email)? else {
+            dummy_verify();
+            return Ok(None);
         };
 
         // Verify password
-        let hash = query::get_password_hash(&conn, &slug, &user.id)?;
-        let hash = match hash {
-            Some(h) => h,
-            None => {
-                auth::dummy_verify();
-                return Ok(None);
-            }
+        let Some(hash) = query::get_password_hash(&conn, &slug, &user.id)? else {
+            dummy_verify();
+            return Ok(None);
         };
 
-        if !auth::verify_password(&password, &hash)? {
+        if !verify_password(&password, &hash)? {
             return Ok(None);
         }
 
@@ -121,7 +118,7 @@ pub async fn login_action(
         .exp((chrono::Utc::now().timestamp() as u64) + expiry)
         .build();
 
-    let token = match auth::create_token(&claims, &state.jwt_secret) {
+    let token = match create_token(&claims, &state.jwt_secret) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!("Token creation error: {}", e);
@@ -133,11 +130,13 @@ pub async fn login_action(
     let cookies = session_cookies(&token, expiry, claims.exp, state.config.admin.dev_mode);
 
     let mut response = Redirect::to("/admin").into_response();
+
     for cookie in cookies {
         response.headers_mut().append(
-            axum::http::header::SET_COOKIE,
+            header::SET_COOKIE,
             cookie.parse().expect("cookie header is valid ASCII"),
         );
     }
+
     response
 }

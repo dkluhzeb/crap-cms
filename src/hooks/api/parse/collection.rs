@@ -192,13 +192,15 @@ pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
         if field.index {
             tracing::warn!(
                 "Global '{}': field '{}' has index = true, which is ignored for globals (single-row tables)",
-                slug, field.name
+                slug,
+                field.name
             );
         }
         if field.unique {
             tracing::warn!(
                 "Global '{}': field '{}' has unique = true, which is ignored for globals (single-row tables)",
-                slug, field.name
+                slug,
+                field.name
             );
         }
     }

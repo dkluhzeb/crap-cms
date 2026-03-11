@@ -7,8 +7,8 @@ pub mod upload;
 use anyhow::Result;
 use tonic::transport::Server;
 
-use crate::core::event::EventBus;
 use crate::core::Registry;
+use crate::core::event::EventBus;
 use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 

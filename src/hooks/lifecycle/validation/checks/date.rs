@@ -211,9 +211,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, start_date TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("start_date", FieldType::Date)
-            .min_date("2024-01-01")
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .min_date("2024-01-01")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("start_date".to_string(), json!("2024-06-15T12:00:00.000Z"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -226,16 +228,20 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, start_date TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("start_date", FieldType::Date)
-            .min_date("2024-06-01")
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .min_date("2024-06-01")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("start_date".to_string(), json!("2024-01-15T12:00:00.000Z"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("on or after"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("on or after")
+        );
     }
 
     #[test]
@@ -244,16 +250,20 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, end_date TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("end_date", FieldType::Date)
-            .max_date("2025-12-31")
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("end_date", FieldType::Date)
+                .max_date("2025-12-31")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("end_date".to_string(), json!("2026-03-15T12:00:00.000Z"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("on or before"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("on or before")
+        );
     }
 
     #[test]
@@ -262,10 +272,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("d", FieldType::Date)
-            .min_date("2024-01-01")
-            .max_date("2025-12-31")
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("d", FieldType::Date)
+                .min_date("2024-01-01")
+                .max_date("2025-12-31")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -281,9 +293,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("d", FieldType::Date)
-            .min_date("2024-06")
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("d", FieldType::Date)
+                .min_date("2024-06")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!("2024-01"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -291,9 +305,11 @@ mod tests {
             result.is_err(),
             "Month-only date before min_date should fail"
         );
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("on or after"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("on or after")
+        );
     }
 
     #[test]
@@ -302,9 +318,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("d", FieldType::Date)
-            .max_date("2024-06")
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("d", FieldType::Date)
+                .max_date("2024-06")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!("2024-12"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -312,8 +330,10 @@ mod tests {
             result.is_err(),
             "Month-only date after max_date should fail"
         );
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("on or before"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("on or before")
+        );
     }
 }

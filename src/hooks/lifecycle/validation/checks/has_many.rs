@@ -137,13 +137,15 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Select)
-            .has_many(true)
-            .options(vec![
-                SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
-                SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
-            ])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .options(vec![
+                    SelectOption::new(LocalizedString::Plain("Red".to_string()), "red"),
+                    SelectOption::new(LocalizedString::Plain("Blue".to_string()), "blue"),
+                ])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["red","blue"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -156,20 +158,24 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Select)
-            .has_many(true)
-            .options(vec![SelectOption::new(
-                LocalizedString::Plain("Red".to_string()),
-                "red",
-            )])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Red".to_string()),
+                    "red",
+                )])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["red","invalid"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("invalid option"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("invalid option")
+        );
     }
 
     #[test]
@@ -178,13 +184,15 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Select)
-            .has_many(true)
-            .options(vec![SelectOption::new(
-                LocalizedString::Plain("Red".to_string()),
-                "red",
-            )])
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Select)
+                .has_many(true)
+                .options(vec![SelectOption::new(
+                    LocalizedString::Plain("Red".to_string()),
+                    "red",
+                )])
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!("[]"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -200,9 +208,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["rust","lua","python"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -215,17 +225,21 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .min_length(3)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_length(3)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["rust","ab"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("at least 3 characters"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("at least 3 characters")
+        );
     }
 
     #[test]
@@ -234,17 +248,21 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .max_rows(2)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .max_rows(2)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("at most 2 values"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("at most 2 values")
+        );
     }
 
     #[test]
@@ -253,9 +271,11 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("scores", FieldType::Number)
-            .has_many(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("scores", FieldType::Number)
+                .has_many(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10","20","30"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -268,10 +288,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("scores", FieldType::Number)
-            .has_many(true)
-            .max(50.0)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("scores", FieldType::Number)
+                .has_many(true)
+                .max(50.0)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10","75"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -285,10 +307,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .required(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!("[]"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -302,10 +326,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .required(true)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .required(true)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["rust"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -318,10 +344,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .max_length(10)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .max_length(10)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["abcdefgh","abcdefgh"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -337,10 +365,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .min_rows(3)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .min_rows(3)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["a","b"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -357,10 +387,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("scores", FieldType::Number)
-            .has_many(true)
-            .min_rows(2)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("scores", FieldType::Number)
+                .has_many(true)
+                .min_rows(2)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -377,10 +409,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, scores TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("scores", FieldType::Number)
-            .has_many(true)
-            .min(5.0)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("scores", FieldType::Number)
+                .has_many(true)
+                .min(5.0)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10","2"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -397,10 +431,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, tags TEXT)")
             .unwrap();
-        let fields = vec![FieldDefinition::builder("tags", FieldType::Text)
-            .has_many(true)
-            .max_length(3)
-            .build()];
+        let fields = vec![
+            FieldDefinition::builder("tags", FieldType::Text)
+                .has_many(true)
+                .max_length(3)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["ab","toolong"]"#));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -408,8 +444,10 @@ mod tests {
             result.is_err(),
             "has_many text with value exceeding max_length should fail"
         );
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("at most 3 characters"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("at most 3 characters")
+        );
     }
 }

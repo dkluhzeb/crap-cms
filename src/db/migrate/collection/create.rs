@@ -177,9 +177,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![text_field("meta_title"), text_field("meta_desc")])
-                .build()],
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("meta_title"), text_field("meta_desc")])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
@@ -218,10 +220,12 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("slug", FieldType::Text)
-                .required(true)
-                .unique(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .required(true)
+                    .unique(true)
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         assert!(table_exists(&conn, "posts").unwrap());
@@ -246,11 +250,15 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![FieldDefinition::builder("title", FieldType::Text)
-                    .localized(true)
-                    .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("title", FieldType::Text)
+                            .localized(true)
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
 
@@ -265,11 +273,13 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("title", FieldType::Text)
-                .localized(true)
-                .required(true)
-                .unique(true)
-                .build()],
+            vec![
+                FieldDefinition::builder("title", FieldType::Text)
+                    .localized(true)
+                    .required(true)
+                    .unique(true)
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
 
@@ -283,13 +293,17 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("seo", FieldType::Group)
-                .localized(true)
-                .fields(vec![FieldDefinition::builder("title", FieldType::Text)
-                    .required(true)
-                    .unique(true)
-                    .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![
+                        FieldDefinition::builder("title", FieldType::Text)
+                            .required(true)
+                            .unique(true)
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -303,9 +317,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("layout", FieldType::Row)
-                .fields(vec![text_field("first_name"), text_field("last_name")])
-                .build()],
+            vec![
+                FieldDefinition::builder("layout", FieldType::Row)
+                    .fields(vec![text_field("first_name"), text_field("last_name")])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
@@ -334,9 +350,11 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("details", FieldType::Collapsible)
-                .fields(vec![text_field("summary"), text_field("notes")])
-                .build()],
+            vec![
+                FieldDefinition::builder("details", FieldType::Collapsible)
+                    .fields(vec![text_field("summary"), text_field("notes")])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
@@ -365,12 +383,14 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("Content", vec![text_field("body")]),
-                    FieldTab::new("SEO", vec![text_field("meta_title")]),
-                ])
-                .build()],
+            vec![
+                FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![
+                        FieldTab::new("Content", vec![text_field("body")]),
+                        FieldTab::new("SEO", vec![text_field("meta_title")]),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
@@ -392,17 +412,21 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new(
-                        "Social",
-                        vec![FieldDefinition::builder("social", FieldType::Group)
-                            .fields(vec![text_field("github"), text_field("twitter")])
-                            .build()],
-                    ),
-                    FieldTab::new("Content", vec![text_field("body")]),
-                ])
-                .build()],
+            vec![
+                FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![
+                        FieldTab::new(
+                            "Social",
+                            vec![
+                                FieldDefinition::builder("social", FieldType::Group)
+                                    .fields(vec![text_field("github"), text_field("twitter")])
+                                    .build(),
+                            ],
+                        ),
+                        FieldTab::new("Content", vec![text_field("body")]),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
@@ -431,11 +455,15 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("extra", FieldType::Collapsible)
-                .fields(vec![FieldDefinition::builder("seo", FieldType::Group)
-                    .fields(vec![text_field("title"), text_field("desc")])
-                    .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("extra", FieldType::Collapsible)
+                    .fields(vec![
+                        FieldDefinition::builder("seo", FieldType::Group)
+                            .fields(vec![text_field("title"), text_field("desc")])
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
@@ -457,19 +485,23 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![FieldTab::new(
-                    "Advanced",
-                    vec![FieldDefinition::builder("advanced", FieldType::Collapsible)
-                        .fields(vec![
-                            FieldDefinition::builder("og", FieldType::Group)
-                                .fields(vec![text_field("image"), text_field("title")])
+            vec![
+                FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Advanced",
+                        vec![
+                            FieldDefinition::builder("advanced", FieldType::Collapsible)
+                                .fields(vec![
+                                    FieldDefinition::builder("og", FieldType::Group)
+                                        .fields(vec![text_field("image"), text_field("title")])
+                                        .build(),
+                                    text_field("canonical"),
+                                ])
                                 .build(),
-                            text_field("canonical"),
-                        ])
-                        .build()],
-                )])
-                .build()],
+                        ],
+                    )])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
@@ -494,11 +526,15 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("meta", FieldType::Group)
-                .fields(vec![FieldDefinition::builder("row1", FieldType::Row)
-                    .fields(vec![text_field("title"), text_field("slug")])
-                    .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("row1", FieldType::Row)
+                            .fields(vec![text_field("title"), text_field("slug")])
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -518,14 +554,15 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![FieldDefinition::builder(
-                    "advanced",
-                    FieldType::Collapsible,
-                )
-                .fields(vec![text_field("robots"), text_field("canonical")])
-                .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("advanced", FieldType::Collapsible)
+                            .fields(vec![text_field("robots"), text_field("canonical")])
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -545,14 +582,18 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("settings", FieldType::Group)
-                .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
-                    .tabs(vec![
-                        FieldTab::new("General", vec![text_field("theme")]),
-                        FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
+            vec![
+                FieldDefinition::builder("settings", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("layout", FieldType::Tabs)
+                            .tabs(vec![
+                                FieldTab::new("General", vec![text_field("theme")]),
+                                FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
+                            ])
+                            .build(),
                     ])
-                    .build()])
-                .build()],
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -572,16 +613,22 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("outer", FieldType::Group)
-                .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
-                    .tabs(vec![FieldTab::new(
-                        "Nested",
-                        vec![FieldDefinition::builder("inner", FieldType::Group)
-                            .fields(vec![text_field("deep_value")])
-                            .build()],
-                    )])
-                    .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("outer", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("layout", FieldType::Tabs)
+                            .tabs(vec![FieldTab::new(
+                                "Nested",
+                                vec![
+                                    FieldDefinition::builder("inner", FieldType::Group)
+                                        .fields(vec![text_field("deep_value")])
+                                        .build(),
+                                ],
+                            )])
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -597,15 +644,23 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("a", FieldType::Group)
-                .fields(vec![FieldDefinition::builder("r", FieldType::Row)
-                    .fields(vec![FieldDefinition::builder("b", FieldType::Group)
-                        .fields(vec![FieldDefinition::builder("c", FieldType::Collapsible)
-                            .fields(vec![text_field("leaf")])
-                            .build()])
-                        .build()])
-                    .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("a", FieldType::Group)
+                    .fields(vec![
+                        FieldDefinition::builder("r", FieldType::Row)
+                            .fields(vec![
+                                FieldDefinition::builder("b", FieldType::Group)
+                                    .fields(vec![
+                                        FieldDefinition::builder("c", FieldType::Collapsible)
+                                            .fields(vec![text_field("leaf")])
+                                            .build(),
+                                    ])
+                                    .build(),
+                            ])
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -621,12 +676,16 @@ mod tests {
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
-            vec![FieldDefinition::builder("meta", FieldType::Group)
-                .localized(true)
-                .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
-                    .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
-                    .build()])
-                .build()],
+            vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![
+                        FieldDefinition::builder("layout", FieldType::Tabs)
+                            .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
+                            .build(),
+                    ])
+                    .build(),
+            ],
         );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();

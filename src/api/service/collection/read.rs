@@ -5,8 +5,8 @@ use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 
 use crate::api::content;
-use crate::api::service::convert::document_to_proto;
 use crate::api::service::ContentService;
+use crate::api::service::convert::document_to_proto;
 use crate::core::upload;
 use crate::db::query::{AccessResult, FindQuery, LocaleContext};
 use crate::db::{ops, query};

@@ -9,16 +9,16 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
+use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
-use crap_cms::admin::AdminState;
 use crap_cms::config::{CrapConfig, LocaleConfig};
+use crap_cms::core::Registry;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
-use crap_cms::core::Registry;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -31,9 +31,11 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
-        .required(true)
-        .build()];
+    def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
+    ];
     def
 }
 
@@ -1038,14 +1040,18 @@ async fn upload_api_create_returns_201_with_document() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(json["document"]["id"].is_string());
     assert_eq!(json["document"]["alt"], "Test alt");
-    assert!(json["document"]["filename"]
-        .as_str()
-        .unwrap()
-        .ends_with("photo.png"));
-    assert!(json["document"]["url"]
-        .as_str()
-        .unwrap()
-        .starts_with("/uploads/media/"));
+    assert!(
+        json["document"]["filename"]
+            .as_str()
+            .unwrap()
+            .ends_with("photo.png")
+    );
+    assert!(
+        json["document"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("/uploads/media/")
+    );
     assert_eq!(json["document"]["mime_type"], "image/png");
 }
 
@@ -1110,10 +1116,12 @@ async fn upload_api_create_non_upload_collection_returns_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_string(resp.into_body()).await;
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert!(json["error"]
-        .as_str()
-        .unwrap()
-        .contains("not an upload collection"));
+    assert!(
+        json["error"]
+            .as_str()
+            .unwrap()
+            .contains("not an upload collection")
+    );
 }
 
 #[tokio::test]

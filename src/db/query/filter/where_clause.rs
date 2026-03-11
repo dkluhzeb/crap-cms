@@ -1,13 +1,13 @@
 //! WHERE clause building, subquery SQL generation, and locale column resolution.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-use super::super::{is_valid_identifier, sanitize_locale};
 use super::super::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode};
+use super::super::{is_valid_identifier, sanitize_locale};
 use super::operators::{build_filter_condition, build_op_condition};
-use super::resolve::{resolve_filter, ResolvedFilter, SubqueryCondition};
-use crate::core::field::{FieldDefinition, FieldType};
+use super::resolve::{ResolvedFilter, SubqueryCondition, resolve_filter};
 use crate::core::CollectionDefinition;
+use crate::core::field::{FieldDefinition, FieldType};
 
 // ── Subquery SQL generation ──────────────────────────────────────────────
 

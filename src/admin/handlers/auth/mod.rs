@@ -34,12 +34,17 @@ pub use verify_email::verify_email;
 
 // ── Shared structs and helpers ──────────────────────────────────────────────
 
-use axum::response::{Html, IntoResponse};
+use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
+use serde_json::{Value, json};
 
-use crate::admin::context::{ContextBuilder, PageType};
-use crate::admin::AdminState;
-use crate::core::email;
+use crate::{
+    admin::{
+        AdminState,
+        context::{ContextBuilder, PageType},
+    },
+    core::email,
+};
 
 /// Form data for the login page.
 #[derive(Debug, Deserialize)]
@@ -103,6 +108,7 @@ pub struct LocaleForm {
 /// Build `Set-Cookie` header values for the session.
 pub(super) fn session_cookies(token: &str, expiry: u64, exp: u64, dev_mode: bool) -> Vec<String> {
     let secure = if dev_mode { "" } else { "; Secure" };
+
     vec![
         format!(
             "crap_session={}; HttpOnly; Path=/; SameSite=Lax; Max-Age={}{}",
@@ -118,6 +124,7 @@ pub(super) fn session_cookies(token: &str, expiry: u64, exp: u64, dev_mode: bool
 /// Build `Set-Cookie` header values that clear both session cookies.
 pub(super) fn clear_session_cookies(dev_mode: bool) -> Vec<String> {
     let secure = if dev_mode { "" } else { "; Secure" };
+
     vec![
         format!(
             "crap_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0{}",
@@ -130,29 +137,19 @@ pub(super) fn clear_session_cookies(dev_mode: bool) -> Vec<String> {
     ]
 }
 
-pub(super) fn login_error(
-    state: &AdminState,
-    error: &str,
-    email: &str,
-) -> axum::response::Response {
+pub(super) fn login_error(state: &AdminState, error: &str, email: &str) -> Response {
     let auth_collections = get_auth_collections(state);
     let all_disable_local = all_disable_local(state);
     let show_forgot_password = show_forgot_password(state);
 
     let data = ContextBuilder::auth(state)
         .page(PageType::AuthLogin, "Login")
-        .set("error", serde_json::json!(error))
-        .set("email", serde_json::json!(email))
-        .set("collections", serde_json::json!(auth_collections))
-        .set(
-            "show_collection_picker",
-            serde_json::json!(auth_collections.len() > 1),
-        )
-        .set("disable_local", serde_json::json!(all_disable_local))
-        .set(
-            "show_forgot_password",
-            serde_json::json!(show_forgot_password),
-        )
+        .set("error", json!(error))
+        .set("email", json!(email))
+        .set("collections", json!(auth_collections))
+        .set("show_collection_picker", json!(auth_collections.len() > 1))
+        .set("disable_local", json!(all_disable_local))
+        .set("show_forgot_password", json!(show_forgot_password))
         .build();
 
     match state.render("auth/login", &data) {
@@ -173,9 +170,11 @@ pub(super) fn all_disable_local(state: &AdminState) -> bool {
         .values()
         .filter(|def| def.is_auth_collection())
         .collect();
+
     if auth_collections.is_empty() {
         return false;
     }
+
     auth_collections
         .iter()
         .all(|def| def.auth.as_ref().map(|a| a.disable_local).unwrap_or(false))
@@ -186,6 +185,7 @@ pub(super) fn show_forgot_password(state: &AdminState) -> bool {
     if !email::is_configured(&state.config.email) {
         return false;
     }
+
     state
         .registry
         .collections
@@ -194,35 +194,34 @@ pub(super) fn show_forgot_password(state: &AdminState) -> bool {
         .any(|def| def.auth.as_ref().is_some_and(|a| a.forgot_password))
 }
 
-pub(super) fn get_auth_collections(state: &AdminState) -> Vec<serde_json::Value> {
+pub(super) fn get_auth_collections(state: &AdminState) -> Vec<Value> {
     let mut collections: Vec<_> = state
         .registry
         .collections
         .values()
         .filter(|def| def.is_auth_collection())
         .map(|def| {
-            serde_json::json!({
+            json!({
                 "slug": def.slug,
                 "display_name": def.display_name(),
             })
         })
         .collect();
+
     collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
+
     collections
 }
 
 pub(super) fn render_forgot_success(
     state: &AdminState,
-    auth_collections: &[serde_json::Value],
+    auth_collections: &[Value],
 ) -> Html<String> {
     let data = ContextBuilder::auth(state)
         .page(PageType::AuthForgot, "Forgot Password")
-        .set("success", serde_json::json!(true))
-        .set("collections", serde_json::json!(auth_collections))
-        .set(
-            "show_collection_picker",
-            serde_json::json!(auth_collections.len() > 1),
-        )
+        .set("success", json!(true))
+        .set("collections", json!(auth_collections))
+        .set("show_collection_picker", json!(auth_collections.len() > 1))
         .build();
 
     match state.render("auth/forgot_password", &data) {

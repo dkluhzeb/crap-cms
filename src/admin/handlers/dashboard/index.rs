@@ -1,10 +1,10 @@
 //! Dashboard handler showing collection/global cards with document counts.
 
-use axum::{extract::State, response::Html, Extension};
+use axum::{Extension, extract::State, response::Html};
 
+use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::handlers::shared::extract_editor_locale;
-use crate::admin::AdminState;
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::ops::count_documents;
 

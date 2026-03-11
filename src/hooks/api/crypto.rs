@@ -42,7 +42,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     let secret = auth_secret.to_string();
     let encrypt_fn = lua.create_function(move |_, plaintext: String| -> mlua::Result<String> {
         use aes_gcm::Nonce;
-        use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
+        use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
         use base64::Engine;
         use rand::RngCore;
         use ring::digest;
@@ -68,7 +68,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     let secret2 = auth_secret.to_string();
     let decrypt_fn = lua.create_function(move |_, encoded: String| -> mlua::Result<String> {
         use aes_gcm::Nonce;
-        use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
+        use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
         use base64::Engine;
         use ring::digest;
 

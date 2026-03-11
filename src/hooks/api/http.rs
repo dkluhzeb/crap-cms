@@ -65,7 +65,7 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
                 return Err(mlua::Error::RuntimeError(format!(
                     "unsupported HTTP method: {}",
                     method
-                )))
+                )));
             }
         };
 

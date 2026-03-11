@@ -260,10 +260,12 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![ImageSizeBuilder::new("thumbnail")
-            .width(300)
-            .height(300)
-            .build()];
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumbnail")
+                .width(300)
+                .height(300)
+                .build(),
+        ];
 
         let mut doc = Document::new("test-id".into());
         doc.fields
@@ -283,10 +285,12 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
-            .width(100)
-            .height(100)
-            .build()];
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(100)
+                .height(100)
+                .build(),
+        ];
         upload.format_options = FormatOptions {
             webp: None,
             avif: Some(FormatQuality::new(50, false)),
@@ -333,10 +337,12 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
-            .width(100)
-            .height(100)
-            .build()];
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(100)
+                .height(100)
+                .build(),
+        ];
         upload.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: Some(FormatQuality::new(50, false)),
@@ -376,10 +382,12 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
-            .width(100)
-            .height(100)
-            .build()];
+        upload.image_sizes = vec![
+            ImageSizeBuilder::new("thumb")
+                .width(100)
+                .height(100)
+                .build(),
+        ];
 
         let mut doc = Document::new("id1".into());
         doc.fields

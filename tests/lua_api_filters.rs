@@ -263,7 +263,10 @@ fn collections_config_get_includes_select_options() {
         return table.concat(parts, "|")
     "#,
     );
-    assert_eq!(result, "Draft=draft|Published=published|Archived=archived|Active=active|Red=red|Blue=blue|Green=green|True=true|False=false");
+    assert_eq!(
+        result,
+        "Draft=draft|Published=published|Archived=archived|Active=active|Red=red|Blue=blue|Green=green|True=true|False=false"
+    );
 }
 
 #[test]

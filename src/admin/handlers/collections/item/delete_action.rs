@@ -1,10 +1,10 @@
-use crate::admin::handlers::collections::shared::delete_action_impl;
 use crate::admin::AdminState;
+use crate::admin::handlers::collections::shared::delete_action_impl;
 use crate::core::auth::AuthUser;
 use axum::{
+    Extension,
     extract::{Path, State},
     response::IntoResponse,
-    Extension,
 };
 
 /// DELETE /admin/collections/{slug}/{id} — delete an item (no form body)

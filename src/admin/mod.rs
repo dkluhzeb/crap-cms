@@ -14,10 +14,10 @@ use handlebars::Handlebars;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::CrapConfig;
+use crate::core::Registry;
 use crate::core::email::EmailRenderer;
 use crate::core::event::EventBus;
 use crate::core::rate_limit::LoginRateLimiter;
-use crate::core::Registry;
 use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 

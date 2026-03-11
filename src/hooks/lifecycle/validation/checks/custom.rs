@@ -72,9 +72,11 @@ mod tests {
         data.insert("name".to_string(), json!("bad"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0]
-            .message
-            .contains("cannot be bad"));
+        assert!(
+            result.unwrap_err().errors[0]
+                .message
+                .contains("cannot be bad")
+        );
     }
 
     #[test]

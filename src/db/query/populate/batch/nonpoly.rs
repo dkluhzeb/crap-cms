@@ -3,11 +3,11 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
-use super::super::{document_to_json, PopulateCache, PopulateContext, PopulateOpts};
+use super::super::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
 use super::populate_relationships_batch_cached;
 use crate::core::Document;
-use crate::db::query::read::find_by_ids;
 use crate::db::query::LocaleContext;
+use crate::db::query::read::find_by_ids;
 
 /// Batch fetch and distribute for non-polymorphic has-many fields.
 pub(super) fn batch_nonpoly_has_many(

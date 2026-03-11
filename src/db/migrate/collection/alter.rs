@@ -421,9 +421,11 @@ mod tests {
                 FieldDefinition::builder("tabs", FieldType::Tabs)
                     .tabs(vec![FieldTab::new(
                         "SEO",
-                        vec![FieldDefinition::builder("seo", FieldType::Group)
-                            .fields(vec![text_field("og_title"), text_field("og_desc")])
-                            .build()],
+                        vec![
+                            FieldDefinition::builder("seo", FieldType::Group)
+                                .fields(vec![text_field("og_title"), text_field("og_desc")])
+                                .build(),
+                        ],
                     )])
                     .build(),
             ],

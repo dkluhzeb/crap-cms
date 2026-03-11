@@ -7,7 +7,7 @@ mod find_by_id;
 pub(super) mod select;
 
 pub use back_references::{
-    find_back_references, find_missing_relations, BackReference, MissingRelation,
+    BackReference, MissingRelation, find_back_references, find_missing_relations,
 };
 pub use count::{count, count_where_field_eq, count_with_search};
 pub use find::find;

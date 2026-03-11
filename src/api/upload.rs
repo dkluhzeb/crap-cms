@@ -6,17 +6,17 @@
 //! - `DELETE /api/upload/{slug}/{id}`  — delete upload document + files
 
 use axum::{
+    Router,
     extract::{Path, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{delete, patch, post},
-    Router,
 };
 use std::collections::HashMap;
 
+use crate::admin::AdminState;
 use crate::admin::handlers::collections::forms::parse_multipart_form;
 use crate::admin::server::load_auth_user;
-use crate::admin::AdminState;
 use crate::core::auth::{self, AuthUser};
 use crate::core::event::EventUser;
 use crate::core::upload::{self, inject_upload_metadata};
@@ -81,7 +81,7 @@ async fn create_upload(
             return json_error(
                 StatusCode::NOT_FOUND,
                 &format!("Collection '{}' not found", slug),
-            )
+            );
         }
     };
 
@@ -113,13 +113,13 @@ async fn create_upload(
     };
     match access {
         Ok(AccessResult::Denied) => {
-            return json_error(StatusCode::FORBIDDEN, "Create access denied")
+            return json_error(StatusCode::FORBIDDEN, "Create access denied");
         }
         Err(e) => {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Access check error: {}", e),
-            )
+            );
         }
         _ => {}
     }
@@ -131,7 +131,7 @@ async fn create_upload(
             return json_error(
                 StatusCode::BAD_REQUEST,
                 &format!("Multipart parse error: {}", e),
-            )
+            );
         }
     };
 
@@ -142,7 +142,7 @@ async fn create_upload(
             return json_error(
                 StatusCode::BAD_REQUEST,
                 "No file provided (use field name '_file')",
-            )
+            );
         }
     };
 
@@ -171,7 +171,7 @@ async fn create_upload(
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Task error: {}", e),
-            )
+            );
         }
     };
     let queued_conversions = processed.queued_conversions.clone();
@@ -301,7 +301,7 @@ async fn update_upload(
             return json_error(
                 StatusCode::NOT_FOUND,
                 &format!("Collection '{}' not found", slug),
-            )
+            );
         }
     };
 
@@ -336,13 +336,13 @@ async fn update_upload(
     };
     match access {
         Ok(AccessResult::Denied) => {
-            return json_error(StatusCode::FORBIDDEN, "Update access denied")
+            return json_error(StatusCode::FORBIDDEN, "Update access denied");
         }
         Err(e) => {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Access check error: {}", e),
-            )
+            );
         }
         _ => {}
     }
@@ -354,7 +354,7 @@ async fn update_upload(
             return json_error(
                 StatusCode::BAD_REQUEST,
                 &format!("Multipart parse error: {}", e),
-            )
+            );
         }
     };
 
@@ -393,7 +393,7 @@ async fn update_upload(
                     return json_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         &format!("Task error: {}", e),
-                    )
+                    );
                 }
             }
         }
@@ -532,7 +532,7 @@ async fn delete_upload(
             return json_error(
                 StatusCode::NOT_FOUND,
                 &format!("Collection '{}' not found", slug),
-            )
+            );
         }
     };
 
@@ -567,13 +567,13 @@ async fn delete_upload(
     };
     match access {
         Ok(AccessResult::Denied) => {
-            return json_error(StatusCode::FORBIDDEN, "Delete access denied")
+            return json_error(StatusCode::FORBIDDEN, "Delete access denied");
         }
         Err(e) => {
             return json_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 &format!("Access check error: {}", e),
-            )
+            );
         }
         _ => {}
     }

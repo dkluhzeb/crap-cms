@@ -1,8 +1,8 @@
 //! Operator SQL generation for individual filter conditions.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
-use super::super::{is_valid_identifier, Filter, FilterOp};
+use super::super::{Filter, FilterOp, is_valid_identifier};
 
 /// Generate a SQL condition applying a [`FilterOp`] to an arbitrary SQL
 /// expression, appending bind parameters to `params`.
@@ -251,9 +251,11 @@ mod tests {
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let result = build_filter_condition(&f, &mut params);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid field name"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid field name")
+        );
     }
 }

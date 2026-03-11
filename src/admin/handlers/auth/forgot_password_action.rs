@@ -2,11 +2,13 @@ use axum::{
     extract::{Form, State},
     response::Html,
 };
+use chrono::Utc;
+use nanoid::nanoid;
+use serde_json::json;
+use tokio::task;
 
-use super::{get_auth_collections, render_forgot_success, ForgotPasswordForm};
-use crate::admin::AdminState;
-use crate::core::email;
-use crate::db::query;
+use super::{ForgotPasswordForm, get_auth_collections, render_forgot_success};
+use crate::{admin::AdminState, core::email, db::query};
 
 /// POST /admin/forgot-password — look up user, generate token, send email.
 /// Always shows success (don't leak whether email exists).
@@ -39,7 +41,7 @@ pub async fn forgot_password_action(
             // Load email renderer (we do this on the main thread since it's cheap)
             let email_renderer = state.email_renderer.clone();
 
-            tokio::task::spawn_blocking(move || {
+            task::spawn_blocking(move || {
                 let conn = match pool.get() {
                     Ok(c) => c,
                     Err(e) => {
@@ -58,8 +60,8 @@ pub async fn forgot_password_action(
                 };
 
                 // Generate reset token (nanoid)
-                let token = nanoid::nanoid!();
-                let exp = chrono::Utc::now().timestamp() + reset_expiry as i64;
+                let token = nanoid!();
+                let exp = Utc::now().timestamp() + reset_expiry as i64;
 
                 if let Err(e) = query::set_reset_token(&conn, &slug, &user.id, &token, exp) {
                     tracing::error!("Failed to set reset token: {}", e);
@@ -76,7 +78,7 @@ pub async fn forgot_password_action(
 
                 let html = match email_renderer.render(
                     "password_reset",
-                    &serde_json::json!({
+                    &json!({
                         "reset_url": reset_url,
                         "expiry_minutes": reset_expiry / 60,
                         "from_name": email_config.from_name,

@@ -4,8 +4,8 @@ use anyhow::Context as _;
 use tonic::{Request, Response, Status};
 
 use crate::api::content;
-use crate::api::service::convert::{prost_struct_to_hashmap, prost_struct_to_json_map};
 use crate::api::service::ContentService;
+use crate::api::service::convert::{prost_struct_to_hashmap, prost_struct_to_json_map};
 use crate::db::query::{self, AccessResult, FindQuery, LocaleContext};
 
 use super::filter_builder::FilterBuilder;

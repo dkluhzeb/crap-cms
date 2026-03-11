@@ -4,12 +4,12 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
 use super::super::{
-    document_to_json, parse_poly_ref, PopulateCache, PopulateContext, PopulateOpts,
+    PopulateCache, PopulateContext, PopulateOpts, document_to_json, parse_poly_ref,
 };
 use super::populate_relationships_cached;
 use crate::core::Document;
-use crate::db::query::read::{find_by_id, find_by_ids};
 use crate::db::query::LocaleContext;
+use crate::db::query::read::{find_by_id, find_by_ids};
 
 /// Populate a polymorphic has-many field.
 pub(super) fn populate_poly_has_many(
@@ -168,8 +168,8 @@ mod tests {
     use super::super::super::test_helpers::*;
     use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
-    use crate::core::field::*;
     use crate::core::Registry;
+    use crate::core::field::*;
     use std::collections::HashSet;
 
     #[test]

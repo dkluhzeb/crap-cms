@@ -1,8 +1,8 @@
 //! Field/column resolution helpers for FTS5 indexing.
 
 use crate::config::LocaleConfig;
-use crate::core::field::FieldType;
 use crate::core::CollectionDefinition;
+use crate::core::field::FieldType;
 use crate::db::query::sanitize_locale;
 
 /// Determine which logical fields should be indexed in the FTS5 table.
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn get_fts_fields_empty_for_no_text() {
         let def = simple_def(vec![
-            FieldDefinition::builder("count", FieldType::Number).build()
+            FieldDefinition::builder("count", FieldType::Number).build(),
         ]);
         assert!(get_fts_fields(&def).is_empty());
     }
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn get_fts_columns_empty_when_no_text_fields() {
         let def = simple_def(vec![
-            FieldDefinition::builder("count", FieldType::Number).build()
+            FieldDefinition::builder("count", FieldType::Number).build(),
         ]);
         let cols = get_fts_columns(&def, &locale_config_en_de());
         assert!(cols.is_empty());

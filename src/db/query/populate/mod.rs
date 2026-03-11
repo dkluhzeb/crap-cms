@@ -94,9 +94,9 @@ pub fn populate_relationships_batch(
 /// Shared test helpers used by single.rs and batch.rs test modules.
 #[cfg(test)]
 pub(crate) mod test_helpers {
+    use crate::core::Registry;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use crate::core::Registry;
     use rusqlite::Connection;
 
     pub fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
