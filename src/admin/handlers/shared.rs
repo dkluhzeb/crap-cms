@@ -36,7 +36,7 @@ pub struct PaginationParams {
 /// Extract the editor locale from the `crap_editor_locale` cookie.
 /// Falls back to the config's default locale if the cookie is absent or invalid.
 /// Returns `None` if locales are not enabled.
-pub(super) fn extract_editor_locale(headers: &axum::http::HeaderMap, config: &crate::config::LocaleConfig) -> Option<String> {
+pub(crate) fn extract_editor_locale(headers: &axum::http::HeaderMap, config: &crate::config::LocaleConfig) -> Option<String> {
     if !config.is_enabled() {
         return None;
     }
@@ -54,18 +54,18 @@ pub(super) fn extract_editor_locale(headers: &axum::http::HeaderMap, config: &cr
 }
 
 /// Extract the user document from AuthUser extension (for access checks).
-pub(super) fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&crate::core::Document> {
+pub(crate) fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&crate::core::Document> {
     auth_user.as_ref().map(|Extension(au)| &au.user_doc)
 }
 
 
 /// Extract an EventUser from the AuthUser extension (for SSE event attribution).
-pub(super) fn get_event_user(auth_user: &Option<Extension<AuthUser>>) -> Option<crate::core::event::EventUser> {
+pub(crate) fn get_event_user(auth_user: &Option<Extension<AuthUser>>) -> Option<crate::core::event::EventUser> {
     auth_user.as_ref().map(|Extension(au)| crate::core::event::EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
 }
 
 /// Strip denied fields from a document's fields map.
-pub(super) fn strip_denied_fields(
+pub(crate) fn strip_denied_fields(
     fields: &mut HashMap<String, serde_json::Value>,
     denied: &[String],
 ) {
@@ -76,7 +76,7 @@ pub(super) fn strip_denied_fields(
 
 /// Helper to check collection/global-level access. Returns AccessResult or renders a 403 page.
 #[allow(clippy::result_large_err)]
-pub(super) fn check_access_or_forbid(
+pub(crate) fn check_access_or_forbid(
     state: &AdminState,
     access_ref: Option<&str>,
     auth_user: &Option<Extension<AuthUser>>,
@@ -105,7 +105,7 @@ pub(super) fn check_access_or_forbid(
 /// Build locale template context (selector data) from config + current locale.
 /// Returns `(locale_ctx_for_db, template_json)` where template_json has
 /// `has_locales`, `current_locale`, `locales` (array with value/label/selected).
-pub(super) fn build_locale_template_data(
+pub(crate) fn build_locale_template_data(
     state: &AdminState,
     requested_locale: Option<&str>,
 ) -> (Option<LocaleContext>, serde_json::Value) {
@@ -131,13 +131,13 @@ pub(super) fn build_locale_template_data(
 }
 
 /// Auto-generate a label from a field name (e.g. "my_field" -> "My Field").
-pub(super) fn auto_label_from_name(name: &str) -> String {
+pub(crate) fn auto_label_from_name(name: &str) -> String {
     crate::core::field::to_title_case(name)
 }
 
 /// Parse `where[field][op]=value` parameters from a raw query string.
 /// Returns empty vec for malformed/invalid params. Best-effort parsing.
-pub(super) fn parse_where_params(
+pub(crate) fn parse_where_params(
     raw_query: &str,
     def: &CollectionDefinition,
 ) -> Vec<FilterClause> {
@@ -185,7 +185,7 @@ pub(super) fn parse_where_params(
 }
 
 /// Simple percent-decoding for URL query values.
-pub(super) fn url_decode(s: &str) -> String {
+pub(crate) fn url_decode(s: &str) -> String {
     let mut result = String::with_capacity(s.len());
     let mut chars = s.bytes();
     while let Some(b) = chars.next() {
@@ -207,7 +207,7 @@ pub(super) fn url_decode(s: &str) -> String {
 /// Validate a sort field name against the collection definition.
 /// Strips leading `-` (descending) before validation.
 /// Returns the validated sort string (with `-` prefix if present), or None.
-pub(super) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<String> {
+pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<String> {
     let field_name = sort.strip_prefix('-').unwrap_or(sort);
     let system_cols = ["id", "created_at", "updated_at", "_status"];
     let valid = system_cols.contains(&field_name)
@@ -220,7 +220,7 @@ pub(super) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<St
 }
 
 /// Check if a field type is eligible for display as a list column.
-pub(super) fn is_column_eligible(field_type: &FieldType) -> bool {
+pub(crate) fn is_column_eligible(field_type: &FieldType) -> bool {
     matches!(
         field_type,
         FieldType::Text
@@ -237,7 +237,7 @@ pub(super) fn is_column_eligible(field_type: &FieldType) -> bool {
 }
 
 /// Build a list URL preserving all query params (pagination, search, sort, filters).
-pub(super) fn build_list_url(
+pub(crate) fn build_list_url(
     base: &str,
     page: i64,
     per_page: Option<i64>,
@@ -279,7 +279,7 @@ fn url_encode(s: &str) -> String {
 }
 
 /// Extract only `where[...]` params from a raw query string (for pagination link preservation).
-pub(super) fn extract_where_params(raw_query: &str) -> String {
+pub(crate) fn extract_where_params(raw_query: &str) -> String {
     raw_query
         .split('&')
         .filter(|p| p.starts_with("where%5B") || p.starts_with("where["))
@@ -290,7 +290,7 @@ pub(super) fn extract_where_params(raw_query: &str) -> String {
 /// Compute a custom row label for an array or blocks row.
 ///
 /// Priority: `row_label` Lua function > block-level `label_field` > field-level `label_field` > None.
-pub(super) fn compute_row_label(
+pub(crate) fn compute_row_label(
     admin: &crate::core::field::FieldAdmin,
     block_label_field: Option<&str>,
     row_data: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -322,7 +322,7 @@ pub(super) fn compute_row_label(
 }
 
 /// Check if the current locale is a non-default locale (fields should be locked).
-pub(super) fn is_non_default_locale(state: &AdminState, requested_locale: Option<&str>) -> bool {
+pub(crate) fn is_non_default_locale(state: &AdminState, requested_locale: Option<&str>) -> bool {
     let config = &state.config.locale;
     if !config.is_enabled() {
         return false;
@@ -332,7 +332,7 @@ pub(super) fn is_non_default_locale(state: &AdminState, requested_locale: Option
 }
 
 /// Map a `VersionSnapshot` to the JSON object used in templates.
-pub(super) fn version_to_json(v: VersionSnapshot) -> serde_json::Value {
+pub(crate) fn version_to_json(v: VersionSnapshot) -> serde_json::Value {
     serde_json::json!({
         "id": v.id,
         "version": v.version,
@@ -344,7 +344,7 @@ pub(super) fn version_to_json(v: VersionSnapshot) -> serde_json::Value {
 
 /// Fetch the last N versions + total count for sidebar display.
 /// Returns `(versions_json, total_count)`.
-pub(super) fn fetch_version_sidebar_data(
+pub(crate) fn fetch_version_sidebar_data(
     pool: &DbPool,
     table_name: &str,
     parent_id: &str,
@@ -364,7 +364,7 @@ pub(super) fn fetch_version_sidebar_data(
 
 /// Execute the unpublish flow on an already-open transaction:
 /// set status to draft, build snapshot, create version, prune.
-pub(super) fn do_unpublish(
+pub(crate) fn do_unpublish(
     tx: &rusqlite::Transaction,
     table_name: &str,
     parent_id: &str,
@@ -386,7 +386,7 @@ pub(super) fn do_unpublish(
 /// Translate validation errors using the translation system.
 /// If a FieldError has a `key`, resolve it through `Translations::get_interpolated`;
 /// otherwise use the raw English `message` (custom Lua validator messages).
-pub(super) fn translate_validation_errors(
+pub(crate) fn translate_validation_errors(
     ve: &ValidationError,
     translations: &Translations,
     locale: &str,
@@ -404,7 +404,7 @@ pub(super) fn translate_validation_errors(
 }
 
 /// Render a 403 Forbidden page with the given message.
-pub(super) fn forbidden(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
+pub(crate) fn forbidden(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = ContextBuilder::new(state, None)
         .page(PageType::Error403, "Forbidden")
         .set("message", serde_json::Value::String(message.to_string()))
@@ -418,7 +418,7 @@ pub(super) fn forbidden(state: &AdminState, message: &str) -> (StatusCode, Html<
 }
 
 /// Create a redirect response to the given URL (303 See Other).
-pub(super) fn redirect_response(url: &str) -> axum::response::Response {
+pub(crate) fn redirect_response(url: &str) -> axum::response::Response {
     Redirect::to(url).into_response()
 }
 
@@ -426,7 +426,7 @@ pub(super) fn redirect_response(url: &str) -> axum::response::Response {
 /// page navigation instead of an in-place body swap. This avoids issues with custom
 /// elements (ProseMirror richtext editors in blocks) not re-initializing properly during
 /// HTMX innerHTML swaps after write operations.
-pub(super) fn htmx_redirect(url: &str) -> axum::response::Response {
+pub(crate) fn htmx_redirect(url: &str) -> axum::response::Response {
     axum::response::Response::builder()
         .status(StatusCode::OK)
         .header("HX-Redirect", url)
@@ -435,7 +435,7 @@ pub(super) fn htmx_redirect(url: &str) -> axum::response::Response {
 }
 
 /// Render a template and set the X-Crap-Toast header for client-side notifications.
-pub(super) fn html_with_toast(state: &AdminState, template: &str, data: &serde_json::Value, toast: &str) -> axum::response::Response {
+pub(crate) fn html_with_toast(state: &AdminState, template: &str, data: &serde_json::Value, toast: &str) -> axum::response::Response {
     match state.render(template, data) {
         Ok(html) => {
             let mut resp = Html(html).into_response();
@@ -453,7 +453,7 @@ pub(super) fn html_with_toast(state: &AdminState, template: &str, data: &serde_j
 }
 
 /// Render a template, falling back to a plain error page on failure.
-pub(super) fn render_or_error(state: &AdminState, template: &str, data: &serde_json::Value) -> Html<String> {
+pub(crate) fn render_or_error(state: &AdminState, template: &str, data: &serde_json::Value) -> Html<String> {
     match state.render(template, data) {
         Ok(html) => Html(html),
         Err(e) => {
@@ -464,7 +464,7 @@ pub(super) fn render_or_error(state: &AdminState, template: &str, data: &serde_j
 }
 
 /// Render a 404 Not Found page with the given message.
-pub(super) fn not_found(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
+pub(crate) fn not_found(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = ContextBuilder::new(state, None)
         .page(PageType::Error404, "Not Found")
         .set("message", serde_json::Value::String(message.to_string()))
@@ -478,7 +478,7 @@ pub(super) fn not_found(state: &AdminState, message: &str) -> (StatusCode, Html<
 }
 
 /// Render a 500 Internal Server Error page with the given message.
-pub(super) fn server_error(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
+pub(crate) fn server_error(state: &AdminState, message: &str) -> (StatusCode, Html<String>) {
     let data = ContextBuilder::new(state, None)
         .page(PageType::Error500, "Server Error")
         .set("message", serde_json::Value::String(message.to_string()))

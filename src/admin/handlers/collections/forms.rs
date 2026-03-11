@@ -4,15 +4,14 @@ use axum::extract::{FromRequest, Multipart};
 use std::collections::HashMap;
 
 use crate::admin::AdminState;
-use crate::core::upload::UploadedFileBuilder;
-use crate::core::field::FieldType;
-use crate::core::upload::UploadedFile;
+use crate::core::upload::{UploadedFile, UploadedFileBuilder};
+use crate::core::field::{FieldType, FieldDefinition, flatten_array_sub_fields};
 
 /// Extract join table data from form submission for has-many relationships and array fields.
 /// Returns a map suitable for `query::save_join_table_data`.
 pub(crate) fn extract_join_data_from_form(
     form: &HashMap<String, String>,
-    field_defs: &[crate::core::field::FieldDefinition],
+    field_defs: &[FieldDefinition],
 ) -> HashMap<String, serde_json::Value> {
     let mut join_data = HashMap::new();
 
@@ -61,7 +60,7 @@ pub(crate) fn extract_join_data_from_form(
 /// them to JSON array strings (e.g., `"a,b"` → `'["a","b"]'`) for storage in TEXT columns.
 pub(crate) fn transform_select_has_many(
     form: &mut HashMap<String, String>,
-    field_defs: &[crate::core::field::FieldDefinition],
+    field_defs: &[FieldDefinition],
 ) {
     for field in field_defs {
         match field.field_type {
@@ -131,7 +130,7 @@ pub(crate) fn transform_select_has_many(
 fn parse_composite_form_data(
     form: &HashMap<String, String>,
     field_name: &str,
-    sub_field_defs: &[crate::core::field::FieldDefinition],
+    sub_field_defs: &[FieldDefinition],
 ) -> Vec<serde_json::Value> {
     let prefix = format!("{}[", field_name);
     let mut rows: std::collections::BTreeMap<usize, Vec<(String, String)>> = std::collections::BTreeMap::new();
@@ -187,7 +186,7 @@ fn parse_composite_form_data(
         }
 
         // Process nested keys recursively
-        let flat_defs = crate::core::field::flatten_array_sub_fields(sub_field_defs);
+        let flat_defs = flatten_array_sub_fields(sub_field_defs);
         for (base_key, nested_entries) in nested_keys {
             // Look up the field definition for this sub-field to determine type
             let sf_def = flat_defs.iter().find(|sf| sf.name == base_key).copied();
@@ -229,7 +228,7 @@ fn parse_composite_form_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldDefinition, SelectOption, LocalizedString};
+    use crate::core::field::{FieldDefinition, FieldTab, SelectOption, LocalizedString};
 
     fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
@@ -462,7 +461,7 @@ mod tests {
         let blocks_field = make_field("content", FieldType::Blocks);
         let mut tabs_field = make_field("page_settings", FieldType::Tabs);
         tabs_field.tabs = vec![
-            crate::core::field::FieldTab::new("Content", vec![blocks_field]),
+            FieldTab::new("Content", vec![blocks_field]),
         ];
 
         let result = extract_join_data_from_form(&form, &[
@@ -607,8 +606,8 @@ mod tests {
         let sub_defs = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![
-                    crate::core::field::FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
-                    crate::core::field::FieldTab::new("Content", vec![make_field("body", FieldType::Text)]),
+                    FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
+                    FieldTab::new("Content", vec![make_field("body", FieldType::Text)]),
                 ])
                 .build(),
         ];

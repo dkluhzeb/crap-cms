@@ -2,11 +2,15 @@
 
 use axum::{
     extract::{Path, State},
+    Extension,
 };
+use crate::core::auth::{AuthUser, Claims};
 use crate::core::upload;
 use crate::db::query;
+use crate::db::query::{AccessResult, FindQuery};
 
 use crate::admin::AdminState;
+use crate::admin::handlers::shared::check_access_or_forbid;
 
 #[derive(serde::Deserialize)]
 pub struct SearchQuery {
@@ -20,10 +24,24 @@ pub async fn search_collection(
     State(state): State<AdminState>,
     Path(slug): Path<String>,
     axum::extract::Query(params): axum::extract::Query<SearchQuery>,
+    _claims: Option<Extension<Claims>>,
+    auth_user: Option<Extension<AuthUser>>,
 ) -> axum::Json<serde_json::Value> {
     let Some(def) = state.registry.get_collection(&slug) else {
         return axum::Json(serde_json::json!([]));
     };
+
+    // Check read access
+    let access_result = match check_access_or_forbid(
+        &state, def.access.read.as_deref(), &auth_user, None, None,
+    ) {
+        Ok(r) => r,
+        Err(_) => return axum::Json(serde_json::json!([])),
+    };
+    if matches!(access_result, AccessResult::Denied) {
+        return axum::Json(serde_json::json!([]));
+    }
+
     let title_field = def.title_field().map(|s| s.to_string());
     let search_term = params.q.unwrap_or_default().to_lowercase();
     let limit = params.limit
@@ -41,9 +59,15 @@ pub async fn search_collection(
     let locale_ctx = crate::db::query::LocaleContext::from_locale_string(
         None, &state.config.locale,
     );
-    let mut find_query = query::FindQuery::new();
+    let mut find_query = FindQuery::new();
     find_query.limit = Some(limit as i64);
     find_query.search = if search_term.is_empty() { None } else { Some(search_term.clone()) };
+
+    // Merge access constraint filters
+    if let AccessResult::Constrained(ref constraint_filters) = access_result {
+        find_query.filters.extend(constraint_filters.clone());
+    }
+
     let Ok(mut docs) = query::find(&conn, &slug, def, &find_query, locale_ctx.as_ref()) else {
         return axum::Json(serde_json::json!([]));
     };

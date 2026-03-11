@@ -9,6 +9,8 @@ use axum::{
 use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::core::auth::{AuthUser, Claims};
+use crate::admin::handlers::shared::extract_editor_locale;
+use crate::db::ops::count_documents;
 
 /// Render the admin dashboard with collection and global summary cards.
 pub async fn index(
@@ -22,7 +24,7 @@ pub async fn index(
     {
         let conn = state.pool.get().ok();
         for (slug, def) in &state.registry.collections {
-            let count = crate::db::ops::count_documents(&state.pool, slug, def, &[], None)
+            let count = count_documents(&state.pool, slug, def, &[], None)
                 .unwrap_or(0);
             let last_updated = conn.as_ref().and_then(|c| {
                 c.query_row(
@@ -62,7 +64,7 @@ pub async fn index(
     collection_cards.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
     global_cards.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
 
-    let editor_locale = super::shared::extract_editor_locale(&headers, &state.config.locale);
+    let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)

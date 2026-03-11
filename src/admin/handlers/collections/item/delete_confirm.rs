@@ -1,5 +1,3 @@
-//! Collection delete handlers.
-
 use axum::{
     extract::{Path, State},
     response::IntoResponse,
@@ -11,10 +9,9 @@ use crate::core::auth::{AuthUser, Claims};
 use crate::db::ops;
 use crate::db::query::{self, AccessResult};
 
-use super::{
-    get_user_doc, get_event_user, check_access_or_forbid, extract_editor_locale,
-    forbidden, htmx_redirect,
-    render_or_error, not_found,
+use crate::admin::handlers::shared::{
+    check_access_or_forbid, extract_editor_locale,
+    render_or_error, not_found, forbidden,
 };
 
 /// GET /admin/collections/{slug}/{id}/delete — delete confirmation page
@@ -78,64 +75,4 @@ pub async fn delete_confirm(
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/delete", &data).into_response()
-}
-
-/// DELETE /admin/collections/{slug}/{id} — delete an item (no form body)
-pub async fn delete_action_simple(
-    State(state): State<AdminState>,
-    Path((slug, id)): Path<(String, String)>,
-    auth_user: Option<Extension<AuthUser>>,
-) -> impl IntoResponse {
-    delete_action_impl(&state, &slug, &id, &auth_user).await.into_response()
-}
-
-pub(super) async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user: &Option<Extension<AuthUser>>) -> axum::response::Response {
-    let def = match state.registry.get_collection(slug) {
-        Some(d) => d.clone(),
-        None => return axum::response::Redirect::to("/admin/collections").into_response(),
-    };
-
-    // Check delete access
-    match check_access_or_forbid(
-        state, def.access.delete.as_deref(), auth_user, Some(id), None,
-    ) {
-        Ok(AccessResult::Denied) => return forbidden(state, "You don't have permission to delete this item").into_response(),
-        Err(resp) => return resp,
-        _ => {}
-    }
-
-    // Before hooks + delete + upload cleanup in a single transaction
-    let pool = state.pool.clone();
-    let runner = state.hook_runner.clone();
-    let def_clone = def.clone();
-    let slug_owned = slug.to_string();
-    let id_owned = id.to_string();
-    let user_doc = get_user_doc(auth_user).cloned();
-    let config_dir = state.config_dir.clone();
-    let result = tokio::task::spawn_blocking(move || {
-        crate::service::delete_document(
-            &pool, &runner, &slug_owned, &id_owned, &def_clone, user_doc.as_ref(),
-            Some(&config_dir),
-        )
-    }).await;
-
-    match result {
-        Ok(Ok(_req_context)) => {
-            state.hook_runner.publish_event(
-                &state.event_bus, &def.hooks, def.live.as_ref(),
-                crate::core::event::EventTarget::Collection,
-                crate::core::event::EventOperation::Delete,
-                slug.to_string(), id.to_string(), std::collections::HashMap::new(),
-                get_event_user(auth_user),
-            );
-        }
-        Ok(Err(e)) => {
-            tracing::error!("Delete error: {}", e);
-        }
-        Err(e) => {
-            tracing::error!("Delete task error: {}", e);
-        }
-    }
-
-    htmx_redirect(&format!("/admin/collections/{}", slug))
 }

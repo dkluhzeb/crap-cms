@@ -1,35 +1,29 @@
-//! Collection CRUD handlers: list, create, edit, delete.
+//! Collection CRUD handlers re-exports.
 
 pub mod forms;
-pub mod list;
-pub mod create;
-pub mod edit;
-pub mod delete;
-pub mod versions;
-pub mod search;
+pub mod shared;
+pub mod list_collections;
+pub mod items;
+pub mod item;
+pub mod api;
 
-// Re-export shared helpers so submodules can access them via `super::shared`.
-// These are needed because `handlers::shared` is a private module of `handlers`;
-// grandchild modules cannot use `super::super::shared` directly.
-pub(super) use super::shared::{
-    PaginationParams,
-    get_user_doc, get_event_user, strip_denied_fields,
-    check_access_or_forbid, extract_editor_locale, build_locale_template_data,
-    is_non_default_locale, auto_label_from_name, url_decode,
-    parse_where_params, validate_sort, build_list_url, is_column_eligible,
-    extract_where_params,
-    build_field_contexts, enrich_field_contexts,
-    apply_display_conditions, split_sidebar_fields,
-    translate_validation_errors,
-    version_to_json, fetch_version_sidebar_data,
-    forbidden, redirect_response, htmx_redirect, html_with_toast,
-    render_or_error, not_found, server_error,
-};
+// Re-export common handlers for the router
+pub use list_collections::list_collections;
+pub use items::list::list_items;
+pub use items::create_form::create_form;
+pub use items::create_action::create_action;
+pub use items::evaluate_conditions::evaluate_conditions;
+pub use item::edit_form::edit_form;
+pub use item::update_action::update_action;
+pub use item::delete_confirm::delete_confirm;
+pub use item::delete_action::delete_action;
+pub use item::versions::list::list_versions_page;
+pub use item::versions::restore_confirm::restore_confirm;
+pub use item::versions::restore_action::restore_version;
+pub use api::search::search_collection;
+pub use api::save_user_settings::save_user_settings;
 
-// Re-export all public handler items so external code doesn't need to change import paths.
-pub use list::{list_collections, list_items, save_user_settings};
-pub use create::{create_form, create_action};
-pub use edit::{edit_form, update_action_post};
-pub use delete::{delete_confirm, delete_action_simple};
-pub use versions::{restore_confirm, restore_version, list_versions_page, evaluate_conditions, EvaluateConditionsRequest};
-pub use search::{search_collection, SearchQuery};
+// Re-export shared types for super/server
+pub use super::shared::PaginationParams;
+pub use api::search::SearchQuery;
+pub use items::evaluate_conditions::EvaluateConditionsRequest;

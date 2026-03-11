@@ -14,7 +14,7 @@ use tokio_util::sync::WaitForCancellationFutureOwned;
 
 use crate::core::auth::AuthUser;
 use crate::db::query::AccessResult;
-use super::super::AdminState;
+use crate::admin::AdminState;
 
 /// Stream wrapper that ends when a CancellationToken fires.
 struct CancellableStream {

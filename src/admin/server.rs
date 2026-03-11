@@ -117,9 +117,9 @@ pub fn build_router(state: AdminState) -> Router {
 
     let item_methods: MethodRouter<AdminState> = MethodRouter::new()
         .get(collections::edit_form)
-        .post(collections::update_action_post)
-        .put(collections::update_action_post)
-        .delete(collections::delete_action_simple);
+        .post(collections::update_action)
+        .put(collections::update_action)
+        .delete(collections::delete_action);
 
     let globals_methods: MethodRouter<AdminState> = MethodRouter::new()
         .get(globals::edit_form)
