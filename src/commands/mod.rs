@@ -25,6 +25,7 @@ pub fn parse_key_val(s: &str) -> Result<(String, String), String> {
     Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
 }
 
+/// Actions for the `make` subcommand.
 #[derive(Subcommand)]
 pub enum MakeAction {
     /// Generate a collection Lua file
@@ -140,6 +141,7 @@ pub enum MakeAction {
     },
 }
 
+/// Actions for the `blueprint` subcommand.
 #[derive(Subcommand)]
 pub enum BlueprintAction {
     /// Save a config directory as a reusable blueprint
@@ -174,6 +176,7 @@ pub enum BlueprintAction {
     },
 }
 
+/// Actions for the `user` subcommand.
 #[derive(Subcommand)]
 pub enum UserAction {
     /// Create a new user in an auth collection
@@ -343,6 +346,7 @@ pub enum UserAction {
     },
 }
 
+/// Actions for the `migrate` subcommand.
 #[derive(Subcommand)]
 pub enum MigrateAction {
     /// Create a new migration file
@@ -368,6 +372,7 @@ pub enum MigrateAction {
     },
 }
 
+/// Actions for the `db` subcommand.
 #[derive(Subcommand)]
 pub enum DbAction {
     /// Open an interactive SQLite console
@@ -386,6 +391,7 @@ pub enum DbAction {
     },
 }
 
+/// Actions for the `templates` subcommand.
 #[derive(Subcommand)]
 pub enum TemplatesAction {
     /// List all available default templates and static files
@@ -416,6 +422,7 @@ pub enum TemplatesAction {
     },
 }
 
+/// Actions for the `jobs` subcommand.
 #[derive(Subcommand)]
 pub enum JobsAction {
     /// List defined jobs and recent runs
@@ -462,6 +469,7 @@ pub enum JobsAction {
     },
 }
 
+/// Actions for the `images` subcommand.
 #[derive(Subcommand)]
 pub enum ImagesAction {
     /// List image processing queue entries

@@ -8,10 +8,14 @@ use super::parsing::{serde_duration, serde_duration_ms};
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum CompressionMode {
+    /// Disable compression (default).
     #[default]
     Off,
+    /// Enable Gzip compression.
     Gzip,
+    /// Enable Brotli compression.
     Br,
+    /// Enable all supported compression modes.
     All,
 }
 
@@ -19,8 +23,11 @@ pub enum CompressionMode {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ServerConfig {
+    /// Port for the admin UI HTTP server. Default: 3000.
     pub admin_port: u16,
+    /// Port for the gRPC API server. Default: 50051.
     pub grpc_port: u16,
+    /// Host interface to bind to. Default: "0.0.0.0".
     pub host: String,
     /// Enable response compression. Default: off (most deployments use a reverse proxy).
     /// Options: "off", "gzip", "br", "all".
@@ -57,6 +64,7 @@ impl Default for ServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DatabaseConfig {
+    /// Path to the SQLite database file.
     pub path: String,
     /// Maximum number of connections in the pool. Default: 16.
     pub pool_max_size: u32,
@@ -85,6 +93,7 @@ impl Default for DatabaseConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AdminConfig {
+    /// Enable development mode (e.g., more verbose errors).
     pub dev_mode: bool,
     /// When true (default), block admin panel if no auth collection exists.
     /// Set to false for open dev mode with no authentication.

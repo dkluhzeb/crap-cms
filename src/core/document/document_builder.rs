@@ -13,6 +13,7 @@ pub struct DocumentBuilder {
 }
 
 impl DocumentBuilder {
+    /// Creates a new `DocumentBuilder` with the specified ID.
     pub fn new(id: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -22,21 +23,25 @@ impl DocumentBuilder {
         }
     }
 
+    /// Sets the document fields.
     pub fn fields(mut self, fields: HashMap<String, serde_json::Value>) -> Self {
         self.fields = fields;
         self
     }
 
+    /// Sets the document's creation timestamp.
     pub fn created_at(mut self, ts: impl Into<String>) -> Self {
         self.created_at = Some(ts.into());
         self
     }
 
+    /// Sets the document's last update timestamp.
     pub fn updated_at(mut self, ts: impl Into<String>) -> Self {
         self.updated_at = Some(ts.into());
         self
     }
 
+    /// Builds and returns the `Document`.
     pub fn build(self) -> Document {
         Document {
             id: self.id,

@@ -16,6 +16,7 @@ pub struct CollectionDefinitionBuilder {
 }
 
 impl CollectionDefinitionBuilder {
+    /// Create a new `CollectionDefinitionBuilder` with the given slug.
     pub fn new(slug: impl Into<String>) -> Self {
         Self {
             inner: CollectionDefinition {
@@ -25,66 +26,79 @@ impl CollectionDefinitionBuilder {
         }
     }
 
+    /// Set the plural and singular labels for the collection.
     pub fn labels(mut self, v: Labels) -> Self {
         self.inner.labels = v;
         self
     }
 
+    /// Set whether the collection should include standard timestamps.
     pub fn timestamps(mut self, v: bool) -> Self {
         self.inner.timestamps = v;
         self
     }
 
+    /// Set the field definitions for the collection.
     pub fn fields(mut self, v: Vec<FieldDefinition>) -> Self {
         self.inner.fields = v;
         self
     }
 
+    /// Set the admin UI configuration for the collection.
     pub fn admin(mut self, v: AdminConfig) -> Self {
         self.inner.admin = v;
         self
     }
 
+    /// Set the lifecycle hooks for the collection.
     pub fn hooks(mut self, v: Hooks) -> Self {
         self.inner.hooks = v;
         self
     }
 
+    /// Set the authentication configuration for the collection.
     pub fn auth(mut self, v: Auth) -> Self {
         self.inner.auth = Some(v);
         self
     }
 
+    /// Set the file upload configuration for the collection.
     pub fn upload(mut self, v: CollectionUpload) -> Self {
         self.inner.upload = Some(v);
         self
     }
 
+    /// Set the access control rules for the collection.
     pub fn access(mut self, v: Access) -> Self {
         self.inner.access = v;
         self
     }
 
+    /// Set the MCP-specific configuration for the collection.
     pub fn mcp(mut self, v: McpConfig) -> Self {
         self.inner.mcp = v;
         self
     }
 
+    /// Set the live update settings for the collection.
     pub fn live(mut self, v: LiveSetting) -> Self {
         self.inner.live = Some(v);
         self
     }
 
+    /// Set the versioning and drafts configuration for the collection.
     pub fn versions(mut self, v: VersionsConfig) -> Self {
         self.inner.versions = Some(v);
         self
     }
 
+    /// Set additional database indexes for the collection.
     pub fn indexes(mut self, v: Vec<IndexDefinition>) -> Self {
         self.inner.indexes = v;
         self
     }
 
+    /// Build the final `CollectionDefinition` instance.
     pub fn build(self) -> CollectionDefinition {
         self.inner
     }

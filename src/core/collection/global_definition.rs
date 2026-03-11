@@ -7,24 +7,33 @@ use serde::{Deserialize, Serialize};
 /// Global definitions are simpler — single-document collections.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalDefinition {
+    /// Unique identifier for the global.
     pub slug: String,
+    /// Human-readable labels for the global.
     #[serde(default)]
     pub labels: Labels,
+    /// List of fields that make up the global's schema.
     #[serde(default)]
     pub fields: Vec<FieldDefinition>,
+    /// Lua hook functions triggered during various lifecycle events.
     #[serde(default)]
     pub hooks: Hooks,
+    /// Access control rules for reading and updating the global.
     #[serde(default)]
     pub access: Access,
+    /// Model Context Protocol (MCP) configuration for AI integration.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Real-time update settings for this global.
     #[serde(default)]
     pub live: Option<LiveSetting>,
+    /// Versioning and draft configuration.
     #[serde(default)]
     pub versions: Option<VersionsConfig>,
 }
 
 impl GlobalDefinition {
+    /// Create a new `GlobalDefinition` with the given slug and default settings.
     pub fn new(slug: impl Into<String>) -> Self {
         Self {
             slug: slug.into(),
@@ -32,11 +41,12 @@ impl GlobalDefinition {
         }
     }
 
+    /// Create a builder for `GlobalDefinition`.
     pub fn builder(slug: impl Into<String>) -> super::GlobalDefinitionBuilder {
         super::GlobalDefinitionBuilder::new(slug)
     }
 
-    /// Get the display label (singular, falls back to slug). Uses default resolution.
+    /// Get the display label (singular form, falls back to slug). Uses default resolution.
     pub fn display_name(&self) -> &str {
         self.labels
             .singular
@@ -62,7 +72,7 @@ impl GlobalDefinition {
         self.versions.is_some()
     }
 
-    /// Check if this global has drafts enabled (versioning + drafts flag).
+    /// Check if this global has drafts enabled (versioning with drafts flag).
     pub fn has_drafts(&self) -> bool {
         self.versions.as_ref().is_some_and(|v| v.drafts)
     }

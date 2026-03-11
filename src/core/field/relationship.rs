@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 /// Configuration for relationship fields (target collection, cardinality, depth cap).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelationshipConfig {
+    /// The slug of the target collection this field relates to.
     pub collection: String,
+    /// Whether this relationship allows multiple linked documents (many-to-one or many-to-many).
     pub has_many: bool,
     /// Per-field max depth. If set, limits population depth for this field
     /// regardless of the request-level depth.
@@ -19,6 +21,7 @@ pub struct RelationshipConfig {
 }
 
 impl RelationshipConfig {
+    /// Create a new relationship configuration for a single target collection.
     pub fn new(collection: impl Into<String>, has_many: bool) -> Self {
         Self {
             collection: collection.into(),
@@ -53,6 +56,7 @@ pub struct JoinConfig {
 }
 
 impl JoinConfig {
+    /// Create a new join configuration (virtual reverse-relationship).
     pub fn new(collection: impl Into<String>, on: impl Into<String>) -> Self {
         Self {
             collection: collection.into(),

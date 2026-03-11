@@ -6,19 +6,33 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldType {
+    /// Single-line plain text.
     Text,
+    /// Floating-point or integer number.
     Number,
+    /// Multi-line plain text area.
     Textarea,
+    /// Dropdown selection from predefined options.
     Select,
+    /// Single checkbox for boolean values.
     Checkbox,
+    /// Date or date-time string.
     Date,
+    /// Email address with basic validation.
     Email,
+    /// Structured JSON data stored as text.
     Json,
+    /// Rich text content (e.g. HTML from a WYSIWYG editor).
     Richtext,
+    /// Relationship to another document (many-to-one).
     Relationship,
+    /// Array of sub-fields (many-to-many relationship).
     Array,
+    /// Group of sub-fields (prefixed columns in the same table).
     Group,
+    /// Reference to a file in an upload collection.
     Upload,
+    /// Dynamic blocks of different field sets.
     Blocks,
     /// Radio buttons. Same as Select in storage (TEXT column) but renders as radio group.
     Radio,
@@ -40,6 +54,7 @@ pub enum FieldType {
 }
 
 impl FieldType {
+    /// Returns the SQLite column type for this field type.
     pub fn sqlite_type(&self) -> &'static str {
         match self {
             FieldType::Text => "TEXT",
@@ -65,6 +80,7 @@ impl FieldType {
         }
     }
 
+    /// Parse a string into a `FieldType`, defaulting to `Text` if unknown.
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
@@ -95,6 +111,7 @@ impl FieldType {
         }
     }
 
+    /// Returns the string identifier for this field type.
     pub fn as_str(&self) -> &'static str {
         match self {
             FieldType::Text => "text",

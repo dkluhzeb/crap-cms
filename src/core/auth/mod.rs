@@ -1,6 +1,8 @@
 //! Authentication primitives: Argon2id password hashing and JWT token management.
 
+/// JWT claims module.
 pub mod claims;
+/// Builder for JWT claims.
 pub mod claims_builder;
 
 use std::sync::LazyLock;
@@ -48,14 +50,17 @@ pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
 /// Contains the JWT claims and the full user document from the database.
 #[derive(Debug, Clone)]
 pub struct AuthUser {
+    /// The decoded JWT claims for this user.
     #[allow(dead_code)]
     pub claims: Claims,
+    /// The full document representing this user from their auth collection.
     pub user_doc: crate::core::Document,
     /// Preferred admin UI locale (e.g. "en", "de"). Loaded from user settings.
     pub ui_locale: String,
 }
 
 impl AuthUser {
+    /// Create a new `AuthUser` instance with the given claims and document.
     pub fn new(claims: Claims, user_doc: crate::core::Document) -> Self {
         Self {
             claims,

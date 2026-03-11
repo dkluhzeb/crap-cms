@@ -1,10 +1,16 @@
 //! Collection CRUD handlers re-exports.
 
+/// Collection-related API handlers.
 pub mod api;
+/// Collection form handlers.
 pub mod forms;
+/// Handlers for individual collection items.
 pub mod item;
+/// Handlers for collection item lists and creation.
 pub mod items;
+/// Handler for listing available collections.
 pub mod list_collections;
+/// Shared collection handler utilities.
 pub mod shared;
 
 // Re-export common handlers for the router

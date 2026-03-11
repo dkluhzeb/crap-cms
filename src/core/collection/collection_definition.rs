@@ -15,29 +15,42 @@ fn default_true() -> bool {
 /// Full definition of a collection, parsed from a Lua file. Maps to one SQLite table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionDefinition {
+    /// Unique identifier for the collection, used in URLs and database table names.
     pub slug: String,
+    /// Human-readable labels for the collection (singular and plural).
     #[serde(default)]
     pub labels: Labels,
+    /// Whether to automatically manage `created_at` and `updated_at` timestamps.
     #[serde(default = "default_true")]
     pub timestamps: bool,
+    /// List of fields that make up the collection's schema.
     #[serde(default)]
     pub fields: Vec<FieldDefinition>,
+    /// Configuration for how this collection appears and behaves in the admin UI.
     #[serde(default)]
     pub admin: AdminConfig,
+    /// Lua hook functions triggered during various lifecycle events.
     #[serde(default)]
     pub hooks: Hooks,
+    /// Authentication settings, if this collection is used for user management.
     #[serde(default)]
     pub auth: Option<Auth>,
+    /// File upload configuration, if this collection supports media/attachments.
     #[serde(default)]
     pub upload: Option<CollectionUpload>,
+    /// Access control rules for reading, creating, updating, and deleting items.
     #[serde(default)]
     pub access: Access,
+    /// Model Context Protocol (MCP) configuration for AI integration.
     #[serde(default)]
     pub mcp: McpConfig,
+    /// Real-time update settings for this collection.
     #[serde(default)]
     pub live: Option<LiveSetting>,
+    /// Versioning and draft configuration.
     #[serde(default)]
     pub versions: Option<VersionsConfig>,
+    /// Custom database indexes to optimize query performance.
     #[serde(default)]
     pub indexes: Vec<IndexDefinition>,
 }
@@ -63,6 +76,7 @@ impl Default for CollectionDefinition {
 }
 
 impl CollectionDefinition {
+    /// Create a new `CollectionDefinition` with the given slug and default settings.
     pub fn new(slug: impl Into<String>) -> Self {
         Self {
             slug: slug.into(),
@@ -70,6 +84,7 @@ impl CollectionDefinition {
         }
     }
 
+    /// Create a builder for `CollectionDefinition`.
     pub fn builder(slug: impl Into<String>) -> super::CollectionDefinitionBuilder {
         super::CollectionDefinitionBuilder::new(slug)
     }
@@ -116,17 +131,17 @@ impl CollectionDefinition {
             .unwrap_or(&self.slug)
     }
 
-    /// Get the field to use as item title in admin lists.
+    /// Get the field name to use as item title in admin lists.
     pub fn title_field(&self) -> Option<&str> {
         self.admin.use_as_title.as_deref()
     }
 
-    /// Check if this collection has auth enabled.
+    /// Check if this collection has authentication enabled.
     pub fn is_auth_collection(&self) -> bool {
         self.auth.as_ref().is_some_and(|a| a.enabled)
     }
 
-    /// Check if this collection is an upload collection.
+    /// Check if this collection has file upload support enabled.
     pub fn is_upload_collection(&self) -> bool {
         self.upload.as_ref().is_some_and(|u| u.enabled)
     }
@@ -136,7 +151,7 @@ impl CollectionDefinition {
         self.versions.is_some()
     }
 
-    /// Check if this collection has drafts enabled (versioning + drafts flag).
+    /// Check if this collection has drafts enabled (versioning with drafts flag).
     pub fn has_drafts(&self) -> bool {
         self.versions.as_ref().is_some_and(|v| v.drafts)
     }

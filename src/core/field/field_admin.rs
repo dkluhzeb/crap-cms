@@ -10,16 +10,22 @@ fn default_true() -> bool {
 /// Admin UI display hints for a field (placeholder, description, visibility, width).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldAdmin {
+    /// Localized display label for the field.
     #[serde(default)]
     pub label: Option<LocalizedString>,
+    /// Localized placeholder text for inputs.
     #[serde(default)]
     pub placeholder: Option<LocalizedString>,
+    /// Localized help text/description displayed below the field.
     #[serde(default)]
     pub description: Option<LocalizedString>,
+    /// Whether the field is hidden from the admin UI.
     #[serde(default)]
     pub hidden: bool,
+    /// Whether the field is read-only in the admin UI.
     #[serde(default)]
     pub readonly: bool,
+    /// CSS width for the field container (e.g., "50%", "33%").
     #[serde(default)]
     pub width: Option<String>,
     /// Start collapsed in the admin UI (groups, collapsibles, array/block rows).
@@ -76,6 +82,7 @@ pub struct FieldAdmin {
 }
 
 impl FieldAdmin {
+    /// Returns a new `FieldAdminBuilder` for constructing display hints.
     pub fn builder() -> super::FieldAdminBuilder {
         super::FieldAdminBuilder::new()
     }

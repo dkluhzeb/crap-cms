@@ -29,20 +29,35 @@ use env::substitute_in_value;
 pub struct CrapConfig {
     /// Required CMS version. If set, warns on mismatch at startup.
     pub crap_version: Option<String>,
+    /// Server settings (host, ports, compression, etc.).
     pub server: ServerConfig,
+    /// Database connection and pooling settings.
     pub database: DatabaseConfig,
+    /// Admin UI settings.
     pub admin: AdminConfig,
+    /// Global hook settings, including Lua VM pool size.
     pub hooks: HooksConfig,
+    /// Authentication settings, including JWT secret and password policy.
     pub auth: AuthConfig,
+    /// Default and maximum relationship population depth.
     pub depth: DepthConfig,
+    /// File upload settings.
     pub upload: UploadConfig,
+    /// Email/SMTP settings.
     pub email: EmailConfig,
+    /// Live update and preview settings.
     pub live: LiveConfig,
+    /// Localization and internationalization settings.
     pub locale: LocaleConfig,
+    /// Background job processing settings.
     pub jobs: JobsConfig,
+    /// CORS (Cross-Origin Resource Sharing) settings.
     pub cors: CorsConfig,
+    /// Access control settings.
     pub access: AccessConfig,
+    /// Default pagination settings.
     pub pagination: PaginationConfig,
+    /// MCP (Model Context Protocol) settings.
     pub mcp: McpConfig,
 }
 

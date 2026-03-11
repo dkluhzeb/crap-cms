@@ -7,11 +7,15 @@ use std::collections::HashMap;
 /// A single content document with an ID, user-defined fields, and optional timestamps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
+    /// The unique identifier for this document.
     pub id: String,
+    /// A map of field names to their JSON-serialized values.
     #[serde(flatten)]
     pub fields: HashMap<String, serde_json::Value>,
+    /// The timestamp when this document was originally created.
     #[serde(default)]
     pub created_at: Option<String>,
+    /// The timestamp when this document was last updated.
     #[serde(default)]
     pub updated_at: Option<String>,
 }
@@ -28,6 +32,7 @@ impl Document {
         }
     }
 
+    /// Returns a new `DocumentBuilder` for constructing a document with the given ID.
     pub fn builder(id: impl Into<String>) -> DocumentBuilder {
         DocumentBuilder::new(id)
     }

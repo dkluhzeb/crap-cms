@@ -8,7 +8,9 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum LocalizedString {
+    /// A simple, non-localized string.
     Plain(String),
+    /// A map of locale identifiers to their localized strings.
     Localized(HashMap<String, String>),
 }
 

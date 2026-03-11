@@ -12,24 +12,40 @@ use crate::core::field::FieldDefinition;
 
 /// Page type identifiers for template conditional logic.
 pub enum PageType {
+    /// The main administration dashboard.
     Dashboard,
+    /// The list of all available collections.
     CollectionList,
+    /// The list of items within a specific collection.
     CollectionItems,
+    /// The page for editing an existing collection item.
     CollectionEdit,
+    /// The page for creating a new collection item.
     CollectionCreate,
+    /// The confirmation page for deleting a collection item.
     CollectionDelete,
+    /// The list of versions for a specific collection item.
     CollectionVersions,
+    /// The page for editing a global's data.
     GlobalEdit,
+    /// The list of versions for a specific global.
     GlobalVersions,
+    /// The login page.
     AuthLogin,
+    /// The forgot password request page.
     AuthForgot,
+    /// The password reset page (via email link).
     AuthReset,
+    /// Forbidden error page (403).
     Error403,
+    /// Not found error page (404).
     Error404,
+    /// Internal server error page (500).
     Error500,
 }
 
 impl PageType {
+    /// Returns the string identifier used in templates for this page type.
     pub fn as_str(&self) -> &'static str {
         match self {
             PageType::Dashboard => "dashboard",
@@ -53,17 +69,21 @@ impl PageType {
 
 /// A breadcrumb entry with a label and optional URL.
 pub struct Breadcrumb {
+    /// The text label to display for the breadcrumb.
     pub label: String,
+    /// The optional URL to link to. If None, the breadcrumb is the current page.
     pub url: Option<String>,
 }
 
 impl Breadcrumb {
+    /// Create a breadcrumb with a clickable link.
     pub fn link(label: impl Into<String>, url: impl Into<String>) -> Self {
         Self {
             label: label.into(),
             url: Some(url.into()),
         }
     }
+    /// Create a breadcrumb representing the current page (non-clickable).
     pub fn current(label: impl Into<String>) -> Self {
         Self {
             label: label.into(),

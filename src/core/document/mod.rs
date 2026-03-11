@@ -1,3 +1,6 @@
+//! Document types for core CMS content, including the main [`Document`] type
+//! and [`VersionSnapshot`] for versioning and draft support.
+
 pub mod document;
 pub mod document_builder;
 pub mod version_snapshot;

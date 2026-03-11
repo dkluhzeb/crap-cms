@@ -132,7 +132,9 @@ impl PaginationConfig {
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum PaginationMode {
+    /// Offset-based pagination (page numbers).
     Page,
+    /// Keyset-based pagination (cursors).
     Cursor,
 }
 
@@ -286,6 +288,8 @@ impl Default for LiveConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HooksConfig {
+    /// List of Lua script names (without extension) to run once when the CMS starts up.
+    /// These are loaded from the `hooks/` directory.
     pub on_init: Vec<String>,
     /// Max hook recursion depth for Lua CRUD → hook → CRUD chains.
     /// 0 = disable hooks from Lua CRUD entirely. Default: 3.

@@ -1,5 +1,10 @@
+//! Global CRUD handlers.
+
+/// Handler for the global edit form.
 pub mod edit_form;
+/// Handler for updating a global.
 pub mod update_action;
+/// Handlers for global versions.
 pub mod versions;
 
 pub use edit_form::edit_form;

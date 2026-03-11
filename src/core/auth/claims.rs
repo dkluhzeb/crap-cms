@@ -15,6 +15,7 @@ pub struct Claims {
 }
 
 impl Claims {
+    /// Start building a new `Claims` instance.
     pub fn builder(sub: impl Into<String>, collection: impl Into<String>) -> ClaimsBuilder {
         ClaimsBuilder::new(sub, collection)
     }

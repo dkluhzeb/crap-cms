@@ -12,9 +12,12 @@ use axum::{
 use crate::admin::handlers::shared::check_access_or_forbid;
 use crate::admin::AdminState;
 
+/// Search query parameters for collection search.
 #[derive(serde::Deserialize)]
 pub struct SearchQuery {
+    /// The search term to filter results by.
     pub q: Option<String>,
+    /// The maximum number of results to return.
     pub limit: Option<usize>,
 }
 

@@ -16,6 +16,7 @@ pub struct VersionSnapshotBuilder {
 }
 
 impl VersionSnapshotBuilder {
+    /// Create a new builder for a snapshot with the given ID and parent document ID.
     pub fn new(id: impl Into<String>, parent: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -29,36 +30,47 @@ impl VersionSnapshotBuilder {
         }
     }
 
+    /// Set the sequential version number.
     pub fn version(mut self, v: i64) -> Self {
         self.version = Some(v);
         self
     }
 
+    /// Set the status of the version snapshot (e.g. "draft", "published").
     pub fn status(mut self, s: impl Into<String>) -> Self {
         self.status = Some(s.into());
         self
     }
 
+    /// Set whether this version is the latest one for its parent document.
     pub fn latest(mut self, l: bool) -> Self {
         self.latest = Some(l);
         self
     }
 
+    /// Set the JSON data snapshot of the document fields.
     pub fn snapshot(mut self, s: serde_json::Value) -> Self {
         self.snapshot = Some(s);
         self
     }
 
+    /// Set the creation timestamp for this version.
     pub fn created_at(mut self, ts: impl Into<String>) -> Self {
         self.created_at = Some(ts.into());
         self
     }
 
+    /// Set the last update timestamp for this version.
     pub fn updated_at(mut self, ts: impl Into<String>) -> Self {
         self.updated_at = Some(ts.into());
         self
     }
 
+    /// Build the final `VersionSnapshot`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any required field is missing (version, status, latest, snapshot).
     pub fn build(self) -> VersionSnapshot {
         VersionSnapshot {
             id: self.id,

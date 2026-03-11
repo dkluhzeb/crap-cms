@@ -105,7 +105,6 @@ impl HookRunner {
     ///
     /// Field hooks in before-write get full CRUD access (same transaction).
     /// `user` is the authenticated user — propagated to CRUD closures for `overrideAccess`.
-    #[allow(clippy::too_many_arguments)]
     pub fn run_before_write(
         &self,
         hooks: &Hooks,
@@ -156,7 +155,6 @@ impl HookRunner {
     /// Run after-write hooks inside the transaction (with CRUD access).
     /// Field-level after_change hooks run first, then collection-level, then registered.
     /// Errors propagate up and cause the caller's transaction to roll back.
-    #[allow(clippy::too_many_arguments)]
     pub fn run_after_write(
         &self,
         hooks: &Hooks,

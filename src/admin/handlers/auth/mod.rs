@@ -1,14 +1,24 @@
 //! Login/logout/forgot-password/reset-password/verify-email handlers for the admin UI.
 
+/// Handler for the forgot password form submission.
 pub mod forgot_password_action;
+/// Handler for the forgot password request page.
 pub mod forgot_password_page;
+/// Handler for the login form submission.
 pub mod login_action;
+/// Handler for the login page.
 pub mod login_page;
+/// Handler for logging out and clearing session cookies.
 pub mod logout_action;
+/// Handler for the reset password form submission.
 pub mod reset_password_action;
+/// Handler for the reset password page.
 pub mod reset_password_page;
+/// Handler for saving the user's UI locale preference.
 pub mod save_locale;
+/// Handler for refreshing the current session.
 pub mod session_refresh;
+/// Handler for verifying a user's email address.
 pub mod verify_email;
 
 pub use forgot_password_action::forgot_password_action;
@@ -31,43 +41,62 @@ use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::AdminState;
 use crate::core::email;
 
+/// Form data for the login page.
 #[derive(Debug, Deserialize)]
 pub struct LoginForm {
+    /// The slug of the collection the user belongs to.
     pub collection: String,
+    /// The user's email address.
     pub email: String,
+    /// The user's password.
     pub password: String,
 }
 
+/// Query parameters for the login page.
 #[derive(Debug, Deserialize, Default)]
 pub struct LoginPageQuery {
+    /// Optional success message to display (e.g. after logout or reset).
     pub success: Option<String>,
 }
 
+/// Form data for the forgot password page.
 #[derive(Debug, Deserialize)]
 pub struct ForgotPasswordForm {
+    /// The slug of the collection the user belongs to.
     pub collection: String,
+    /// The user's email address.
     pub email: String,
 }
 
+/// Query parameters for the reset password page.
 #[derive(Debug, Deserialize)]
 pub struct ResetPasswordQuery {
+    /// The reset token sent via email.
     pub token: String,
 }
 
+/// Form data for the reset password page.
 #[derive(Debug, Deserialize)]
 pub struct ResetPasswordForm {
+    /// The reset token from the URL.
     pub token: String,
+    /// The new password.
     pub password: String,
+    /// Confirmation of the new password.
     pub password_confirm: String,
 }
 
+/// Query parameters for the email verification page.
 #[derive(Debug, Deserialize)]
 pub struct VerifyEmailQuery {
+    /// The verification token sent via email.
     pub token: String,
 }
 
+/// Form data for saving the UI locale.
 #[derive(Debug, Deserialize)]
 pub struct LocaleForm {
+    /// The selected locale identifier.
     pub locale: String,
 }
 

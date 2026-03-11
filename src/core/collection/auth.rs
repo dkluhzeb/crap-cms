@@ -5,12 +5,14 @@ use serde::{Deserialize, Serialize};
 /// A custom authentication strategy (name + Lua function reference).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStrategy {
+    /// Name of the authentication strategy.
     pub name: String,
     /// Lua function ref (module.function format)
     pub authenticate: String,
 }
 
 impl AuthStrategy {
+    /// Create a new authentication strategy.
     pub fn new(name: impl Into<String>, authenticate: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -22,11 +24,15 @@ impl AuthStrategy {
 /// Authentication configuration for a collection (JWT, strategies, local login).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Auth {
+    /// Whether authentication is enabled for this collection.
     pub enabled: bool,
+    /// JWT token expiry in seconds. Default: 7200 (2 hours).
     #[serde(default = "default_token_expiry")]
     pub token_expiry: u64,
+    /// List of custom authentication strategies.
     #[serde(default)]
     pub strategies: Vec<AuthStrategy>,
+    /// Whether to disable local (email/password) login.
     #[serde(default)]
     pub disable_local: bool,
     /// Enable email verification requirement for new users. Default: false.
@@ -46,6 +52,7 @@ fn default_token_expiry() -> u64 {
 }
 
 impl Auth {
+    /// Create a new authentication configuration with the given enabled status.
     pub fn new(enabled: bool) -> Self {
         Self {
             enabled,

@@ -14,6 +14,7 @@ pub struct ClaimsBuilder {
 }
 
 impl ClaimsBuilder {
+    /// Create a new `ClaimsBuilder` with the required `sub` and `collection` fields.
     pub fn new(sub: impl Into<String>, collection: impl Into<String>) -> Self {
         Self {
             sub: sub.into(),
@@ -23,16 +24,23 @@ impl ClaimsBuilder {
         }
     }
 
+    /// Set the user's email address.
     pub fn email(mut self, email: impl Into<String>) -> Self {
         self.email = Some(email.into());
         self
     }
 
+    /// Set the expiration time (Unix timestamp).
     pub fn exp(mut self, exp: u64) -> Self {
         self.exp = Some(exp);
         self
     }
 
+    /// Build the final `Claims` instance.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `email` or `exp` have not been set.
     pub fn build(self) -> Claims {
         Claims {
             sub: self.sub,

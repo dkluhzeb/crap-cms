@@ -11,7 +11,9 @@ use tokio::sync::broadcast;
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum EventTarget {
+    /// A collection document.
     Collection,
+    /// A global setting.
     Global,
 }
 
@@ -19,19 +21,25 @@ pub enum EventTarget {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum EventOperation {
+    /// A new document or global was created.
     Create,
+    /// An existing document or global was updated.
     Update,
+    /// A document was deleted.
     Delete,
 }
 
 /// The user who triggered a mutation event.
 #[derive(Debug, Clone, Serialize)]
 pub struct EventUser {
+    /// The unique identifier of the user.
     pub id: String,
+    /// The email address of the user.
     pub email: String,
 }
 
 impl EventUser {
+    /// Create a new event user.
     pub fn new(id: impl Into<String>, email: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -43,13 +51,21 @@ impl EventUser {
 /// A mutation event broadcast to all subscribers.
 #[derive(Debug, Clone, Serialize)]
 pub struct MutationEvent {
+    /// A monotonic sequence number for ordering events.
     pub sequence: u64,
+    /// The ISO 8601 timestamp when the event occurred.
     pub timestamp: String,
+    /// The type of target that was mutated.
     pub target: EventTarget,
+    /// The type of operation performed.
     pub operation: EventOperation,
+    /// The slug of the collection or global.
     pub collection: String,
+    /// The ID of the document or global name.
     pub document_id: String,
+    /// The data that was changed or the full state.
     pub data: HashMap<String, serde_json::Value>,
+    /// The user who performed the action, if known.
     pub edited_by: Option<EventUser>,
 }
 

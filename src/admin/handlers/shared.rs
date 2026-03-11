@@ -27,9 +27,13 @@ pub(super) use super::field_context::{
 /// Query parameters for paginated collection list views.
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
+    /// The current page number (1-indexed).
     pub page: Option<i64>,
+    /// The number of items per page.
     pub per_page: Option<i64>,
+    /// Search query string.
     pub search: Option<String>,
+    /// Sort string (e.g. "title" or "-title").
     pub sort: Option<String>,
 }
 

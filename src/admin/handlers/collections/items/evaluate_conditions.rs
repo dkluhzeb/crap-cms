@@ -31,8 +31,11 @@ pub async fn evaluate_conditions(
     axum::Json(serde_json::Value::Object(results))
 }
 
+/// Request payload for evaluating field display conditions.
 #[derive(serde::Deserialize)]
 pub struct EvaluateConditionsRequest {
+    /// The current form data.
     pub form_data: HashMap<String, serde_json::Value>,
+    /// Map of field names to their condition function references.
     pub conditions: HashMap<String, String>,
 }

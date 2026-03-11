@@ -8,10 +8,13 @@ use serde::{Deserialize, Serialize};
 /// Lua function references for field-level access control (read/create/update).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FieldAccess {
+    /// Lua function name for read access control.
     #[serde(default)]
     pub read: Option<String>,
+    /// Lua function name for create access control.
     #[serde(default)]
     pub create: Option<String>,
+    /// Lua function name for update access control.
     #[serde(default)]
     pub update: Option<String>,
 }
@@ -19,17 +22,22 @@ pub struct FieldAccess {
 /// Lua function references for field-level lifecycle hooks.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FieldHooks {
+    /// Lua function names for before-validate hooks.
     #[serde(default)]
     pub before_validate: Vec<String>,
+    /// Lua function names for before-change hooks.
     #[serde(default)]
     pub before_change: Vec<String>,
+    /// Lua function names for after-change hooks.
     #[serde(default)]
     pub after_change: Vec<String>,
+    /// Lua function names for after-read hooks.
     #[serde(default)]
     pub after_read: Vec<String>,
 }
 
 impl FieldHooks {
+    /// Returns true if no hooks are defined for this field.
     #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.before_validate.is_empty()
@@ -42,37 +50,54 @@ impl FieldHooks {
 /// Complete definition of a single field within a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDefinition {
+    /// Unique identifier for the field within the collection. Used as column name.
     pub name: String,
+    /// The data type of the field.
     #[serde(rename = "type")]
     pub field_type: FieldType,
+    /// Whether the field is required to have a value.
     #[serde(default)]
     pub required: bool,
+    /// Whether the field must have a unique value across the collection.
     #[serde(default)]
     pub unique: bool,
+    /// Whether to create a database index for this field.
     #[serde(default)]
     pub index: bool,
+    /// Optional Lua validation function name.
     #[serde(default)]
     pub validate: Option<String>,
+    /// Default value for the field when creating new items.
     #[serde(default)]
     pub default_value: Option<serde_json::Value>,
+    /// List of options for Select and Radio fields.
     #[serde(default)]
     pub options: Vec<SelectOption>,
+    /// Configuration for the admin UI representation of this field.
     #[serde(default)]
     pub admin: FieldAdmin,
+    /// Lifecycle hooks specific to this field.
     #[serde(default)]
     pub hooks: FieldHooks,
+    /// Access control rules for this field.
     #[serde(default)]
     pub access: FieldAccess,
+    /// MCP-specific configuration for this field.
     #[serde(default)]
     pub mcp: McpFieldConfig,
+    /// Configuration for Relationship and Upload fields.
     #[serde(default)]
     pub relationship: Option<RelationshipConfig>,
+    /// Sub-fields for Group and Array types.
     #[serde(default)]
     pub fields: Vec<FieldDefinition>,
+    /// Block definitions for Blocks type.
     #[serde(default)]
     pub blocks: Vec<BlockDefinition>,
+    /// Tab definitions for Tabs layout type.
     #[serde(default)]
     pub tabs: Vec<FieldTab>,
+    /// Whether the field's value is localized.
     #[serde(default)]
     pub localized: bool,
     /// For date fields: controls the HTML input type and storage format.
@@ -147,6 +172,7 @@ impl Default for FieldDefinition {
 }
 
 impl FieldDefinition {
+    /// Create a new `FieldDefinitionBuilder` with the given name and type.
     pub fn builder(
         name: impl Into<String>,
         field_type: FieldType,
