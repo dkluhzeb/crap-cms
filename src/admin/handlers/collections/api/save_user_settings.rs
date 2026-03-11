@@ -1,15 +1,15 @@
+use anyhow::Context as _;
 use axum::{
     extract::{Path, State},
     response::IntoResponse,
     Extension,
 };
-use anyhow::Context as _;
 use std::collections::HashMap;
 
+use crate::admin::handlers::shared::is_column_eligible;
 use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 use crate::db::query;
-use crate::admin::handlers::shared::is_column_eligible;
 
 /// POST /admin/api/user-settings/{slug} — save user column preferences
 pub async fn save_user_settings(
@@ -30,15 +30,27 @@ pub async fn save_user_settings(
     };
 
     // Parse columns from form (comma-separated or multiple "columns" fields)
-    let columns: Vec<String> = form.get("columns")
-        .map(|c| c.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+    let columns: Vec<String> = form
+        .get("columns")
+        .map(|c| {
+            c.split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
 
     // Validate column keys
-    let valid_columns: Vec<String> = columns.into_iter()
+    let valid_columns: Vec<String> = columns
+        .into_iter()
         .filter(|k| {
-            k == "created_at" || k == "updated_at" || k == "_status"
-                || def.fields.iter().any(|f| f.name == *k && is_column_eligible(&f.field_type))
+            k == "created_at"
+                || k == "updated_at"
+                || k == "_status"
+                || def
+                    .fields
+                    .iter()
+                    .any(|f| f.name == *k && is_column_eligible(&f.field_type))
         })
         .collect();
 
@@ -58,7 +70,8 @@ pub async fn save_user_settings(
         let json_str = serde_json::to_string(&settings)?;
         query::auth::set_user_settings(&conn, &user_id, &json_str)?;
         Ok::<_, anyhow::Error>(())
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => axum::http::StatusCode::NO_CONTENT.into_response(),

@@ -54,7 +54,9 @@ impl HookRunner {
                 return doc;
             }
         };
-        apply_after_read_inner(&lua, hooks, fields, collection, operation, doc, user, ui_locale)
+        apply_after_read_inner(
+            &lua, hooks, fields, collection, operation, doc, user, ui_locale,
+        )
     }
 
     /// Fire after_read hooks on a list of documents.
@@ -87,7 +89,11 @@ impl HookRunner {
         };
 
         docs.into_iter()
-            .map(|doc| apply_after_read_inner(&lua, hooks, fields, collection, operation, doc, user, ui_locale))
+            .map(|doc| {
+                apply_after_read_inner(
+                    &lua, hooks, fields, collection, operation, doc, user, ui_locale,
+                )
+            })
             .collect()
     }
 
@@ -125,9 +131,12 @@ impl HookRunner {
             ui_locale,
         )?;
         // Collection-level before_validate
-        let ctx = self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, conn, user, ui_locale)?;
+        let ctx =
+            self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, conn, user, ui_locale)?;
         // Validation (skip required checks for drafts)
-        self.validate_fields(fields, &ctx.data, conn, table, exclude_id, is_draft, locale_ctx)?;
+        self.validate_fields(
+            fields, &ctx.data, conn, table, exclude_id, is_draft, locale_ctx,
+        )?;
         // Field-level before_change (post-validation transforms, CRUD available)
         let mut ctx = ctx;
         self.run_field_hooks_with_conn(
@@ -193,9 +202,12 @@ impl HookRunner {
         is_draft: bool,
         locale_ctx: Option<&LocaleContext>,
     ) -> Result<(), ValidationError> {
-        let lua = self.pool.acquire().map_err(|_| ValidationError::new(
-            vec![FieldError::new("_system", "VM pool error")]
-        ))?;
-        validate_fields_inner(&lua, fields, data, conn, table, exclude_id, is_draft, locale_ctx)
+        let lua = self
+            .pool
+            .acquire()
+            .map_err(|_| ValidationError::new(vec![FieldError::new("_system", "VM pool error")]))?;
+        validate_fields_inner(
+            &lua, fields, data, conn, table, exclude_id, is_draft, locale_ctx,
+        )
     }
 }

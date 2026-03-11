@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::db::DbPool;
 use crap_cms::core::SharedRegistry;
+use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -30,7 +30,9 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
@@ -63,12 +65,19 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 #[allow(dead_code)]
 fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── 5B. Lua CRUD with Draft Option ──────────────────────────────────────────
 
-fn setup_versioned_db() -> (tempfile::TempDir, crap_cms::db::DbPool, SharedRegistry, HookRunner) {
+fn setup_versioned_db() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    SharedRegistry,
+    HookRunner,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let collections_dir = tmp.path().join("collections");
     std::fs::create_dir_all(&collections_dir).unwrap();
@@ -88,7 +97,8 @@ crap.collections.define("articles", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -110,7 +120,9 @@ crap.collections.define("articles", {
 
 fn eval_versioned(runner: &HookRunner, pool: &crap_cms::db::DbPool, code: &str) -> String {
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── Date normalization integration tests ────────────────────────────────────
@@ -118,28 +130,36 @@ fn eval_versioned(runner: &HookRunner, pool: &crap_cms::db::DbPool, code: &str) 
 #[test]
 fn date_field_normalizes_date_only_to_utc_noon() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Date Test 1",
             published_at = "2026-03-15",
         })
         local found = crap.collections.find_by_id("articles", doc.id)
         return found.published_at
-    "#);
+    "#,
+    );
     assert_eq!(result, "2026-03-15T12:00:00.000Z");
 }
 
 #[test]
 fn date_field_normalizes_full_datetime() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Date Test 2",
             event_at = "2026-03-15T09:00:00Z",
         })
         local found = crap.collections.find_by_id("articles", doc.id)
         return found.event_at
-    "#);
+    "#,
+    );
     assert_eq!(result, "2026-03-15T09:00:00.000Z");
 }
 
@@ -148,17 +168,22 @@ fn date_field_normalizes_full_datetime() {
 #[test]
 fn collections_config_get_returns_nil_for_unknown() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("nonexistent")
         return tostring(def)
-    "#);
+    "#,
+    );
     assert_eq!(result, "nil");
 }
 
 #[test]
 fn collections_config_get_returns_labels_and_fields() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("articles")
         if def == nil then return "nil" end
         local parts = {}
@@ -166,7 +191,8 @@ fn collections_config_get_returns_labels_and_fields() {
         parts[#parts + 1] = def.labels.plural
         parts[#parts + 1] = tostring(#def.fields)
         return table.concat(parts, "|")
-    "#);
+    "#,
+    );
     let parts: Vec<&str> = result.split('|').collect();
     assert_eq!(parts[0], "Article");
     assert_eq!(parts[1], "Articles");
@@ -177,7 +203,9 @@ fn collections_config_get_returns_labels_and_fields() {
 #[test]
 fn collections_config_get_includes_field_details() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("articles")
         local title = def.fields[1]
         local parts = {}
@@ -186,36 +214,45 @@ fn collections_config_get_includes_field_details() {
         parts[#parts + 1] = tostring(title.required)
         parts[#parts + 1] = tostring(title.unique)
         return table.concat(parts, "|")
-    "#);
+    "#,
+    );
     assert_eq!(result, "title|text|true|true");
 }
 
 #[test]
 fn collections_config_get_includes_hooks() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("articles")
         return def.hooks.before_validate[1]
-    "#);
+    "#,
+    );
     assert_eq!(result, "hooks.article_hooks.before_validate");
 }
 
 #[test]
 fn collections_config_get_includes_field_hooks() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("articles")
         -- slug is field 4
         local slug = def.fields[4]
         return slug.hooks.before_change[1]
-    "#);
+    "#,
+    );
     assert_eq!(result, "hooks.field_hooks.slugify_title");
 }
 
 #[test]
 fn collections_config_get_includes_select_options() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("articles")
         -- status is field 3
         local status = def.fields[3]
@@ -224,19 +261,23 @@ fn collections_config_get_includes_select_options() {
             parts[#parts + 1] = opt.label .. "=" .. opt.value
         end
         return table.concat(parts, "|")
-    "#);
+    "#,
+    );
     assert_eq!(result, "Draft=draft|Published=published|Archived=archived|Active=active|Red=red|Blue=blue|Green=green|True=true|False=false");
 }
 
 #[test]
 fn collections_config_get_includes_picker_appearance() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("articles")
         -- event_at is field 7, has picker_appearance = "dayAndTime"
         local event_at = def.fields[7]
         return event_at.picker_appearance
-    "#);
+    "#,
+    );
     assert_eq!(result, "dayAndTime");
 }
 
@@ -244,7 +285,9 @@ fn collections_config_get_includes_picker_appearance() {
 fn collections_config_get_roundtrip_redefine() {
     let runner = setup_lua();
     // Get the definition, modify it, redefine, and get again to verify round-trip
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.collections.config.get("articles")
         -- Add a new field
         def.fields[#def.fields + 1] = { name = "extra", type = "text" }
@@ -258,7 +301,8 @@ fn collections_config_get_roundtrip_redefine() {
         parts[#parts + 1] = def2.labels.singular
         parts[#parts + 1] = def2.hooks.before_change[1]
         return table.concat(parts, "|")
-    "#);
+    "#,
+    );
     let parts: Vec<&str> = result.split('|').collect();
     assert_eq!(parts[0], "8"); // 7 original + 1 new
     assert_eq!(parts[1], "extra");
@@ -271,30 +315,38 @@ fn collections_config_get_roundtrip_redefine() {
 #[test]
 fn globals_config_get_returns_nil_for_unknown() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         return tostring(crap.globals.config.get("nonexistent"))
-    "#);
+    "#,
+    );
     assert_eq!(result, "nil");
 }
 
 #[test]
 fn globals_config_get_returns_labels_and_fields() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.globals.config.get("settings")
         local parts = {}
         parts[#parts + 1] = def.labels.singular
         parts[#parts + 1] = tostring(#def.fields)
         parts[#parts + 1] = def.fields[1].name
         return table.concat(parts, "|")
-    "#);
+    "#,
+    );
     assert_eq!(result, "Settings|2|site_name");
 }
 
 #[test]
 fn globals_config_get_roundtrip_redefine() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local def = crap.globals.config.get("settings")
         def.fields[#def.fields + 1] = { name = "footer_text", type = "text" }
         crap.globals.define("settings", def)
@@ -304,14 +356,17 @@ fn globals_config_get_roundtrip_redefine() {
         parts[#parts + 1] = def2.fields[#def2.fields].name
         parts[#parts + 1] = def2.labels.singular
         return table.concat(parts, "|")
-    "#);
+    "#,
+    );
     assert_eq!(result, "3|footer_text|Settings");
 }
 
 #[test]
 fn globals_list_returns_slug_keyed_map() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local all = crap.globals.config.list()
         local slugs = {}
         for slug, _ in pairs(all) do
@@ -319,14 +374,21 @@ fn globals_list_returns_slug_keyed_map() {
         end
         table.sort(slugs)
         return table.concat(slugs, ",")
-    "#);
-    assert!(result.contains("settings"), "should contain settings, got: {}", result);
+    "#,
+    );
+    assert!(
+        result.contains("settings"),
+        "should contain settings, got: {}",
+        result
+    );
 }
 
 #[test]
 fn globals_list_can_modify_and_redefine() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         for slug, def in pairs(crap.globals.config.list()) do
             if slug == "settings" then
                 def.fields[#def.fields + 1] = { name = "plugin_field", type = "text" }
@@ -335,14 +397,17 @@ fn globals_list_can_modify_and_redefine() {
         end
         local updated = crap.globals.config.get("settings")
         return updated.fields[#updated.fields].name
-    "#);
+    "#,
+    );
     assert_eq!(result, "plugin_field");
 }
 
 #[test]
 fn collections_list_returns_all_collections() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local all = crap.collections.config.list()
         local slugs = {}
         for slug, _ in pairs(all) do
@@ -350,15 +415,22 @@ fn collections_list_returns_all_collections() {
         end
         table.sort(slugs)
         return table.concat(slugs, ",")
-    "#);
-    assert!(result.contains("articles"), "should contain articles, got: {}", result);
+    "#,
+    );
+    assert!(
+        result.contains("articles"),
+        "should contain articles, got: {}",
+        result
+    );
 }
 
 #[test]
 fn collections_list_can_filter_and_redefine() {
     let runner = setup_lua();
     // Simulate a plugin that adds a field to every collection
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         for slug, def in pairs(crap.collections.config.list()) do
             if slug == "articles" then
                 def.fields[#def.fields + 1] = { name = "plugin_field", type = "text" }
@@ -367,7 +439,8 @@ fn collections_list_can_filter_and_redefine() {
         end
         local updated = crap.collections.config.get("articles")
         return updated.fields[#updated.fields].name
-    "#);
+    "#,
+    );
     assert_eq!(result, "plugin_field");
 }
 
@@ -376,7 +449,10 @@ fn collections_list_can_filter_and_redefine() {
 #[test]
 fn lua_find_dot_notation_where() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         -- Create Product 1: "Widget" with red variant, text block
         crap.collections.create("products", {
             name = "Widget",
@@ -444,7 +520,8 @@ fn lua_find_dot_notation_where() {
         if r6.documents[1].name ~= "Gadget" then return "GIB:WRONG_NAME:" .. r6.documents[1].name end
 
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -457,7 +534,10 @@ fn lua_find_dot_notation_where() {
 #[test]
 fn lua_find_filter_operators() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         -- Seed data
         crap.collections.create("articles", { title = "Alpha", body = "10", status = "red" })
         crap.collections.create("articles", { title = "Beta", body = "20", status = "blue" })
@@ -522,7 +602,8 @@ fn lua_find_filter_operators() {
         if r9.pagination.totalDocs ~= 1 then return "CONTAINS:" .. tostring(r9.pagination.totalDocs) end
 
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -532,7 +613,9 @@ fn lua_find_filter_operators() {
 fn lua_create_unique_constraint_violation() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         -- title is unique in the fixture articles collection
         crap.collections.create("articles", { title = "Unique Title", body = "First" })
 
@@ -546,7 +629,11 @@ fn lua_create_unique_constraint_violation() {
             return "ok"
         end
         return "UNEXPECTED:" .. err_str
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -572,7 +659,10 @@ fn lua_validate_fields_with_custom_validator() {
     data.insert("word_count".to_string(), serde_json::json!("100"));
 
     let result = runner.validate_fields(&def.fields, &data, &tx, "articles", None, false, None);
-    assert!(result.is_ok(), "Valid positive number should pass validation");
+    assert!(
+        result.is_ok(),
+        "Valid positive number should pass validation"
+    );
 
     // Invalid: negative number should fail
     let mut bad_data = std::collections::HashMap::new();
@@ -593,7 +683,12 @@ fn lua_validate_fields_with_custom_validator() {
 
 fn setup_localized_lua_db(
     locales: Vec<&str>,
-) -> (tempfile::TempDir, crap_cms::db::DbPool, SharedRegistry, HookRunner) {
+) -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    SharedRegistry,
+    HookRunner,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let collections_dir = tmp.path().join("collections");
     std::fs::create_dir_all(&collections_dir).unwrap();
@@ -698,7 +793,10 @@ fn lua_find_drafts_only() {
     let (_tmp, pool, _reg, runner) = setup_versioned_db();
     // Lua find() now auto-filters to _status="published" by default (matches gRPC).
     // Use draft=true to include all documents.
-    let result = eval_versioned(&runner, &pool, r#"
+    let result = eval_versioned(
+        &runner,
+        &pool,
+        r#"
         -- Create a published doc
         crap.collections.create("articles", {
             title = "Published",
@@ -739,14 +837,18 @@ fn lua_find_drafts_only() {
         end
 
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_count_respects_draft_filtering() {
     let (_tmp, pool, _reg, runner) = setup_versioned_db();
-    let result = eval_versioned(&runner, &pool, r#"
+    let result = eval_versioned(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", {
             title = "Published",
             body = "Pub body",
@@ -769,7 +871,8 @@ fn lua_count_respects_draft_filtering() {
         end
 
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -783,7 +886,10 @@ fn lua_create_runs_before_change_hook() {
     // The articles before_change hook sets default status to "draft" when empty,
     // and the field-level before_change on slug generates a slug from title.
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "My Test Article",
         })
@@ -796,7 +902,8 @@ fn lua_create_runs_before_change_hook() {
             return "WRONG_SLUG:" .. tostring(doc.slug)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -804,7 +911,10 @@ fn lua_create_runs_before_change_hook() {
 fn lua_create_runs_before_validate_hook() {
     // The articles before_validate hook trims title whitespace.
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "  Padded Title  ",
             body = "some body",
@@ -813,7 +923,8 @@ fn lua_create_runs_before_validate_hook() {
             return "NOT_TRIMMED:" .. tostring(doc.title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -839,7 +950,8 @@ crap.collections.define("notes", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(
         collections_dir.join("audit.lua"),
         r#"
@@ -850,7 +962,8 @@ crap.collections.define("audit", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(
         hooks_dir.join("note_hooks.lua"),
         r#"
@@ -864,7 +977,8 @@ function M.after_change(ctx)
 end
 return M
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
     std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
 
@@ -882,7 +996,9 @@ return M
         .expect("runner");
 
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local doc = crap.collections.create("notes", { title = "Test Note" })
         -- after_change hook should have created an audit doc
         local audits = crap.collections.find("audit", {})
@@ -893,7 +1009,11 @@ return M
             return "WRONG_ACTION:" .. tostring(audits.documents[1].action)
         end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -902,7 +1022,9 @@ fn lua_create_runs_validation() {
     // The articles collection has a custom validator on word_count (positive_number).
     let (_tmp, pool, _reg, runner) = setup_with_db();
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local ok, err = pcall(function()
             crap.collections.create("articles", {
                 title = "Bad Article",
@@ -913,7 +1035,11 @@ fn lua_create_runs_validation() {
         local err_str = tostring(err)
         if err_str:find("positive") then return "ok" end
         return "WRONG_ERROR:" .. err_str
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -921,7 +1047,10 @@ fn lua_create_runs_validation() {
 fn lua_create_with_hooks_false() {
     // When hooks = false, before_change hook should NOT fire (no default status).
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "No Hooks Article",
         }, { hooks = false })
@@ -934,7 +1063,8 @@ fn lua_create_with_hooks_false() {
             return "FIELD_HOOK_RAN:" .. tostring(doc.slug)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -959,7 +1089,8 @@ crap.collections.define("items", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(
         collections_dir.join("deletelog.lua"),
         r#"
@@ -969,7 +1100,8 @@ crap.collections.define("deletelog", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(
         hooks_dir.join("item_hooks.lua"),
         r#"
@@ -982,7 +1114,8 @@ function M.after_delete(ctx)
 end
 return M
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
     std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
 
@@ -1000,7 +1133,9 @@ return M
         .expect("runner");
 
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local doc = crap.collections.create("items", { name = "To Delete" })
         local id = doc.id
         crap.collections.delete("items", id)
@@ -1014,7 +1149,11 @@ return M
             return "WRONG_ID:" .. tostring(logs.documents[1].deleted_id) .. " expected:" .. id
         end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -1022,7 +1161,10 @@ return M
 fn lua_find_runs_after_read_hook() {
     // The articles after_read hook sets _was_read = "true" on each document.
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", {
             title = "Readable Article",
             body = "Content",
@@ -1041,7 +1183,8 @@ fn lua_find_runs_after_read_hook() {
             return "NO_AFTER_READ_ON_FIND_BY_ID:" .. tostring(found._was_read)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -1065,7 +1208,8 @@ crap.collections.define("depthtest", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let hooks_dir = tmp.path().join("hooks");
     std::fs::create_dir_all(&hooks_dir).unwrap();
@@ -1079,7 +1223,8 @@ function M.record_depth(ctx)
 end
 return M
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
     std::fs::write(tmp.path().join("crap.toml"), "").unwrap();
 
@@ -1097,14 +1242,20 @@ return M
         .expect("runner");
 
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local doc = crap.collections.create("depthtest", { name = "test" })
         -- At Lua CRUD level, hook_depth should be 1 (incremented from 0)
         if doc.depth_seen ~= "1" then
             return "WRONG_DEPTH:" .. tostring(doc.depth_seen)
         end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -1129,7 +1280,8 @@ crap.collections.define("recursive", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let hooks_dir = tmp.path().join("hooks");
     std::fs::create_dir_all(&hooks_dir).unwrap();
@@ -1148,7 +1300,8 @@ function M.spawn(ctx)
 end
 return M
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
     std::fs::write(tmp.path().join("crap.toml"), "[hooks]\nmax_depth = 2\n").unwrap();
 
@@ -1167,7 +1320,9 @@ return M
         .expect("runner");
 
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         crap.collections.create("recursive", { name = "root" })
         -- With max_depth=2: root creates at depth 0, hook fires at depth 1,
         -- which creates another doc, hook fires at depth 2 which creates
@@ -1178,6 +1333,10 @@ return M
             return "TOO_FEW:" .. tostring(result.pagination.totalDocs)
         end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }

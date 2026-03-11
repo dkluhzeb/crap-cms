@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use super::processed_upload::ProcessedUpload;
 use super::queued_conversion::QueuedConversion;
 use super::size_result::SizeResult;
-use super::processed_upload::ProcessedUpload;
 
 /// Builder for [`ProcessedUpload`].
 ///
@@ -74,8 +74,12 @@ impl ProcessedUploadBuilder {
     pub fn build(self) -> ProcessedUpload {
         ProcessedUpload {
             filename: self.filename,
-            mime_type: self.mime_type.expect("ProcessedUploadBuilder: mime_type is required"),
-            filesize: self.filesize.expect("ProcessedUploadBuilder: filesize is required"),
+            mime_type: self
+                .mime_type
+                .expect("ProcessedUploadBuilder: mime_type is required"),
+            filesize: self
+                .filesize
+                .expect("ProcessedUploadBuilder: filesize is required"),
             width: self.width,
             height: self.height,
             url: self.url,
@@ -111,12 +115,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "ProcessedUploadBuilder: mime_type is required")]
     fn panics_without_mime_type() {
-        ProcessedUploadBuilder::new("f.jpg", "/u/f.jpg").filesize(1).build();
+        ProcessedUploadBuilder::new("f.jpg", "/u/f.jpg")
+            .filesize(1)
+            .build();
     }
 
     #[test]
     #[should_panic(expected = "ProcessedUploadBuilder: filesize is required")]
     fn panics_without_filesize() {
-        ProcessedUploadBuilder::new("f.jpg", "/u/f.jpg").mime_type("image/jpeg").build();
+        ProcessedUploadBuilder::new("f.jpg", "/u/f.jpg")
+            .mime_type("image/jpeg")
+            .build();
     }
 }

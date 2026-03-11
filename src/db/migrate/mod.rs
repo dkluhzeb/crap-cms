@@ -6,20 +6,26 @@ pub mod helpers;
 mod tracking;
 
 pub use tracking::{
-    list_migration_files, get_applied_migrations, get_applied_migrations_desc,
-    get_pending_migrations, record_migration, remove_migration, drop_all_tables,
+    drop_all_tables, get_applied_migrations, get_applied_migrations_desc, get_pending_migrations,
+    list_migration_files, record_migration, remove_migration,
 };
 
 use anyhow::{Context as _, Result};
 
+use super::DbPool;
 use crate::config::LocaleConfig;
 use crate::core::SharedRegistry;
-use super::DbPool;
 
 /// Sync all collection tables with their Lua definitions.
-pub fn sync_all(pool: &DbPool, registry: &SharedRegistry, locale_config: &LocaleConfig) -> Result<()> {
+pub fn sync_all(
+    pool: &DbPool,
+    registry: &SharedRegistry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
-    let tx = conn.transaction().context("Failed to start migration transaction")?;
+    let tx = conn
+        .transaction()
+        .context("Failed to start migration transaction")?;
 
     // Create metadata table
     tx.execute_batch(
@@ -27,16 +33,18 @@ pub fn sync_all(pool: &DbPool, registry: &SharedRegistry, locale_config: &Locale
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
             updated_at TEXT DEFAULT (datetime('now'))
-        );"
-    ).context("Failed to create _crap_meta table")?;
+        );",
+    )
+    .context("Failed to create _crap_meta table")?;
 
     // Create migrations tracking table
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS _crap_migrations (
             filename TEXT PRIMARY KEY,
             applied_at TEXT DEFAULT (datetime('now'))
-        );"
-    ).context("Failed to create _crap_migrations table")?;
+        );",
+    )
+    .context("Failed to create _crap_migrations table")?;
 
     // Create jobs table
     tx.execute_batch(
@@ -58,16 +66,18 @@ pub fn sync_all(pool: &DbPool, registry: &SharedRegistry, locale_config: &Locale
         );
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
-        CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);"
-    ).context("Failed to create _crap_jobs table")?;
+        CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);",
+    )
+    .context("Failed to create _crap_jobs table")?;
 
     // Create user settings table (decoupled from auth collections)
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS _crap_user_settings (
             user_id TEXT PRIMARY KEY,
             settings TEXT NOT NULL DEFAULT '{}'
-        );"
-    ).context("Failed to create _crap_user_settings table")?;
+        );",
+    )
+    .context("Failed to create _crap_user_settings table")?;
 
     // Create image processing queue table
     tx.execute_batch(
@@ -86,10 +96,12 @@ pub fn sync_all(pool: &DbPool, registry: &SharedRegistry, locale_config: &Locale
             created_at TEXT DEFAULT (datetime('now')),
             completed_at TEXT
         );
-        CREATE INDEX IF NOT EXISTS idx_crap_image_queue_status ON _crap_image_queue(status);"
-    ).context("Failed to create _crap_image_queue table")?;
+        CREATE INDEX IF NOT EXISTS idx_crap_image_queue_status ON _crap_image_queue(status);",
+    )
+    .context("Failed to create _crap_image_queue table")?;
 
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
     for (slug, def) in &reg.collections {
@@ -101,7 +113,8 @@ pub fn sync_all(pool: &DbPool, registry: &SharedRegistry, locale_config: &Locale
     }
 
     drop(reg);
-    tx.commit().context("Failed to commit migration transaction")?;
+    tx.commit()
+        .context("Failed to commit migration transaction")?;
 
     Ok(())
 }

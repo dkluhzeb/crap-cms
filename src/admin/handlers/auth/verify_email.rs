@@ -3,9 +3,9 @@ use axum::{
     response::{IntoResponse, Redirect},
 };
 
+use super::VerifyEmailQuery;
 use crate::admin::AdminState;
 use crate::db::query;
-use super::VerifyEmailQuery;
 
 /// GET /admin/verify-email?token=xxx — validate token, mark verified, redirect.
 pub async fn verify_email(
@@ -20,9 +20,15 @@ pub async fn verify_email(
         let conn = pool.get()?;
 
         for def in registry.collections.values() {
-            if !def.is_auth_collection() { continue; }
-            if !def.auth.as_ref().is_some_and(|a| a.verify_email) { continue; }
-            if let Some((user, exp)) = query::find_by_verification_token(&conn, &def.slug, def, &token)? {
+            if !def.is_auth_collection() {
+                continue;
+            }
+            if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
+                continue;
+            }
+            if let Some((user, exp)) =
+                query::find_by_verification_token(&conn, &def.slug, def, &token)?
+            {
                 if chrono::Utc::now().timestamp() >= exp {
                     // Token expired — don't verify
                     return Ok(false);
@@ -33,14 +39,11 @@ pub async fn verify_email(
         }
 
         Ok::<_, anyhow::Error>(false)
-    }).await;
+    })
+    .await;
 
     match result {
-        Ok(Ok(true)) => {
-            Redirect::to("/admin/login?success=success_email_verified").into_response()
-        }
-        _ => {
-            Redirect::to("/admin/login").into_response()
-        }
+        Ok(Ok(true)) => Redirect::to("/admin/login?success=success_email_verified").into_response(),
+        _ => Redirect::to("/admin/login").into_response(),
     }
 }

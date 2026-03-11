@@ -1,9 +1,6 @@
 //! Global definitions — single-document collections.
 
-use super::{
-    Access, Hooks, Labels, LiveSetting, McpConfig,
-    VersionsConfig,
-};
+use super::{Access, Hooks, Labels, LiveSetting, McpConfig, VersionsConfig};
 use crate::core::field::FieldDefinition;
 use serde::{Deserialize, Serialize};
 
@@ -29,7 +26,10 @@ pub struct GlobalDefinition {
 
 impl GlobalDefinition {
     pub fn new(slug: impl Into<String>) -> Self {
-        Self { slug: slug.into(), ..Default::default() }
+        Self {
+            slug: slug.into(),
+            ..Default::default()
+        }
     }
 
     pub fn builder(slug: impl Into<String>) -> super::GlobalDefinitionBuilder {
@@ -38,7 +38,9 @@ impl GlobalDefinition {
 
     /// Get the display label (singular, falls back to slug). Uses default resolution.
     pub fn display_name(&self) -> &str {
-        self.labels.singular.as_ref()
+        self.labels
+            .singular
+            .as_ref()
             .map(|ls| ls.resolve_default())
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.slug)
@@ -47,7 +49,9 @@ impl GlobalDefinition {
     /// Get the display label resolved for a specific locale.
     #[allow(dead_code)]
     pub fn display_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        self.labels.singular.as_ref()
+        self.labels
+            .singular
+            .as_ref()
             .map(|ls| ls.resolve(locale, default_locale))
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.slug)

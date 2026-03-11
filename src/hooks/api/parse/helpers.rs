@@ -24,14 +24,21 @@ pub(super) fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedSt
             for (k, v) in t.pairs::<String, String>().flatten() {
                 map.insert(k, v);
             }
-            if map.is_empty() { None } else { Some(LocalizedString::Localized(map)) }
+            if map.is_empty() {
+                None
+            } else {
+                Some(LocalizedString::Localized(map))
+            }
         }
         _ => None,
     }
 }
 
 pub(super) fn get_bool(tbl: &Table, key: &str, default: bool) -> bool {
-    tbl.get::<Option<bool>>(key).ok().flatten().unwrap_or(default)
+    tbl.get::<Option<bool>>(key)
+        .ok()
+        .flatten()
+        .unwrap_or(default)
 }
 
 /// Parse the `collection` field from a relationship Lua table.
@@ -102,8 +109,8 @@ pub(super) fn parse_select_options(opts_tbl: &Table) -> Result<Vec<SelectOption>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mlua::Lua;
     use crate::core::field::LocalizedString;
+    use mlua::Lua;
 
     #[test]
     fn test_get_string_present() {

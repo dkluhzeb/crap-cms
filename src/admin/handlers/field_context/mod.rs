@@ -71,7 +71,8 @@ pub(super) fn apply_display_conditions(
     };
 
     // Collect all conditions that need evaluation
-    let conditions: Vec<(&str, &serde_json::Value)> = defs.iter()
+    let conditions: Vec<(&str, &serde_json::Value)> = defs
+        .iter()
         .filter_map(|fd| fd.admin.condition.as_deref().map(|c| (c, form_data)))
         .collect();
 
@@ -105,7 +106,7 @@ pub(super) fn apply_display_conditions(
 pub(super) fn split_sidebar_fields(
     fields: Vec<serde_json::Value>,
 ) -> (Vec<serde_json::Value>, Vec<serde_json::Value>) {
-    fields.into_iter().partition(|f| {
-        f.get("position").and_then(|v| v.as_str()) != Some("sidebar")
-    })
+    fields
+        .into_iter()
+        .partition(|f| f.get("position").and_then(|v| v.as_str()) != Some("sidebar"))
 }

@@ -7,8 +7,8 @@ pub mod upload;
 use anyhow::Result;
 use tonic::transport::Server;
 
-use crate::core::Registry;
 use crate::core::event::EventBus;
+use crate::core::Registry;
 use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
@@ -37,27 +37,31 @@ pub async fn start_server(
 ) -> Result<()> {
     let addr = addr.parse()?;
 
-    let email_renderer = std::sync::Arc::new(
-        crate::core::email::EmailRenderer::new(config_dir)?
-    );
-    let login_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::LoginRateLimiter::new(
-            config.auth.max_login_attempts,
-            config.auth.login_lockout_seconds,
-        )
-    );
-    let forgot_password_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::LoginRateLimiter::new(
+    let email_renderer = std::sync::Arc::new(crate::core::email::EmailRenderer::new(config_dir)?);
+    let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(
+        config.auth.max_login_attempts,
+        config.auth.login_lockout_seconds,
+    ));
+    let forgot_password_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(
             config.auth.max_forgot_password_attempts,
             config.auth.forgot_password_window_seconds,
-        )
-    );
+        ));
     let content_service = service::ContentService::new(
-        pool, registry, hook_runner, jwt_secret, depth_config,
+        pool,
+        registry,
+        hook_runner,
+        jwt_secret,
+        depth_config,
         &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(),
-        event_bus, config.locale.clone(), config_dir.to_path_buf(),
-        login_limiter, config.auth.reset_token_expiry,
+        config.email.clone(),
+        email_renderer,
+        config.server.clone(),
+        event_bus,
+        config.locale.clone(),
+        config_dir.to_path_buf(),
+        login_limiter,
+        config.auth.reset_token_expiry,
         config.auth.password_policy.clone(),
         forgot_password_limiter,
     );
@@ -67,9 +71,8 @@ pub async fn start_server(
         if let Some(cache) = content_service.populate_cache_handle() {
             let interval_secs = depth_config.populate_cache_max_age_secs;
             tokio::spawn(async move {
-                let mut interval = tokio::time::interval(
-                    std::time::Duration::from_secs(interval_secs),
-                );
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
                 interval.tick().await; // skip first immediate tick
                 loop {
                     interval.tick().await;
@@ -79,12 +82,10 @@ pub async fn start_server(
         }
     }
 
-    let grpc_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::GrpcRateLimiter::new(
-            config.server.grpc_rate_limit_requests,
-            config.server.grpc_rate_limit_window,
-        )
-    );
+    let grpc_limiter = std::sync::Arc::new(crate::core::rate_limit::GrpcRateLimiter::new(
+        config.server.grpc_rate_limit_requests,
+        config.server.grpc_rate_limit_window,
+    ));
     let rate_limit_layer = rate_limit::GrpcRateLimitLayer::new(grpc_limiter);
 
     let content_svc = content::content_api_server::ContentApiServer::new(content_service);

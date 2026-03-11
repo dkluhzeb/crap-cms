@@ -9,17 +9,26 @@ use super::VmLabel;
 pub(super) fn register_log(lua: &Lua, crap: &Table) -> Result<()> {
     let log_table = lua.create_table()?;
     let log_info = lua.create_function(|lua, msg: String| {
-        let label = lua.app_data_ref::<VmLabel>().map(|l| l.0.clone()).unwrap_or_else(|| "lua".into());
+        let label = lua
+            .app_data_ref::<VmLabel>()
+            .map(|l| l.0.clone())
+            .unwrap_or_else(|| "lua".into());
         tracing::info!("[lua:{label}] {msg}");
         Ok(())
     })?;
     let log_warn = lua.create_function(|lua, msg: String| {
-        let label = lua.app_data_ref::<VmLabel>().map(|l| l.0.clone()).unwrap_or_else(|| "lua".into());
+        let label = lua
+            .app_data_ref::<VmLabel>()
+            .map(|l| l.0.clone())
+            .unwrap_or_else(|| "lua".into());
         tracing::warn!("[lua:{label}] {msg}");
         Ok(())
     })?;
     let log_error = lua.create_function(|lua, msg: String| {
-        let label = lua.app_data_ref::<VmLabel>().map(|l| l.0.clone()).unwrap_or_else(|| "lua".into());
+        let label = lua
+            .app_data_ref::<VmLabel>()
+            .map(|l| l.0.clone())
+            .unwrap_or_else(|| "lua".into());
         tracing::error!("[lua:{label}] {msg}");
         Ok(())
     })?;

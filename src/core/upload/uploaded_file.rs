@@ -8,7 +8,10 @@ pub struct UploadedFile {
 }
 
 impl UploadedFile {
-    pub fn builder(filename: impl Into<String>, content_type: impl Into<String>) -> UploadedFileBuilder {
+    pub fn builder(
+        filename: impl Into<String>,
+        content_type: impl Into<String>,
+    ) -> UploadedFileBuilder {
         UploadedFileBuilder::new(filename, content_type)
     }
 }

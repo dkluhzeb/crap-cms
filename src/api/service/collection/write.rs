@@ -5,7 +5,9 @@ use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 
 use crate::api::content;
-use crate::api::service::convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map};
+use crate::api::service::convert::{
+    document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map,
+};
 use crate::api::service::ContentService;
 use crate::db::query::{AccessResult, LocaleContext};
 

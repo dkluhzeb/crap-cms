@@ -1,12 +1,9 @@
 use std::collections::HashMap;
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::collection::{
-    Auth, CollectionDefinition, Labels, GlobalDefinition,
-};
+use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{
-    BlockDefinition, FieldDefinition, FieldType,
-    LocalizedString, RelationshipConfig,
+    BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
 use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
@@ -19,7 +16,9 @@ fn make_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("status", FieldType::Select)
             .default_value(serde_json::json!("draft"))
             .build(),
@@ -39,7 +38,11 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, field_type).build()
 }
 
-fn seed_posts() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn seed_posts() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_posts_def();
@@ -80,7 +83,10 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
     def.auth = Some(Auth {
@@ -118,7 +124,11 @@ fn make_articles_with_join_tables() -> CollectionDefinition {
     def
 }
 
-fn setup_articles() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn setup_articles() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_articles_with_join_tables();
@@ -301,8 +311,10 @@ fn checkbox_default_when_field_missing() {
 #[test]
 fn apply_select_keeps_id() {
     let mut doc = crap_cms::core::Document::new("test-id".to_string());
-    doc.fields.insert("title".to_string(), serde_json::json!("Test"));
-    doc.fields.insert("body".to_string(), serde_json::json!("Content"));
+    doc.fields
+        .insert("title".to_string(), serde_json::json!("Test"));
+    doc.fields
+        .insert("body".to_string(), serde_json::json!("Content"));
     doc.created_at = Some("2024-01-01".to_string());
 
     query::apply_select_to_document(&mut doc, &["title".to_string()]);
@@ -314,9 +326,14 @@ fn apply_select_keeps_id() {
 #[test]
 fn apply_select_group_prefix() {
     let mut doc = crap_cms::core::Document::new("test-id".to_string());
-    doc.fields.insert("seo__title".to_string(), serde_json::json!("SEO Title"));
-    doc.fields.insert("seo__description".to_string(), serde_json::json!("SEO Desc"));
-    doc.fields.insert("other".to_string(), serde_json::json!("Other"));
+    doc.fields
+        .insert("seo__title".to_string(), serde_json::json!("SEO Title"));
+    doc.fields.insert(
+        "seo__description".to_string(),
+        serde_json::json!("SEO Desc"),
+    );
+    doc.fields
+        .insert("other".to_string(), serde_json::json!("Other"));
 
     query::apply_select_to_document(&mut doc, &["seo".to_string()]);
     assert!(doc.fields.contains_key("seo__title"));
@@ -346,7 +363,8 @@ fn sync_creates_auth_columns() {
     // These should not error -- columns must exist
     query::update_password(&tx, "users", &doc.id, "password123").expect("update_password");
     query::set_reset_token(&tx, "users", &doc.id, "token", 9999999).expect("set_reset_token");
-    query::set_verification_token(&tx, "users", &doc.id, "vtoken", 9999999999).expect("set_verification_token");
+    query::set_verification_token(&tx, "users", &doc.id, "vtoken", 9999999999)
+        .expect("set_verification_token");
     tx.commit().expect("Commit");
 }
 
@@ -360,7 +378,14 @@ fn sync_creates_join_tables() {
     assert!(tags_result.is_ok());
 
     let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
-    let links_result = query::find_array_rows(&conn, "articles", "links", "nonexistent", &links_field.fields, None);
+    let links_result = query::find_array_rows(
+        &conn,
+        "articles",
+        "links",
+        "nonexistent",
+        &links_field.fields,
+        None,
+    );
     assert!(links_result.is_ok());
 
     let blocks_result = query::find_block_rows(&conn, "articles", "content", "nonexistent", None);
@@ -406,7 +431,10 @@ fn alter_adds_auth_columns_on_upgrade() {
     let mut def = CollectionDefinition::new("members");
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         make_field("name", FieldType::Text),
     ];
     {
@@ -434,7 +462,8 @@ fn alter_adds_auth_columns_on_upgrade() {
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "members", &def, &data, None).expect("Create");
     query::update_password(&tx, "members", &doc.id, "pass").expect("update_password");
-    query::set_verification_token(&tx, "members", &doc.id, "tok", 9999999999).expect("set_verification_token");
+    query::set_verification_token(&tx, "members", &doc.id, "tok", 9999999999)
+        .expect("set_verification_token");
     tx.commit().expect("Commit");
 }
 
@@ -445,7 +474,9 @@ fn sync_adds_locale_columns() {
     let mut def = CollectionDefinition::new("pages");
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).localized(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .localized(true)
+            .build(),
         make_field("slug_field", FieldType::Text),
     ];
     {
@@ -481,8 +512,7 @@ fn sync_global_creates_and_seeds() {
     let conn = pool.get().expect("DB connection");
 
     // Check the default row was created
-    let doc = query::get_global(&conn, "site_settings", &def, None)
-        .expect("Get global failed");
+    let doc = query::get_global(&conn, "site_settings", &def, None).expect("Get global failed");
     assert_eq!(doc.id, "default");
     assert!(doc.created_at.is_some());
 }
@@ -504,7 +534,11 @@ fn make_group_def() -> CollectionDefinition {
     def
 }
 
-fn setup_group_collection() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn setup_group_collection() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_group_def();
@@ -522,7 +556,10 @@ fn create_with_group_flattens_to_columns() {
     let mut data = HashMap::new();
     data.insert("title".to_string(), "My Page".to_string());
     data.insert("seo__meta_title".to_string(), "Page Title".to_string());
-    data.insert("seo__meta_description".to_string(), "Page description".to_string());
+    data.insert(
+        "seo__meta_description".to_string(),
+        "Page description".to_string(),
+    );
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
@@ -531,7 +568,10 @@ fn create_with_group_flattens_to_columns() {
 
     // Before hydration, the fields are stored as seo__meta_title
     assert_eq!(doc.get_str("seo__meta_title"), Some("Page Title"));
-    assert_eq!(doc.get_str("seo__meta_description"), Some("Page description"));
+    assert_eq!(
+        doc.get_str("seo__meta_description"),
+        Some("Page description")
+    );
 }
 
 #[test]
@@ -549,15 +589,22 @@ fn hydrate_returns_grouped_fields() {
 
     let conn = pool.get().expect("conn");
     let mut doc = query::find_by_id(&conn, "pages_with_seo", &def, &doc.id, None)
-        .expect("Find").expect("Not found");
+        .expect("Find")
+        .expect("Not found");
     query::hydrate_document(&conn, "pages_with_seo", &def.fields, &mut doc, None, None)
         .expect("Hydrate");
 
     // After hydration, seo should be a nested object
     let seo = doc.get("seo").expect("seo should exist");
     assert!(seo.is_object());
-    assert_eq!(seo.get("meta_title").unwrap().as_str().unwrap(), "SEO Title");
-    assert_eq!(seo.get("meta_description").unwrap().as_str().unwrap(), "SEO Desc");
+    assert_eq!(
+        seo.get("meta_title").unwrap().as_str().unwrap(),
+        "SEO Title"
+    );
+    assert_eq!(
+        seo.get("meta_description").unwrap().as_str().unwrap(),
+        "SEO Desc"
+    );
 }
 
 #[test]
@@ -566,7 +613,10 @@ fn update_group_subfield() {
     let mut data = HashMap::new();
     data.insert("title".to_string(), "My Page".to_string());
     data.insert("seo__meta_title".to_string(), "Original Title".to_string());
-    data.insert("seo__meta_description".to_string(), "Original Desc".to_string());
+    data.insert(
+        "seo__meta_description".to_string(),
+        "Original Desc".to_string(),
+    );
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
@@ -578,12 +628,16 @@ fn update_group_subfield() {
     update.insert("seo__meta_title".to_string(), "New Title".to_string());
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let updated = query::update(&tx, "pages_with_seo", &def, &doc.id, &update, None).expect("Update");
+    let updated =
+        query::update(&tx, "pages_with_seo", &def, &doc.id, &update, None).expect("Update");
     tx.commit().expect("Commit");
 
     assert_eq!(updated.get_str("seo__meta_title"), Some("New Title"));
     // Description should be unchanged
-    assert_eq!(updated.get_str("seo__meta_description"), Some("Original Desc"));
+    assert_eq!(
+        updated.get_str("seo__meta_description"),
+        Some("Original Desc")
+    );
 }
 
 #[test]
@@ -716,8 +770,7 @@ fn ops_count_documents() {
 fn ops_get_global() {
     let (_tmp, pool, def) = setup_global();
 
-    let doc = ops::get_global(&pool, "site_settings", &def, None)
-        .expect("ops::get_global failed");
+    let doc = ops::get_global(&pool, "site_settings", &def, None).expect("ops::get_global failed");
     assert_eq!(doc.id, "default");
     assert!(doc.created_at.is_some());
 }
@@ -753,7 +806,11 @@ fn contains_filter_escapes_percent() {
         op: query::FilterOp::Contains("50%".to_string()),
     })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
-    assert_eq!(docs.len(), 1, "Contains('50%') should only match one document");
+    assert_eq!(
+        docs.len(),
+        1,
+        "Contains('50%') should only match one document"
+    );
     assert_eq!(docs[0].get_str("title"), Some("50% off"));
 }
 
@@ -786,7 +843,11 @@ fn contains_filter_escapes_underscore() {
         op: query::FilterOp::Contains("a_b".to_string()),
     })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
-    assert_eq!(docs.len(), 1, "Contains('a_b') should only match literal underscore");
+    assert_eq!(
+        docs.len(),
+        1,
+        "Contains('a_b') should only match literal underscore"
+    );
     assert_eq!(docs[0].get_str("title"), Some("a_b"));
 }
 
@@ -802,7 +863,11 @@ fn validate_query_fields_passes_valid() {
     })];
     q.order_by = Some("status".to_string());
     let result = query::validate_query_fields(&def, &q, None);
-    assert!(result.is_ok(), "Valid fields should pass validation: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Valid fields should pass validation: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -816,7 +881,11 @@ fn validate_query_fields_rejects_invalid_filter() {
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid filter field should be rejected");
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("nonexistent_field"), "Error should mention the invalid field name, got: {}", err_msg);
+    assert!(
+        err_msg.contains("nonexistent_field"),
+        "Error should mention the invalid field name, got: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -827,7 +896,11 @@ fn validate_query_fields_rejects_invalid_order() {
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid order_by field should be rejected");
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("nonexistent_field"), "Error should mention the invalid field name, got: {}", err_msg);
+    assert!(
+        err_msg.contains("nonexistent_field"),
+        "Error should mention the invalid field name, got: {}",
+        err_msg
+    );
 }
 
 // ── 6. Migration DEFAULT Value Escaping (Bug Fix Test) ────────────────────────
@@ -891,8 +964,10 @@ fn create_checkbox_truthy_values() {
         let doc = query::create(&tx, "flags", &def, &data, None).expect("Create");
         tx.commit().expect("Commit");
         assert_eq!(
-            doc.get("active").unwrap().as_i64(), Some(1),
-            "Checkbox value '{}' should coerce to 1", truthy
+            doc.get("active").unwrap().as_i64(),
+            Some(1),
+            "Checkbox value '{}' should coerce to 1",
+            truthy
         );
     }
 }
@@ -923,8 +998,10 @@ fn create_checkbox_falsy_values() {
         let doc = query::create(&tx, "flags2", &def, &data, None).expect("Create");
         tx.commit().expect("Commit");
         assert_eq!(
-            doc.get("active").unwrap().as_i64(), Some(0),
-            "Checkbox value '{}' should coerce to 0", falsy
+            doc.get("active").unwrap().as_i64(),
+            Some(0),
+            "Checkbox value '{}' should coerce to 0",
+            falsy
         );
     }
 }
@@ -948,7 +1025,10 @@ fn create_number_invalid_stores_null() {
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "metrics_invalid", &def, &data, None).expect("Create");
     tx.commit().expect("Commit");
-    assert!(doc.get("score").unwrap().is_null(), "Invalid number 'abc' should store as null");
+    assert!(
+        doc.get("score").unwrap().is_null(),
+        "Invalid number 'abc' should store as null"
+    );
 }
 
 #[test]
@@ -969,5 +1049,8 @@ fn create_text_empty_stores_null() {
     let tx = conn.transaction().expect("tx");
     let doc = query::create(&tx, "posts", &def, &data, None).expect("Create");
     tx.commit().expect("Commit");
-    assert!(doc.get("status").unwrap().is_null(), "Empty text string should store as null");
+    assert!(
+        doc.get("status").unwrap().is_null(),
+        "Empty text string should store as null"
+    );
 }

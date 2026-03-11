@@ -2,7 +2,7 @@
 //! Also: check version snapshots for missing (deleted) relationship targets.
 
 use crate::config::LocaleConfig;
-use crate::core::field::{FieldDefinition, FieldType, to_title_case};
+use crate::core::field::{to_title_case, FieldDefinition, FieldType};
 use crate::core::Registry;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -21,12 +21,23 @@ pub struct BackReference {
 
 impl BackReference {
     pub fn new(
-        owner_slug: String, owner_label: String,
-        field_name: String, field_label: String,
-        document_ids: Vec<String>, is_global: bool,
+        owner_slug: String,
+        owner_label: String,
+        field_name: String,
+        field_label: String,
+        document_ids: Vec<String>,
+        is_global: bool,
     ) -> Self {
         let count = document_ids.len();
-        Self { owner_slug, owner_label, field_name, field_label, document_ids, count, is_global }
+        Self {
+            owner_slug,
+            owner_label,
+            field_name,
+            field_label,
+            document_ids,
+            count,
+            is_global,
+        }
     }
 }
 
@@ -44,9 +55,18 @@ pub fn find_back_references(
     for (slug, def) in &registry.collections {
         let table = slug.as_str();
         scan_fields(
-            conn, &def.fields, table, table,
-            def.display_name(), target_collection, target_id,
-            locale_config, slug, false, "", &mut results,
+            conn,
+            &def.fields,
+            table,
+            table,
+            def.display_name(),
+            target_collection,
+            target_id,
+            locale_config,
+            slug,
+            false,
+            "",
+            &mut results,
         );
     }
 
@@ -54,9 +74,18 @@ pub fn find_back_references(
     for (slug, def) in &registry.globals {
         let table = format!("_global_{}", slug);
         scan_fields(
-            conn, &def.fields, &table, &table,
-            def.display_name(), target_collection, target_id,
-            locale_config, slug, true, "", &mut results,
+            conn,
+            &def.fields,
+            &table,
+            &table,
+            def.display_name(),
+            target_collection,
+            target_id,
+            locale_config,
+            slug,
+            true,
+            "",
+            &mut results,
         );
     }
 
@@ -89,24 +118,51 @@ fn scan_fields(
                     format!("{}__{}", prefix, field.name)
                 };
                 scan_fields(
-                    conn, &field.fields, parent_table, collection_table,
-                    owner_label, target_collection, target_id,
-                    locale_config, owner_slug, is_global, &new_prefix, results,
+                    conn,
+                    &field.fields,
+                    parent_table,
+                    collection_table,
+                    owner_label,
+                    target_collection,
+                    target_id,
+                    locale_config,
+                    owner_slug,
+                    is_global,
+                    &new_prefix,
+                    results,
                 );
             }
             FieldType::Row | FieldType::Collapsible => {
                 scan_fields(
-                    conn, &field.fields, parent_table, collection_table,
-                    owner_label, target_collection, target_id,
-                    locale_config, owner_slug, is_global, prefix, results,
+                    conn,
+                    &field.fields,
+                    parent_table,
+                    collection_table,
+                    owner_label,
+                    target_collection,
+                    target_id,
+                    locale_config,
+                    owner_slug,
+                    is_global,
+                    prefix,
+                    results,
                 );
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
                     scan_fields(
-                        conn, &tab.fields, parent_table, collection_table,
-                        owner_label, target_collection, target_id,
-                        locale_config, owner_slug, is_global, prefix, results,
+                        conn,
+                        &tab.fields,
+                        parent_table,
+                        collection_table,
+                        owner_label,
+                        target_collection,
+                        target_id,
+                        locale_config,
+                        owner_slug,
+                        is_global,
+                        prefix,
+                        results,
                     );
                 }
             }
@@ -125,27 +181,45 @@ fn scan_fields(
                         format!("{}__{}", prefix, field.name)
                     };
                     let ids = query_has_one(
-                        conn, parent_table, &col, target_collection, target_id,
-                        rc.is_polymorphic(), field.localized && locale_config.is_enabled(),
-                        locale_config, owner_slug, is_global,
+                        conn,
+                        parent_table,
+                        &col,
+                        target_collection,
+                        target_id,
+                        rc.is_polymorphic(),
+                        field.localized && locale_config.is_enabled(),
+                        locale_config,
+                        owner_slug,
+                        is_global,
                     );
                     if !ids.is_empty() {
                         results.push(BackReference::new(
-                            owner_slug.to_string(), owner_label.to_string(),
-                            field.name.clone(), field_label, ids, is_global,
+                            owner_slug.to_string(),
+                            owner_label.to_string(),
+                            field.name.clone(),
+                            field_label,
+                            ids,
+                            is_global,
                         ));
                     }
                 } else {
                     // Has-many: junction table
                     let junction = format!("{}_{}", collection_table, field.name);
                     let ids = query_has_many(
-                        conn, &junction, target_collection, target_id,
+                        conn,
+                        &junction,
+                        target_collection,
+                        target_id,
                         rc.is_polymorphic(),
                     );
                     if !ids.is_empty() {
                         results.push(BackReference::new(
-                            owner_slug.to_string(), owner_label.to_string(),
-                            field.name.clone(), field_label, ids, is_global,
+                            owner_slug.to_string(),
+                            owner_label.to_string(),
+                            field.name.clone(),
+                            field_label,
+                            ids,
+                            is_global,
                         ));
                     }
                 }
@@ -153,17 +227,32 @@ fn scan_fields(
             FieldType::Array => {
                 let array_table = format!("{}_{}", collection_table, field.name);
                 scan_array_sub_fields(
-                    conn, &field.fields, &array_table, parent_table,
-                    owner_label, target_collection, target_id,
-                    owner_slug, is_global, &field.name, results,
+                    conn,
+                    &field.fields,
+                    &array_table,
+                    parent_table,
+                    owner_label,
+                    target_collection,
+                    target_id,
+                    owner_slug,
+                    is_global,
+                    &field.name,
+                    results,
                 );
             }
             FieldType::Blocks => {
                 let blocks_table = format!("{}_{}", collection_table, field.name);
                 scan_blocks(
-                    conn, &field.blocks, &blocks_table,
-                    owner_label, target_collection, target_id,
-                    owner_slug, is_global, &field.name, results,
+                    conn,
+                    &field.blocks,
+                    &blocks_table,
+                    owner_label,
+                    target_collection,
+                    target_id,
+                    owner_slug,
+                    is_global,
+                    &field.name,
+                    results,
                 );
             }
             _ => {}
@@ -187,10 +276,14 @@ fn query_has_one(
 ) -> Vec<String> {
     if is_localized {
         // Localized has-one: check all locale columns
-        let locale_cols: Vec<String> = locale_config.locales.iter()
+        let locale_cols: Vec<String> = locale_config
+            .locales
+            .iter()
             .map(|l| format!("{}__{}", col, l))
             .collect();
-        if locale_cols.is_empty() { return Vec::new(); }
+        if locale_cols.is_empty() {
+            return Vec::new();
+        }
 
         let match_value = if is_polymorphic {
             format!("{}/{}", target_collection, target_id)
@@ -198,7 +291,8 @@ fn query_has_one(
             target_id.to_string()
         };
 
-        let conditions: Vec<String> = locale_cols.iter()
+        let conditions: Vec<String> = locale_cols
+            .iter()
             .map(|c| format!("\"{}\" = ?1", c))
             .collect();
         let sql = format!(
@@ -206,14 +300,35 @@ fn query_has_one(
             table,
             conditions.join(" OR ")
         );
-        query_ids(conn, &sql, &[&match_value], owner_slug, target_id, is_global)
+        query_ids(
+            conn,
+            &sql,
+            &[&match_value],
+            owner_slug,
+            target_id,
+            is_global,
+        )
     } else if is_polymorphic {
         let match_value = format!("{}/{}", target_collection, target_id);
         let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = ?1", table, col);
-        query_ids(conn, &sql, &[&match_value as &dyn rusqlite::types::ToSql], owner_slug, target_id, is_global)
+        query_ids(
+            conn,
+            &sql,
+            &[&match_value as &dyn rusqlite::types::ToSql],
+            owner_slug,
+            target_id,
+            is_global,
+        )
     } else {
         let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = ?1", table, col);
-        query_ids(conn, &sql, &[&target_id as &dyn rusqlite::types::ToSql], owner_slug, target_id, is_global)
+        query_ids(
+            conn,
+            &sql,
+            &[&target_id as &dyn rusqlite::types::ToSql],
+            owner_slug,
+            target_id,
+            is_global,
+        )
     }
 }
 
@@ -246,7 +361,9 @@ fn query_has_many(
     };
 
     if is_polymorphic {
-        match stmt.query_map(rusqlite::params![target_id, target_collection], |row| row.get::<_, String>(0)) {
+        match stmt.query_map(rusqlite::params![target_id, target_collection], |row| {
+            row.get::<_, String>(0)
+        }) {
             Ok(r) => r.filter_map(|r| r.ok()).collect(),
             Err(_) => Vec::new(),
         }
@@ -306,8 +423,12 @@ fn scan_array_sub_fields(
                         field_display_label(sub)
                     );
                     results.push(BackReference::new(
-                        owner_slug.to_string(), owner_label.to_string(),
-                        format!("{}.{}", array_field_name, sub.name), label, ids, is_global,
+                        owner_slug.to_string(),
+                        owner_label.to_string(),
+                        format!("{}.{}", array_field_name, sub.name),
+                        label,
+                        ids,
+                        is_global,
                     ));
                 }
             }
@@ -355,20 +476,26 @@ fn scan_blocks(
                         "SELECT DISTINCT parent_id FROM \"{}\" WHERE _block_type = ?1 AND json_extract(data, ?2) = ?3",
                         blocks_table
                     );
-                    let ids = query_ids_blocks(conn, &sql, &block.block_type, &json_path, &match_value);
+                    let ids =
+                        query_ids_blocks(conn, &sql, &block.block_type, &json_path, &match_value);
                     if !ids.is_empty() {
                         let label = format!(
                             "{} > {} > {}",
                             to_title_case(blocks_field_name),
-                            block.label.as_ref()
+                            block
+                                .label
+                                .as_ref()
                                 .map(|l| l.resolve_default().to_string())
                                 .unwrap_or_else(|| to_title_case(&block.block_type)),
                             field_display_label(sub),
                         );
                         results.push(BackReference::new(
-                            owner_slug.to_string(), owner_label.to_string(),
+                            owner_slug.to_string(),
+                            owner_label.to_string(),
                             format!("{}.{}.{}", blocks_field_name, block.block_type, sub.name),
-                            label, ids, is_global,
+                            label,
+                            ids,
+                            is_global,
                         ));
                     }
                 }
@@ -380,7 +507,10 @@ fn scan_blocks(
 
 /// Get the display label for a field (admin label or title-cased name).
 fn field_display_label(field: &FieldDefinition) -> String {
-    field.admin.label.as_ref()
+    field
+        .admin
+        .label
+        .as_ref()
         .map(|l| l.resolve_default().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| to_title_case(&field.name))
@@ -446,7 +576,9 @@ fn query_ids_blocks(
             return Vec::new();
         }
     };
-    let result = stmt.query_map(rusqlite::params![block_type, json_path, value], |row| row.get::<_, String>(0));
+    let result = stmt.query_map(rusqlite::params![block_type, json_path, value], |row| {
+        row.get::<_, String>(0)
+    });
     match result {
         Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
         Err(_) => Vec::new(),
@@ -467,11 +599,19 @@ pub struct MissingRelation {
 
 impl MissingRelation {
     pub fn new(
-        field_name: String, field_label: String,
-        missing_ids: Vec<String>, total_ids: usize,
+        field_name: String,
+        field_label: String,
+        missing_ids: Vec<String>,
+        total_ids: usize,
     ) -> Self {
         let missing_count = missing_ids.len();
-        Self { field_name, field_label, missing_ids, missing_count, total_ids }
+        Self {
+            field_name,
+            field_label,
+            missing_ids,
+            missing_count,
+            total_ids,
+        }
     }
 }
 
@@ -510,9 +650,23 @@ fn collect_missing_fields(
                 };
                 // Group snapshot can be flat (seo__title) or nested (seo: { title })
                 if let Some(nested) = obj.get(&field.name).and_then(|v| v.as_object()) {
-                    collect_missing_fields(conn, registry, nested, &field.fields, &new_prefix, results);
+                    collect_missing_fields(
+                        conn,
+                        registry,
+                        nested,
+                        &field.fields,
+                        &new_prefix,
+                        results,
+                    );
                 } else {
-                    collect_missing_fields(conn, registry, obj, &field.fields, &new_prefix, results);
+                    collect_missing_fields(
+                        conn,
+                        registry,
+                        obj,
+                        &field.fields,
+                        &new_prefix,
+                        results,
+                    );
                 }
             }
             FieldType::Row | FieldType::Collapsible => {
@@ -543,19 +697,35 @@ fn collect_missing_fields(
                     let label = field_display_label(field);
                     let total = ids.len();
                     results.push(MissingRelation::new(
-                        field.name.clone(), label,
-                        missing.into_iter().collect(), total,
+                        field.name.clone(),
+                        label,
+                        missing.into_iter().collect(),
+                        total,
                     ));
                 }
             }
             FieldType::Array => {
                 if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
-                    collect_missing_in_array(conn, registry, arr, &field.fields, &field.name, results);
+                    collect_missing_in_array(
+                        conn,
+                        registry,
+                        arr,
+                        &field.fields,
+                        &field.name,
+                        results,
+                    );
                 }
             }
             FieldType::Blocks => {
                 if let Some(arr) = obj.get(&field.name).and_then(|v| v.as_array()) {
-                    collect_missing_in_blocks(conn, registry, arr, &field.blocks, &field.name, results);
+                    collect_missing_in_blocks(
+                        conn,
+                        registry,
+                        arr,
+                        &field.blocks,
+                        &field.name,
+                        results,
+                    );
                 }
             }
             _ => {}
@@ -673,7 +843,8 @@ fn query_existing_ids(
             return HashSet::new();
         }
     };
-    let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter()
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
         .map(|s| s as &dyn rusqlite::types::ToSql)
         .collect();
     let result = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0));
@@ -718,8 +889,10 @@ fn collect_missing_in_array(
                         field_display_label(sub)
                     );
                     results.push(MissingRelation::new(
-                        format!("{}.{}", array_name, sub.name), label,
-                        missing.into_iter().collect(), all_ids.len(),
+                        format!("{}.{}", array_name, sub.name),
+                        label,
+                        missing.into_iter().collect(),
+                        all_ids.len(),
                     ));
                 }
             }
@@ -749,7 +922,8 @@ fn collect_missing_in_blocks(
                     let mut all_ids = Vec::new();
                     for row in rows {
                         if let Some(obj) = row.as_object() {
-                            let bt = obj.get("_block_type")
+                            let bt = obj
+                                .get("_block_type")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
                             if bt == block.block_type {
@@ -766,14 +940,18 @@ fn collect_missing_in_blocks(
                         let label = format!(
                             "{} > {} > {}",
                             to_title_case(blocks_name),
-                            block.label.as_ref()
+                            block
+                                .label
+                                .as_ref()
                                 .map(|l| l.resolve_default().to_string())
                                 .unwrap_or_else(|| to_title_case(&block.block_type)),
                             field_display_label(sub),
                         );
                         results.push(MissingRelation::new(
-                            format!("{}.{}.{}", blocks_name, block.block_type, sub.name), label,
-                            missing.into_iter().collect(), all_ids.len(),
+                            format!("{}.{}.{}", blocks_name, block.block_type, sub.name),
+                            label,
+                            missing.into_iter().collect(),
+                            all_ids.len(),
                         ));
                     }
                 }
@@ -822,8 +1000,12 @@ mod tests {
         let registry_shared = Registry::shared();
         {
             let mut reg = registry_shared.write().unwrap();
-            for c in collections { reg.register_collection(c.clone()); }
-            for g in globals { reg.register_global(g.clone()); }
+            for c in collections {
+                reg.register_collection(c.clone());
+            }
+            for g in globals {
+                reg.register_global(g.clone());
+            }
         }
         migrate::sync_all(&db_pool, &registry_shared, locale).expect("sync");
 
@@ -832,17 +1014,25 @@ mod tests {
     }
 
     fn insert_doc(conn: &rusqlite::Connection, table: &str, id: &str) {
-        conn.execute(
-            &format!("INSERT INTO \"{}\" (id) VALUES (?1)", table),
-            [id],
-        ).unwrap();
+        conn.execute(&format!("INSERT INTO \"{}\" (id) VALUES (?1)", table), [id])
+            .unwrap();
     }
 
-    fn insert_doc_with_field(conn: &rusqlite::Connection, table: &str, id: &str, col: &str, val: &str) {
+    fn insert_doc_with_field(
+        conn: &rusqlite::Connection,
+        table: &str,
+        id: &str,
+        col: &str,
+        val: &str,
+    ) {
         conn.execute(
-            &format!("INSERT INTO \"{}\" (id, \"{}\") VALUES (?1, ?2)", table, col),
+            &format!(
+                "INSERT INTO \"{}\" (id, \"{}\") VALUES (?1, ?2)",
+                table, col
+            ),
             rusqlite::params![id, val],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // ── Has-one relationship ──────────────────────────────────────────
@@ -881,11 +1071,9 @@ mod tests {
     fn no_references_returns_empty() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("image", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("image", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -901,11 +1089,9 @@ mod tests {
     fn has_many_finds_back_reference() {
         let tags = CollectionDefinition::new("tags");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("tags", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("tags", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("tags", true))
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[tags, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -916,11 +1102,13 @@ mod tests {
         conn.execute(
             "INSERT INTO posts_tags (parent_id, related_id, _order) VALUES (?1, ?2, 0)",
             ["p1", "t1"],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO posts_tags (parent_id, related_id, _order) VALUES (?1, ?2, 0)",
             ["p2", "t1"],
-        ).unwrap();
+        )
+        .unwrap();
 
         let refs = find_back_references(&conn, &registry, "tags", "t1", &no_locale());
         assert_eq!(refs.len(), 1);
@@ -965,16 +1153,14 @@ mod tests {
         let media = CollectionDefinition::new("media");
         let pages = CollectionDefinition::new("pages");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("related", FieldType::Relationship)
-                .relationship(RelationshipConfig {
-                    collection: "media".to_string(),
-                    has_many: true,
-                    max_depth: None,
-                    polymorphic: vec!["media".to_string(), "pages".to_string()],
-                })
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("related", FieldType::Relationship)
+            .relationship(RelationshipConfig {
+                collection: "media".to_string(),
+                has_many: true,
+                max_depth: None,
+                polymorphic: vec!["media".to_string(), "pages".to_string()],
+            })
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media, pages, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -997,15 +1183,11 @@ mod tests {
     fn group_nested_relationship_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("meta", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("hero", FieldType::Upload)
-                        .relationship(RelationshipConfig::new("media", false))
-                        .build(),
-                ])
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("hero", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build()])
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1024,15 +1206,11 @@ mod tests {
     fn array_sub_field_relationship_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("slides", FieldType::Array)
-                .fields(vec![
-                    FieldDefinition::builder("image", FieldType::Upload)
-                        .relationship(RelationshipConfig::new("media", false))
-                        .build(),
-                ])
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("slides", FieldType::Array)
+            .fields(vec![FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build()])
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1042,7 +1220,8 @@ mod tests {
         conn.execute(
             "INSERT INTO posts_slides (id, parent_id, _order, image) VALUES ('s1', 'p1', 0, 'm1')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
         assert_eq!(refs.len(), 1);
@@ -1056,17 +1235,14 @@ mod tests {
     fn blocks_sub_field_relationship_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("content", FieldType::Blocks)
-                .blocks(vec![
-                    BlockDefinition::new("hero", vec![
-                        FieldDefinition::builder("bg_image", FieldType::Upload)
-                            .relationship(RelationshipConfig::new("media", false))
-                            .build(),
-                    ]),
-                ])
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new(
+                "hero",
+                vec![FieldDefinition::builder("bg_image", FieldType::Upload)
+                    .relationship(RelationshipConfig::new("media", false))
+                    .build()],
+            )])
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1090,21 +1266,17 @@ mod tests {
     fn global_back_reference_found() {
         let media = CollectionDefinition::new("media");
         let mut settings = GlobalDefinition::new("settings");
-        settings.fields = vec![
-            FieldDefinition::builder("logo", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
+        settings.fields = vec![FieldDefinition::builder("logo", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media], &[settings], &no_locale());
         let conn = pool.get().unwrap();
 
         insert_doc(&conn, "media", "m1");
         // Globals auto-create a single row during migration. Update it.
-        conn.execute(
-            "UPDATE _global_settings SET logo = ?1",
-            ["m1"],
-        ).unwrap();
+        conn.execute("UPDATE _global_settings SET logo = ?1", ["m1"])
+            .unwrap();
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
         assert_eq!(refs.len(), 1);
@@ -1118,22 +1290,18 @@ mod tests {
     fn localized_has_one_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("hero", FieldType::Upload)
-                .localized(true)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("hero", FieldType::Upload)
+            .localized(true)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()];
         let locale = locale_en_de();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &locale);
         let conn = pool.get().unwrap();
 
         insert_doc(&conn, "media", "m1");
-        conn.execute(
-            "INSERT INTO posts (id, hero__en) VALUES ('p1', 'm1')",
-            [],
-        ).unwrap();
+        conn.execute("INSERT INTO posts (id, hero__en) VALUES ('p1', 'm1')", [])
+            .unwrap();
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &locale);
         assert_eq!(refs.len(), 1);
@@ -1146,17 +1314,13 @@ mod tests {
     fn multiple_collections_found() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("image", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("image", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()];
         let mut pages = CollectionDefinition::new("pages");
-        pages.fields = vec![
-            FieldDefinition::builder("banner", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
+        pages.fields = vec![FieldDefinition::builder("banner", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts, pages], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1178,11 +1342,9 @@ mod tests {
     fn unrelated_collection_not_included() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        posts.fields = vec![
-            FieldDefinition::builder("author", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("users", false))
-                .build(),
-        ];
+        posts.fields = vec![FieldDefinition::builder("author", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("users", false))
+            .build()];
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
@@ -1223,11 +1385,9 @@ mod tests {
     fn no_missing_returns_empty() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![
-            FieldDefinition::builder("image", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("image", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1243,11 +1403,9 @@ mod tests {
     fn missing_has_many_detected() {
         let tags = CollectionDefinition::new("tags");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![
-            FieldDefinition::builder("tags", FieldType::Relationship)
-                .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("tags", true))
+            .build()];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[tags, posts], &[], &no_locale());
@@ -1293,15 +1451,11 @@ mod tests {
     fn missing_group_nested_relation() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![
-            FieldDefinition::builder("meta", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("hero", FieldType::Upload)
-                        .relationship(RelationshipConfig::new("media", false))
-                        .build(),
-                ])
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("hero", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build()])
+            .build()];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1317,15 +1471,11 @@ mod tests {
     fn missing_array_sub_field_relation() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![
-            FieldDefinition::builder("slides", FieldType::Array)
-                .fields(vec![
-                    FieldDefinition::builder("image", FieldType::Upload)
-                        .relationship(RelationshipConfig::new("media", false))
-                        .build(),
-                ])
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("slides", FieldType::Array)
+            .fields(vec![FieldDefinition::builder("image", FieldType::Upload)
+                .relationship(RelationshipConfig::new("media", false))
+                .build()])
+            .build()];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1349,17 +1499,14 @@ mod tests {
     fn missing_blocks_sub_field_relation() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![
-            FieldDefinition::builder("content", FieldType::Blocks)
-                .blocks(vec![
-                    BlockDefinition::new("hero", vec![
-                        FieldDefinition::builder("bg_image", FieldType::Upload)
-                            .relationship(RelationshipConfig::new("media", false))
-                            .build(),
-                    ]),
-                ])
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks(vec![BlockDefinition::new(
+                "hero",
+                vec![FieldDefinition::builder("bg_image", FieldType::Upload)
+                    .relationship(RelationshipConfig::new("media", false))
+                    .build()],
+            )])
+            .build()];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
@@ -1379,11 +1526,9 @@ mod tests {
     fn empty_snapshot_returns_empty() {
         let media = CollectionDefinition::new("media");
         let mut posts = CollectionDefinition::new("posts");
-        let fields = vec![
-            FieldDefinition::builder("image", FieldType::Upload)
-                .relationship(RelationshipConfig::new("media", false))
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("image", FieldType::Upload)
+            .relationship(RelationshipConfig::new("media", false))
+            .build()];
         posts.fields = fields.clone();
 
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());

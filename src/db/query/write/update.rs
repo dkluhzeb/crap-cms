@@ -4,10 +4,10 @@ use anyhow::{Context as _, Result};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
-use crate::core::{CollectionDefinition, Document};
-use crate::core::field::FieldType;
-use super::super::{LocaleContext, locale_write_column, coerce_value};
 use super::super::read::find_by_id_raw;
+use super::super::{coerce_value, locale_write_column, LocaleContext};
+use crate::core::field::FieldType;
+use crate::core::{CollectionDefinition, Document};
 
 /// Update a document by ID. Returns the updated document.
 pub fn update(
@@ -18,13 +18,23 @@ pub fn update(
     data: &HashMap<String, String>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string();
+    let now = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
 
     let mut set_clauses = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut idx = 1;
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut set_clauses, &mut params, &mut idx, "");
+    collect_update_params(
+        &def.fields,
+        data,
+        &locale_ctx,
+        &mut set_clauses,
+        &mut params,
+        &mut idx,
+        "",
+    );
 
     if def.timestamps {
         set_clauses.push(format!("updated_at = ?{}", idx));
@@ -73,18 +83,44 @@ pub(super) fn collect_update_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                collect_update_params(&field.fields, data, locale_ctx, set_clauses, params, idx, &new_prefix);
+                collect_update_params(
+                    &field.fields,
+                    data,
+                    locale_ctx,
+                    set_clauses,
+                    params,
+                    idx,
+                    &new_prefix,
+                );
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_update_params(&field.fields, data, locale_ctx, set_clauses, params, idx, prefix);
+                collect_update_params(
+                    &field.fields,
+                    data,
+                    locale_ctx,
+                    set_clauses,
+                    params,
+                    idx,
+                    prefix,
+                );
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_update_params(&tab.fields, data, locale_ctx, set_clauses, params, idx, prefix);
+                    collect_update_params(
+                        &tab.fields,
+                        data,
+                        locale_ctx,
+                        set_clauses,
+                        params,
+                        idx,
+                        prefix,
+                    );
                 }
             }
             _ => {
-                if !field.has_parent_column() { continue; }
+                if !field.has_parent_column() {
+                    continue;
+                }
                 let data_key = if prefix.is_empty() {
                     field.name.clone()
                 } else {
@@ -107,11 +143,11 @@ pub(super) fn collect_update_params(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::create::create;
-    use rusqlite::Connection;
+    use super::*;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use rusqlite::Connection;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -131,8 +167,9 @@ mod tests {
                 status TEXT,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 
@@ -170,7 +207,11 @@ mod tests {
 
         let updated = update(&conn, "posts", &def, &id, &update_data, None).unwrap();
         assert_eq!(updated.get_str("title"), Some("New Title"));
-        assert_eq!(updated.get_str("status"), Some("draft"), "status should be preserved");
+        assert_eq!(
+            updated.get_str("status"),
+            Some("draft"),
+            "status should be preserved"
+        );
     }
 
     #[test]
@@ -196,18 +237,17 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO posts (id, meta__color, meta__size, created_at, updated_at)
-            VALUES ('p1', 'blue', 'small', '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('p1', 'blue', 'small', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![
-            FieldDefinition::builder("meta", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("color", FieldType::Text).build(),
-                    FieldDefinition::builder("size", FieldType::Text).build(),
-                ])
-                .build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("color", FieldType::Text).build(),
+                FieldDefinition::builder("size", FieldType::Text).build(),
+            ])
+            .build()];
         let def = def;
 
         let mut data = HashMap::new();
@@ -227,14 +267,13 @@ mod tests {
                 id TEXT PRIMARY KEY,
                 name TEXT
             );
-            INSERT INTO events (id, name) VALUES ('e1', 'Original');"
-        ).unwrap();
+            INSERT INTO events (id, name) VALUES ('e1', 'Original');",
+        )
+        .unwrap();
 
         let mut def = CollectionDefinition::new("events");
         def.timestamps = false;
-        def.fields = vec![
-            FieldDefinition::builder("name", FieldType::Text).build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
         let def = def;
 
         let mut data = HashMap::new();
@@ -274,27 +313,28 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO posts (id, social__github, social__twitter, body, created_at, updated_at)
-            VALUES ('p1', 'https://github.com', '@old', 'Old body', '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('p1', 'https://github.com', '@old', 'Old body', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("Social", vec![
-                        FieldDefinition::builder("social", FieldType::Group)
-                            .fields(vec![
-                                FieldDefinition::builder("github", FieldType::Text).build(),
-                                FieldDefinition::builder("twitter", FieldType::Text).build(),
-                            ])
-                            .build(),
-                    ]),
-                    FieldTab::new("Content", vec![
-                        FieldDefinition::builder("body", FieldType::Text).build(),
-                    ]),
-                ])
-                .build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
+            .tabs(vec![
+                FieldTab::new(
+                    "Social",
+                    vec![FieldDefinition::builder("social", FieldType::Group)
+                        .fields(vec![
+                            FieldDefinition::builder("github", FieldType::Text).build(),
+                            FieldDefinition::builder("twitter", FieldType::Text).build(),
+                        ])
+                        .build()],
+                ),
+                FieldTab::new(
+                    "Content",
+                    vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                ),
+            ])
+            .build()];
         let def = def;
 
         // Only update twitter, leave github and body untouched
@@ -303,8 +343,16 @@ mod tests {
 
         let doc = update(&conn, "posts", &def, "p1", &data, None).unwrap();
         assert_eq!(doc.get_str("social__twitter"), Some("@new"));
-        assert_eq!(doc.get_str("social__github"), Some("https://github.com"), "github should be preserved");
-        assert_eq!(doc.get_str("body"), Some("Old body"), "body should be preserved");
+        assert_eq!(
+            doc.get_str("social__github"),
+            Some("https://github.com"),
+            "github should be preserved"
+        );
+        assert_eq!(
+            doc.get_str("body"),
+            Some("Old body"),
+            "body should be preserved"
+        );
     }
 
     #[test]
@@ -319,22 +367,19 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO posts (id, meta__title, meta__slug, created_at, updated_at)
-            VALUES ('abc', 'Old', 'old', '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('abc', 'Old', 'old', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = CollectionDefinition::new("posts");
-        def.fields = vec![
-            FieldDefinition::builder("meta", FieldType::Group)
+        def.fields = vec![FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
                 .fields(vec![
-                    FieldDefinition::builder("r", FieldType::Row)
-                        .fields(vec![
-                            FieldDefinition::builder("title", FieldType::Text).build(),
-                            FieldDefinition::builder("slug", FieldType::Text).build(),
-                        ])
-                        .build(),
+                    FieldDefinition::builder("title", FieldType::Text).build(),
+                    FieldDefinition::builder("slug", FieldType::Text).build(),
                 ])
-                .build(),
-        ];
+                .build()])
+            .build()];
         let def = def;
 
         let mut data = HashMap::new();
@@ -342,6 +387,10 @@ mod tests {
 
         let doc = update(&conn, "posts", &def, "abc", &data, None).unwrap();
         assert_eq!(doc.get_str("meta__title"), Some("New Title"));
-        assert_eq!(doc.get_str("meta__slug"), Some("old"), "Unset field should be preserved");
+        assert_eq!(
+            doc.get_str("meta__slug"),
+            Some("old"),
+            "Unset field should be preserved"
+        );
     }
 }

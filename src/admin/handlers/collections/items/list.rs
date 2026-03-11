@@ -1,28 +1,25 @@
+use anyhow::Context as _;
 use axum::{
     extract::{Path, Query, State},
     response::IntoResponse,
     Extension,
 };
-use anyhow::Context as _;
 use std::collections::HashMap;
 
-use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
+use crate::admin::AdminState;
 use crate::core::auth::{AuthUser, Claims};
 use crate::core::upload;
 use crate::db::query;
-use crate::db::query::{AccessResult, FindQuery, LocaleContext, FilterClause};
+use crate::db::query::{AccessResult, FilterClause, FindQuery, LocaleContext};
 
 use crate::admin::handlers::collections::shared::{
-    resolve_columns, compute_cells, build_column_options,
-    build_filter_fields, build_filter_pills,
+    build_column_options, build_filter_fields, build_filter_pills, compute_cells, resolve_columns,
 };
 use crate::admin::handlers::shared::{
+    build_list_url, check_access_or_forbid, extract_editor_locale, extract_where_params, forbidden,
+    get_user_doc, not_found, parse_where_params, render_or_error, server_error, validate_sort,
     PaginationParams,
-    get_user_doc, check_access_or_forbid, extract_editor_locale,
-    parse_where_params, validate_sort, build_list_url,
-    extract_where_params,
-    forbidden, render_or_error, not_found, server_error,
 };
 
 /// GET /admin/collections/{slug} — list items in a collection
@@ -37,23 +34,26 @@ pub async fn list_items(
 ) -> impl IntoResponse {
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Collection '{}' not found", slug)).into_response(),
+        None => {
+            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response()
+        }
     };
 
     // Check read access
-    let access_result = match check_access_or_forbid(
-        &state, def.access.read.as_deref(), &auth_user, None, None,
-    ) {
-        Ok(r) => r,
-        Err(resp) => return resp,
-    };
+    let access_result =
+        match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
+            Ok(r) => r,
+            Err(resp) => return resp,
+        };
     if matches!(access_result, AccessResult::Denied) {
-        return forbidden(&state, "You don't have permission to view this collection").into_response();
+        return forbidden(&state, "You don't have permission to view this collection")
+            .into_response();
     }
 
     let raw_query = uri.query().unwrap_or("");
     let page = params.page.unwrap_or(1).max(1);
-    let per_page = params.per_page
+    let per_page = params
+        .per_page
         .unwrap_or(state.config.pagination.default_limit)
         .min(state.config.pagination.max_limit);
     let offset = (page - 1) * per_page;
@@ -85,7 +85,8 @@ pub async fn list_items(
     find_query.search = search.clone();
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
-    let locale_ctx = LocaleContext::from_locale_string(editor_locale.as_deref(), &state.config.locale);
+    let locale_ctx =
+        LocaleContext::from_locale_string(editor_locale.as_deref(), &state.config.locale);
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -96,8 +97,21 @@ pub async fn list_items(
     let read_result = tokio::task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "find", HashMap::new())?;
         let conn = pool.get().context("Failed to get DB connection")?;
-        let total = query::count_with_search(&conn, &slug_owned, &def_owned, &filters, locale_ctx.as_ref(), find_query.search.as_deref())?;
-        let mut docs = query::find(&conn, &slug_owned, &def_owned, &find_query, locale_ctx.as_ref())?;
+        let total = query::count_with_search(
+            &conn,
+            &slug_owned,
+            &def_owned,
+            &filters,
+            locale_ctx.as_ref(),
+            find_query.search.as_deref(),
+        )?;
+        let mut docs = query::find(
+            &conn,
+            &slug_owned,
+            &def_owned,
+            &find_query,
+            locale_ctx.as_ref(),
+        )?;
         // Assemble sizes for upload collections
         if let Some(ref upload_config) = def_owned.upload {
             if upload_config.enabled {
@@ -106,14 +120,22 @@ pub async fn list_items(
                 }
             }
         }
-        let docs = runner.apply_after_read_many(&hooks, &fields, &slug_owned, "find", docs, None, None);
+        let docs =
+            runner.apply_after_read_many(&hooks, &fields, &slug_owned, "find", docs, None, None);
         Ok::<_, anyhow::Error>((docs, total))
-    }).await;
+    })
+    .await;
 
     let (documents, total) = match read_result {
         Ok(Ok(v)) => v,
-        Ok(Err(e)) => { tracing::error!("Collection list query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
-        Err(e) => { tracing::error!("Collection list task error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
+        Ok(Err(e)) => {
+            tracing::error!("Collection list query error: {}", e);
+            return server_error(&state, "An internal error occurred.").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Collection list task error: {}", e);
+            return server_error(&state, "An internal error occurred.").into_response();
+        }
     };
 
     // Strip field-level read-denied fields from documents
@@ -127,19 +149,24 @@ pub async fn list_items(
             Ok(t) => t,
             Err(_) => return server_error(&state, "Database error").into_response(),
         };
-        let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+        let denied = state
+            .hook_runner
+            .check_field_read_access(&def.fields, user_doc, &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         denied
     } else {
         Vec::new()
     };
-    let documents: Vec<_> = documents.into_iter().map(|mut doc| {
-        for field_name in &denied_fields {
-            doc.fields.remove(field_name);
-        }
-        doc
-    }).collect();
+    let documents: Vec<_> = documents
+        .into_iter()
+        .map(|mut doc| {
+            for field_name in &denied_fields {
+                doc.fields.remove(field_name);
+            }
+            doc
+        })
+        .collect();
 
     // Load user column preferences
     let user_columns: Option<Vec<String>> = auth_user.as_ref().and_then(|Extension(au)| {
@@ -147,7 +174,11 @@ pub async fn list_items(
         let settings_json = query::auth::get_user_settings(&conn, &au.claims.sub).ok()??;
         let settings: serde_json::Value = serde_json::from_str(&settings_json).ok()?;
         let cols = settings.get(&slug)?.get("columns")?.as_array()?;
-        Some(cols.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        Some(
+            cols.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect(),
+        )
     });
 
     let base_url = format!("/admin/collections/{}", slug);
@@ -162,7 +193,8 @@ pub async fn list_items(
         &where_params,
         search.as_deref(),
     );
-    let column_keys: Vec<String> = table_columns.iter()
+    let column_keys: Vec<String> = table_columns
+        .iter()
         .filter_map(|c| c["key"].as_str().map(|s| s.to_string()))
         .collect();
 
@@ -180,70 +212,105 @@ pub async fn list_items(
         } else {
             tf.clone()
         };
-        Some(build_list_url(&base_url, 1, None, search.as_deref(), Some(&next), &where_params))
+        Some(build_list_url(
+            &base_url,
+            1,
+            None,
+            search.as_deref(),
+            Some(&next),
+            &where_params,
+        ))
     } else {
         None
     };
-    let title_sorted_asc = title_field.as_ref().map(|tf| {
-        let sf = sort.as_deref().map(|s| s.strip_prefix('-').unwrap_or(s));
-        let desc = sort.as_deref().map(|s| s.starts_with('-')).unwrap_or(false);
-        sf == Some(tf.as_str()) && !desc
-    }).unwrap_or(false);
-    let title_sorted_desc = title_field.as_ref().map(|tf| {
-        let sf = sort.as_deref().map(|s| s.strip_prefix('-').unwrap_or(s));
-        let desc = sort.as_deref().map(|s| s.starts_with('-')).unwrap_or(false);
-        sf == Some(tf.as_str()) && desc
-    }).unwrap_or(false);
+    let title_sorted_asc = title_field
+        .as_ref()
+        .map(|tf| {
+            let sf = sort.as_deref().map(|s| s.strip_prefix('-').unwrap_or(s));
+            let desc = sort.as_deref().map(|s| s.starts_with('-')).unwrap_or(false);
+            sf == Some(tf.as_str()) && !desc
+        })
+        .unwrap_or(false);
+    let title_sorted_desc = title_field
+        .as_ref()
+        .map(|tf| {
+            let sf = sort.as_deref().map(|s| s.strip_prefix('-').unwrap_or(s));
+            let desc = sort.as_deref().map(|s| s.starts_with('-')).unwrap_or(false);
+            sf == Some(tf.as_str()) && desc
+        })
+        .unwrap_or(false);
 
     let is_upload = def.is_upload_collection();
-    let admin_thumbnail = def.upload.as_ref()
+    let admin_thumbnail = def
+        .upload
+        .as_ref()
         .and_then(|u| u.admin_thumbnail.as_ref().cloned());
-    let items: Vec<_> = documents.iter().map(|doc| {
-        let title_value = title_field.as_ref()
-            .and_then(|f| doc.get_str(f))
-            .unwrap_or_else(|| {
-                if is_upload {
-                    doc.get_str("filename").unwrap_or(&doc.id)
-                } else {
-                    &doc.id
-                }
+    let items: Vec<_> = documents
+        .iter()
+        .map(|doc| {
+            let title_value = title_field
+                .as_ref()
+                .and_then(|f| doc.get_str(f))
+                .unwrap_or_else(|| {
+                    if is_upload {
+                        doc.get_str("filename").unwrap_or(&doc.id)
+                    } else {
+                        &doc.id
+                    }
+                });
+
+            let cells = compute_cells(doc, &table_columns, &def);
+
+            let mut item = serde_json::json!({
+                "id": doc.id,
+                "title_value": title_value,
+                "created_at": doc.created_at,
+                "updated_at": doc.updated_at,
+                "cells": cells,
             });
 
-        let cells = compute_cells(doc, &table_columns, &def);
-
-        let mut item = serde_json::json!({
-            "id": doc.id,
-            "title_value": title_value,
-            "created_at": doc.created_at,
-            "updated_at": doc.updated_at,
-            "cells": cells,
-        });
-
-        // Add thumbnail URL for upload collections
-        if is_upload {
-            let mime = doc.get_str("mime_type").unwrap_or("");
-            if mime.starts_with("image/") {
-                let thumb_url = admin_thumbnail.as_ref()
-                    .and_then(|thumb_name| {
-                        doc.fields.get("sizes")
-                            .and_then(|v| v.get(thumb_name))
-                            .and_then(|v| v.get("url"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .or_else(|| doc.get_str("url").map(|s| s.to_string()));
-                if let Some(url) = thumb_url {
-                    item["thumbnail_url"] = serde_json::json!(url);
+            // Add thumbnail URL for upload collections
+            if is_upload {
+                let mime = doc.get_str("mime_type").unwrap_or("");
+                if mime.starts_with("image/") {
+                    let thumb_url = admin_thumbnail
+                        .as_ref()
+                        .and_then(|thumb_name| {
+                            doc.fields
+                                .get("sizes")
+                                .and_then(|v| v.get(thumb_name))
+                                .and_then(|v| v.get("url"))
+                                .and_then(|v| v.as_str())
+                                .map(|s| s.to_string())
+                        })
+                        .or_else(|| doc.get_str("url").map(|s| s.to_string()));
+                    if let Some(url) = thumb_url {
+                        item["thumbnail_url"] = serde_json::json!(url);
+                    }
                 }
             }
-        }
 
-        item
-    }).collect();
+            item
+        })
+        .collect();
 
     // Build pagination URLs preserving sort + where params
-    let prev_url = build_list_url(&base_url, page - 1, None, search.as_deref(), sort.as_deref(), &where_params);
-    let next_url = build_list_url(&base_url, page + 1, None, search.as_deref(), sort.as_deref(), &where_params);
+    let prev_url = build_list_url(
+        &base_url,
+        page - 1,
+        None,
+        search.as_deref(),
+        sort.as_deref(),
+        &where_params,
+    );
+    let next_url = build_list_url(
+        &base_url,
+        page + 1,
+        None,
+        search.as_deref(),
+        sort.as_deref(),
+        &where_params,
+    );
 
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let data = ContextBuilder::new(&state, claims_ref)

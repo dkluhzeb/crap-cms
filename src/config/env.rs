@@ -130,7 +130,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[server]\nadmin_port = 9999\nhost = \"${CRAP_TEST_HOST2:-0.0.0.0}\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.server.admin_port, 9999);
         assert_eq!(config.server.host, "0.0.0.0");
@@ -145,7 +146,8 @@ mod tests {
             tmp.path().join("crap.toml"),
             "# Set ${CRAP_TEST_UNSET_COMMENT_VAR} for production\n\
              [server]\nadmin_port = 3000\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.server.admin_port, 3000);
     }
@@ -157,7 +159,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[email]\nsmtp_host = \"${CRAP_TEST_SMTP_HOST}\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.email.smtp_host, "mail.example.com");
         std::env::remove_var("CRAP_TEST_SMTP_HOST");
@@ -176,7 +179,10 @@ mod tests {
     fn substitute_in_value_table() {
         std::env::set_var("CRAP_TEST_SIV2", "value2");
         let mut tbl = toml::map::Map::new();
-        tbl.insert("key".to_string(), toml::Value::String("${CRAP_TEST_SIV2}".to_string()));
+        tbl.insert(
+            "key".to_string(),
+            toml::Value::String("${CRAP_TEST_SIV2}".to_string()),
+        );
         tbl.insert("num".to_string(), toml::Value::Integer(42));
         let mut val = toml::Value::Table(tbl);
         substitute_in_value(&mut val).unwrap();

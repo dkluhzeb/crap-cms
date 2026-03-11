@@ -15,7 +15,8 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
             crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
-            let reg = registry.read()
+            let reg = registry
+                .read()
                 .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
             let conn = pool.get().context("Failed to get DB connection")?;
 
@@ -24,7 +25,10 @@ pub fn run(action: super::JobsAction) -> Result<()> {
                 return Ok(());
             }
 
-            println!("{:<24} {:<16} {:<16} {:<12}", "Job", "Schedule", "Queue", "Recent Runs");
+            println!(
+                "{:<24} {:<16} {:<16} {:<12}",
+                "Job", "Schedule", "Queue", "Recent Runs"
+            );
             println!("{}", "-".repeat(70));
 
             let mut slugs: Vec<_> = reg.jobs.keys().collect();
@@ -39,19 +43,42 @@ pub fn run(action: super::JobsAction) -> Result<()> {
                 let status_summary = if recent.is_empty() {
                     "none".to_string()
                 } else {
-                    let completed = recent.iter().filter(|r| r.status == crate::core::job::JobStatus::Completed).count();
-                    let failed = recent.iter().filter(|r| r.status == crate::core::job::JobStatus::Failed).count();
-                    let pending = recent.iter().filter(|r| r.status == crate::core::job::JobStatus::Pending).count();
-                    let running = recent.iter().filter(|r| r.status == crate::core::job::JobStatus::Running).count();
+                    let completed = recent
+                        .iter()
+                        .filter(|r| r.status == crate::core::job::JobStatus::Completed)
+                        .count();
+                    let failed = recent
+                        .iter()
+                        .filter(|r| r.status == crate::core::job::JobStatus::Failed)
+                        .count();
+                    let pending = recent
+                        .iter()
+                        .filter(|r| r.status == crate::core::job::JobStatus::Pending)
+                        .count();
+                    let running = recent
+                        .iter()
+                        .filter(|r| r.status == crate::core::job::JobStatus::Running)
+                        .count();
                     let mut parts = Vec::new();
-                    if completed > 0 { parts.push(format!("{}ok", completed)); }
-                    if failed > 0 { parts.push(format!("{}fail", failed)); }
-                    if pending > 0 { parts.push(format!("{}pend", pending)); }
-                    if running > 0 { parts.push(format!("{}run", running)); }
+                    if completed > 0 {
+                        parts.push(format!("{}ok", completed));
+                    }
+                    if failed > 0 {
+                        parts.push(format!("{}fail", failed));
+                    }
+                    if pending > 0 {
+                        parts.push(format!("{}pend", pending));
+                    }
+                    if running > 0 {
+                        parts.push(format!("{}run", running));
+                    }
                     parts.join("/")
                 };
 
-                println!("{:<24} {:<16} {:<16} {}", slug, schedule, &def.queue, status_summary);
+                println!(
+                    "{:<24} {:<16} {:<16} {}",
+                    slug, schedule, &def.queue, status_summary
+                );
             }
 
             Ok(())
@@ -63,17 +90,18 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
             crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
-            let reg = registry.read()
+            let reg = registry
+                .read()
                 .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
-            let job_def = reg.get_job(&slug)
+            let job_def = reg
+                .get_job(&slug)
                 .ok_or_else(|| anyhow::anyhow!("Job '{}' not defined", slug))?;
 
             let data_json = data.as_deref().unwrap_or("{}");
 
             // Validate JSON
-            serde_json::from_str::<serde_json::Value>(data_json)
-                .context("Invalid JSON data")?;
+            serde_json::from_str::<serde_json::Value>(data_json).context("Invalid JSON data")?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
             let job_run = crate::db::query::jobs::insert_job(
@@ -90,7 +118,12 @@ pub fn run(action: super::JobsAction) -> Result<()> {
 
             Ok(())
         }
-        super::JobsAction::Status { config, id, slug, limit } => {
+        super::JobsAction::Status {
+            config,
+            id,
+            slug,
+            limit,
+        } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = crate::config::CrapConfig::load(&config_dir)?;
             let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
@@ -108,10 +141,16 @@ pub fn run(action: super::JobsAction) -> Result<()> {
                 println!("Status:      {}", run.status.as_str());
                 println!("Queue:       {}", run.queue);
                 println!("Attempt:     {}/{}", run.attempt, run.max_attempts);
-                println!("Scheduled by: {}", run.scheduled_by.as_deref().unwrap_or("-"));
+                println!(
+                    "Scheduled by: {}",
+                    run.scheduled_by.as_deref().unwrap_or("-")
+                );
                 println!("Created:     {}", run.created_at.as_deref().unwrap_or("-"));
                 println!("Started:     {}", run.started_at.as_deref().unwrap_or("-"));
-                println!("Completed:   {}", run.completed_at.as_deref().unwrap_or("-"));
+                println!(
+                    "Completed:   {}",
+                    run.completed_at.as_deref().unwrap_or("-")
+                );
                 if let Some(ref data) = Some(&run.data) {
                     println!("Data:        {}", data);
                 }
@@ -123,20 +162,29 @@ pub fn run(action: super::JobsAction) -> Result<()> {
                 }
             } else {
                 // List runs
-                let runs = crate::db::query::jobs::list_job_runs(&conn, slug.as_deref(), None, limit, 0)?;
+                let runs =
+                    crate::db::query::jobs::list_job_runs(&conn, slug.as_deref(), None, limit, 0)?;
                 if runs.is_empty() {
                     println!("No job runs found.");
                     return Ok(());
                 }
 
-                println!("{:<24} {:<20} {:<12} {:<8} {:<20}", "ID", "Job", "Status", "Attempt", "Created");
+                println!(
+                    "{:<24} {:<20} {:<12} {:<8} {:<20}",
+                    "ID", "Job", "Status", "Attempt", "Created"
+                );
                 println!("{}", "-".repeat(86));
 
                 for run in &runs {
-                    println!("{:<24} {:<20} {:<12} {}/{:<5} {}",
-                        run.id, run.slug, run.status.as_str(),
-                        run.attempt, run.max_attempts,
-                        run.created_at.as_deref().unwrap_or("-"));
+                    println!(
+                        "{:<24} {:<20} {:<12} {}/{:<5} {}",
+                        run.id,
+                        run.slug,
+                        run.status.as_str(),
+                        run.attempt,
+                        run.max_attempts,
+                        run.created_at.as_deref().unwrap_or("-")
+                    );
                 }
 
                 println!("\n{} run(s)", runs.len());
@@ -169,7 +217,8 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
             crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
-            let reg = registry.read()
+            let reg = registry
+                .read()
                 .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
             let conn = pool.get().context("Failed to get DB connection")?;
 
@@ -221,10 +270,13 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             if stale_count > 0 {
                 println!("\nStale jobs:");
                 for job in &stale_jobs {
-                    println!("  {} ({}): started {}, last heartbeat {}",
-                        job.id, job.slug,
+                    println!(
+                        "  {} ({}): started {}, last heartbeat {}",
+                        job.id,
+                        job.slug,
                         job.started_at.as_deref().unwrap_or("-"),
-                        job.heartbeat_at.as_deref().unwrap_or("never"));
+                        job.heartbeat_at.as_deref().unwrap_or("never")
+                    );
                 }
             }
 

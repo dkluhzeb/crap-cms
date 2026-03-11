@@ -3,7 +3,9 @@
 use super::LocalizedString;
 use serde::{Deserialize, Serialize};
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Admin UI display hints for a field (placeholder, description, visibility, width).
 #[derive(Debug, Clone, Serialize, Deserialize)]

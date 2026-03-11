@@ -18,13 +18,13 @@ pub fn delete(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::create::create;
     use super::super::read::find_by_id_raw;
-    use rusqlite::Connection;
-    use std::collections::HashMap;
+    use super::create::create;
+    use super::*;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use rusqlite::Connection;
+    use std::collections::HashMap;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -44,8 +44,9 @@ mod tests {
                 status TEXT,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 

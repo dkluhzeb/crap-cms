@@ -15,10 +15,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
+use crap_cms::admin::AdminState;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
@@ -36,7 +36,9 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![FieldDefinition::builder("title", FieldType::Text).required(true).build()];
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -48,10 +50,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -63,10 +71,7 @@ struct TestApp {
     _jwt_secret: String,
 }
 
-fn setup_app(
-    collections: Vec<CollectionDefinition>,
-    globals: Vec<GlobalDefinition>,
-) -> TestApp {
+fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".to_string();
@@ -97,19 +102,17 @@ fn setup_app_with_config(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = {
         let reg = registry.read().unwrap();
@@ -126,8 +129,12 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".to_string(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            5, 300,
+        )),
+        forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -171,7 +178,8 @@ async fn body_string(body: Body) -> String {
 #[tokio::test]
 async fn health_liveness_returns_200() {
     let app = setup_app(vec![make_posts_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -181,7 +189,8 @@ async fn health_liveness_returns_200() {
 #[tokio::test]
 async fn health_readiness_returns_200_with_healthy_db() {
     let app = setup_app(vec![make_posts_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -192,7 +201,8 @@ async fn health_readiness_returns_200_with_healthy_db() {
 async fn health_endpoints_bypass_auth() {
     // Setup with auth required — health should still be accessible
     let app = setup_app(vec![make_users_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/health").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -204,7 +214,8 @@ async fn health_endpoints_bypass_auth() {
 #[tokio::test]
 async fn static_css_returns_200() {
     let app = setup_app(vec![make_posts_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/static/styles.css")
                 .body(Body::empty())
@@ -213,7 +224,9 @@ async fn static_css_returns_200() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp.headers().get("content-type")
+    let ct = resp
+        .headers()
+        .get("content-type")
         .map(|v| v.to_str().unwrap_or(""));
     assert!(
         ct.unwrap_or("").contains("css"),
@@ -221,4 +234,3 @@ async fn static_css_returns_200() {
         ct
     );
 }
-

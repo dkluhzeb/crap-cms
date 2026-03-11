@@ -14,7 +14,11 @@ use crap_cms::commands::{
 };
 
 #[derive(Parser)]
-#[command(name = "crap-cms", about = "Crap CMS - Headless CMS with Lua hooks", version)]
+#[command(
+    name = "crap-cms",
+    about = "Crap CMS - Headless CMS with Lua hooks",
+    version
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -195,7 +199,9 @@ async fn main() -> Result<()> {
     // Initialize tracing subscriber early so all commands get logging.
     // RUST_LOG env overrides. Default: crap_cms=debug for serve, info for others.
     let use_json = matches!(&cli.command, Command::Serve { json: true, .. })
-        || std::env::var("CRAP_LOG_FORMAT").map(|v| v == "json").unwrap_or(false);
+        || std::env::var("CRAP_LOG_FORMAT")
+            .map(|v| v == "json")
+            .unwrap_or(false);
 
     let default_filter = match &cli.command {
         Command::Serve { .. } => "crap_cms=debug,info",
@@ -210,9 +216,7 @@ async fn main() -> Result<()> {
             .with_env_filter(env_filter)
             .init();
     } else {
-        tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .init();
+        tracing_subscriber::fmt().with_env_filter(env_filter).init();
     }
 
     match cli.command {
@@ -227,9 +231,11 @@ async fn main() -> Result<()> {
         Command::Init { dir } => commands::init::run(dir),
         Command::Make { action } => commands::make::run(action),
         Command::Blueprint { action } => match action {
-            BlueprintAction::Save { config, name, force } => {
-                crap_cms::scaffold::blueprint_save(&config, &name, force)
-            }
+            BlueprintAction::Save {
+                config,
+                name,
+                force,
+            } => crap_cms::scaffold::blueprint_save(&config, &name, force),
             BlueprintAction::Use { name, dir } => {
                 let name = match name {
                     Some(n) => n,
@@ -270,27 +276,38 @@ async fn main() -> Result<()> {
                 crap_cms::scaffold::blueprint_remove(&name)
             }
         },
-        Command::Typegen { config, lang, output } => {
-            commands::typegen::run(&config, &lang, output.as_deref())
-        }
+        Command::Typegen {
+            config,
+            lang,
+            output,
+        } => commands::typegen::run(&config, &lang, output.as_deref()),
         Command::Proto { output } => crap_cms::scaffold::proto_export(output.as_deref()),
         Command::Migrate { config, action } => commands::db::migrate(&config, action),
-        Command::Backup { config, output, include_uploads } => {
-            commands::db::backup(&config, output, include_uploads)
-        }
-        Command::Restore { config, backup, include_uploads, confirm } => {
-            commands::db::restore(&config, &backup, include_uploads, confirm)
-        }
+        Command::Backup {
+            config,
+            output,
+            include_uploads,
+        } => commands::db::backup(&config, output, include_uploads),
+        Command::Restore {
+            config,
+            backup,
+            include_uploads,
+            confirm,
+        } => commands::db::restore(&config, &backup, include_uploads, confirm),
         Command::Db { action } => match action {
             DbAction::Console { config } => commands::db::console(&config),
             DbAction::Cleanup { config, confirm } => commands::db::cleanup(&config, confirm),
         },
-        Command::Export { config, collection, output } => {
-            commands::export::export(&config, collection, output)
-        }
-        Command::Import { config, file, collection } => {
-            commands::export::import(&config, &file, collection)
-        }
+        Command::Export {
+            config,
+            collection,
+            output,
+        } => commands::export::export(&config, collection, output),
+        Command::Import {
+            config,
+            file,
+            collection,
+        } => commands::export::import(&config, &file, collection),
         Command::Templates { action } => commands::templates::run(action),
         Command::Jobs { action } => commands::jobs::run(action),
         Command::Images { action } => commands::images::run(action),

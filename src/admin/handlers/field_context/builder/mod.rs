@@ -1,9 +1,9 @@
 //! Build field context objects for template rendering (no DB access).
 
-use std::collections::HashMap;
-use crate::core::field::FieldType;
-use super::{safe_template_id, count_errors_in_fields, MAX_FIELD_DEPTH};
 use super::super::shared::auto_label_from_name;
+use super::{count_errors_in_fields, safe_template_id, MAX_FIELD_DEPTH};
+use crate::core::field::FieldType;
+use std::collections::HashMap;
 
 /// Build a field context for a single field definition, recursing into composite sub-fields.
 ///
@@ -20,13 +20,19 @@ pub fn build_single_field_context(
 ) -> serde_json::Value {
     let full_name = if name_prefix.is_empty() {
         field.name.clone()
-    } else if matches!(field.field_type, FieldType::Tabs | FieldType::Row | FieldType::Collapsible) {
+    } else if matches!(
+        field.field_type,
+        FieldType::Tabs | FieldType::Row | FieldType::Collapsible
+    ) {
         name_prefix.to_string() // transparent — layout wrappers don't add their name
     } else {
         format!("{}[{}]", name_prefix, field.name)
     };
     let value = values.get(&full_name).cloned().unwrap_or_default();
-    let label = field.admin.label.as_ref()
+    let label = field
+        .admin
+        .label
+        .as_ref()
         .map(|ls| ls.resolve_default().to_string())
         .unwrap_or_else(|| auto_label_from_name(&field.name));
     let locale_locked = non_default_locale && !field.localized;
@@ -102,25 +108,32 @@ pub fn build_single_field_context(
             if field.has_many {
                 // Multi-select: value is a JSON array like ["val1","val2"]
                 let selected_values: std::collections::HashSet<String> =
-                    serde_json::from_str(&value)
-                        .unwrap_or_default();
-                let options: Vec<_> = field.options.iter().map(|opt| {
-                    serde_json::json!({
-                        "label": opt.label.resolve_default(),
-                        "value": opt.value,
-                        "selected": selected_values.contains(&opt.value),
+                    serde_json::from_str(&value).unwrap_or_default();
+                let options: Vec<_> = field
+                    .options
+                    .iter()
+                    .map(|opt| {
+                        serde_json::json!({
+                            "label": opt.label.resolve_default(),
+                            "value": opt.value,
+                            "selected": selected_values.contains(&opt.value),
+                        })
                     })
-                }).collect();
+                    .collect();
                 ctx["options"] = serde_json::json!(options);
                 ctx["has_many"] = serde_json::json!(true);
             } else {
-                let options: Vec<_> = field.options.iter().map(|opt| {
-                    serde_json::json!({
-                        "label": opt.label.resolve_default(),
-                        "value": opt.value,
-                        "selected": opt.value == value,
+                let options: Vec<_> = field
+                    .options
+                    .iter()
+                    .map(|opt| {
+                        serde_json::json!({
+                            "label": opt.label.resolve_default(),
+                            "value": opt.value,
+                            "selected": opt.value == value,
+                        })
                     })
-                }).collect();
+                    .collect();
                 ctx["options"] = serde_json::json!(options);
             }
         }
@@ -144,9 +157,20 @@ pub fn build_single_field_context(
         FieldType::Array => {
             // Build sub_field contexts for the <template> section (with __INDEX__ placeholder)
             let template_prefix = format!("{}[__INDEX__]", full_name);
-            let sub_fields: Vec<_> = field.fields.iter().map(|sf| {
-                build_single_field_context(sf, &HashMap::new(), &HashMap::new(), &template_prefix, non_default_locale, depth + 1)
-            }).collect();
+            let sub_fields: Vec<_> = field
+                .fields
+                .iter()
+                .map(|sf| {
+                    build_single_field_context(
+                        sf,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &template_prefix,
+                        non_default_locale,
+                        depth + 1,
+                    )
+                })
+                .collect();
             ctx["sub_fields"] = serde_json::json!(sub_fields);
             ctx["row_count"] = serde_json::json!(0);
             ctx["template_id"] = serde_json::json!(safe_template_id(&full_name));
@@ -194,9 +218,20 @@ pub fn build_single_field_context(
                 }).collect()
             } else {
                 // Nested group: use bracketed naming via recursion
-                field.fields.iter().map(|sf| {
-                    build_single_field_context(sf, values, errors, &full_name, non_default_locale, depth + 1)
-                }).collect()
+                field
+                    .fields
+                    .iter()
+                    .map(|sf| {
+                        build_single_field_context(
+                            sf,
+                            values,
+                            errors,
+                            &full_name,
+                            non_default_locale,
+                            depth + 1,
+                        )
+                    })
+                    .collect()
             };
             ctx["sub_fields"] = serde_json::json!(sub_fields);
             ctx["collapsed"] = serde_json::json!(field.admin.collapsed);
@@ -207,14 +242,36 @@ pub fn build_single_field_context(
             // so we delegate to build_single_field_context with the same prefix.
             // This correctly handles Group (double-underscore), Collapsible, etc.
             let sub_fields: Vec<_> = if name_prefix.is_empty() {
-                field.fields.iter().map(|sf| {
-                    build_single_field_context(sf, values, errors, "", non_default_locale, depth + 1)
-                }).collect()
+                field
+                    .fields
+                    .iter()
+                    .map(|sf| {
+                        build_single_field_context(
+                            sf,
+                            values,
+                            errors,
+                            "",
+                            non_default_locale,
+                            depth + 1,
+                        )
+                    })
+                    .collect()
             } else {
                 // Nested row: use bracketed naming via recursion
-                field.fields.iter().map(|sf| {
-                    build_single_field_context(sf, values, errors, &full_name, non_default_locale, depth + 1)
-                }).collect()
+                field
+                    .fields
+                    .iter()
+                    .map(|sf| {
+                        build_single_field_context(
+                            sf,
+                            values,
+                            errors,
+                            &full_name,
+                            non_default_locale,
+                            depth + 1,
+                        )
+                    })
+                    .collect()
             };
             ctx["sub_fields"] = serde_json::json!(sub_fields);
         }
@@ -224,13 +281,35 @@ pub fn build_single_field_context(
             // so we delegate to build_single_field_context with the same prefix.
             // This correctly handles Group (double-underscore), Row, etc.
             let sub_fields: Vec<_> = if name_prefix.is_empty() {
-                field.fields.iter().map(|sf| {
-                    build_single_field_context(sf, values, errors, "", non_default_locale, depth + 1)
-                }).collect()
+                field
+                    .fields
+                    .iter()
+                    .map(|sf| {
+                        build_single_field_context(
+                            sf,
+                            values,
+                            errors,
+                            "",
+                            non_default_locale,
+                            depth + 1,
+                        )
+                    })
+                    .collect()
             } else {
-                field.fields.iter().map(|sf| {
-                    build_single_field_context(sf, values, errors, &full_name, non_default_locale, depth + 1)
-                }).collect()
+                field
+                    .fields
+                    .iter()
+                    .map(|sf| {
+                        build_single_field_context(
+                            sf,
+                            values,
+                            errors,
+                            &full_name,
+                            non_default_locale,
+                            depth + 1,
+                        )
+                    })
+                    .collect()
             };
             ctx["sub_fields"] = serde_json::json!(sub_fields);
             ctx["collapsed"] = serde_json::json!(field.admin.collapsed);
@@ -240,29 +319,53 @@ pub fn build_single_field_context(
             // Top-level tabs promote sub-fields to the same level as the parent,
             // so we delegate to build_single_field_context with the same prefix.
             // This correctly handles Group (double-underscore), Row, Collapsible, etc.
-            let tabs_ctx: Vec<_> = field.tabs.iter().map(|tab| {
-                let tab_sub_fields: Vec<_> = if name_prefix.is_empty() {
-                    tab.fields.iter().map(|sf| {
-                        build_single_field_context(sf, values, errors, "", non_default_locale, depth + 1)
-                    }).collect()
-                } else {
-                    tab.fields.iter().map(|sf| {
-                        build_single_field_context(sf, values, errors, &full_name, non_default_locale, depth + 1)
-                    }).collect()
-                };
-                let error_count = count_errors_in_fields(&tab_sub_fields);
-                let mut tab_ctx = serde_json::json!({
-                    "label": &tab.label,
-                    "sub_fields": tab_sub_fields,
-                });
-                if error_count > 0 {
-                    tab_ctx["error_count"] = serde_json::json!(error_count);
-                }
-                if let Some(ref desc) = tab.description {
-                    tab_ctx["description"] = serde_json::json!(desc);
-                }
-                tab_ctx
-            }).collect();
+            let tabs_ctx: Vec<_> = field
+                .tabs
+                .iter()
+                .map(|tab| {
+                    let tab_sub_fields: Vec<_> = if name_prefix.is_empty() {
+                        tab.fields
+                            .iter()
+                            .map(|sf| {
+                                build_single_field_context(
+                                    sf,
+                                    values,
+                                    errors,
+                                    "",
+                                    non_default_locale,
+                                    depth + 1,
+                                )
+                            })
+                            .collect()
+                    } else {
+                        tab.fields
+                            .iter()
+                            .map(|sf| {
+                                build_single_field_context(
+                                    sf,
+                                    values,
+                                    errors,
+                                    &full_name,
+                                    non_default_locale,
+                                    depth + 1,
+                                )
+                            })
+                            .collect()
+                    };
+                    let error_count = count_errors_in_fields(&tab_sub_fields);
+                    let mut tab_ctx = serde_json::json!({
+                        "label": &tab.label,
+                        "sub_fields": tab_sub_fields,
+                    });
+                    if error_count > 0 {
+                        tab_ctx["error_count"] = serde_json::json!(error_count);
+                    }
+                    if let Some(ref desc) = tab.description {
+                        tab_ctx["description"] = serde_json::json!(desc);
+                    }
+                    tab_ctx
+                })
+                .collect();
             ctx["tabs"] = serde_json::json!(tabs_ctx);
         }
         FieldType::Date => {
@@ -270,11 +373,19 @@ pub fn build_single_field_context(
             ctx["picker_appearance"] = serde_json::json!(appearance);
             match appearance {
                 "dayOnly" => {
-                    let date_val = if value.len() >= 10 { &value[..10] } else { &value };
+                    let date_val = if value.len() >= 10 {
+                        &value[..10]
+                    } else {
+                        &value
+                    };
                     ctx["date_only_value"] = serde_json::json!(date_val);
                 }
                 "dayAndTime" => {
-                    let dt_val = if value.len() >= 16 { &value[..16] } else { &value };
+                    let dt_val = if value.len() >= 16 {
+                        &value[..16]
+                    } else {
+                        &value
+                    };
                     ctx["datetime_local_value"] = serde_json::json!(dt_val);
                 }
                 _ => {}
@@ -411,7 +522,9 @@ pub fn apply_field_type_extras(
         }
     }
 
-    if depth >= MAX_FIELD_DEPTH { return; }
+    if depth >= MAX_FIELD_DEPTH {
+        return;
+    }
     match &sf.field_type {
         FieldType::Checkbox => {
             let checked = matches!(value, "1" | "true" | "on" | "yes");
@@ -420,25 +533,32 @@ pub fn apply_field_type_extras(
         FieldType::Select | FieldType::Radio => {
             if sf.has_many {
                 let selected_values: std::collections::HashSet<String> =
-                    serde_json::from_str(value)
-                        .unwrap_or_default();
-                let options: Vec<_> = sf.options.iter().map(|opt| {
-                    serde_json::json!({
-                        "label": opt.label.resolve_default(),
-                        "value": opt.value,
-                        "selected": selected_values.contains(&opt.value),
+                    serde_json::from_str(value).unwrap_or_default();
+                let options: Vec<_> = sf
+                    .options
+                    .iter()
+                    .map(|opt| {
+                        serde_json::json!({
+                            "label": opt.label.resolve_default(),
+                            "value": opt.value,
+                            "selected": selected_values.contains(&opt.value),
+                        })
                     })
-                }).collect();
+                    .collect();
                 sub_ctx["options"] = serde_json::json!(options);
                 sub_ctx["has_many"] = serde_json::json!(true);
             } else {
-                let options: Vec<_> = sf.options.iter().map(|opt| {
-                    serde_json::json!({
-                        "label": opt.label.resolve_default(),
-                        "value": opt.value,
-                        "selected": opt.value == value,
+                let options: Vec<_> = sf
+                    .options
+                    .iter()
+                    .map(|opt| {
+                        serde_json::json!({
+                            "label": opt.label.resolve_default(),
+                            "value": opt.value,
+                            "selected": opt.value == value,
+                        })
                     })
-                }).collect();
+                    .collect();
                 sub_ctx["options"] = serde_json::json!(options);
             }
         }
@@ -447,11 +567,19 @@ pub fn apply_field_type_extras(
             sub_ctx["picker_appearance"] = serde_json::json!(appearance);
             match appearance {
                 "dayOnly" => {
-                    let date_val = if value.len() >= 10 { &value[..10] } else { value };
+                    let date_val = if value.len() >= 10 {
+                        &value[..10]
+                    } else {
+                        value
+                    };
                     sub_ctx["date_only_value"] = serde_json::json!(date_val);
                 }
                 "dayAndTime" => {
-                    let dt_val = if value.len() >= 16 { &value[..16] } else { value };
+                    let dt_val = if value.len() >= 16 {
+                        &value[..16]
+                    } else {
+                        value
+                    };
                     sub_ctx["datetime_local_value"] = serde_json::json!(dt_val);
                 }
                 _ => {}
@@ -459,9 +587,20 @@ pub fn apply_field_type_extras(
         }
         FieldType::Array => {
             let template_prefix = format!("{}[__INDEX__]", name_prefix);
-            let sub_fields: Vec<_> = sf.fields.iter().map(|nested| {
-                build_single_field_context(nested, &HashMap::new(), &HashMap::new(), &template_prefix, non_default_locale, depth + 1)
-            }).collect();
+            let sub_fields: Vec<_> = sf
+                .fields
+                .iter()
+                .map(|nested| {
+                    build_single_field_context(
+                        nested,
+                        &HashMap::new(),
+                        &HashMap::new(),
+                        &template_prefix,
+                        non_default_locale,
+                        depth + 1,
+                    )
+                })
+                .collect();
             sub_ctx["sub_fields"] = serde_json::json!(sub_fields);
             sub_ctx["row_count"] = serde_json::json!(0);
             sub_ctx["template_id"] = serde_json::json!(safe_template_id(name_prefix));
@@ -480,43 +619,91 @@ pub fn apply_field_type_extras(
             }
         }
         FieldType::Group => {
-            let sub_fields: Vec<_> = sf.fields.iter().map(|nested| {
-                build_single_field_context(nested, values, errors, name_prefix, non_default_locale, depth + 1)
-            }).collect();
+            let sub_fields: Vec<_> = sf
+                .fields
+                .iter()
+                .map(|nested| {
+                    build_single_field_context(
+                        nested,
+                        values,
+                        errors,
+                        name_prefix,
+                        non_default_locale,
+                        depth + 1,
+                    )
+                })
+                .collect();
             sub_ctx["sub_fields"] = serde_json::json!(sub_fields);
             sub_ctx["collapsed"] = serde_json::json!(sf.admin.collapsed);
         }
         FieldType::Row => {
-            let sub_fields: Vec<_> = sf.fields.iter().map(|nested| {
-                build_single_field_context(nested, values, errors, name_prefix, non_default_locale, depth + 1)
-            }).collect();
+            let sub_fields: Vec<_> = sf
+                .fields
+                .iter()
+                .map(|nested| {
+                    build_single_field_context(
+                        nested,
+                        values,
+                        errors,
+                        name_prefix,
+                        non_default_locale,
+                        depth + 1,
+                    )
+                })
+                .collect();
             sub_ctx["sub_fields"] = serde_json::json!(sub_fields);
         }
         FieldType::Collapsible => {
-            let sub_fields: Vec<_> = sf.fields.iter().map(|nested| {
-                build_single_field_context(nested, values, errors, name_prefix, non_default_locale, depth + 1)
-            }).collect();
+            let sub_fields: Vec<_> = sf
+                .fields
+                .iter()
+                .map(|nested| {
+                    build_single_field_context(
+                        nested,
+                        values,
+                        errors,
+                        name_prefix,
+                        non_default_locale,
+                        depth + 1,
+                    )
+                })
+                .collect();
             sub_ctx["sub_fields"] = serde_json::json!(sub_fields);
             sub_ctx["collapsed"] = serde_json::json!(sf.admin.collapsed);
         }
         FieldType::Tabs => {
-            let tabs_ctx: Vec<_> = sf.tabs.iter().map(|tab| {
-                let tab_sub_fields: Vec<_> = tab.fields.iter().map(|nested| {
-                    build_single_field_context(nested, values, errors, name_prefix, non_default_locale, depth + 1)
-                }).collect();
-                let error_count = count_errors_in_fields(&tab_sub_fields);
-                let mut tab_ctx = serde_json::json!({
-                    "label": &tab.label,
-                    "sub_fields": tab_sub_fields,
-                });
-                if error_count > 0 {
-                    tab_ctx["error_count"] = serde_json::json!(error_count);
-                }
-                if let Some(ref desc) = tab.description {
-                    tab_ctx["description"] = serde_json::json!(desc);
-                }
-                tab_ctx
-            }).collect();
+            let tabs_ctx: Vec<_> = sf
+                .tabs
+                .iter()
+                .map(|tab| {
+                    let tab_sub_fields: Vec<_> = tab
+                        .fields
+                        .iter()
+                        .map(|nested| {
+                            build_single_field_context(
+                                nested,
+                                values,
+                                errors,
+                                name_prefix,
+                                non_default_locale,
+                                depth + 1,
+                            )
+                        })
+                        .collect();
+                    let error_count = count_errors_in_fields(&tab_sub_fields);
+                    let mut tab_ctx = serde_json::json!({
+                        "label": &tab.label,
+                        "sub_fields": tab_sub_fields,
+                    });
+                    if error_count > 0 {
+                        tab_ctx["error_count"] = serde_json::json!(error_count);
+                    }
+                    if let Some(ref desc) = tab.description {
+                        tab_ctx["description"] = serde_json::json!(desc);
+                    }
+                    tab_ctx
+                })
+                .collect();
             sub_ctx["tabs"] = serde_json::json!(tabs_ctx);
         }
         FieldType::Blocks => {
@@ -614,9 +801,8 @@ pub fn build_field_contexts(
     } else {
         Box::new(fields.iter())
     };
-    iter.map(|field| {
-        build_single_field_context(field, values, errors, "", non_default_locale, 0)
-    }).collect()
+    iter.map(|field| build_single_field_context(field, values, errors, "", non_default_locale, 0))
+        .collect()
 }
 
 #[cfg(test)]

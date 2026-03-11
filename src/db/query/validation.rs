@@ -2,10 +2,10 @@
 
 use std::collections::HashSet;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
-use crate::core::CollectionDefinition;
 use crate::core::field::FieldType;
+use crate::core::CollectionDefinition;
 
 use super::columns::get_valid_filter_columns;
 use super::locale::LocaleContext;
@@ -19,7 +19,8 @@ pub fn is_valid_identifier(s: &str) -> bool {
 /// Sanitize a locale string for safe use in SQL identifiers (column names, defaults).
 /// Only allows alphanumeric characters, underscores, and dashes.
 pub fn sanitize_locale(locale: &str) -> String {
-    locale.chars()
+    locale
+        .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
         .collect()
 }
@@ -29,7 +30,10 @@ pub fn validate_slug(slug: &str) -> Result<()> {
     if slug.is_empty() {
         bail!("Slug cannot be empty");
     }
-    if !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+    if !slug
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
         bail!(
             "Invalid slug '{}' — use lowercase letters, digits, and underscores only",
             slug
@@ -60,12 +64,18 @@ pub fn validate_field_name(field: &str, valid_columns: &HashSet<String>) -> Resu
 /// a known field; deeper segments are validated at SQL generation time.
 ///
 /// `order_by` only supports flat columns (no dot notation).
-pub fn validate_query_fields(def: &CollectionDefinition, query: &FindQuery, locale_ctx: Option<&LocaleContext>) -> Result<()> {
+pub fn validate_query_fields(
+    def: &CollectionDefinition,
+    query: &FindQuery,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<()> {
     let (exact_columns, prefix_roots) = get_valid_filter_paths(def, locale_ctx);
 
     for clause in &query.filters {
         match clause {
-            FilterClause::Single(f) => validate_filter_field(&f.field, &exact_columns, &prefix_roots)?,
+            FilterClause::Single(f) => {
+                validate_filter_field(&f.field, &exact_columns, &prefix_roots)?
+            }
             FilterClause::Or(groups) => {
                 for group in groups {
                     for f in group {
@@ -90,7 +100,10 @@ pub fn validate_query_fields(def: &CollectionDefinition, query: &FindQuery, loca
 /// Returns `(exact_columns, prefix_roots)` where:
 /// - `exact_columns`: flat column names valid for filtering and order_by
 /// - `prefix_roots`: field names that accept dot-path sub-filters (Array, Blocks, has-many Relationship)
-pub fn get_valid_filter_paths(def: &CollectionDefinition, locale_ctx: Option<&LocaleContext>) -> (HashSet<String>, HashSet<String>) {
+pub fn get_valid_filter_paths(
+    def: &CollectionDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> (HashSet<String>, HashSet<String>) {
     let exact = get_valid_filter_columns(def, locale_ctx);
     let mut prefixes = HashSet::new();
 
@@ -114,7 +127,11 @@ pub fn get_valid_filter_paths(def: &CollectionDefinition, locale_ctx: Option<&Lo
 }
 
 /// Validate a single filter field name against exact columns or dot-path prefixes.
-pub(crate) fn validate_filter_field(field: &str, exact_columns: &HashSet<String>, prefix_roots: &HashSet<String>) -> Result<()> {
+pub(crate) fn validate_filter_field(
+    field: &str,
+    exact_columns: &HashSet<String>,
+    prefix_roots: &HashSet<String>,
+) -> Result<()> {
     // Exact match — flat column name
     if exact_columns.contains(field) {
         return Ok(());
@@ -126,18 +143,14 @@ pub(crate) fn validate_filter_field(field: &str, exact_columns: &HashSet<String>
             return Ok(());
         }
     }
-    bail!(
-        "Invalid field '{}'. Valid fields: {}",
-        field,
-        {
-            let mut all: Vec<String> = exact_columns.iter().cloned().collect();
-            for p in prefix_roots {
-                all.push(format!("{}.*", p));
-            }
-            all.sort();
-            all.join(", ")
+    bail!("Invalid field '{}'. Valid fields: {}", field, {
+        let mut all: Vec<String> = exact_columns.iter().cloned().collect();
+        for p in prefix_roots {
+            all.push(format!("{}.*", p));
         }
-    )
+        all.sort();
+        all.join(", ")
+    })
 }
 
 #[cfg(test)]
@@ -165,7 +178,9 @@ mod tests {
     #[test]
     fn validate_field_name_accepts_known() {
         let valid: HashSet<String> = ["id", "title", "status"]
-            .iter().map(|s| s.to_string()).collect();
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         assert!(validate_field_name("title", &valid).is_ok());
         assert!(validate_field_name("id", &valid).is_ok());
     }
@@ -173,7 +188,9 @@ mod tests {
     #[test]
     fn validate_field_name_rejects_unknown() {
         let valid: HashSet<String> = ["id", "title", "status"]
-            .iter().map(|s| s.to_string()).collect();
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let err = validate_field_name("nonexistent", &valid).unwrap_err();
         assert!(err.to_string().contains("Invalid field 'nonexistent'"));
     }

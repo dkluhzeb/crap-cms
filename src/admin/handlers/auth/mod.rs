@@ -1,26 +1,26 @@
 //! Login/logout/forgot-password/reset-password/verify-email handlers for the admin UI.
 
-pub mod login_page;
-pub mod login_action;
-pub mod logout_action;
-pub mod session_refresh;
-pub mod forgot_password_page;
 pub mod forgot_password_action;
-pub mod reset_password_page;
+pub mod forgot_password_page;
+pub mod login_action;
+pub mod login_page;
+pub mod logout_action;
 pub mod reset_password_action;
-pub mod verify_email;
+pub mod reset_password_page;
 pub mod save_locale;
+pub mod session_refresh;
+pub mod verify_email;
 
-pub use login_page::login_page;
-pub use login_action::login_action;
-pub use logout_action::logout_action;
-pub use session_refresh::session_refresh;
-pub use forgot_password_page::forgot_password_page;
 pub use forgot_password_action::forgot_password_action;
-pub use reset_password_page::reset_password_page;
+pub use forgot_password_page::forgot_password_page;
+pub use login_action::login_action;
+pub use login_page::login_page;
+pub use logout_action::logout_action;
 pub use reset_password_action::reset_password_action;
-pub use verify_email::verify_email;
+pub use reset_password_page::reset_password_page;
 pub use save_locale::save_locale;
+pub use session_refresh::session_refresh;
+pub use verify_email::verify_email;
 
 // ── Shared structs and helpers ──────────────────────────────────────────────
 
@@ -90,12 +90,22 @@ pub(super) fn session_cookies(token: &str, expiry: u64, exp: u64, dev_mode: bool
 pub(super) fn clear_session_cookies(dev_mode: bool) -> Vec<String> {
     let secure = if dev_mode { "" } else { "; Secure" };
     vec![
-        format!("crap_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0{}", secure),
-        format!("crap_session_exp=; Path=/; SameSite=Lax; Max-Age=0{}", secure),
+        format!(
+            "crap_session=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0{}",
+            secure
+        ),
+        format!(
+            "crap_session_exp=; Path=/; SameSite=Lax; Max-Age=0{}",
+            secure
+        ),
     ]
 }
 
-pub(super) fn login_error(state: &AdminState, error: &str, email: &str) -> axum::response::Response {
+pub(super) fn login_error(
+    state: &AdminState,
+    error: &str,
+    email: &str,
+) -> axum::response::Response {
     let auth_collections = get_auth_collections(state);
     let all_disable_local = all_disable_local(state);
     let show_forgot_password = show_forgot_password(state);
@@ -105,31 +115,41 @@ pub(super) fn login_error(state: &AdminState, error: &str, email: &str) -> axum:
         .set("error", serde_json::json!(error))
         .set("email", serde_json::json!(email))
         .set("collections", serde_json::json!(auth_collections))
-        .set("show_collection_picker", serde_json::json!(auth_collections.len() > 1))
+        .set(
+            "show_collection_picker",
+            serde_json::json!(auth_collections.len() > 1),
+        )
         .set("disable_local", serde_json::json!(all_disable_local))
-        .set("show_forgot_password", serde_json::json!(show_forgot_password))
+        .set(
+            "show_forgot_password",
+            serde_json::json!(show_forgot_password),
+        )
         .build();
 
     match state.render("auth/login", &data) {
         Ok(html) => Html(html).into_response(),
         Err(e) => {
-                tracing::error!("Template render error: {}", e);
-                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-            }.into_response(),
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+        }
+        .into_response(),
     }
 }
 
 /// Check if all auth collections have disable_local = true.
 pub(super) fn all_disable_local(state: &AdminState) -> bool {
-    let auth_collections: Vec<_> = state.registry.collections.values()
+    let auth_collections: Vec<_> = state
+        .registry
+        .collections
+        .values()
         .filter(|def| def.is_auth_collection())
         .collect();
     if auth_collections.is_empty() {
         return false;
     }
-    auth_collections.iter().all(|def| {
-        def.auth.as_ref().map(|a| a.disable_local).unwrap_or(false)
-    })
+    auth_collections
+        .iter()
+        .all(|def| def.auth.as_ref().map(|a| a.disable_local).unwrap_or(false))
 }
 
 /// Check if "forgot password?" link should show on login page.
@@ -137,37 +157,51 @@ pub(super) fn show_forgot_password(state: &AdminState) -> bool {
     if !email::is_configured(&state.config.email) {
         return false;
     }
-    state.registry.collections.values()
+    state
+        .registry
+        .collections
+        .values()
         .filter(|def| def.is_auth_collection())
         .any(|def| def.auth.as_ref().is_some_and(|a| a.forgot_password))
 }
 
 pub(super) fn get_auth_collections(state: &AdminState) -> Vec<serde_json::Value> {
-    let mut collections: Vec<_> = state.registry.collections.values()
+    let mut collections: Vec<_> = state
+        .registry
+        .collections
+        .values()
         .filter(|def| def.is_auth_collection())
-        .map(|def| serde_json::json!({
-            "slug": def.slug,
-            "display_name": def.display_name(),
-        }))
+        .map(|def| {
+            serde_json::json!({
+                "slug": def.slug,
+                "display_name": def.display_name(),
+            })
+        })
         .collect();
     collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
     collections
 }
 
-pub(super) fn render_forgot_success(state: &AdminState, auth_collections: &[serde_json::Value]) -> Html<String> {
+pub(super) fn render_forgot_success(
+    state: &AdminState,
+    auth_collections: &[serde_json::Value],
+) -> Html<String> {
     let data = ContextBuilder::auth(state)
         .page(PageType::AuthForgot, "Forgot Password")
         .set("success", serde_json::json!(true))
         .set("collections", serde_json::json!(auth_collections))
-        .set("show_collection_picker", serde_json::json!(auth_collections.len() > 1))
+        .set(
+            "show_collection_picker",
+            serde_json::json!(auth_collections.len() > 1),
+        )
         .build();
 
     match state.render("auth/forgot_password", &data) {
         Ok(html) => Html(html),
         Err(e) => {
-                tracing::error!("Template render error: {}", e);
-                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-            },
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+        }
     }
 }
 

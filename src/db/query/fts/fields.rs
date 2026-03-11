@@ -1,8 +1,8 @@
 //! Field/column resolution helpers for FTS5 indexing.
 
 use crate::config::LocaleConfig;
-use crate::core::CollectionDefinition;
 use crate::core::field::FieldType;
+use crate::core::CollectionDefinition;
 use crate::db::query::sanitize_locale;
 
 /// Determine which logical fields should be indexed in the FTS5 table.
@@ -47,7 +47,10 @@ pub fn get_fts_columns(def: &CollectionDefinition, locale_config: &LocaleConfig)
 
     let mut columns = Vec::new();
     for field_name in &logical_fields {
-        let is_localized = def.fields.iter().any(|f| f.name == *field_name && f.localized);
+        let is_localized = def
+            .fields
+            .iter()
+            .any(|f| f.name == *field_name && f.localized);
 
         if is_localized {
             for locale in &locale_config.locales {
@@ -67,8 +70,7 @@ pub(super) fn json_richtext_columns(
 ) -> std::collections::HashSet<String> {
     let mut set = std::collections::HashSet::new();
     for f in &def.fields {
-        if f.field_type == FieldType::Richtext
-            && f.admin.richtext_format.as_deref() == Some("json")
+        if f.field_type == FieldType::Richtext && f.admin.richtext_format.as_deref() == Some("json")
         {
             set.insert(f.name.clone());
         }
@@ -135,7 +137,9 @@ mod tests {
     }
 
     fn localized_text_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).localized(true).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .localized(true)
+            .build()
     }
 
     #[test]
@@ -165,7 +169,9 @@ mod tests {
 
     #[test]
     fn get_fts_fields_empty_for_no_text() {
-        let def = simple_def(vec![FieldDefinition::builder("count", FieldType::Number).build()]);
+        let def = simple_def(vec![
+            FieldDefinition::builder("count", FieldType::Number).build()
+        ]);
         assert!(get_fts_fields(&def).is_empty());
     }
 
@@ -218,7 +224,9 @@ mod tests {
 
     #[test]
     fn get_fts_columns_empty_when_no_text_fields() {
-        let def = simple_def(vec![FieldDefinition::builder("count", FieldType::Number).build()]);
+        let def = simple_def(vec![
+            FieldDefinition::builder("count", FieldType::Number).build()
+        ]);
         let cols = get_fts_columns(&def, &locale_config_en_de());
         assert!(cols.is_empty());
     }

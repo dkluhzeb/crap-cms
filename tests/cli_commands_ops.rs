@@ -96,7 +96,11 @@ fn copy_dir_skip(src: &Path, dst: &Path, skip: &[&str]) {
 }
 
 /// Set up a fixture dir that also includes a job definition.
-fn full_setup_with_jobs() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry) {
+fn full_setup_with_jobs() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
@@ -119,7 +123,8 @@ function M.run(ctx)
 end
 return M
 "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
@@ -133,7 +138,6 @@ return M
 // 18. Command Export/Import Functions
 // ═══════════════════════════════════════════════════════════════════════════
 
-
 #[test]
 fn cmd_user_lock_by_email() {
     let (_tmp, pool, registry) = full_setup();
@@ -141,7 +145,13 @@ fn cmd_user_lock_by_email() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "lockme@example.com", "pw", &[("name", "Lock Me")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "lockme@example.com",
+        "pw",
+        &[("name", "Lock Me")],
+    );
 
     // Verify not locked initially
     let conn = pool.get().unwrap();
@@ -150,9 +160,13 @@ fn cmd_user_lock_by_email() {
 
     // Lock via command
     commands::user::user_lock(
-        &pool, &registry, "users",
-        Some("lockme@example.com".to_string()), None,
-    ).unwrap();
+        &pool,
+        &registry,
+        "users",
+        Some("lockme@example.com".to_string()),
+        None,
+    )
+    .unwrap();
 
     // Verify locked
     let conn = pool.get().unwrap();
@@ -166,13 +180,16 @@ fn cmd_user_lock_by_id() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "lockid@example.com", "pw", &[("name", "Lock ID")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "lockid@example.com",
+        "pw",
+        &[("name", "Lock ID")],
+    );
 
     // Lock via ID
-    commands::user::user_lock(
-        &pool, &registry, "users",
-        None, Some(doc.id.clone()),
-    ).unwrap();
+    commands::user::user_lock(&pool, &registry, "users", None, Some(doc.id.clone())).unwrap();
 
     let conn = pool.get().unwrap();
     assert!(query::is_locked(&conn, "users", &doc.id).unwrap());
@@ -185,7 +202,13 @@ fn cmd_user_unlock_by_email() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "unlockme@example.com", "pw", &[("name", "Unlock Me")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "unlockme@example.com",
+        "pw",
+        &[("name", "Unlock Me")],
+    );
 
     // Lock first
     let conn = pool.get().unwrap();
@@ -195,9 +218,13 @@ fn cmd_user_unlock_by_email() {
 
     // Unlock via command
     commands::user::user_unlock(
-        &pool, &registry, "users",
-        Some("unlockme@example.com".to_string()), None,
-    ).unwrap();
+        &pool,
+        &registry,
+        "users",
+        Some("unlockme@example.com".to_string()),
+        None,
+    )
+    .unwrap();
 
     let conn = pool.get().unwrap();
     assert!(!query::is_locked(&conn, "users", &doc.id).unwrap());
@@ -210,15 +237,25 @@ fn cmd_user_delete_with_confirm_by_email() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "deleteme@example.com", "pw", &[("name", "Delete Me")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "deleteme@example.com",
+        "pw",
+        &[("name", "Delete Me")],
+    );
     let id = doc.id.clone();
 
     // Delete with confirm=true (skips interactive prompt)
     commands::user::user_delete(
-        &pool, &registry, "users",
-        Some("deleteme@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "users",
+        Some("deleteme@example.com".to_string()),
+        None,
         true, // skip confirmation
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify deleted
     let reg = registry.read().unwrap();
@@ -235,15 +272,17 @@ fn cmd_user_delete_with_confirm_by_id() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "delbyid@example.com", "pw", &[("name", "Delete By ID")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "delbyid@example.com",
+        "pw",
+        &[("name", "Delete By ID")],
+    );
     let id = doc.id.clone();
 
     // Delete by ID with confirm=true
-    commands::user::user_delete(
-        &pool, &registry, "users",
-        None, Some(id.clone()),
-        true,
-    ).unwrap();
+    commands::user::user_delete(&pool, &registry, "users", None, Some(id.clone()), true).unwrap();
 
     let reg = registry.read().unwrap();
     let def = reg.get_collection("users").unwrap();
@@ -257,8 +296,11 @@ fn cmd_user_delete_nonexistent_email_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_delete(
-        &pool, &registry, "users",
-        Some("nonexistent@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "users",
+        Some("nonexistent@example.com".to_string()),
+        None,
         true,
     );
     assert!(result.is_err());
@@ -273,19 +315,31 @@ fn cmd_user_change_password_by_email() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "chpw@example.com", "oldpw", &[("name", "ChPW User")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "chpw@example.com",
+        "oldpw",
+        &[("name", "ChPW User")],
+    );
 
     // Change password via command (programmatic, not interactive)
     commands::user::user_change_password(
-        &pool, &registry, "users",
-        Some("chpw@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "users",
+        Some("chpw@example.com".to_string()),
+        None,
         Some("newpw123".to_string()),
         &crap_cms::config::PasswordPolicy::default(),
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify new password works
     let conn = pool.get().unwrap();
-    let hash = query::get_password_hash(&conn, "users", &doc.id).unwrap().unwrap();
+    let hash = query::get_password_hash(&conn, "users", &doc.id)
+        .unwrap()
+        .unwrap();
     assert!(auth::verify_password("newpw123", &hash).unwrap());
     assert!(!auth::verify_password("oldpw", &hash).unwrap());
 }
@@ -297,17 +351,29 @@ fn cmd_user_change_password_by_id() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "chpwid@example.com", "oldpw", &[("name", "ChPW ID")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "chpwid@example.com",
+        "oldpw",
+        &[("name", "ChPW ID")],
+    );
 
     commands::user::user_change_password(
-        &pool, &registry, "users",
-        None, Some(doc.id.clone()),
+        &pool,
+        &registry,
+        "users",
+        None,
+        Some(doc.id.clone()),
         Some("newpw456".to_string()),
         &crap_cms::config::PasswordPolicy::default(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let conn = pool.get().unwrap();
-    let hash = query::get_password_hash(&conn, "users", &doc.id).unwrap().unwrap();
+    let hash = query::get_password_hash(&conn, "users", &doc.id)
+        .unwrap()
+        .unwrap();
     assert!(auth::verify_password("newpw456", &hash).unwrap());
 }
 
@@ -316,8 +382,11 @@ fn cmd_user_change_password_nonexistent_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_change_password(
-        &pool, &registry, "users",
-        Some("noone@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "users",
+        Some("noone@example.com".to_string()),
+        None,
         Some("newpw".to_string()),
         &crap_cms::config::PasswordPolicy::default(),
     );
@@ -329,8 +398,11 @@ fn cmd_user_lock_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_lock(
-        &pool, &registry, "posts",
-        Some("anyone@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "posts",
+        Some("anyone@example.com".to_string()),
+        None,
     );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -342,8 +414,11 @@ fn cmd_user_unlock_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_unlock(
-        &pool, &registry, "posts",
-        Some("anyone@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "posts",
+        Some("anyone@example.com".to_string()),
+        None,
     );
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -355,8 +430,11 @@ fn cmd_user_delete_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_delete(
-        &pool, &registry, "posts",
-        Some("anyone@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "posts",
+        Some("anyone@example.com".to_string()),
+        None,
         true,
     );
     assert!(result.is_err());
@@ -369,8 +447,11 @@ fn cmd_user_change_password_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_change_password(
-        &pool, &registry, "posts",
-        Some("anyone@example.com".to_string()), None,
+        &pool,
+        &registry,
+        "posts",
+        Some("anyone@example.com".to_string()),
+        None,
         Some("newpw".to_string()),
         &crap_cms::config::PasswordPolicy::default(),
     );
@@ -406,10 +487,12 @@ fn cmd_jobs_list() {
     let (tmp, _pool, _registry) = full_setup_with_jobs();
     let config_dir = tmp.path().join("config");
 
-    let result = commands::jobs::run(commands::JobsAction::List {
-        config: config_dir,
-    });
-    assert!(result.is_ok(), "jobs list should succeed: {:?}", result.err());
+    let result = commands::jobs::run(commands::JobsAction::List { config: config_dir });
+    assert!(
+        result.is_ok(),
+        "jobs list should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -419,10 +502,12 @@ fn cmd_jobs_list_empty() {
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
-    let result = commands::jobs::run(commands::JobsAction::List {
-        config: config_dir,
-    });
-    assert!(result.is_ok(), "jobs list with no jobs should succeed: {:?}", result.err());
+    let result = commands::jobs::run(commands::JobsAction::List { config: config_dir });
+    assert!(
+        result.is_ok(),
+        "jobs list with no jobs should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -435,7 +520,8 @@ fn cmd_jobs_trigger_and_status() {
         config: config_dir.clone(),
         slug: "cleanup".to_string(),
         data: Some(r#"{"key": "value"}"#.to_string()),
-    }).unwrap();
+    })
+    .unwrap();
 
     // Check status (list all runs)
     let result = commands::jobs::run(commands::JobsAction::Status {
@@ -444,7 +530,11 @@ fn cmd_jobs_trigger_and_status() {
         slug: Some("cleanup".to_string()),
         limit: 10,
     });
-    assert!(result.is_ok(), "jobs status should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "jobs status should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -485,13 +575,15 @@ fn cmd_jobs_status_single_run() {
         config: config_dir.clone(),
         slug: "cleanup".to_string(),
         data: None,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Get the run ID from the database
     let cfg = CrapConfig::load(&config_dir).unwrap();
     let db_pool = pool::create_pool(&config_dir, &cfg).unwrap();
     let conn = db_pool.get().unwrap();
-    let runs = crap_cms::db::query::jobs::list_job_runs(&conn, Some("cleanup"), None, 10, 0).unwrap();
+    let runs =
+        crap_cms::db::query::jobs::list_job_runs(&conn, Some("cleanup"), None, 10, 0).unwrap();
     assert!(!runs.is_empty());
     let run_id = runs[0].id.clone();
     drop(conn);
@@ -504,7 +596,11 @@ fn cmd_jobs_status_single_run() {
         slug: None,
         limit: 20,
     });
-    assert!(result.is_ok(), "jobs status by ID should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "jobs status by ID should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -518,7 +614,10 @@ fn cmd_jobs_status_not_found() {
         slug: None,
         limit: 20,
     });
-    assert!(result.is_err(), "jobs status with nonexistent ID should fail");
+    assert!(
+        result.is_err(),
+        "jobs status with nonexistent ID should fail"
+    );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not found"), "error: {}", err);
 }
@@ -535,7 +634,11 @@ fn cmd_jobs_status_empty() {
         slug: None,
         limit: 20,
     });
-    assert!(result.is_ok(), "jobs status with no runs should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "jobs status with no runs should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -548,14 +651,19 @@ fn cmd_jobs_purge() {
         config: config_dir.clone(),
         slug: "cleanup".to_string(),
         data: None,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Purge old runs (0 seconds = purge everything older than now)
     let result = commands::jobs::run(commands::JobsAction::Purge {
         config: config_dir,
         older_than: "1m".to_string(),
     });
-    assert!(result.is_ok(), "jobs purge should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "jobs purge should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -593,7 +701,11 @@ fn cmd_status_empty_project() {
     scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
 
     let result = commands::status::run(&config_dir);
-    assert!(result.is_ok(), "status on empty project should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "status on empty project should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -614,7 +726,11 @@ fn cmd_status_with_data() {
     }
 
     let result = commands::status::run(&config_dir);
-    assert!(result.is_ok(), "status with data should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "status with data should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -625,7 +741,11 @@ fn cmd_status_with_globals() {
 
     // The fixture has a globals/settings.lua — status should show it
     let result = commands::status::run(&config_dir);
-    assert!(result.is_ok(), "status with globals should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "status with globals should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -638,7 +758,11 @@ fn cmd_status_with_migrations() {
     scaffold::make_migration(&config_dir, "test_status_migration").unwrap();
 
     let result = commands::status::run(&config_dir);
-    assert!(result.is_ok(), "status with migrations should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "status with migrations should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -657,7 +781,11 @@ fn cmd_templates_list_all() {
         r#type: None,
         verbose: false,
     });
-    assert!(result.is_ok(), "templates list should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "templates list should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -666,7 +794,11 @@ fn cmd_templates_list_templates_only() {
         r#type: Some("templates".to_string()),
         verbose: false,
     });
-    assert!(result.is_ok(), "templates list templates should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "templates list templates should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -675,7 +807,11 @@ fn cmd_templates_list_static_only() {
         r#type: Some("static".to_string()),
         verbose: false,
     });
-    assert!(result.is_ok(), "templates list static should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "templates list static should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -684,7 +820,10 @@ fn cmd_templates_list_invalid_type() {
         r#type: Some("invalid".to_string()),
         verbose: false,
     });
-    assert!(result.is_err(), "templates list with invalid type should fail");
+    assert!(
+        result.is_err(),
+        "templates list with invalid type should fail"
+    );
 }
 
 #[test]
@@ -693,7 +832,11 @@ fn cmd_templates_list_verbose() {
         r#type: None,
         verbose: true,
     });
-    assert!(result.is_ok(), "templates list --verbose should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "templates list --verbose should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -707,7 +850,11 @@ fn cmd_templates_extract_specific() {
         r#type: None,
         force: false,
     });
-    assert!(result.is_ok(), "templates extract specific should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "templates extract specific should succeed: {:?}",
+        result.err()
+    );
     assert!(tmp.path().join("templates/layout/base.hbs").exists());
 }
 
@@ -722,7 +869,11 @@ fn cmd_templates_extract_all_templates() {
         r#type: Some("templates".to_string()),
         force: false,
     });
-    assert!(result.is_ok(), "templates extract all templates should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "templates extract all templates should succeed: {:?}",
+        result.err()
+    );
     assert!(tmp.path().join("templates/layout/base.hbs").exists());
 }
 
@@ -737,7 +888,11 @@ fn cmd_templates_extract_all_static() {
         r#type: Some("static".to_string()),
         force: false,
     });
-    assert!(result.is_ok(), "templates extract all static should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "templates extract all static should succeed: {:?}",
+        result.err()
+    );
     assert!(tmp.path().join("static/styles.css").exists());
 }
 
@@ -752,7 +907,10 @@ fn cmd_templates_extract_no_paths_no_all_errors() {
         r#type: None,
         force: false,
     });
-    assert!(result.is_err(), "extract with no paths and no --all should fail");
+    assert!(
+        result.is_err(),
+        "extract with no paths and no --all should fail"
+    );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("--all"), "error: {}", err);
 }
@@ -768,7 +926,8 @@ fn cmd_templates_extract_force_overwrites() {
         all: false,
         r#type: None,
         force: false,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Write a custom marker
     std::fs::write(tmp.path().join("templates/layout/base.hbs"), "CUSTOM").unwrap();
@@ -780,7 +939,8 @@ fn cmd_templates_extract_force_overwrites() {
         all: false,
         r#type: None,
         force: false,
-    }).unwrap();
+    })
+    .unwrap();
     let content = std::fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
     assert_eq!(content, "CUSTOM", "should not overwrite without force");
 
@@ -791,7 +951,8 @@ fn cmd_templates_extract_force_overwrites() {
         all: false,
         r#type: None,
         force: true,
-    }).unwrap();
+    })
+    .unwrap();
     let content = std::fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
     assert_ne!(content, "CUSTOM", "should overwrite with force");
 }
@@ -809,20 +970,25 @@ fn cmd_migrate_up() {
     // Create a migration file
     let migrations_dir = config_dir.join("migrations");
     std::fs::create_dir_all(&migrations_dir).unwrap();
-    std::fs::write(migrations_dir.join("20240101000000_noop.lua"), r#"
+    std::fs::write(
+        migrations_dir.join("20240101000000_noop.lua"),
+        r#"
 local M = {}
 function M.up()
 end
 function M.down()
 end
 return M
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
-    let result = commands::db::migrate(
-        &config_dir,
-        commands::MigrateAction::Up,
+    let result = commands::db::migrate(&config_dir, commands::MigrateAction::Up);
+    assert!(
+        result.is_ok(),
+        "migrate up should succeed: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "migrate up should succeed: {:?}", result.err());
 
     // Verify migration was applied
     let cfg = CrapConfig::load(&config_dir).unwrap();
@@ -838,11 +1004,12 @@ fn cmd_migrate_up_no_pending() {
     copy_dir(&fixture_dir(), &config_dir);
 
     // No migration files — should succeed with "no pending" message
-    let result = commands::db::migrate(
-        &config_dir,
-        commands::MigrateAction::Up,
+    let result = commands::db::migrate(&config_dir, commands::MigrateAction::Up);
+    assert!(
+        result.is_ok(),
+        "migrate up with no pending should succeed: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "migrate up with no pending should succeed: {:?}", result.err());
 }
 
 #[test]
@@ -854,11 +1021,12 @@ fn cmd_migrate_list() {
     // Create a migration
     scaffold::make_migration(&config_dir, "test_list").unwrap();
 
-    let result = commands::db::migrate(
-        &config_dir,
-        commands::MigrateAction::List,
+    let result = commands::db::migrate(&config_dir, commands::MigrateAction::List);
+    assert!(
+        result.is_ok(),
+        "migrate list should succeed: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "migrate list should succeed: {:?}", result.err());
 }
 
 #[test]
@@ -867,11 +1035,12 @@ fn cmd_migrate_list_empty() {
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
-    let result = commands::db::migrate(
-        &config_dir,
-        commands::MigrateAction::List,
+    let result = commands::db::migrate(&config_dir, commands::MigrateAction::List);
+    assert!(
+        result.is_ok(),
+        "migrate list with no migrations should succeed: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "migrate list with no migrations should succeed: {:?}", result.err());
 }
 
 #[test]
@@ -880,11 +1049,12 @@ fn cmd_migrate_down_no_applied() {
     let config_dir = tmp.path().join("config");
     copy_dir(&fixture_dir(), &config_dir);
 
-    let result = commands::db::migrate(
-        &config_dir,
-        commands::MigrateAction::Down { steps: 1 },
+    let result = commands::db::migrate(&config_dir, commands::MigrateAction::Down { steps: 1 });
+    assert!(
+        result.is_ok(),
+        "migrate down with nothing to roll back should succeed: {:?}",
+        result.err()
     );
-    assert!(result.is_ok(), "migrate down with nothing to roll back should succeed: {:?}", result.err());
 }
 
 #[test]
@@ -915,7 +1085,11 @@ fn cmd_migrate_fresh_with_confirm() {
         &config_dir,
         commands::MigrateAction::Fresh { confirm: true },
     );
-    assert!(result.is_ok(), "migrate fresh with confirm should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "migrate fresh with confirm should succeed: {:?}",
+        result.err()
+    );
 
     // Verify data is gone
     let cfg = CrapConfig::load(&config_dir).unwrap();

@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::FieldError;
+use std::collections::HashMap;
 
 /// Validate email format (only if non-empty).
 pub(crate) fn check_email_format(
@@ -15,7 +15,12 @@ pub(crate) fn check_email_format(
     }
     if let Some(serde_json::Value::String(s)) = value {
         if !is_valid_email_format(s) {
-            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} is not a valid email address", field.name), "validation.email", HashMap::from([("field".to_string(), field.name.clone())])));
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} is not a valid email address", field.name),
+                "validation.email",
+                HashMap::from([("field".to_string(), field.name.clone())]),
+            ));
         }
     }
 }
@@ -47,7 +52,8 @@ mod tests {
     fn test_validate_email_format_valid() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("user@example.com"));
@@ -59,20 +65,24 @@ mod tests {
     fn test_validate_email_format_invalid_no_at() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("not-an-email"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0].message.contains("valid email"));
+        assert!(result.unwrap_err().errors[0]
+            .message
+            .contains("valid email"));
     }
 
     #[test]
     fn test_validate_email_format_invalid_no_domain() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("user@"));
@@ -84,7 +94,8 @@ mod tests {
     fn test_validate_email_format_skipped_for_empty() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!(""));

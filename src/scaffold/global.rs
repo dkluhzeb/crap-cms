@@ -7,12 +7,16 @@ use std::path::Path;
 /// Generate a global Lua file at `<config_dir>/globals/<slug>.lua`.
 ///
 /// Optionally accepts inline field shorthand (e.g., "title:text:required,tagline:textarea").
-pub fn make_global(config_dir: &Path, slug: &str, fields_shorthand: Option<&str>, force: bool) -> Result<()> {
+pub fn make_global(
+    config_dir: &Path,
+    slug: &str,
+    fields_shorthand: Option<&str>,
+    force: bool,
+) -> Result<()> {
     super::validate_slug(slug)?;
 
     let globals_dir = config_dir.join("globals");
-    fs::create_dir_all(&globals_dir)
-        .context("Failed to create globals/ directory")?;
+    fs::create_dir_all(&globals_dir).context("Failed to create globals/ directory")?;
 
     let file_path = globals_dir.join(format!("{}.lua", slug));
     if file_path.exists() && !force {
@@ -103,7 +107,13 @@ mod tests {
     #[test]
     fn test_make_global_with_fields() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_global(tmp.path(), "nav", Some("title:text:required,links:array"), false).unwrap();
+        make_global(
+            tmp.path(),
+            "nav",
+            Some("title:text:required,links:array"),
+            false,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("globals/nav.lua")).unwrap();
         assert!(content.contains("crap.fields.text({"));

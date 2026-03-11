@@ -9,10 +9,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
+use crap_cms::admin::AdminState;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
@@ -31,9 +31,9 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -45,10 +45,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -60,10 +66,7 @@ struct TestApp {
     jwt_secret: String,
 }
 
-fn setup_app(
-    collections: Vec<CollectionDefinition>,
-    globals: Vec<GlobalDefinition>,
-) -> TestApp {
+fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".to_string();
@@ -94,19 +97,17 @@ fn setup_app_with_config(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = {
         let reg = registry.read().unwrap();
@@ -123,8 +124,12 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".to_string(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            5, 300,
+        )),
+        forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -186,7 +191,9 @@ fn make_versioned_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.admin = AdminConfig {
@@ -205,7 +212,9 @@ fn make_posts_with_required_title() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.admin = AdminConfig {
@@ -216,7 +225,6 @@ fn make_posts_with_required_title() -> CollectionDefinition {
 }
 
 // ── 1C. Dashboard & Collections ───────────────────────────────────────────
-
 
 #[tokio::test]
 async fn create_form_auth_collection_shows_password_field() {
@@ -236,7 +244,10 @@ async fn create_form_auth_collection_shows_password_field() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("password"), "Auth collection create form should contain password field");
+    assert!(
+        body.contains("password"),
+        "Auth collection create form should contain password field"
+    );
 }
 
 // ── Collections: Edit form for auth collection shows password ─────────────
@@ -259,9 +270,14 @@ async fn edit_form_auth_collection_shows_password_field() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("password"), "Auth collection edit form should contain password field");
     assert!(
-        body.contains("Leave blank") || body.contains("leave blank") || body.contains("keep current"),
+        body.contains("password"),
+        "Auth collection edit form should contain password field"
+    );
+    assert!(
+        body.contains("Leave blank")
+            || body.contains("leave blank")
+            || body.contains("keep current"),
         "Edit form should indicate password can be left blank"
     );
 }
@@ -270,7 +286,10 @@ async fn edit_form_auth_collection_shows_password_field() {
 
 #[tokio::test]
 async fn update_action_validation_error() {
-    let app = setup_app(vec![make_posts_with_required_title(), make_users_def()], vec![]);
+    let app = setup_app(
+        vec![make_posts_with_required_title(), make_users_def()],
+        vec![],
+    );
     let user_id = create_test_user(&app, "update_val@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "update_val@test.com");
 
@@ -337,7 +356,8 @@ async fn update_action_post_with_method_delete() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Method Delete Test".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "Method Delete Test".to_string())]);
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -441,7 +461,8 @@ async fn versioned_collection_edit_shows_versions() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Versioned Doc".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "Versioned Doc".to_string())]);
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -475,7 +496,8 @@ async fn versioned_collection_update_unpublish() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Published Post".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "Published Post".to_string())]);
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -511,7 +533,8 @@ async fn versioned_collection_versions_page() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Versioned Page".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "Versioned Page".to_string())]);
     let doc = query::create(&tx, "articles", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -561,7 +584,9 @@ async fn non_versioned_collection_versions_page_redirects() {
         .unwrap();
     let status = resp.status();
     assert!(
-        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::TEMPORARY_REDIRECT,
+        status == StatusCode::SEE_OTHER
+            || status == StatusCode::FOUND
+            || status == StatusCode::TEMPORARY_REDIRECT,
         "Non-versioned collection versions page should redirect, got {}",
         status
     );
@@ -586,11 +611,14 @@ async fn restore_version_non_versioned_redirects() {
     let resp = app
         .router
         .oneshot(
-            Request::post(format!("/admin/collections/posts/{}/versions/fake-ver/restore", doc.id))
-                .header("cookie", auth_and_csrf(&cookie))
-                .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::empty())
-                .unwrap(),
+            Request::post(format!(
+                "/admin/collections/posts/{}/versions/fake-ver/restore",
+                doc.id
+            ))
+            .header("cookie", auth_and_csrf(&cookie))
+            .header("X-CSRF-Token", TEST_CSRF)
+            .body(Body::empty())
+            .unwrap(),
         )
         .await
         .unwrap();
@@ -630,8 +658,10 @@ async fn evaluate_conditions_returns_json() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert!(json.is_object(), "Evaluate conditions should return a JSON object");
+    assert!(
+        json.is_object(),
+        "Evaluate conditions should return a JSON object"
+    );
 }
 
 // ── Collections: list_searchable_fields configuration ─────────────────────
-

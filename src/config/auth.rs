@@ -128,7 +128,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[auth]\nreset_token_expiry = 1800\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.reset_token_expiry, 1800);
     }
@@ -153,7 +154,10 @@ mod tests {
 
     #[test]
     fn password_policy_rejects_too_short() {
-        let policy = PasswordPolicy { min_length: 8, ..Default::default() };
+        let policy = PasswordPolicy {
+            min_length: 8,
+            ..Default::default()
+        };
         assert!(policy.validate("short").is_err());
         assert!(policy.validate("1234567").is_err());
         assert!(policy.validate("12345678").is_ok());
@@ -161,35 +165,50 @@ mod tests {
 
     #[test]
     fn password_policy_rejects_too_long() {
-        let policy = PasswordPolicy { max_length: 10, ..Default::default() };
+        let policy = PasswordPolicy {
+            max_length: 10,
+            ..Default::default()
+        };
         assert!(policy.validate("12345678").is_ok());
         assert!(policy.validate("12345678901").is_err());
     }
 
     #[test]
     fn password_policy_require_uppercase() {
-        let policy = PasswordPolicy { require_uppercase: true, ..Default::default() };
+        let policy = PasswordPolicy {
+            require_uppercase: true,
+            ..Default::default()
+        };
         assert!(policy.validate("alllower").is_err());
         assert!(policy.validate("hasUpper1").is_ok());
     }
 
     #[test]
     fn password_policy_require_lowercase() {
-        let policy = PasswordPolicy { require_lowercase: true, ..Default::default() };
+        let policy = PasswordPolicy {
+            require_lowercase: true,
+            ..Default::default()
+        };
         assert!(policy.validate("ALLUPPER").is_err());
         assert!(policy.validate("HASLOWERa").is_ok());
     }
 
     #[test]
     fn password_policy_require_digit() {
-        let policy = PasswordPolicy { require_digit: true, ..Default::default() };
+        let policy = PasswordPolicy {
+            require_digit: true,
+            ..Default::default()
+        };
         assert!(policy.validate("nodigits").is_err());
         assert!(policy.validate("hasdigit1").is_ok());
     }
 
     #[test]
     fn password_policy_require_special() {
-        let policy = PasswordPolicy { require_special: true, ..Default::default() };
+        let policy = PasswordPolicy {
+            require_special: true,
+            ..Default::default()
+        };
         assert!(policy.validate("nospecial1").is_err());
         assert!(policy.validate("special!1").is_ok());
     }
@@ -215,12 +234,16 @@ mod tests {
     #[test]
     fn password_policy_from_toml() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join("crap.toml"), r#"
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            r#"
 [auth.password_policy]
 min_length = 12
 require_uppercase = true
 require_digit = true
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.password_policy.min_length, 12);
         assert!(config.auth.password_policy.require_uppercase);

@@ -9,10 +9,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
+use crap_cms::admin::AdminState;
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
@@ -31,9 +31,9 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -45,10 +45,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -60,10 +66,7 @@ struct TestApp {
     jwt_secret: String,
 }
 
-fn setup_app(
-    collections: Vec<CollectionDefinition>,
-    globals: Vec<GlobalDefinition>,
-) -> TestApp {
+fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".to_string();
@@ -94,19 +97,17 @@ fn setup_app_with_config(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = {
         let reg = registry.read().unwrap();
@@ -123,8 +124,12 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".to_string(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            5, 300,
+        )),
+        forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -207,8 +212,13 @@ fn make_localized_pages_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).localized(true).build(),
-        FieldDefinition::builder("body", FieldType::Textarea).localized(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .localized(true)
+            .build(),
+        FieldDefinition::builder("body", FieldType::Textarea)
+            .localized(true)
+            .build(),
     ];
     def.admin = AdminConfig {
         use_as_title: Some("title".to_string()),
@@ -237,7 +247,9 @@ fn make_versioned_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.admin = AdminConfig {
@@ -256,7 +268,9 @@ fn make_searchable_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
         FieldDefinition::builder("category", FieldType::Text).build(),
     ];
@@ -356,8 +370,6 @@ fn tiny_png() -> Vec<u8> {
 
 // ── 1C. Dashboard & Collections ───────────────────────────────────────────
 
-
-
 #[tokio::test]
 async fn search_uses_configured_searchable_fields() {
     let app = setup_app(vec![make_searchable_posts_def(), make_users_def()], vec![]);
@@ -391,7 +403,10 @@ async fn search_uses_configured_searchable_fields() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("Unique Title XYZ"), "Search should find by configured searchable fields");
+    assert!(
+        body.contains("Unique Title XYZ"),
+        "Search should find by configured searchable fields"
+    );
 }
 
 // ── Collections: Update via locale redirect suffix ────────────────────────
@@ -515,7 +530,8 @@ async fn list_items_uses_title_field() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "My Custom Title".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "My Custom Title".to_string())]);
     query::create(&tx, "posts", &real_def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -531,7 +547,10 @@ async fn list_items_uses_title_field() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("My Custom Title"), "List should show document title via use_as_title");
+    assert!(
+        body.contains("My Custom Title"),
+        "List should show document title via use_as_title"
+    );
 }
 
 #[tokio::test]
@@ -540,7 +559,8 @@ async fn create_action_missing_required_field_shows_errors() {
     let user_id = create_test_user(&app, "valerr@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "valerr@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/collections/posts")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -565,7 +585,8 @@ async fn create_form_auth_collection_includes_password() {
     let user_id = create_test_user(&app, "authform@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "authform@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/users/create")
                 .header("cookie", &cookie)
@@ -576,7 +597,10 @@ async fn create_form_auth_collection_includes_password() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("password"), "Auth collection create form should have password field");
+    assert!(
+        body.contains("password"),
+        "Auth collection create form should have password field"
+    );
 }
 
 #[tokio::test]
@@ -585,7 +609,8 @@ async fn edit_form_auth_collection_includes_password() {
     let user_id = create_test_user(&app, "authedit@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "authedit@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get(format!("/admin/collections/users/{}", user_id))
                 .header("cookie", &cookie)
@@ -596,7 +621,10 @@ async fn edit_form_auth_collection_includes_password() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("password"), "Auth collection edit form should have password field");
+    assert!(
+        body.contains("password"),
+        "Auth collection edit form should have password field"
+    );
 }
 
 #[tokio::test]
@@ -605,7 +633,8 @@ async fn edit_form_nonexistent_document_returns_404() {
     let user_id = create_test_user(&app, "nondoc@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "nondoc@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/posts/nonexistent-id")
                 .header("cookie", &cookie)
@@ -623,7 +652,8 @@ async fn delete_confirm_nonexistent_document_returns_404() {
     let user_id = create_test_user(&app, "delconfnon@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "delconfnon@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/posts/nonexistent-id/delete")
                 .header("cookie", &cookie)
@@ -641,7 +671,8 @@ async fn versioned_collection_create_form() {
     let user_id = create_test_user(&app, "ver@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "ver@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/articles/create")
                 .header("cookie", &cookie)
@@ -665,11 +696,13 @@ async fn post_with_method_delete_deletes_document() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "Method Delete".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "Method Delete".to_string())]);
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post(format!("/admin/collections/posts/{}", doc.id))
                 .header("cookie", auth_and_csrf(&cookie))
@@ -694,7 +727,8 @@ async fn update_action_nonexistent_collection_redirects() {
     let user_id = create_test_user(&app, "noncolu@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "noncolu@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/collections/nonexistent/someid")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -706,7 +740,11 @@ async fn update_action_nonexistent_collection_redirects() {
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::SEE_OTHER, "Update on nonexistent collection should redirect");
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "Update on nonexistent collection should redirect"
+    );
 }
 
 #[tokio::test]
@@ -715,7 +753,8 @@ async fn delete_action_nonexistent_collection_redirects() {
     let user_id = create_test_user(&app, "noncold@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "noncold@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::delete("/admin/collections/nonexistent/someid")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -739,7 +778,8 @@ async fn delete_confirm_nonexistent_collection_returns_404() {
     let user_id = create_test_user(&app, "noncoldc@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "noncoldc@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/nonexistent/someid/delete")
                 .header("cookie", &cookie)
@@ -767,18 +807,26 @@ async fn restore_version_nonversioned_redirects() {
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
-            Request::post(format!("/admin/collections/posts/{}/versions/fake-version/restore", doc.id))
-                .header("cookie", auth_and_csrf(&cookie))
-                .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::empty())
-                .unwrap(),
+            Request::post(format!(
+                "/admin/collections/posts/{}/versions/fake-version/restore",
+                doc.id
+            ))
+            .header("cookie", auth_and_csrf(&cookie))
+            .header("X-CSRF-Token", TEST_CSRF)
+            .body(Body::empty())
+            .unwrap(),
         )
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::SEE_OTHER, "Restore on non-versioned should redirect");
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "Restore on non-versioned should redirect"
+    );
 }
 
 #[tokio::test]
@@ -787,7 +835,8 @@ async fn restore_version_nonexistent_collection_redirects() {
     let user_id = create_test_user(&app, "restnc@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "restnc@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/collections/nonexistent/someid/versions/v1/restore")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -798,7 +847,11 @@ async fn restore_version_nonexistent_collection_redirects() {
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::SEE_OTHER, "Restore on nonexistent collection should redirect");
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "Restore on nonexistent collection should redirect"
+    );
 }
 
 // ── Collections: Create form with locale param ────────────────────────────
@@ -948,7 +1001,10 @@ async fn create_form_with_locale() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("DE") || body.contains("de"), "Should show locale selector with DE");
+    assert!(
+        body.contains("DE") || body.contains("de"),
+        "Should show locale selector with DE"
+    );
 }
 
 // ── Upload API tests ─────────────────────────────────────────────────────
@@ -982,8 +1038,14 @@ async fn upload_api_create_returns_201_with_document() {
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert!(json["document"]["id"].is_string());
     assert_eq!(json["document"]["alt"], "Test alt");
-    assert!(json["document"]["filename"].as_str().unwrap().ends_with("photo.png"));
-    assert!(json["document"]["url"].as_str().unwrap().starts_with("/uploads/media/"));
+    assert!(json["document"]["filename"]
+        .as_str()
+        .unwrap()
+        .ends_with("photo.png"));
+    assert!(json["document"]["url"]
+        .as_str()
+        .unwrap()
+        .starts_with("/uploads/media/"));
     assert_eq!(json["document"]["mime_type"], "image/png");
 }
 
@@ -1048,7 +1110,10 @@ async fn upload_api_create_non_upload_collection_returns_400() {
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = body_string(resp.into_body()).await;
     let json: serde_json::Value = serde_json::from_str(&body).unwrap();
-    assert!(json["error"].as_str().unwrap().contains("not an upload collection"));
+    assert!(json["error"]
+        .as_str()
+        .unwrap()
+        .contains("not an upload collection"));
 }
 
 #[tokio::test]
@@ -1083,8 +1148,7 @@ async fn upload_api_create_rejected_mime_returns_400() {
     let user_id = create_test_user(&app, "uploader@test.com", "secret123");
     let bearer = make_bearer_token(&app, &user_id, "uploader@test.com");
 
-    let (ct, body) =
-        build_multipart_body("notes.txt", "text/plain", b"hello world", &[]);
+    let (ct, body) = build_multipart_body("notes.txt", "text/plain", b"hello world", &[]);
 
     let resp = app
         .router
@@ -1134,11 +1198,13 @@ async fn upload_api_update_replaces_file() {
     let create_body = body_string(resp.into_body()).await;
     let create_json: serde_json::Value = serde_json::from_str(&create_body).unwrap();
     let doc_id = create_json["document"]["id"].as_str().unwrap();
-    let old_filename = create_json["document"]["filename"].as_str().unwrap().to_string();
+    let old_filename = create_json["document"]["filename"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     let png2 = tiny_png();
-    let (ct2, body2) =
-        build_multipart_body("second.png", "image/png", &png2, &[("alt", "Second")]);
+    let (ct2, body2) = build_multipart_body("second.png", "image/png", &png2, &[("alt", "Second")]);
 
     let resp = app
         .router
@@ -1159,7 +1225,10 @@ async fn upload_api_update_replaces_file() {
     let update_body = body_string(resp.into_body()).await;
     let update_json: serde_json::Value = serde_json::from_str(&update_body).unwrap();
     let new_filename = update_json["document"]["filename"].as_str().unwrap();
-    assert_ne!(new_filename, old_filename, "Filename should change on file replacement");
+    assert_ne!(
+        new_filename, old_filename,
+        "Filename should change on file replacement"
+    );
     assert_eq!(update_json["document"]["alt"], "Second");
 }
 
@@ -1263,7 +1332,8 @@ async fn upload_collection_create_form_has_upload_context() {
     let user_id = create_test_user(&app, "uploadadm@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "uploadadm@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/media/create")
                 .header("cookie", &cookie)
@@ -1289,7 +1359,8 @@ async fn delete_confirm_page_returns_200() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "To Confirm Delete".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "To Confirm Delete".to_string())]);
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -1327,7 +1398,8 @@ async fn delete_confirm_page_with_schema_mismatch_returns_200() {
     tx.commit().unwrap();
 
     // Simulate schema mismatch: rename the title column so SELECT fails
-    conn.execute_batch("ALTER TABLE posts RENAME COLUMN title TO title_old;").unwrap();
+    conn.execute_batch("ALTER TABLE posts RENAME COLUMN title TO title_old;")
+        .unwrap();
 
     let resp = app
         .router
@@ -1354,7 +1426,9 @@ async fn delete_confirm_shows_back_references_warning() {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     posts.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("image", FieldType::Upload)
             .relationship(RelationshipConfig::new("media", false))
             .build(),
@@ -1366,11 +1440,13 @@ async fn delete_confirm_shows_back_references_warning() {
 
     // Create a media document and a post referencing it
     let conn = app.pool.get().unwrap();
-    conn.execute("INSERT INTO media (id) VALUES ('m1')", []).unwrap();
+    conn.execute("INSERT INTO media (id) VALUES ('m1')", [])
+        .unwrap();
     conn.execute(
         "INSERT INTO posts (id, title, image) VALUES ('p1', 'My Post', 'm1')",
         [],
-    ).unwrap();
+    )
+    .unwrap();
     drop(conn);
 
     let resp = app
@@ -1388,7 +1464,10 @@ async fn delete_confirm_shows_back_references_warning() {
     let body = body_string(resp.into_body()).await;
     // Should contain the warning card with back-reference info
     assert!(body.contains("card--warning"), "Should show warning card");
-    assert!(body.contains("Posts"), "Should mention the referencing collection");
+    assert!(
+        body.contains("Posts"),
+        "Should mention the referencing collection"
+    );
 }
 
 #[tokio::test]
@@ -1408,7 +1487,8 @@ async fn delete_confirm_no_warning_when_unreferenced() {
 
     // Create a media document with no references
     let conn = app.pool.get().unwrap();
-    conn.execute("INSERT INTO media (id) VALUES ('m1')", []).unwrap();
+    conn.execute("INSERT INTO media (id) VALUES ('m1')", [])
+        .unwrap();
     drop(conn);
 
     let resp = app
@@ -1424,5 +1504,8 @@ async fn delete_confirm_no_warning_when_unreferenced() {
 
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(!body.contains("card--warning"), "Should NOT show warning when unreferenced");
+    assert!(
+        !body.contains("card--warning"),
+        "Should NOT show warning when unreferenced"
+    );
 }

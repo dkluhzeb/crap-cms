@@ -3,14 +3,12 @@
 use anyhow::Result;
 use mlua::{Table, Value};
 
-use crate::core::field::{
-    FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType,
-};
+use crate::core::field::{FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType};
 
-use super::helpers::*;
 use super::admin::parse_field_admin;
-use super::relationship::parse_field_relationship;
 use super::blocks::{parse_block_definitions, parse_tab_definitions};
+use super::helpers::*;
+use super::relationship::parse_field_relationship;
 
 /// Parse a Lua sequence of field tables into a `Vec<FieldDefinition>`.
 pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
@@ -20,12 +18,16 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         let field_tbl = pair?;
         let name: String = get_string_val(&field_tbl, "name")
             .map_err(|_| anyhow::anyhow!("Field missing 'name'"))?;
-        
+
         if !crate::db::query::is_valid_identifier(&name) {
-            anyhow::bail!("Invalid field name '{}' — use alphanumeric and underscores only", name);
+            anyhow::bail!(
+                "Invalid field name '{}' — use alphanumeric and underscores only",
+                name
+            );
         }
 
-        let type_str: String = get_string_val(&field_tbl, "type").unwrap_or_else(|_| "text".to_string());
+        let type_str: String =
+            get_string_val(&field_tbl, "type").unwrap_or_else(|_| "text".to_string());
         let field_type = FieldType::from_str(&type_str);
 
         let required = get_bool(&field_tbl, "required", false);
@@ -39,8 +41,7 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
                 Value::Nil => None,
                 Value::Boolean(b) => Some(serde_json::Value::Bool(b)),
                 Value::Integer(i) => Some(serde_json::Value::Number(serde_json::Number::from(i))),
-                Value::Number(n) => serde_json::Number::from_f64(n)
-                    .map(serde_json::Value::Number),
+                Value::Number(n) => serde_json::Number::from_f64(n).map(serde_json::Value::Number),
                 Value::String(s) => Some(serde_json::Value::String(s.to_str()?.to_string())),
                 _ => None,
             }
@@ -74,7 +75,11 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         let relationship = parse_field_relationship(&field_tbl, &field_type)?;
 
         // Parse sub-fields for Array, Group, Row, and Collapsible types (recursive)
-        let sub_fields = if field_type == FieldType::Array || field_type == FieldType::Group || field_type == FieldType::Row || field_type == FieldType::Collapsible {
+        let sub_fields = if field_type == FieldType::Array
+            || field_type == FieldType::Group
+            || field_type == FieldType::Row
+            || field_type == FieldType::Collapsible
+        {
             if let Ok(sub_fields_tbl) = get_table(&field_tbl, "fields") {
                 parse_fields(&sub_fields_tbl)?
             } else {
@@ -166,19 +171,45 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             .localized(localized)
             .has_many(has_many)
             .options(options);
-        if let Some(v) = validate { fd_builder = fd_builder.validate(v); }
-        if let Some(v) = default_value { fd_builder = fd_builder.default_value(v); }
-        if let Some(v) = relationship { fd_builder = fd_builder.relationship(v); }
-        if let Some(v) = picker_appearance { fd_builder = fd_builder.picker_appearance(v); }
-        if let Some(v) = min_rows { fd_builder = fd_builder.min_rows(v); }
-        if let Some(v) = max_rows { fd_builder = fd_builder.max_rows(v); }
-        if let Some(v) = min_length { fd_builder = fd_builder.min_length(v); }
-        if let Some(v) = max_length { fd_builder = fd_builder.max_length(v); }
-        if let Some(v) = min { fd_builder = fd_builder.min(v); }
-        if let Some(v) = max { fd_builder = fd_builder.max(v); }
-        if let Some(v) = min_date { fd_builder = fd_builder.min_date(v); }
-        if let Some(v) = max_date { fd_builder = fd_builder.max_date(v); }
-        if let Some(v) = join { fd_builder = fd_builder.join(v); }
+        if let Some(v) = validate {
+            fd_builder = fd_builder.validate(v);
+        }
+        if let Some(v) = default_value {
+            fd_builder = fd_builder.default_value(v);
+        }
+        if let Some(v) = relationship {
+            fd_builder = fd_builder.relationship(v);
+        }
+        if let Some(v) = picker_appearance {
+            fd_builder = fd_builder.picker_appearance(v);
+        }
+        if let Some(v) = min_rows {
+            fd_builder = fd_builder.min_rows(v);
+        }
+        if let Some(v) = max_rows {
+            fd_builder = fd_builder.max_rows(v);
+        }
+        if let Some(v) = min_length {
+            fd_builder = fd_builder.min_length(v);
+        }
+        if let Some(v) = max_length {
+            fd_builder = fd_builder.max_length(v);
+        }
+        if let Some(v) = min {
+            fd_builder = fd_builder.min(v);
+        }
+        if let Some(v) = max {
+            fd_builder = fd_builder.max(v);
+        }
+        if let Some(v) = min_date {
+            fd_builder = fd_builder.min_date(v);
+        }
+        if let Some(v) = max_date {
+            fd_builder = fd_builder.max_date(v);
+        }
+        if let Some(v) = join {
+            fd_builder = fd_builder.join(v);
+        }
         fields.push(fd_builder.build());
     }
 
@@ -267,7 +298,10 @@ mod tests {
         field.set("default_value", 42i64).unwrap();
         fields_tbl.set(1, field).unwrap();
         let fields = parse_fields(&fields_tbl).unwrap();
-        assert_eq!(fields[0].default_value, Some(serde_json::Value::Number(42.into())));
+        assert_eq!(
+            fields[0].default_value,
+            Some(serde_json::Value::Number(42.into()))
+        );
     }
 
     #[test]
@@ -439,7 +473,10 @@ mod tests {
         field.set("mcp", mcp_tbl).unwrap();
         fields_tbl.set(1, field).unwrap();
         let fields = parse_fields(&fields_tbl).unwrap();
-        assert_eq!(fields[0].mcp.description.as_deref(), Some("A short summary"));
+        assert_eq!(
+            fields[0].mcp.description.as_deref(),
+            Some("A short summary")
+        );
     }
 
     #[test]

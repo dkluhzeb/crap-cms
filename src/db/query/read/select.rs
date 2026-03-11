@@ -2,8 +2,8 @@
 
 use std::collections::HashSet;
 
-use crate::core::{CollectionDefinition, Document};
 use crate::core::field::FieldType;
+use crate::core::{CollectionDefinition, Document};
 
 /// Filter SELECT columns based on a `select` list. If `select` is None or empty,
 /// returns all columns (backward compat). Always includes `id`, `created_at`, `updated_at`.
@@ -20,7 +20,9 @@ pub fn apply_select_filter(
     };
 
     // Build set of group field names for prefix matching
-    let group_names: HashSet<&str> = def.fields.iter()
+    let group_names: HashSet<&str> = def
+        .fields
+        .iter()
         .filter(|f| f.field_type == FieldType::Group)
         .map(|f| f.name.as_str())
         .collect();
@@ -116,9 +118,12 @@ mod tests {
         let def = def;
 
         let select_exprs = vec![
-            "id".to_string(), "title".to_string(),
-            "seo__meta_title".to_string(), "seo__meta_desc".to_string(),
-            "created_at".to_string(), "updated_at".to_string(),
+            "id".to_string(),
+            "title".to_string(),
+            "seo__meta_title".to_string(),
+            "seo__meta_desc".to_string(),
+            "created_at".to_string(),
+            "updated_at".to_string(),
         ];
         let result_names = select_exprs.clone();
 
@@ -150,7 +155,8 @@ mod tests {
         let exprs = vec!["id".to_string(), "title".to_string()];
         let names = exprs.clone();
         let empty: Vec<String> = Vec::new();
-        let (out_exprs, out_names) = apply_select_filter(exprs.clone(), names.clone(), Some(&empty), &def);
+        let (out_exprs, out_names) =
+            apply_select_filter(exprs.clone(), names.clone(), Some(&empty), &def);
         assert_eq!(out_exprs, exprs);
         assert_eq!(out_names, names);
     }
@@ -159,7 +165,11 @@ mod tests {
     fn apply_select_filter_locale_suffix_passthrough() {
         // When a column is "title__de" and select has "title", the locale variant should be included
         let def = test_def();
-        let exprs = vec!["id".to_string(), "title__de".to_string(), "title__en".to_string()];
+        let exprs = vec![
+            "id".to_string(),
+            "title__de".to_string(),
+            "title__en".to_string(),
+        ];
         let names = exprs.clone();
         let select = vec!["title".to_string()];
         let (_, out_names) = apply_select_filter(exprs, names, Some(&select), &def);
@@ -171,9 +181,12 @@ mod tests {
     #[test]
     fn apply_select_to_document_keeps_selected() {
         let mut doc = Document::new("abc".to_string());
-        doc.fields.insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields.insert("status".to_string(), serde_json::json!("draft"));
-        doc.fields.insert("body".to_string(), serde_json::json!("Some content"));
+        doc.fields
+            .insert("title".to_string(), serde_json::json!("Hello"));
+        doc.fields
+            .insert("status".to_string(), serde_json::json!("draft"));
+        doc.fields
+            .insert("body".to_string(), serde_json::json!("Some content"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-02".to_string());
 
@@ -195,9 +208,12 @@ mod tests {
     #[test]
     fn apply_select_to_document_prefix_match() {
         let mut doc = Document::new("x".to_string());
-        doc.fields.insert("seo__title".to_string(), serde_json::json!("SEO Title"));
-        doc.fields.insert("seo__desc".to_string(), serde_json::json!("SEO Desc"));
-        doc.fields.insert("title".to_string(), serde_json::json!("Main Title"));
+        doc.fields
+            .insert("seo__title".to_string(), serde_json::json!("SEO Title"));
+        doc.fields
+            .insert("seo__desc".to_string(), serde_json::json!("SEO Desc"));
+        doc.fields
+            .insert("title".to_string(), serde_json::json!("Main Title"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-01".to_string());
 
@@ -205,9 +221,18 @@ mod tests {
         let select = vec!["seo".to_string()];
         apply_select_to_document(&mut doc, &select);
 
-        assert!(doc.fields.contains_key("seo__title"), "seo__title should be kept by prefix match");
-        assert!(doc.fields.contains_key("seo__desc"), "seo__desc should be kept by prefix match");
-        assert!(!doc.fields.contains_key("title"), "title not in select should be removed");
+        assert!(
+            doc.fields.contains_key("seo__title"),
+            "seo__title should be kept by prefix match"
+        );
+        assert!(
+            doc.fields.contains_key("seo__desc"),
+            "seo__desc should be kept by prefix match"
+        );
+        assert!(
+            !doc.fields.contains_key("title"),
+            "title not in select should be removed"
+        );
     }
 
     #[test]
@@ -219,8 +244,14 @@ mod tests {
         let select = vec!["created_at".to_string()];
         apply_select_to_document(&mut doc, &select);
 
-        assert!(doc.created_at.is_some(), "created_at should be kept when selected");
-        assert!(doc.updated_at.is_none(), "updated_at should be cleared when not selected");
+        assert!(
+            doc.created_at.is_some(),
+            "created_at should be kept when selected"
+        );
+        assert!(
+            doc.updated_at.is_none(),
+            "updated_at should be cleared when not selected"
+        );
     }
 
     #[test]
@@ -232,7 +263,13 @@ mod tests {
         let select = vec!["updated_at".to_string()];
         apply_select_to_document(&mut doc, &select);
 
-        assert!(doc.updated_at.is_some(), "updated_at should be kept when selected");
-        assert!(doc.created_at.is_none(), "created_at should be cleared when not selected");
+        assert!(
+            doc.updated_at.is_some(),
+            "updated_at should be kept when selected"
+        );
+        assert!(
+            doc.created_at.is_none(),
+            "created_at should be cleared when not selected"
+        );
     }
 }

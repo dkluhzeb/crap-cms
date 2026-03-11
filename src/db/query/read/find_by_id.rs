@@ -3,19 +3,24 @@
 use anyhow::{Context as _, Result};
 use rusqlite::params_from_iter;
 
+use super::super::{
+    get_column_names, get_locale_select_columns, group_locale_fields, LocaleContext, LocaleMode,
+};
 use crate::core::{CollectionDefinition, Document};
 use crate::db::document::row_to_document;
-use super::super::{
-    LocaleMode, LocaleContext,
-    get_column_names, get_locale_select_columns, group_locale_fields,
-};
 
 /// Find a single document by ID with full hydration (join tables, group reconstruction).
 ///
 /// This is the standard read function — returns a fully hydrated document with
 /// nested group objects and populated join table data (arrays, blocks, relationships).
 /// Use `find_by_id_raw` when you only need flat column data without hydration.
-pub fn find_by_id(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition, id: &str, locale_ctx: Option<&LocaleContext>) -> Result<Option<Document>> {
+pub fn find_by_id(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<Document>> {
     let doc = find_by_id_raw(conn, slug, def, id, locale_ctx)?;
     match doc {
         Some(mut d) => {
@@ -43,7 +48,9 @@ pub fn find_by_ids(
     }
 
     let (select_exprs, result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns(&def.fields, def.timestamps, ctx),
+        Some(ctx) if ctx.config.is_enabled() => {
+            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+        }
         _ => {
             let names = get_column_names(def);
             (names.clone(), names)
@@ -58,13 +65,19 @@ pub fn find_by_ids(
         placeholders.join(", ")
     );
 
-    let params: Vec<&dyn rusqlite::types::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
-    let mut stmt = conn.prepare(&sql)
+    let params: Vec<&dyn rusqlite::types::ToSql> = ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::types::ToSql)
+        .collect();
+    let mut stmt = conn
+        .prepare(&sql)
         .with_context(|| format!("Failed to prepare find_by_ids query on '{}'", slug))?;
 
-    let rows = stmt.query_map(params_from_iter(params.iter()), |row| {
-        row_to_document(row, &result_names)
-    }).with_context(|| format!("Failed to execute find_by_ids on '{}'", slug))?;
+    let rows = stmt
+        .query_map(params_from_iter(params.iter()), |row| {
+            row_to_document(row, &result_names)
+        })
+        .with_context(|| format!("Failed to execute find_by_ids on '{}'", slug))?;
 
     let mut documents = Vec::new();
     for row in rows {
@@ -88,20 +101,30 @@ pub fn find_by_ids(
 /// Returns flat column data as stored in the parent table. Group fields remain
 /// as `field__subfield` flat keys. Join table data (arrays, blocks, relationships)
 /// is NOT populated. Used internally by write operations that don't need hydration.
-pub(crate) fn find_by_id_raw(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition, id: &str, locale_ctx: Option<&LocaleContext>) -> Result<Option<Document>> {
+pub(crate) fn find_by_id_raw(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Option<Document>> {
     let (select_exprs, result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns(&def.fields, def.timestamps, ctx),
+        Some(ctx) if ctx.config.is_enabled() => {
+            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+        }
         _ => {
             let names = get_column_names(def);
             (names.clone(), names)
         }
     };
 
-    let sql = format!("SELECT {} FROM {} WHERE id = ?1", select_exprs.join(", "), slug);
+    let sql = format!(
+        "SELECT {} FROM {} WHERE id = ?1",
+        select_exprs.join(", "),
+        slug
+    );
 
-    let result = conn.query_row(&sql, [id], |row| {
-        row_to_document(row, &result_names)
-    });
+    let result = conn.query_row(&sql, [id], |row| row_to_document(row, &result_names));
 
     match result {
         Ok(mut doc) => {
@@ -121,13 +144,13 @@ pub(crate) fn find_by_id_raw(conn: &rusqlite::Connection, slug: &str, def: &Coll
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::write::create;
     use super::*;
+    use crate::core::collection::*;
+    use crate::core::field::*;
     use rusqlite::Connection;
     use std::collections::HashMap;
     use std::collections::HashSet;
-    use crate::core::collection::*;
-    use crate::core::field::*;
-    use super::super::super::write::create;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -147,8 +170,9 @@ mod tests {
                 status TEXT,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 
@@ -209,7 +233,8 @@ mod tests {
         let result = find_by_ids(&conn, "posts", &def, &ids, None).unwrap();
         assert_eq!(result.len(), 2);
 
-        let titles: HashSet<String> = result.iter()
+        let titles: HashSet<String> = result
+            .iter()
             .filter_map(|d| d.get_str("title").map(|s| s.to_string()))
             .collect();
         assert!(titles.contains("First"));

@@ -49,10 +49,18 @@ impl QueuedConversionBuilder {
         QueuedConversion {
             source_path: self.source_path,
             target_path: self.target_path,
-            format: self.format.expect("QueuedConversionBuilder: format is required"),
-            quality: self.quality.expect("QueuedConversionBuilder: quality is required"),
-            url_column: self.url_column.expect("QueuedConversionBuilder: url_column is required"),
-            url_value: self.url_value.expect("QueuedConversionBuilder: url_value is required"),
+            format: self
+                .format
+                .expect("QueuedConversionBuilder: format is required"),
+            quality: self
+                .quality
+                .expect("QueuedConversionBuilder: quality is required"),
+            url_column: self
+                .url_column
+                .expect("QueuedConversionBuilder: url_column is required"),
+            url_value: self
+                .url_value
+                .expect("QueuedConversionBuilder: url_value is required"),
         }
     }
 }

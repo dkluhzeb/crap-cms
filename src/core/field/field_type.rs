@@ -57,9 +57,9 @@ impl FieldType {
             FieldType::Group => "TEXT", // never used — sub-fields get prefixed columns
             FieldType::Upload => "TEXT",
             FieldType::Blocks => "TEXT", // never used — blocks use join tables
-            FieldType::Row => "TEXT", // never used — sub-fields are promoted to parent
+            FieldType::Row => "TEXT",    // never used — sub-fields are promoted to parent
             FieldType::Collapsible => "TEXT", // never used — sub-fields are promoted to parent
-            FieldType::Tabs => "TEXT", // never used — sub-fields are promoted to parent
+            FieldType::Tabs => "TEXT",   // never used — sub-fields are promoted to parent
             FieldType::Code => "TEXT",
             FieldType::Join => "TEXT", // never used — virtual field, no column
         }
@@ -171,13 +171,26 @@ mod tests {
     #[test]
     fn as_str_roundtrip() {
         let types = [
-            FieldType::Text, FieldType::Number, FieldType::Textarea,
-            FieldType::Select, FieldType::Radio, FieldType::Checkbox, FieldType::Date,
-            FieldType::Email, FieldType::Json, FieldType::Richtext,
-            FieldType::Relationship, FieldType::Array,
-            FieldType::Group, FieldType::Upload, FieldType::Blocks,
-            FieldType::Row, FieldType::Collapsible, FieldType::Tabs,
-            FieldType::Code, FieldType::Join,
+            FieldType::Text,
+            FieldType::Number,
+            FieldType::Textarea,
+            FieldType::Select,
+            FieldType::Radio,
+            FieldType::Checkbox,
+            FieldType::Date,
+            FieldType::Email,
+            FieldType::Json,
+            FieldType::Richtext,
+            FieldType::Relationship,
+            FieldType::Array,
+            FieldType::Group,
+            FieldType::Upload,
+            FieldType::Blocks,
+            FieldType::Row,
+            FieldType::Collapsible,
+            FieldType::Tabs,
+            FieldType::Code,
+            FieldType::Join,
         ];
         for ft in &types {
             assert_eq!(FieldType::from_str(ft.as_str()), *ft);

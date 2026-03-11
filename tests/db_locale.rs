@@ -2,10 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition};
-use crap_cms::core::field::{
-    BlockDefinition, FieldDefinition, FieldType,
-    RelationshipConfig,
-};
+use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
 use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
 
@@ -69,7 +66,8 @@ fn create_with_locale_writes_correct_column() {
 
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let doc = query::create(&tx, "localized_pages", &def, &data, Some(&locale_ctx)).expect("Create");
+    let doc =
+        query::create(&tx, "localized_pages", &def, &data, Some(&locale_ctx)).expect("Create");
     tx.commit().expect("Commit");
 
     // In Single mode, the title is returned as "title" (aliased)
@@ -99,10 +97,13 @@ fn find_with_locale_coalesce_fallback() {
         config: locale_config.clone(),
     };
     let docs = ops::find_documents(
-        &pool, "localized_pages", &def,
+        &pool,
+        "localized_pages",
+        &def,
         &query::FindQuery::default(),
         Some(&de_ctx),
-    ).expect("Find");
+    )
+    .expect("Find");
     assert!(!docs.is_empty());
     // With fallback enabled, should get the English value
     assert_eq!(docs[0].get_str("title"), Some("English Title"));
@@ -134,7 +135,15 @@ fn find_all_locales_returns_nested() {
     de_data.insert("title".to_string(), "Deutscher Titel".to_string());
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    query::update(&tx, "localized_pages", &def, &doc.id, &de_data, Some(&de_ctx)).expect("Update");
+    query::update(
+        &tx,
+        "localized_pages",
+        &def,
+        &doc.id,
+        &de_data,
+        Some(&de_ctx),
+    )
+    .expect("Update");
     tx.commit().expect("Commit");
 
     // Find with All mode — should return nested locale object
@@ -143,16 +152,29 @@ fn find_all_locales_returns_nested() {
         config: locale_config.clone(),
     };
     let docs = ops::find_documents(
-        &pool, "localized_pages", &def,
+        &pool,
+        "localized_pages",
+        &def,
         &query::FindQuery::default(),
         Some(&all_ctx),
-    ).expect("Find");
+    )
+    .expect("Find");
     assert!(!docs.is_empty());
 
     let title_val = docs[0].get("title").expect("title should exist");
-    assert!(title_val.is_object(), "title should be a locale object, got: {:?}", title_val);
-    assert_eq!(title_val.get("en").unwrap().as_str().unwrap(), "English Title");
-    assert_eq!(title_val.get("de").unwrap().as_str().unwrap(), "Deutscher Titel");
+    assert!(
+        title_val.is_object(),
+        "title should be a locale object, got: {:?}",
+        title_val
+    );
+    assert_eq!(
+        title_val.get("en").unwrap().as_str().unwrap(),
+        "English Title"
+    );
+    assert_eq!(
+        title_val.get("de").unwrap().as_str().unwrap(),
+        "Deutscher Titel"
+    );
 }
 
 #[test]
@@ -176,7 +198,15 @@ fn update_with_locale() {
     update.insert("title".to_string(), "Updated English".to_string());
     let mut conn = pool.get().expect("conn");
     let tx = conn.transaction().expect("tx");
-    let updated = query::update(&tx, "localized_pages", &def, &doc.id, &update, Some(&en_ctx)).expect("Update");
+    let updated = query::update(
+        &tx,
+        "localized_pages",
+        &def,
+        &doc.id,
+        &update,
+        Some(&en_ctx),
+    )
+    .expect("Update");
     tx.commit().expect("Commit");
     assert_eq!(updated.get_str("title"), Some("Updated English"));
 }
@@ -207,8 +237,8 @@ fn filter_on_localized_field() {
         field: "title".to_string(),
         op: query::FilterOp::Contains("Hello".to_string()),
     })];
-    let docs = ops::find_documents(&pool, "localized_pages", &def, &q, Some(&en_ctx))
-        .expect("Find");
+    let docs =
+        ops::find_documents(&pool, "localized_pages", &def, &q, Some(&en_ctx)).expect("Find");
     assert_eq!(docs.len(), 1);
     assert_eq!(docs[0].get_str("title"), Some("Hello World"));
 }
@@ -236,15 +266,17 @@ fn make_localized_join_def() -> CollectionDefinition {
     content_field.name = "content".to_string();
     content_field.field_type = FieldType::Blocks;
     content_field.localized = true;
-    content_field.blocks = vec![
-        BlockDefinition::new("paragraph", vec![make_field("text", FieldType::Textarea)]),
-    ];
+    content_field.blocks = vec![BlockDefinition::new(
+        "paragraph",
+        vec![make_field("text", FieldType::Textarea)],
+    )];
     let mut meta_field = FieldDefinition::default();
     meta_field.name = "meta".to_string();
     meta_field.field_type = FieldType::Blocks;
-    meta_field.blocks = vec![
-        BlockDefinition::new("kv", vec![make_field("key", FieldType::Text)]),
-    ];
+    meta_field.blocks = vec![BlockDefinition::new(
+        "kv",
+        vec![make_field("key", FieldType::Text)],
+    )];
     def.fields = vec![
         make_field("slug_field", FieldType::Text),
         tags_field,
@@ -295,11 +327,25 @@ fn localized_related_ids_scoped_by_locale() {
     let doc = query::create(&tx, "l10n_articles", &_def, &data, None).expect("Create");
 
     // Write English tags
-    query::set_related_ids(&tx, "l10n_articles", "tags", &doc.id, &["en-tag-1".into(), "en-tag-2".into()], Some("en"))
-        .expect("Set EN tags");
+    query::set_related_ids(
+        &tx,
+        "l10n_articles",
+        "tags",
+        &doc.id,
+        &["en-tag-1".into(), "en-tag-2".into()],
+        Some("en"),
+    )
+    .expect("Set EN tags");
     // Write German tags
-    query::set_related_ids(&tx, "l10n_articles", "tags", &doc.id, &["de-tag-1".into()], Some("de"))
-        .expect("Set DE tags");
+    query::set_related_ids(
+        &tx,
+        "l10n_articles",
+        "tags",
+        &doc.id,
+        &["de-tag-1".into()],
+        Some("de"),
+    )
+    .expect("Set DE tags");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("conn");
@@ -325,14 +371,35 @@ fn localized_related_ids_update_one_locale_preserves_other() {
     let doc = query::create(&tx, "l10n_articles", &_def, &data, None).expect("Create");
 
     // Write both locales
-    query::set_related_ids(&tx, "l10n_articles", "tags", &doc.id, &["en-1".into(), "en-2".into()], Some("en"))
-        .expect("Set EN");
-    query::set_related_ids(&tx, "l10n_articles", "tags", &doc.id, &["de-1".into()], Some("de"))
-        .expect("Set DE");
+    query::set_related_ids(
+        &tx,
+        "l10n_articles",
+        "tags",
+        &doc.id,
+        &["en-1".into(), "en-2".into()],
+        Some("en"),
+    )
+    .expect("Set EN");
+    query::set_related_ids(
+        &tx,
+        "l10n_articles",
+        "tags",
+        &doc.id,
+        &["de-1".into()],
+        Some("de"),
+    )
+    .expect("Set DE");
 
     // Overwrite EN tags — DE should be preserved
-    query::set_related_ids(&tx, "l10n_articles", "tags", &doc.id, &["en-3".into()], Some("en"))
-        .expect("Overwrite EN");
+    query::set_related_ids(
+        &tx,
+        "l10n_articles",
+        "tags",
+        &doc.id,
+        &["en-3".into()],
+        Some("en"),
+    )
+    .expect("Overwrite EN");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("conn");
@@ -363,18 +430,50 @@ fn localized_array_rows_scoped_by_locale() {
         ("label".to_string(), "German Link".to_string()),
     ])];
 
-    query::set_array_rows(&tx, "l10n_articles", "links", &doc.id, &en_rows, &links_field.fields, Some("en"))
-        .expect("Set EN links");
-    query::set_array_rows(&tx, "l10n_articles", "links", &doc.id, &de_rows, &links_field.fields, Some("de"))
-        .expect("Set DE links");
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &en_rows,
+        &links_field.fields,
+        Some("en"),
+    )
+    .expect("Set EN links");
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &de_rows,
+        &links_field.fields,
+        Some("de"),
+    )
+    .expect("Set DE links");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("conn");
-    let en = query::find_array_rows(&conn, "l10n_articles", "links", &doc.id, &links_field.fields, Some("en")).unwrap();
+    let en = query::find_array_rows(
+        &conn,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &links_field.fields,
+        Some("en"),
+    )
+    .unwrap();
     assert_eq!(en.len(), 1);
     assert_eq!(en[0]["label"], "English Link");
 
-    let de = query::find_array_rows(&conn, "l10n_articles", "links", &doc.id, &links_field.fields, Some("de")).unwrap();
+    let de = query::find_array_rows(
+        &conn,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &links_field.fields,
+        Some("de"),
+    )
+    .unwrap();
     assert_eq!(de.len(), 1);
     assert_eq!(de[0]["label"], "German Link");
 }
@@ -399,25 +498,71 @@ fn localized_array_rows_update_preserves_other_locale() {
         ("label".to_string(), "Deutsch".to_string()),
     ])];
 
-    query::set_array_rows(&tx, "l10n_articles", "links", &doc.id, &en_rows, &links_field.fields, Some("en")).unwrap();
-    query::set_array_rows(&tx, "l10n_articles", "links", &doc.id, &de_rows, &links_field.fields, Some("de")).unwrap();
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &en_rows,
+        &links_field.fields,
+        Some("en"),
+    )
+    .unwrap();
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &de_rows,
+        &links_field.fields,
+        Some("de"),
+    )
+    .unwrap();
 
     // Replace EN rows — DE should remain
     let en_new = vec![HashMap::from([
         ("url".to_string(), "https://new-en.example.com".to_string()),
         ("label".to_string(), "New English".to_string()),
     ])];
-    query::set_array_rows(&tx, "l10n_articles", "links", &doc.id, &en_new, &links_field.fields, Some("en")).unwrap();
+    query::set_array_rows(
+        &tx,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &en_new,
+        &links_field.fields,
+        Some("en"),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("conn");
-    let en = query::find_array_rows(&conn, "l10n_articles", "links", &doc.id, &links_field.fields, Some("en")).unwrap();
+    let en = query::find_array_rows(
+        &conn,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &links_field.fields,
+        Some("en"),
+    )
+    .unwrap();
     assert_eq!(en.len(), 1);
     assert_eq!(en[0]["label"], "New English");
 
-    let de = query::find_array_rows(&conn, "l10n_articles", "links", &doc.id, &links_field.fields, Some("de")).unwrap();
+    let de = query::find_array_rows(
+        &conn,
+        "l10n_articles",
+        "links",
+        &doc.id,
+        &links_field.fields,
+        Some("de"),
+    )
+    .unwrap();
     assert_eq!(de.len(), 1);
-    assert_eq!(de[0]["label"], "Deutsch", "DE array rows should be preserved");
+    assert_eq!(
+        de[0]["label"], "Deutsch",
+        "DE array rows should be preserved"
+    );
 }
 
 #[test]
@@ -433,16 +578,34 @@ fn localized_block_rows_scoped_by_locale() {
     let en_blocks = vec![serde_json::json!({"_block_type": "paragraph", "text": "Hello world"})];
     let de_blocks = vec![serde_json::json!({"_block_type": "paragraph", "text": "Hallo Welt"})];
 
-    query::set_block_rows(&tx, "l10n_articles", "content", &doc.id, &en_blocks, Some("en")).unwrap();
-    query::set_block_rows(&tx, "l10n_articles", "content", &doc.id, &de_blocks, Some("de")).unwrap();
+    query::set_block_rows(
+        &tx,
+        "l10n_articles",
+        "content",
+        &doc.id,
+        &en_blocks,
+        Some("en"),
+    )
+    .unwrap();
+    query::set_block_rows(
+        &tx,
+        "l10n_articles",
+        "content",
+        &doc.id,
+        &de_blocks,
+        Some("de"),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("conn");
-    let en = query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("en")).unwrap();
+    let en =
+        query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("en")).unwrap();
     assert_eq!(en.len(), 1);
     assert_eq!(en[0]["text"], "Hello world");
 
-    let de = query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("de")).unwrap();
+    let de =
+        query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("de")).unwrap();
     assert_eq!(de.len(), 1);
     assert_eq!(de[0]["text"], "Hallo Welt");
 }
@@ -457,22 +620,45 @@ fn localized_block_rows_update_preserves_other_locale() {
     data.insert("slug_field".to_string(), "test".to_string());
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
-    query::set_block_rows(&tx, "l10n_articles", "content", &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "English"})], Some("en")).unwrap();
-    query::set_block_rows(&tx, "l10n_articles", "content", &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "Deutsch"})], Some("de")).unwrap();
+    query::set_block_rows(
+        &tx,
+        "l10n_articles",
+        "content",
+        &doc.id,
+        &[serde_json::json!({"_block_type": "paragraph", "text": "English"})],
+        Some("en"),
+    )
+    .unwrap();
+    query::set_block_rows(
+        &tx,
+        "l10n_articles",
+        "content",
+        &doc.id,
+        &[serde_json::json!({"_block_type": "paragraph", "text": "Deutsch"})],
+        Some("de"),
+    )
+    .unwrap();
 
     // Replace EN blocks — DE should remain
-    query::set_block_rows(&tx, "l10n_articles", "content", &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "New English"})], Some("en")).unwrap();
+    query::set_block_rows(
+        &tx,
+        "l10n_articles",
+        "content",
+        &doc.id,
+        &[serde_json::json!({"_block_type": "paragraph", "text": "New English"})],
+        Some("en"),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("conn");
-    let en = query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("en")).unwrap();
+    let en =
+        query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("en")).unwrap();
     assert_eq!(en.len(), 1);
     assert_eq!(en[0]["text"], "New English");
 
-    let de = query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("de")).unwrap();
+    let de =
+        query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("de")).unwrap();
     assert_eq!(de.len(), 1);
     assert_eq!(de[0]["text"], "Deutsch", "DE blocks should be preserved");
 }
@@ -500,42 +686,75 @@ fn save_join_table_data_with_locale_scopes_writes() {
     // Save EN join data
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert("tags".to_string(), serde_json::json!(["en-tag"]));
-    en_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "English content"}
-    ]));
-    en_join.insert("meta".to_string(), serde_json::json!([
-        {"_block_type": "kv", "key": "shared-meta"}
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    en_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "English content"}
+        ]),
+    );
+    en_join.insert(
+        "meta".to_string(),
+        serde_json::json!([
+            {"_block_type": "kv", "key": "shared-meta"}
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     // Save DE join data
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
     de_join.insert("tags".to_string(), serde_json::json!(["de-tag"]));
-    de_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "German content"}
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &de_join, Some(&de_ctx)).unwrap();
+    de_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "German content"}
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &de_join,
+        Some(&de_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Verify EN data
     let conn = pool.get().expect("conn");
-    let en_tags = query::find_related_ids(&conn, "l10n_articles", "tags", &doc.id, Some("en")).unwrap();
+    let en_tags =
+        query::find_related_ids(&conn, "l10n_articles", "tags", &doc.id, Some("en")).unwrap();
     assert_eq!(en_tags, vec!["en-tag"]);
-    let en_blocks = query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("en")).unwrap();
+    let en_blocks =
+        query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("en")).unwrap();
     assert_eq!(en_blocks.len(), 1);
     assert_eq!(en_blocks[0]["text"], "English content");
 
     // Verify DE data
-    let de_tags = query::find_related_ids(&conn, "l10n_articles", "tags", &doc.id, Some("de")).unwrap();
+    let de_tags =
+        query::find_related_ids(&conn, "l10n_articles", "tags", &doc.id, Some("de")).unwrap();
     assert_eq!(de_tags, vec!["de-tag"]);
-    let de_blocks = query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("de")).unwrap();
+    let de_blocks =
+        query::find_block_rows(&conn, "l10n_articles", "content", &doc.id, Some("de")).unwrap();
     assert_eq!(de_blocks.len(), 1);
     assert_eq!(de_blocks[0]["text"], "German content");
 
     // Non-localized "meta" field should be written without locale scoping —
     // reading with None should return it
     let meta = query::find_block_rows(&conn, "l10n_articles", "meta", &doc.id, None).unwrap();
-    assert_eq!(meta.len(), 1, "Non-localized blocks should work without locale");
+    assert_eq!(
+        meta.len(),
+        1,
+        "Non-localized blocks should work without locale"
+    );
     assert_eq!(meta[0]["key"], "shared-meta");
 }
 
@@ -559,32 +778,72 @@ fn hydrate_document_with_locale_returns_correct_data() {
 
     // Write EN data
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("tags".to_string(), serde_json::json!(["en-tag-1", "en-tag-2"]));
-    en_join.insert("links".to_string(), serde_json::json!([
-        {"url": "https://en.example.com", "label": "English"}
-    ]));
-    en_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "Hello"}
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    en_join.insert(
+        "tags".to_string(),
+        serde_json::json!(["en-tag-1", "en-tag-2"]),
+    );
+    en_join.insert(
+        "links".to_string(),
+        serde_json::json!([
+            {"url": "https://en.example.com", "label": "English"}
+        ]),
+    );
+    en_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "Hello"}
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     // Write DE data
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
     de_join.insert("tags".to_string(), serde_json::json!(["de-tag-1"]));
-    de_join.insert("links".to_string(), serde_json::json!([
-        {"url": "https://de.example.com", "label": "Deutsch"}
-    ]));
-    de_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "Hallo"}
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &de_join, Some(&de_ctx)).unwrap();
+    de_join.insert(
+        "links".to_string(),
+        serde_json::json!([
+            {"url": "https://de.example.com", "label": "Deutsch"}
+        ]),
+    );
+    de_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "Hallo"}
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &de_join,
+        Some(&de_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Hydrate with EN locale
     let conn = pool.get().expect("conn");
     let mut en_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut en_doc, None, Some(&en_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut en_doc,
+        None,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     let en_tags = en_doc.get("tags").unwrap().as_array().unwrap();
     assert_eq!(en_tags.len(), 2);
@@ -601,8 +860,17 @@ fn hydrate_document_with_locale_returns_correct_data() {
 
     // Hydrate with DE locale
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let de_tags = de_doc.get("tags").unwrap().as_array().unwrap();
     assert_eq!(de_tags.len(), 1);
@@ -637,36 +905,80 @@ fn save_join_data_in_one_locale_does_not_clobber_other() {
 
     // Write EN content first
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "English paragraph 1"},
-        {"_block_type": "paragraph", "text": "English paragraph 2"},
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    en_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "English paragraph 1"},
+            {"_block_type": "paragraph", "text": "English paragraph 2"},
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     // Now write DE content — this is the bug scenario: previously this would DELETE all rows
     // (regardless of locale) and then INSERT only the DE rows, destroying EN content.
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
-    de_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "German paragraph"},
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &de_join, Some(&de_ctx)).unwrap();
+    de_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "German paragraph"},
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &de_join,
+        Some(&de_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // The critical assertion: EN content must still be intact
     let conn = pool.get().expect("conn");
     let mut en_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut en_doc, None, Some(&en_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut en_doc,
+        None,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     let en_content = en_doc.get("content").unwrap().as_array().unwrap();
-    assert_eq!(en_content.len(), 2, "English blocks must survive German write");
+    assert_eq!(
+        en_content.len(),
+        2,
+        "English blocks must survive German write"
+    );
     assert_eq!(en_content[0]["text"], "English paragraph 1");
     assert_eq!(en_content[1]["text"], "English paragraph 2");
 
     // And DE content should be correct too
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let de_content = de_doc.get("content").unwrap().as_array().unwrap();
     assert_eq!(de_content.len(), 1);
@@ -690,10 +1002,21 @@ fn non_localized_join_field_ignores_locale_context() {
     // Write to the non-localized "meta" blocks field via save_join_table_data with a locale ctx.
     // Since meta.localized=false, the locale should be ignored (writes without _locale scoping).
     let mut join: HashMap<String, serde_json::Value> = HashMap::new();
-    join.insert("meta".to_string(), serde_json::json!([
-        {"_block_type": "kv", "key": "version"},
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &join, Some(&en_ctx)).unwrap();
+    join.insert(
+        "meta".to_string(),
+        serde_json::json!([
+            {"_block_type": "kv", "key": "version"},
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &join,
+        Some(&en_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Reading with None should find the data (no locale filter)
@@ -708,11 +1031,24 @@ fn non_localized_join_field_ignores_locale_context() {
         config: locale_config.clone(),
     };
     let mut doc2 = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut doc2, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut doc2,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let meta2 = doc2.get("meta").unwrap().as_array().unwrap();
-    assert_eq!(meta2.len(), 1, "Non-localized field should be visible regardless of locale context");
+    assert_eq!(
+        meta2.len(),
+        1,
+        "Non-localized field should be visible regardless of locale context"
+    );
 }
 
 #[test]
@@ -734,33 +1070,70 @@ fn hydrate_without_locale_returns_all_locale_rows() {
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
     // Write blocks in both locales
-    query::set_block_rows(&tx, "l10n_articles", "content", &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "EN"})], Some("en")).unwrap();
-    query::set_block_rows(&tx, "l10n_articles", "content", &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "DE"})], Some("de")).unwrap();
+    query::set_block_rows(
+        &tx,
+        "l10n_articles",
+        "content",
+        &doc.id,
+        &[serde_json::json!({"_block_type": "paragraph", "text": "EN"})],
+        Some("en"),
+    )
+    .unwrap();
+    query::set_block_rows(
+        &tx,
+        "l10n_articles",
+        "content",
+        &doc.id,
+        &[serde_json::json!({"_block_type": "paragraph", "text": "DE"})],
+        Some("de"),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Hydrate with None locale — should return ALL rows from all locales
     let conn = pool.get().expect("conn");
     let mut doc2 = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
+        .unwrap()
+        .unwrap();
     query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut doc2, None, None).unwrap();
 
     let content = doc2.get("content").unwrap().as_array().unwrap();
-    assert_eq!(content.len(), 2, "Without locale context, all rows should be returned");
+    assert_eq!(
+        content.len(),
+        2,
+        "Without locale context, all rows should be returned"
+    );
 
     // Hydrate with EN locale — should return only EN
     let mut en_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut en_doc, None, Some(&en_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut en_doc,
+        None,
+        Some(&en_ctx),
+    )
+    .unwrap();
     let en_content = en_doc.get("content").unwrap().as_array().unwrap();
     assert_eq!(en_content.len(), 1);
     assert_eq!(en_content[0]["text"], "EN");
 
     // Hydrate with DE locale — should return only DE
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
     let de_content = de_doc.get("content").unwrap().as_array().unwrap();
     assert_eq!(de_content.len(), 1);
     assert_eq!(de_content[0]["text"], "DE");
@@ -774,7 +1147,10 @@ fn hydrate_without_locale_returns_all_locale_rows() {
 #[test]
 fn join_fallback_has_many_falls_back_to_default_locale() {
     let (_tmp, pool, def, locale_config) = setup_localized_joins();
-    assert!(locale_config.fallback, "Precondition: fallback must be enabled");
+    assert!(
+        locale_config.fallback,
+        "Precondition: fallback must be enabled"
+    );
 
     let en_ctx = query::LocaleContext {
         mode: query::LocaleMode::Single("en".to_string()),
@@ -794,14 +1170,31 @@ fn join_fallback_has_many_falls_back_to_default_locale() {
     // Write EN tags only — no DE tags
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert("tags".to_string(), serde_json::json!(["tag-1", "tag-2"]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Hydrate with DE locale — should fall back to EN tags
     let conn = pool.get().expect("conn");
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let tags = de_doc.get("tags").unwrap().as_array().unwrap();
     assert_eq!(tags.len(), 2, "DE tags should fall back to EN when empty");
@@ -810,8 +1203,17 @@ fn join_fallback_has_many_falls_back_to_default_locale() {
 
     // Hydrate with EN locale — should return EN tags directly
     let mut en_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut en_doc, None, Some(&en_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut en_doc,
+        None,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     let en_tags = en_doc.get("tags").unwrap().as_array().unwrap();
     assert_eq!(en_tags.len(), 2);
@@ -837,17 +1239,37 @@ fn join_fallback_array_falls_back_to_default_locale() {
 
     // Write EN links only
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("links".to_string(), serde_json::json!([
-        {"url": "https://en.example.com", "label": "English Link"}
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    en_join.insert(
+        "links".to_string(),
+        serde_json::json!([
+            {"url": "https://en.example.com", "label": "English Link"}
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Hydrate with DE locale — should fall back to EN links
     let conn = pool.get().expect("conn");
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let links = de_doc.get("links").unwrap().as_array().unwrap();
     assert_eq!(links.len(), 1, "DE links should fall back to EN when empty");
@@ -874,20 +1296,44 @@ fn join_fallback_blocks_falls_back_to_default_locale() {
 
     // Write EN blocks only
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "English paragraph"}
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    en_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "English paragraph"}
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Hydrate with DE locale — should fall back to EN blocks
     let conn = pool.get().expect("conn");
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let content = de_doc.get("content").unwrap().as_array().unwrap();
-    assert_eq!(content.len(), 1, "DE blocks should fall back to EN when empty");
+    assert_eq!(
+        content.len(),
+        1,
+        "DE blocks should fall back to EN when empty"
+    );
     assert_eq!(content[0]["text"], "English paragraph");
 }
 
@@ -911,27 +1357,62 @@ fn join_fallback_does_not_trigger_when_locale_has_data() {
 
     // Write both EN and DE content
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "English"},
-        {"_block_type": "paragraph", "text": "More English"},
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    en_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "English"},
+            {"_block_type": "paragraph", "text": "More English"},
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
-    de_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "Deutsch"},
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &de_join, Some(&de_ctx)).unwrap();
+    de_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "Deutsch"},
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &de_join,
+        Some(&de_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // DE has its own data — should NOT fall back to EN
     let conn = pool.get().expect("conn");
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let content = de_doc.get("content").unwrap().as_array().unwrap();
-    assert_eq!(content.len(), 1, "DE has its own data — fallback should NOT trigger");
+    assert_eq!(
+        content.len(),
+        1,
+        "DE has its own data — fallback should NOT trigger"
+    );
     assert_eq!(content[0]["text"], "Deutsch");
 }
 
@@ -957,24 +1438,50 @@ fn join_fallback_disabled_returns_empty() {
 
     // Write EN content only
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "English only"}
-    ]));
+    en_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "English only"}
+        ]),
+    );
     en_join.insert("tags".to_string(), serde_json::json!(["en-tag"]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Hydrate with DE — with fallback=false, should get empty results
     let conn = pool.get().expect("conn");
     let mut de_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut de_doc, None, Some(&de_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut de_doc,
+        None,
+        Some(&de_ctx),
+    )
+    .unwrap();
 
     let content = de_doc.get("content").unwrap().as_array().unwrap();
-    assert!(content.is_empty(), "With fallback=false, empty DE should NOT fall back to EN");
+    assert!(
+        content.is_empty(),
+        "With fallback=false, empty DE should NOT fall back to EN"
+    );
 
     let tags = de_doc.get("tags").unwrap().as_array().unwrap();
-    assert!(tags.is_empty(), "With fallback=false, empty DE tags should NOT fall back to EN");
+    assert!(
+        tags.is_empty(),
+        "With fallback=false, empty DE tags should NOT fall back to EN"
+    );
 }
 
 #[test]
@@ -993,17 +1500,37 @@ fn join_fallback_default_locale_no_fallback_needed() {
 
     // Write EN content
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "English"}
-    ]));
-    query::save_join_table_data(&tx, "l10n_articles", &def.fields, &doc.id, &en_join, Some(&en_ctx)).unwrap();
+    en_join.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "English"}
+        ]),
+    );
+    query::save_join_table_data(
+        &tx,
+        "l10n_articles",
+        &def.fields,
+        &doc.id,
+        &en_join,
+        Some(&en_ctx),
+    )
+    .unwrap();
     tx.commit().expect("Commit");
 
     // Hydrate with EN (default locale) — should return EN data directly, no fallback path
     let conn = pool.get().expect("conn");
     let mut en_doc = query::find_by_id(&conn, "l10n_articles", &def, &doc.id, None)
-        .unwrap().unwrap();
-    query::hydrate_document(&conn, "l10n_articles", &def.fields, &mut en_doc, None, Some(&en_ctx)).unwrap();
+        .unwrap()
+        .unwrap();
+    query::hydrate_document(
+        &conn,
+        "l10n_articles",
+        &def.fields,
+        &mut en_doc,
+        None,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     let content = en_doc.get("content").unwrap().as_array().unwrap();
     assert_eq!(content.len(), 1);
@@ -1051,16 +1578,30 @@ fn collection_localized_group_migration_creates_locale_columns() {
 
     let conn = pool.get().unwrap();
     let mut stmt = conn.prepare("PRAGMA table_info(pages_l10n)").unwrap();
-    let columns: HashSet<String> = stmt.query_map([], |row| {
-        row.get::<_, String>(1)
-    }).unwrap().filter_map(|r| r.ok()).collect();
+    let columns: HashSet<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
 
-    assert!(columns.contains("seo__meta_title__en"), "Should have en locale column for group sub-field");
-    assert!(columns.contains("seo__meta_title__de"), "Should have de locale column for group sub-field");
+    assert!(
+        columns.contains("seo__meta_title__en"),
+        "Should have en locale column for group sub-field"
+    );
+    assert!(
+        columns.contains("seo__meta_title__de"),
+        "Should have de locale column for group sub-field"
+    );
     assert!(columns.contains("seo__meta_description__en"));
     assert!(columns.contains("seo__meta_description__de"));
-    assert!(!columns.contains("seo__meta_title"), "Should NOT have non-localized group sub-column");
-    assert!(!columns.contains("seo"), "Should NOT have single group column");
+    assert!(
+        !columns.contains("seo__meta_title"),
+        "Should NOT have non-localized group sub-column"
+    );
+    assert!(
+        !columns.contains("seo"),
+        "Should NOT have single group column"
+    );
 }
 
 /// Collection: write and read localized group sub-fields per locale.
@@ -1088,7 +1629,10 @@ fn collection_localized_group_write_and_read() {
     let mut data = HashMap::new();
     data.insert("title".to_string(), "Test Page".to_string());
     data.insert("seo__meta_title".to_string(), "EN SEO Title".to_string());
-    data.insert("seo__meta_description".to_string(), "EN SEO Desc".to_string());
+    data.insert(
+        "seo__meta_description".to_string(),
+        "EN SEO Desc".to_string(),
+    );
 
     let conn = pool.get().unwrap();
     let doc = query::create(&conn, "pages_l10n", &def, &data, Some(&en_ctx)).expect("Create");
@@ -1096,20 +1640,39 @@ fn collection_localized_group_write_and_read() {
     // Update with German group data
     let mut de_data = HashMap::new();
     de_data.insert("seo__meta_title".to_string(), "DE SEO Titel".to_string());
-    de_data.insert("seo__meta_description".to_string(), "DE SEO Beschreibung".to_string());
+    de_data.insert(
+        "seo__meta_description".to_string(),
+        "DE SEO Beschreibung".to_string(),
+    );
     query::update(&conn, "pages_l10n", &def, &doc.id, &de_data, Some(&de_ctx)).expect("Update DE");
 
     // Read English — hydrated into nested seo object
-    let en_doc = query::find_by_id(&conn, "pages_l10n", &def, &doc.id, Some(&en_ctx)).unwrap().unwrap();
+    let en_doc = query::find_by_id(&conn, "pages_l10n", &def, &doc.id, Some(&en_ctx))
+        .unwrap()
+        .unwrap();
     let en_seo = en_doc.fields.get("seo").expect("seo should exist");
-    assert_eq!(en_seo.get("meta_title").and_then(|v| v.as_str()), Some("EN SEO Title"));
-    assert_eq!(en_seo.get("meta_description").and_then(|v| v.as_str()), Some("EN SEO Desc"));
+    assert_eq!(
+        en_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("EN SEO Title")
+    );
+    assert_eq!(
+        en_seo.get("meta_description").and_then(|v| v.as_str()),
+        Some("EN SEO Desc")
+    );
 
     // Read German — should get DE values
-    let de_doc = query::find_by_id(&conn, "pages_l10n", &def, &doc.id, Some(&de_ctx)).unwrap().unwrap();
+    let de_doc = query::find_by_id(&conn, "pages_l10n", &def, &doc.id, Some(&de_ctx))
+        .unwrap()
+        .unwrap();
     let de_seo = de_doc.fields.get("seo").expect("seo should exist");
-    assert_eq!(de_seo.get("meta_title").and_then(|v| v.as_str()), Some("DE SEO Titel"));
-    assert_eq!(de_seo.get("meta_description").and_then(|v| v.as_str()), Some("DE SEO Beschreibung"));
+    assert_eq!(
+        de_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("DE SEO Titel")
+    );
+    assert_eq!(
+        de_seo.get("meta_description").and_then(|v| v.as_str()),
+        Some("DE SEO Beschreibung")
+    );
 }
 
 // ── Group + Locale Tests (Globals) ────────────────────────────────────────────
@@ -1143,17 +1706,33 @@ fn global_localized_group_migration_creates_locale_columns() {
     migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
 
     let conn = pool.get().unwrap();
-    let mut stmt = conn.prepare("PRAGMA table_info(_global_site_l10n)").unwrap();
-    let columns: HashSet<String> = stmt.query_map([], |row| {
-        row.get::<_, String>(1)
-    }).unwrap().filter_map(|r| r.ok()).collect();
+    let mut stmt = conn
+        .prepare("PRAGMA table_info(_global_site_l10n)")
+        .unwrap();
+    let columns: HashSet<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .filter_map(|r| r.ok())
+        .collect();
 
-    assert!(columns.contains("seo__meta_title__en"), "Should have en locale column for group sub-field");
-    assert!(columns.contains("seo__meta_title__de"), "Should have de locale column for group sub-field");
+    assert!(
+        columns.contains("seo__meta_title__en"),
+        "Should have en locale column for group sub-field"
+    );
+    assert!(
+        columns.contains("seo__meta_title__de"),
+        "Should have de locale column for group sub-field"
+    );
     assert!(columns.contains("seo__meta_description__en"));
     assert!(columns.contains("seo__meta_description__de"));
-    assert!(!columns.contains("seo__meta_title"), "Should NOT have non-localized group sub-column");
-    assert!(!columns.contains("seo"), "Should NOT have single group column");
+    assert!(
+        !columns.contains("seo__meta_title"),
+        "Should NOT have non-localized group sub-column"
+    );
+    assert!(
+        !columns.contains("seo"),
+        "Should NOT have single group column"
+    );
 }
 
 /// Global: write and read localized group sub-fields per locale.
@@ -1189,20 +1768,35 @@ fn global_localized_group_write_and_read() {
     // Update with German group data
     let mut de_data = HashMap::new();
     de_data.insert("seo__meta_title".to_string(), "DE Titel".to_string());
-    de_data.insert("seo__meta_description".to_string(), "DE Beschreibung".to_string());
+    de_data.insert(
+        "seo__meta_description".to_string(),
+        "DE Beschreibung".to_string(),
+    );
     query::update_global(&conn, "site_l10n", &def, &de_data, Some(&de_ctx)).expect("Update DE");
 
     // Read English (hydrated into nested seo object)
     let en_doc = query::get_global(&conn, "site_l10n", &def, Some(&en_ctx)).expect("Get EN");
     let en_seo = en_doc.fields.get("seo").expect("seo should exist");
-    assert_eq!(en_seo.get("meta_title").and_then(|v| v.as_str()), Some("EN Title"));
-    assert_eq!(en_seo.get("meta_description").and_then(|v| v.as_str()), Some("EN Desc"));
+    assert_eq!(
+        en_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("EN Title")
+    );
+    assert_eq!(
+        en_seo.get("meta_description").and_then(|v| v.as_str()),
+        Some("EN Desc")
+    );
 
     // Read German
     let de_doc = query::get_global(&conn, "site_l10n", &def, Some(&de_ctx)).expect("Get DE");
     let de_seo = de_doc.fields.get("seo").expect("seo should exist");
-    assert_eq!(de_seo.get("meta_title").and_then(|v| v.as_str()), Some("DE Titel"));
-    assert_eq!(de_seo.get("meta_description").and_then(|v| v.as_str()), Some("DE Beschreibung"));
+    assert_eq!(
+        de_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("DE Titel")
+    );
+    assert_eq!(
+        de_seo.get("meta_description").and_then(|v| v.as_str()),
+        Some("DE Beschreibung")
+    );
 }
 
 /// Global: locale fallback for group sub-fields.
@@ -1235,5 +1829,9 @@ fn global_localized_group_fallback() {
     // Read German — should fall back to English (fallback=true)
     let de_doc = query::get_global(&conn, "site_l10n", &def, Some(&de_ctx)).expect("Get DE");
     let de_seo = de_doc.fields.get("seo").expect("seo should exist");
-    assert_eq!(de_seo.get("meta_title").and_then(|v| v.as_str()), Some("EN Title"), "Should fall back to EN");
+    assert_eq!(
+        de_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("EN Title"),
+        "Should fall back to EN"
+    );
 }

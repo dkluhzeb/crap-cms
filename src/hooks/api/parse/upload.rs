@@ -2,8 +2,8 @@
 
 use mlua::{Table, Value};
 
-use crate::core::upload::ImageSizeBuilder;
 use crate::core::field::{FieldAdmin, FieldDefinition, FieldType};
+use crate::core::upload::ImageSizeBuilder;
 use crate::core::upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit, ImageSize};
 
 use super::helpers::*;
@@ -19,7 +19,10 @@ pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload
         Value::Boolean(false) | Value::Nil => None,
         Value::Table(tbl) => {
             let mime_types = if let Ok(mt_tbl) = get_table(&tbl, "mime_types") {
-                mt_tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
+                mt_tbl
+                    .sequence_values::<String>()
+                    .filter_map(|r| r.ok())
+                    .collect()
             } else {
                 Vec::new()
             };
@@ -74,7 +77,13 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
             Some("fill") => ImageFit::Fill,
             _ => ImageFit::Cover,
         };
-        sizes.push(ImageSizeBuilder::new(name).width(width).height(height).fit(fit).build());
+        sizes.push(
+            ImageSizeBuilder::new(name)
+                .width(width)
+                .height(height)
+                .fit(fit)
+                .build(),
+        );
     }
     sizes
 }
@@ -155,9 +164,9 @@ pub(super) fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mlua::Lua;
-    use crate::core::upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit};
     use crate::core::field::FieldDefinition;
+    use crate::core::upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit};
+    use mlua::Lua;
 
     #[test]
     fn test_parse_image_sizes_basic() {
@@ -179,7 +188,15 @@ mod tests {
     fn test_parse_image_sizes_with_fit() {
         let lua = Lua::new();
         let tbl = lua.create_table().unwrap();
-        for (i, (name, fit)) in [("a", "cover"), ("b", "contain"), ("c", "inside"), ("d", "fill")].iter().enumerate() {
+        for (i, (name, fit)) in [
+            ("a", "cover"),
+            ("b", "contain"),
+            ("c", "inside"),
+            ("d", "fill"),
+        ]
+        .iter()
+        .enumerate()
+        {
             let s = lua.create_table().unwrap();
             s.set("name", *name).unwrap();
             s.set("width", 100u32).unwrap();
@@ -263,7 +280,8 @@ mod tests {
 
     #[test]
     fn test_inject_upload_fields_basic() {
-        let mut fields = vec![FieldDefinition::builder("alt_text", crate::core::field::FieldType::Text).build()];
+        let mut fields =
+            vec![FieldDefinition::builder("alt_text", crate::core::field::FieldType::Text).build()];
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
         inject_upload_fields(&mut fields, &upload);
@@ -284,9 +302,11 @@ mod tests {
         let mut fields = Vec::new();
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![
-            ImageSizeBuilder::new("thumb").width(200).height(200).fit(ImageFit::Cover).build(),
-        ];
+        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
+            .width(200)
+            .height(200)
+            .fit(ImageFit::Cover)
+            .build()];
         inject_upload_fields(&mut fields, &upload);
         assert_eq!(fields.len(), 11);
         assert_eq!(fields[8].name, "thumb_url");
@@ -299,9 +319,11 @@ mod tests {
         let mut fields = Vec::new();
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![
-            ImageSizeBuilder::new("card").width(400).height(300).fit(ImageFit::Cover).build(),
-        ];
+        upload.image_sizes = vec![ImageSizeBuilder::new("card")
+            .width(400)
+            .height(300)
+            .fit(ImageFit::Cover)
+            .build()];
         upload.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: Some(FormatQuality::new(60, false)),

@@ -24,7 +24,8 @@ impl HelperDef for JsonHelper {
 mod tests {
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
+        let translations =
+            std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
         let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
             .expect("create_handlebars");
         (*hbs).clone()

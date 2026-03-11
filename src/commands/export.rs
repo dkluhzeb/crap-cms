@@ -15,7 +15,8 @@ pub fn export(
 ) -> Result<()> {
     let (pool, registry) = super::load_config_and_sync(config_dir)?;
 
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
     let conn = pool.get().context("Failed to get database connection")?;
@@ -44,7 +45,8 @@ pub fn export(
             crate::db::query::hydrate_document(&conn, slug, &def.fields, doc, None, None)?;
         }
 
-        let docs_json: Vec<serde_json::Value> = docs.into_iter()
+        let docs_json: Vec<serde_json::Value> = docs
+            .into_iter()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()?;
 
@@ -62,7 +64,11 @@ pub fn export(
             let content = serde_json::to_string_pretty(&output_json)?;
             std::fs::write(&path, content)
                 .with_context(|| format!("Failed to write {}", path.display()))?;
-            eprintln!("Exported {} collection(s) to {}", slugs.len(), path.display());
+            eprintln!(
+                "Exported {} collection(s) to {}",
+                slugs.len(),
+                path.display()
+            );
         }
         None => {
             println!("{}", serde_json::to_string_pretty(&output_json)?);
@@ -76,31 +82,33 @@ pub fn export(
 // Excluded from coverage: requires full Lua + DB setup via load_config_and_sync.
 // Tested via CLI integration tests in tests/cli_integration.rs.
 #[cfg(not(tarpaulin_include))]
-pub fn import(
-    config_dir: &Path,
-    file: &Path,
-    collection_filter: Option<String>,
-) -> Result<()> {
+pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>) -> Result<()> {
     let (pool, registry) = super::load_config_and_sync(config_dir)?;
 
     let content = std::fs::read_to_string(file)
         .with_context(|| format!("Failed to read {}", file.display()))?;
-    let data: serde_json::Value = serde_json::from_str(&content)
-        .context("Failed to parse JSON")?;
+    let data: serde_json::Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
 
     // Check version compatibility
     if let Some(export_version) = data.get("crap_version").and_then(|v| v.as_str()) {
         let current = env!("CARGO_PKG_VERSION");
-        if let Some(warning) = crate::config::CrapConfig::check_version_against(Some(export_version), current) {
-            eprintln!("Warning: {}", warning.replace("config requires", "export file was created with"));
+        if let Some(warning) =
+            crate::config::CrapConfig::check_version_against(Some(export_version), current)
+        {
+            eprintln!(
+                "Warning: {}",
+                warning.replace("config requires", "export file was created with")
+            );
         }
     }
 
-    let collections_obj = data.get("collections")
+    let collections_obj = data
+        .get("collections")
         .and_then(|v| v.as_object())
         .ok_or_else(|| anyhow::anyhow!("Expected top-level \"collections\" object in JSON"))?;
 
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
     let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
@@ -115,10 +123,15 @@ pub fn import(
     let mut total_imported = 0usize;
 
     for slug in &slugs {
-        let def = reg.get_collection(slug)
-            .ok_or_else(|| anyhow::anyhow!("Collection '{}' exists in import file but not in schema", slug))?;
+        let def = reg.get_collection(slug).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Collection '{}' exists in import file but not in schema",
+                slug
+            )
+        })?;
 
-        let docs_array = collections_obj.get(slug)
+        let docs_array = collections_obj
+            .get(slug)
             .and_then(|v| v.as_array())
             .ok_or_else(|| anyhow::anyhow!("Expected array for collection '{}'", slug))?;
 
@@ -126,10 +139,12 @@ pub fn import(
         let tx = conn.transaction().context("Failed to begin transaction")?;
 
         for doc_val in docs_array {
-            let doc_obj = doc_val.as_object()
+            let doc_obj = doc_val
+                .as_object()
                 .ok_or_else(|| anyhow::anyhow!("Expected document object in '{}'", slug))?;
 
-            let id = doc_obj.get("id")
+            let id = doc_obj
+                .get("id")
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow::anyhow!("Document missing 'id' in '{}'", slug))?;
 
@@ -180,7 +195,8 @@ pub fn import(
                     for sub in &field.fields {
                         let col_name = format!("{}__{}", field.name, sub.name);
                         // Try nested object first (hydrated export format)
-                        let val = doc_obj.get(&field.name)
+                        let val = doc_obj
+                            .get(&field.name)
                             .and_then(|g| g.get(&sub.name))
                             // Then try flattened format
                             .or_else(|| doc_obj.get(&col_name));
@@ -233,27 +249,40 @@ pub fn import(
             }
 
             // INSERT OR REPLACE
-            let placeholders: Vec<String> = (0..parent_cols.len()).map(|i| format!("?{}", i + 1)).collect();
+            let placeholders: Vec<String> = (0..parent_cols.len())
+                .map(|i| format!("?{}", i + 1))
+                .collect();
             let sql = format!(
                 "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
                 slug,
-                parent_cols.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", "),
+                parent_cols
+                    .iter()
+                    .map(|c| format!("\"{}\"", c))
+                    .collect::<Vec<_>>()
+                    .join(", "),
                 placeholders.join(", ")
             );
 
-            let params: Vec<Box<dyn rusqlite::types::ToSql>> = parent_vals.iter()
+            let params: Vec<Box<dyn rusqlite::types::ToSql>> = parent_vals
+                .iter()
                 .map(|v| Box::new(v.clone()) as Box<dyn rusqlite::types::ToSql>)
                 .collect();
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter()
-                .map(|p| p.as_ref())
-                .collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
 
             tx.execute(&sql, param_refs.as_slice())
                 .with_context(|| format!("Failed to insert document {} into '{}'", id, slug))?;
 
             // Save join table data
             if !join_data.is_empty() {
-                crate::db::query::save_join_table_data(&tx, slug, &def.fields, id, &join_data, None)?;
+                crate::db::query::save_join_table_data(
+                    &tx,
+                    slug,
+                    &def.fields,
+                    id,
+                    &join_data,
+                    None,
+                )?;
             }
 
             total_imported += 1;

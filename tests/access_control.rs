@@ -7,7 +7,12 @@ use crap_cms::db::{migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
-fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry, HookRunner) {
+fn setup() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+    HookRunner,
+) {
     let config_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("example");
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).unwrap();
@@ -30,8 +35,12 @@ fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRe
 fn make_user_doc(id: &str, role: &str) -> Document {
     let mut doc = Document::new(id.to_string());
     doc.fields.insert("role".into(), serde_json::json!(role));
-    doc.fields.insert("email".into(), serde_json::json!(format!("{}@test.com", role)));
-    doc.fields.insert("name".into(), serde_json::json!(role.to_uppercase()));
+    doc.fields.insert(
+        "email".into(),
+        serde_json::json!(format!("{}@test.com", role)),
+    );
+    doc.fields
+        .insert("name".into(), serde_json::json!(role.to_uppercase()));
     doc
 }
 
@@ -43,12 +52,23 @@ fn access_config_parsed_from_lua() {
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).unwrap();
     let reg = registry.read().unwrap();
-    let posts = reg.get_collection("posts").expect("posts collection not found");
+    let posts = reg
+        .get_collection("posts")
+        .expect("posts collection not found");
 
-    assert_eq!(posts.access.read.as_deref(), Some("access.published_or_author"));
+    assert_eq!(
+        posts.access.read.as_deref(),
+        Some("access.published_or_author")
+    );
     assert_eq!(posts.access.create.as_deref(), Some("access.authenticated"));
-    assert_eq!(posts.access.update.as_deref(), Some("access.author_or_editor"));
-    assert_eq!(posts.access.delete.as_deref(), Some("access.editor_or_above"));
+    assert_eq!(
+        posts.access.update.as_deref(),
+        Some("access.author_or_editor")
+    );
+    assert_eq!(
+        posts.access.delete.as_deref(),
+        Some("access.editor_or_above")
+    );
 }
 
 #[test]
@@ -57,13 +77,27 @@ fn field_access_parsed_from_lua() {
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).unwrap();
     let reg = registry.read().unwrap();
-    let posts = reg.get_collection("posts").expect("posts collection not found");
+    let posts = reg
+        .get_collection("posts")
+        .expect("posts collection not found");
 
     // New posts definition has no field-level access controls
     for field in &posts.fields {
-        assert!(field.access.read.is_none(), "field {} has unexpected read access", field.name);
-        assert!(field.access.create.is_none(), "field {} has unexpected create access", field.name);
-        assert!(field.access.update.is_none(), "field {} has unexpected update access", field.name);
+        assert!(
+            field.access.read.is_none(),
+            "field {} has unexpected read access",
+            field.name
+        );
+        assert!(
+            field.access.create.is_none(),
+            "field {} has unexpected create access",
+            field.name
+        );
+        assert!(
+            field.access.update.is_none(),
+            "field {} has unexpected update access",
+            field.name
+        );
     }
 }
 
@@ -83,9 +117,9 @@ fn anyone_allows_anonymous() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
-    let result = runner.check_access(
-        Some("access.anyone"), None, None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(Some("access.anyone"), None, None, None, &conn)
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
 
@@ -94,9 +128,9 @@ fn authenticated_denies_anonymous() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
-    let result = runner.check_access(
-        Some("access.authenticated"), None, None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(Some("access.authenticated"), None, None, None, &conn)
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
 }
 
@@ -106,9 +140,15 @@ fn authenticated_allows_user() {
     let conn = pool.get().unwrap();
     let editor = make_user_doc("editor-1", "editor");
 
-    let result = runner.check_access(
-        Some("access.authenticated"), Some(&editor), None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(
+            Some("access.authenticated"),
+            Some(&editor),
+            None,
+            None,
+            &conn,
+        )
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
 
@@ -118,9 +158,9 @@ fn admin_only_denies_editor() {
     let conn = pool.get().unwrap();
     let editor = make_user_doc("editor-1", "editor");
 
-    let result = runner.check_access(
-        Some("access.admin_only"), Some(&editor), None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(Some("access.admin_only"), Some(&editor), None, None, &conn)
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
 }
 
@@ -130,9 +170,9 @@ fn admin_only_allows_admin() {
     let conn = pool.get().unwrap();
     let admin = make_user_doc("admin-1", "admin");
 
-    let result = runner.check_access(
-        Some("access.admin_only"), Some(&admin), None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(Some("access.admin_only"), Some(&admin), None, None, &conn)
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
 
@@ -141,9 +181,9 @@ fn published_or_author_constrains_anonymous() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().unwrap();
 
-    let result = runner.check_access(
-        Some("access.published_or_author"), None, None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(Some("access.published_or_author"), None, None, None, &conn)
+        .unwrap();
 
     match result {
         query::AccessResult::Constrained(clauses) => {
@@ -169,9 +209,15 @@ fn published_or_author_allows_admin() {
     let conn = pool.get().unwrap();
     let admin = make_user_doc("admin-1", "admin");
 
-    let result = runner.check_access(
-        Some("access.published_or_author"), Some(&admin), None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(
+            Some("access.published_or_author"),
+            Some(&admin),
+            None,
+            None,
+            &conn,
+        )
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 }
 
@@ -186,12 +232,13 @@ fn field_write_no_field_access_allows_all() {
     let reg = registry.read().unwrap();
     let posts = reg.get_collection("posts").unwrap();
 
-    let denied = runner.check_field_write_access(
-        &posts.fields, Some(&editor), "update", &conn,
-    );
+    let denied = runner.check_field_write_access(&posts.fields, Some(&editor), "update", &conn);
     // No field-level access controls in posts definition
-    assert!(denied.is_empty(),
-        "Expected no denied fields, got: {:?}", denied);
+    assert!(
+        denied.is_empty(),
+        "Expected no denied fields, got: {:?}",
+        denied
+    );
 }
 
 #[test]
@@ -204,8 +251,11 @@ fn field_read_no_config_allows_all() {
 
     // No field has read access configured, so nothing should be denied
     let denied = runner.check_field_read_access(&posts.fields, None, &conn);
-    assert!(denied.is_empty(),
-        "Expected no denied fields for read, got: {:?}", denied);
+    assert!(
+        denied.is_empty(),
+        "Expected no denied fields for read, got: {:?}",
+        denied
+    );
 }
 
 // ── 4. End-to-End with DB ───────────────────────────────────────────────────
@@ -240,12 +290,10 @@ fn constrained_find_filters_results() {
 
     // Simulate a Constrained access result (like published_or_author returns
     // for anonymous users), filtering to only published posts via _status.
-    let constraint_filters = vec![
-        query::FilterClause::Single(query::Filter {
-            field: "_status".to_string(),
-            op: query::FilterOp::Equals("published".to_string()),
-        }),
-    ];
+    let constraint_filters = vec![query::FilterClause::Single(query::Filter {
+        field: "_status".to_string(),
+        op: query::FilterOp::Equals("published".to_string()),
+    })];
 
     let mut find_query = query::FindQuery::new();
     find_query.filters = constraint_filters;
@@ -253,7 +301,12 @@ fn constrained_find_filters_results() {
     let docs = ops::find_documents(&pool, "posts", &posts, &find_query, None).unwrap();
 
     // Should only see published posts
-    assert_eq!(docs.len(), 2, "Expected 2 published posts, got {}", docs.len());
+    assert_eq!(
+        docs.len(),
+        2,
+        "Expected 2 published posts, got {}",
+        docs.len()
+    );
 }
 
 #[test]
@@ -280,25 +333,32 @@ fn access_check_plus_db_query_end_to_end() {
 
     // Verify published_or_author for anonymous returns constraint (not fully open)
     let conn = pool.get().unwrap();
-    let result = runner.check_access(
-        posts.access.read.as_deref(), None, None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(posts.access.read.as_deref(), None, None, None, &conn)
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Constrained(_)));
 
     // Verify admin gets full access
     let admin = make_user_doc("admin-1", "admin");
-    let result = runner.check_access(
-        posts.access.read.as_deref(), Some(&admin), None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(
+            posts.access.read.as_deref(),
+            Some(&admin),
+            None,
+            None,
+            &conn,
+        )
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Allowed));
 
-    let all_docs = ops::find_documents(&pool, "posts", &posts, &query::FindQuery::default(), None).unwrap();
+    let all_docs =
+        ops::find_documents(&pool, "posts", &posts, &query::FindQuery::default(), None).unwrap();
     assert_eq!(all_docs.len(), 2);
 
     // Verify author_or_admin denies anonymous delete
-    let result = runner.check_access(
-        posts.access.delete.as_deref(), None, None, None, &conn,
-    ).unwrap();
+    let result = runner
+        .check_access(posts.access.delete.as_deref(), None, None, None, &conn)
+        .unwrap();
     assert!(matches!(result, query::AccessResult::Denied));
 }
 
@@ -336,8 +396,15 @@ fn field_read_access_strips_denied_fields() {
 
     // Anonymous user (no user doc) — admin_only should deny
     let denied = runner.check_field_read_access(&fields, None, &conn);
-    assert_eq!(denied.len(), 1, "Should deny exactly one field for anonymous user");
-    assert_eq!(denied[0], "secret_notes", "The denied field should be 'secret_notes'");
+    assert_eq!(
+        denied.len(),
+        1,
+        "Should deny exactly one field for anonymous user"
+    );
+    assert_eq!(
+        denied[0], "secret_notes",
+        "The denied field should be 'secret_notes'"
+    );
 
     // Admin user — admin_only should allow
     let admin = make_user_doc("admin-1", "admin");
@@ -429,7 +496,9 @@ fn no_access_config_means_allowed() {
 
     // Also test with a user present — should still be Allowed
     let editor = make_user_doc("editor-1", "editor");
-    let result = runner.check_access(None, Some(&editor), None, None, &conn).unwrap();
+    let result = runner
+        .check_access(None, Some(&editor), None, None, &conn)
+        .unwrap();
     assert!(
         matches!(result, query::AccessResult::Allowed),
         "None access ref with user should still return Allowed, got: {:?}",
@@ -437,15 +506,13 @@ fn no_access_config_means_allowed() {
     );
 
     // Field-level: fields without any access config should not be denied
-    let fields = vec![
-        {
-            let mut f = crap_cms::core::field::FieldDefinition::default();
-            f.name = "open_field".to_string();
-            f.field_type = crap_cms::core::field::FieldType::Text;
-            // access.read, access.create, access.update all None by default
-            f
-        },
-    ];
+    let fields = vec![{
+        let mut f = crap_cms::core::field::FieldDefinition::default();
+        f.name = "open_field".to_string();
+        f.field_type = crap_cms::core::field::FieldType::Text;
+        // access.read, access.create, access.update all None by default
+        f
+    }];
 
     let denied_read = runner.check_field_read_access(&fields, None, &conn);
     assert!(
@@ -498,7 +565,9 @@ fn default_deny_true_no_access_ref_returns_denied() {
 
     // Even with a user present, no access function + default_deny → Denied
     let user = make_user_doc("user-1", "editor");
-    let result = runner.check_access(None, Some(&user), None, None, &conn).unwrap();
+    let result = runner
+        .check_access(None, Some(&user), None, None, &conn)
+        .unwrap();
     assert!(
         matches!(result, query::AccessResult::Denied),
         "With default_deny=true, user present, and no access ref, expected Denied, got: {:?}",

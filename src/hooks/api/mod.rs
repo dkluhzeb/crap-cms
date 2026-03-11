@@ -1,23 +1,23 @@
 //! Registers the `crap.*` Lua API namespace (collections, globals, hooks, log, util,
 //! crypto, schema).
 
-pub mod parse;
-mod util;
-mod schema;
-mod crypto;
-mod http;
-mod email;
-mod jobs;
-mod config;
-pub(crate) mod richtext;
-mod serializers;
-mod collections;
-mod globals;
-mod log;
-mod hooks;
 mod auth;
+mod collections;
+mod config;
+mod crypto;
+mod email;
 mod env;
 mod fields;
+mod globals;
+mod hooks;
+mod http;
+mod jobs;
+mod log;
+pub mod parse;
+pub(crate) mod richtext;
+mod schema;
+mod serializers;
+mod util;
 
 use anyhow::{Context as _, Result};
 use mlua::Lua;
@@ -26,7 +26,7 @@ use std::path::Path;
 use crate::config::CrapConfig;
 use crate::core::SharedRegistry;
 
-pub(crate) use serializers::{lua_to_json, json_to_lua};
+pub(crate) use serializers::{json_to_lua, lua_to_json};
 
 /// Label stored in `Lua::app_data` to identify which VM is logging.
 /// Init VM uses `"init"`, pool VMs use `"vm-1"`, `"vm-2"`, etc.
@@ -34,7 +34,12 @@ pub struct VmLabel(pub String);
 
 /// Register the `crap` global table with sub-tables for collections, globals, log, util,
 /// auth, env, http, config.
-pub fn register_api(lua: &Lua, registry: SharedRegistry, _config_dir: &Path, config: &CrapConfig) -> Result<()> {
+pub fn register_api(
+    lua: &Lua,
+    registry: SharedRegistry,
+    _config_dir: &Path,
+    config: &CrapConfig,
+) -> Result<()> {
     let crap = lua.create_table().context("Failed to create crap table")?;
 
     collections::register_collections(lua, &crap, registry.clone())?;

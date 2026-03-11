@@ -8,10 +8,26 @@ pub(super) fn register_fields(lua: &Lua, crap: &Table) -> Result<()> {
     let fields_table = lua.create_table()?;
 
     let field_types = [
-        "text", "number", "textarea", "richtext", "select", "radio",
-        "checkbox", "date", "email", "json", "code", "relationship",
-        "upload", "array", "group", "blocks", "row", "collapsible",
-        "tabs", "join",
+        "text",
+        "number",
+        "textarea",
+        "richtext",
+        "select",
+        "radio",
+        "checkbox",
+        "date",
+        "email",
+        "json",
+        "code",
+        "relationship",
+        "upload",
+        "array",
+        "group",
+        "blocks",
+        "row",
+        "collapsible",
+        "tabs",
+        "join",
     ];
 
     for type_name in field_types {
@@ -57,18 +73,38 @@ mod tests {
         let fields: Table = crap.get("fields").unwrap();
 
         let expected = [
-            "text", "number", "textarea", "richtext", "select", "radio",
-            "checkbox", "date", "email", "json", "code", "relationship",
-            "upload", "array", "group", "blocks", "row", "collapsible",
-            "tabs", "join",
+            "text",
+            "number",
+            "textarea",
+            "richtext",
+            "select",
+            "radio",
+            "checkbox",
+            "date",
+            "email",
+            "json",
+            "code",
+            "relationship",
+            "upload",
+            "array",
+            "group",
+            "blocks",
+            "row",
+            "collapsible",
+            "tabs",
+            "join",
         ];
         for type_name in expected {
             let factory: Function = fields.get(type_name).unwrap();
             let config = lua.create_table().unwrap();
             config.set("name", "test").unwrap();
             let result: Table = factory.call(config).unwrap();
-            assert_eq!(result.get::<String>("type").unwrap(), type_name,
-                "Factory for '{}' should set type correctly", type_name);
+            assert_eq!(
+                result.get::<String>("type").unwrap(),
+                type_name,
+                "Factory for '{}' should set type correctly",
+                type_name
+            );
         }
     }
 

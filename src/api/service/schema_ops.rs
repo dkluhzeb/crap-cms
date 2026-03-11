@@ -13,8 +13,8 @@ use crate::db::query::{AccessResult, LocaleContext};
 use crate::db::{ops, query};
 
 use super::convert::{
-    document_to_proto, field_def_to_proto, json_to_prost_value,
-    prost_struct_to_hashmap, prost_struct_to_json_map,
+    document_to_proto, field_def_to_proto, json_to_prost_value, prost_struct_to_hashmap,
+    prost_struct_to_json_map,
 };
 use super::ContentService;
 
@@ -51,12 +51,19 @@ impl ContentService {
         let doc = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &slug, "get_global", HashMap::new())?;
             let doc = ops::get_global(&pool, &slug, &def, locale_ctx.as_ref())?;
-            let doc = runner.apply_after_read(&hooks, &fields, &slug, "get_global", doc, None, None);
+            let doc =
+                runner.apply_after_read(&hooks, &fields, &slug, "get_global", doc, None, None);
             Ok::<_, anyhow::Error>(doc)
         })
         .await
-        .map_err(|e| { tracing::error!("GetGlobal task error: {}", e); Status::internal("Internal error") })?
-        .map_err(|e| { tracing::error!("GetGlobal query error: {}", e); Status::internal("Internal error") })?;
+        .map_err(|e| {
+            tracing::error!("GetGlobal task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            tracing::error!("GetGlobal query error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         let mut proto_doc = document_to_proto(&doc, &req.slug);
         self.strip_denied_read_fields(&mut proto_doc, &def_fields, &auth_user);
@@ -101,8 +108,10 @@ impl ContentService {
                 .pool
                 .get()
                 .map_err(|_| Status::internal("Database connection error"))?;
-            let tx = conn.transaction()
-                .map_err(|e| { tracing::error!("UpdateGlobal field access tx error: {}", e); Status::internal("Internal error") })?;
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("UpdateGlobal field access tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
             let denied =
                 self.hook_runner
                     .check_field_write_access(&def.fields, user_doc, "update", &tx);
@@ -125,20 +134,35 @@ impl ContentService {
         let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
         let (doc, _req_context) = tokio::task::spawn_blocking(move || {
             crate::service::update_global_document(
-                &pool, &runner, &slug, &def_owned,
+                &pool,
+                &runner,
+                &slug,
+                &def_owned,
                 crate::service::WriteInput {
-                    data, join_data: &join_data, password: None,
-                    locale_ctx: locale_ctx.as_ref(), locale: None, draft: false,
+                    data,
+                    join_data: &join_data,
+                    password: None,
+                    locale_ctx: locale_ctx.as_ref(),
+                    locale: None,
+                    draft: false,
                     ui_locale,
                 },
                 user_doc.as_ref(),
             )
         })
         .await
-        .map_err(|e| { tracing::error!("UpdateGlobal task error: {}", e); Status::internal("Internal error") })?
-        .map_err(|e| { tracing::error!("UpdateGlobal error: {}", e); Status::internal("Internal error") })?;
+        .map_err(|e| {
+            tracing::error!("UpdateGlobal task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            tracing::error!("UpdateGlobal error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
-        if let Some(c) = &self.populate_cache { c.clear(); }
+        if let Some(c) = &self.populate_cache {
+            c.clear();
+        }
 
         {
             let def = self.get_global_def(&req.slug);
@@ -172,7 +196,8 @@ impl ContentService {
         &self,
         _request: Request<content::ListCollectionsRequest>,
     ) -> Result<Response<content::ListCollectionsResponse>, Status> {
-        let mut collections: Vec<content::CollectionInfo> = self.registry
+        let mut collections: Vec<content::CollectionInfo> = self
+            .registry
             .collections
             .values()
             .map(|def| content::CollectionInfo {
@@ -194,7 +219,8 @@ impl ContentService {
             .collect();
         collections.sort_by(|a, b| a.slug.cmp(&b.slug));
 
-        let mut globals: Vec<content::GlobalInfo> = self.registry
+        let mut globals: Vec<content::GlobalInfo> = self
+            .registry
             .globals
             .values()
             .map(|def| content::GlobalInfo {
@@ -273,7 +299,10 @@ impl ContentService {
     pub(super) async fn subscribe_impl(
         &self,
         request: Request<content::SubscribeRequest>,
-    ) -> Result<Response<Pin<Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>>>, Status> {
+    ) -> Result<
+        Response<Pin<Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>>>,
+        Status,
+    > {
         let req = request.into_inner();
 
         let event_bus = self
@@ -292,7 +321,10 @@ impl ContentService {
                 crate::admin::server::load_auth_user(&pool, &registry, &claims, &locale_config)
             })
             .await
-            .map_err(|e| { tracing::error!("Subscribe auth task error: {}", e); Status::internal("Internal error") })?
+            .map_err(|e| {
+                tracing::error!("Subscribe auth task error: {}", e);
+                Status::internal("Internal error")
+            })?
         } else {
             None
         };
@@ -319,12 +351,14 @@ impl ContentService {
                 req.collections
             };
 
-            let mut conn = self
-                .pool
-                .get()
-                .map_err(|e| { tracing::error!("Subscribe DB connection: {}", e); Status::internal("Internal error") })?;
-            let tx = conn.transaction()
-                .map_err(|e| { tracing::error!("Subscribe tx error: {}", e); Status::internal("Internal error") })?;
+            let mut conn = self.pool.get().map_err(|e| {
+                tracing::error!("Subscribe DB connection: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("Subscribe tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
             for slug in &target_collections {
                 if let Some(def) = self.registry.get_collection(slug) {
@@ -446,7 +480,8 @@ impl ContentService {
 
         if !def.has_versions() {
             return Err(Status::failed_precondition(format!(
-                "Collection '{}' does not have versioning enabled", req.collection
+                "Collection '{}' does not have versioning enabled",
+                req.collection
             )));
         }
 
@@ -466,8 +501,14 @@ impl ContentService {
             query::list_versions(&conn, &collection, &id, limit, None)
         })
         .await
-        .map_err(|e| { tracing::error!("ListVersions task error: {}", e); Status::internal("Internal error") })?
-        .map_err(|e| { tracing::error!("ListVersions error: {}", e); Status::internal("Internal error") })?;
+        .map_err(|e| {
+            tracing::error!("ListVersions task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            tracing::error!("ListVersions error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         let proto_versions: Vec<content::VersionInfo> = versions
             .iter()
@@ -497,7 +538,8 @@ impl ContentService {
 
         if !def.has_versions() {
             return Err(Status::failed_precondition(format!(
-                "Collection '{}' does not have versioning enabled", req.collection
+                "Collection '{}' does not have versioning enabled",
+                req.collection
             )));
         }
 
@@ -523,15 +565,28 @@ impl ContentService {
             let version = query::find_version_by_id(&conn, &collection, &version_id)?
                 .ok_or_else(|| anyhow::anyhow!("Version '{}' not found", version_id))?;
             query::restore_version(
-                &conn, &collection, &def_owned, &document_id,
-                &version.snapshot, &version.status, &locale_config,
+                &conn,
+                &collection,
+                &def_owned,
+                &document_id,
+                &version.snapshot,
+                &version.status,
+                &locale_config,
             )
         })
         .await
-        .map_err(|e| { tracing::error!("RestoreVersion task error: {}", e); Status::internal("Internal error") })?
-        .map_err(|e| { tracing::error!("RestoreVersion error: {}", e); Status::internal("Internal error") })?;
+        .map_err(|e| {
+            tracing::error!("RestoreVersion task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            tracing::error!("RestoreVersion error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
-        if let Some(c) = &self.populate_cache { c.clear(); }
+        if let Some(c) = &self.populate_cache {
+            c.clear();
+        }
 
         let proto_doc = document_to_proto(&doc, &req.collection);
 
@@ -551,8 +606,11 @@ impl ContentService {
             return Err(Status::unauthenticated("Authentication required"));
         }
 
-        let jobs: Vec<content::JobDefinitionInfo> = self.registry.jobs.iter().map(|(slug, def)| {
-            content::JobDefinitionInfo {
+        let jobs: Vec<content::JobDefinitionInfo> = self
+            .registry
+            .jobs
+            .iter()
+            .map(|(slug, def)| content::JobDefinitionInfo {
                 slug: slug.clone(),
                 handler: def.handler.clone(),
                 schedule: def.schedule.clone(),
@@ -562,8 +620,8 @@ impl ContentService {
                 concurrency: def.concurrency,
                 skip_if_running: def.skip_if_running,
                 label: def.labels.singular.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         Ok(Response::new(content::ListJobsResponse { jobs }))
     }
@@ -581,7 +639,10 @@ impl ContentService {
         let req = request.into_inner();
 
         // Look up job definition
-        let job_def = self.registry.get_job(&req.slug).cloned()
+        let job_def = self
+            .registry
+            .get_job(&req.slug)
+            .cloned()
             .ok_or_else(|| Status::not_found(format!("Job '{}' not found", req.slug)))?;
 
         // Check access if defined
@@ -593,7 +654,9 @@ impl ContentService {
         }
 
         let data_json = req.data_json.unwrap_or_else(|| "{}".to_string());
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|_| Status::internal("Database connection error"))?;
 
         let job_run = crate::db::query::jobs::insert_job(
@@ -603,7 +666,11 @@ impl ContentService {
             "grpc",
             job_def.retries + 1,
             &job_def.queue,
-        ).map_err(|e| { tracing::error!("Failed to queue job: {}", e); Status::internal("Internal error") })?;
+        )
+        .map_err(|e| {
+            tracing::error!("Failed to queue job: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         Ok(Response::new(content::TriggerJobResponse {
             job_id: job_run.id,
@@ -622,7 +689,9 @@ impl ContentService {
         }
         let req = request.into_inner();
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|_| Status::internal("Database connection error"))?;
 
         let run = crate::db::query::jobs::get_job_run(&conn, &req.id)
@@ -644,7 +713,9 @@ impl ContentService {
         }
         let req = request.into_inner();
 
-        let conn = self.pool.get()
+        let conn = self
+            .pool
+            .get()
             .map_err(|_| Status::internal("Database connection error"))?;
 
         let limit = req.limit.unwrap_or(50);
@@ -656,11 +727,13 @@ impl ContentService {
             req.status.as_deref(),
             limit,
             offset,
-        ).map_err(|e| { tracing::error!("Job query error: {}", e); Status::internal("Internal error") })?;
+        )
+        .map_err(|e| {
+            tracing::error!("Job query error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
-        let runs: Vec<content::GetJobRunResponse> = runs.iter()
-            .map(job_run_to_proto)
-            .collect();
+        let runs: Vec<content::GetJobRunResponse> = runs.iter().map(job_run_to_proto).collect();
 
         Ok(Response::new(content::ListJobRunsResponse { runs }))
     }

@@ -9,21 +9,29 @@ use super::queued_conversion::QueuedConversion;
 /// Reads `{name}_url`, `{name}_width`, `{name}_height`, `{name}_webp_url`, `{name}_avif_url`
 /// from document fields, builds a nested PayloadCMS-style object, inserts as `sizes`,
 /// and removes the individual per-size columns.
-pub fn assemble_sizes_object(
-    doc: &mut crate::core::Document,
-    upload: &CollectionUpload,
-) {
+pub fn assemble_sizes_object(doc: &mut crate::core::Document, upload: &CollectionUpload) {
     let mut sizes = serde_json::Map::new();
 
     for size_def in &upload.image_sizes {
         let name = &size_def.name;
 
-        let url = doc.fields.remove(&format!("{}_url", name))
-            .and_then(|v| match v { serde_json::Value::String(s) => Some(s), _ => None });
-        let width = doc.fields.remove(&format!("{}_width", name))
-            .and_then(|v| v.as_f64()).map(|v| v as u32);
-        let height = doc.fields.remove(&format!("{}_height", name))
-            .and_then(|v| v.as_f64()).map(|v| v as u32);
+        let url = doc
+            .fields
+            .remove(&format!("{}_url", name))
+            .and_then(|v| match v {
+                serde_json::Value::String(s) => Some(s),
+                _ => None,
+            });
+        let width = doc
+            .fields
+            .remove(&format!("{}_width", name))
+            .and_then(|v| v.as_f64())
+            .map(|v| v as u32);
+        let height = doc
+            .fields
+            .remove(&format!("{}_height", name))
+            .and_then(|v| v.as_f64())
+            .map(|v| v as u32);
 
         if let Some(url) = url {
             let mut size_obj = serde_json::Map::new();
@@ -70,13 +78,17 @@ pub fn assemble_sizes_object(
     }
 
     if !sizes.is_empty() {
-        doc.fields.insert("sizes".to_string(), serde_json::Value::Object(sizes));
+        doc.fields
+            .insert("sizes".to_string(), serde_json::Value::Object(sizes));
     }
 }
 
 /// Inject upload metadata fields into form data from a processed upload.
 /// Writes per-size typed fields ({name}_url, {name}_width, {name}_height, {name}_webp_url, etc.)
-pub fn inject_upload_metadata(form_data: &mut HashMap<String, String>, processed: &ProcessedUpload) {
+pub fn inject_upload_metadata(
+    form_data: &mut HashMap<String, String>,
+    processed: &ProcessedUpload,
+) {
     form_data.insert("filename".into(), processed.filename.clone());
     form_data.insert("mime_type".into(), processed.mime_type.clone());
     form_data.insert("filesize".into(), processed.filesize.to_string());
@@ -101,10 +113,7 @@ pub fn inject_upload_metadata(form_data: &mut HashMap<String, String>, processed
 
 /// Delete all files associated with an upload document.
 /// Reads the url and per-size url fields to determine which files to remove.
-pub fn delete_upload_files(
-    config_dir: &Path,
-    doc_fields: &HashMap<String, serde_json::Value>,
-) {
+pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, serde_json::Value>) {
     // Collect all URL fields that point to upload files
     // These are: url, {size}_url, {size}_webp_url, {size}_avif_url
     for (key, value) in doc_fields {
@@ -135,9 +144,15 @@ pub fn enqueue_conversions(
     use crate::db::query::images::insert_image_queue_entry;
     for c in conversions {
         insert_image_queue_entry(
-            conn, collection, document_id,
-            &c.source_path, &c.target_path, &c.format, c.quality,
-            &c.url_column, &c.url_value,
+            conn,
+            collection,
+            document_id,
+            &c.source_path,
+            &c.target_path,
+            &c.format,
+            c.quality,
+            &c.url_column,
+            &c.url_value,
         )?;
     }
     Ok(())
@@ -147,8 +162,8 @@ pub fn enqueue_conversions(
 mod tests {
     use super::*;
     use crate::core::upload::{
-        FormatOptions, FormatQuality, FormatResult,
-        ImageSizeBuilder, ProcessedUploadBuilder, SizeResultBuilder,
+        FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUploadBuilder,
+        SizeResultBuilder,
     };
 
     #[test]
@@ -158,7 +173,10 @@ mod tests {
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
         upload.image_sizes = vec![
-            ImageSizeBuilder::new("thumbnail").width(300).height(300).build(),
+            ImageSizeBuilder::new("thumbnail")
+                .width(300)
+                .height(300)
+                .build(),
             ImageSizeBuilder::new("card").width(640).height(480).build(),
         ];
         upload.format_options = FormatOptions {
@@ -167,15 +185,32 @@ mod tests {
         };
 
         let mut doc = Document::new("test-id".into());
-        doc.fields.insert("url".into(), serde_json::json!("/uploads/media/orig.png"));
-        doc.fields.insert("thumbnail_url".into(), serde_json::json!("/uploads/media/thumb.png"));
-        doc.fields.insert("thumbnail_width".into(), serde_json::json!(300));
-        doc.fields.insert("thumbnail_height".into(), serde_json::json!(300));
-        doc.fields.insert("thumbnail_webp_url".into(), serde_json::json!("/uploads/media/thumb.webp"));
-        doc.fields.insert("card_url".into(), serde_json::json!("/uploads/media/card.png"));
-        doc.fields.insert("card_width".into(), serde_json::json!(640));
-        doc.fields.insert("card_height".into(), serde_json::json!(480));
-        doc.fields.insert("card_webp_url".into(), serde_json::json!("/uploads/media/card.webp"));
+        doc.fields
+            .insert("url".into(), serde_json::json!("/uploads/media/orig.png"));
+        doc.fields.insert(
+            "thumbnail_url".into(),
+            serde_json::json!("/uploads/media/thumb.png"),
+        );
+        doc.fields
+            .insert("thumbnail_width".into(), serde_json::json!(300));
+        doc.fields
+            .insert("thumbnail_height".into(), serde_json::json!(300));
+        doc.fields.insert(
+            "thumbnail_webp_url".into(),
+            serde_json::json!("/uploads/media/thumb.webp"),
+        );
+        doc.fields.insert(
+            "card_url".into(),
+            serde_json::json!("/uploads/media/card.png"),
+        );
+        doc.fields
+            .insert("card_width".into(), serde_json::json!(640));
+        doc.fields
+            .insert("card_height".into(), serde_json::json!(480));
+        doc.fields.insert(
+            "card_webp_url".into(),
+            serde_json::json!("/uploads/media/card.webp"),
+        );
 
         assemble_sizes_object(&mut doc, &upload);
 
@@ -193,17 +228,29 @@ mod tests {
         assert!(sizes.is_object());
 
         let thumb = sizes.get("thumbnail").expect("thumbnail size");
-        assert_eq!(thumb.get("url").unwrap().as_str().unwrap(), "/uploads/media/thumb.png");
+        assert_eq!(
+            thumb.get("url").unwrap().as_str().unwrap(),
+            "/uploads/media/thumb.png"
+        );
         assert_eq!(thumb.get("width").unwrap().as_u64().unwrap(), 300);
         assert_eq!(thumb.get("height").unwrap().as_u64().unwrap(), 300);
         let thumb_formats = thumb.get("formats").expect("formats");
         assert_eq!(
-            thumb_formats.get("webp").unwrap().get("url").unwrap().as_str().unwrap(),
+            thumb_formats
+                .get("webp")
+                .unwrap()
+                .get("url")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "/uploads/media/thumb.webp"
         );
 
         let card = sizes.get("card").expect("card size");
-        assert_eq!(card.get("url").unwrap().as_str().unwrap(), "/uploads/media/card.png");
+        assert_eq!(
+            card.get("url").unwrap().as_str().unwrap(),
+            "/uploads/media/card.png"
+        );
         assert_eq!(card.get("width").unwrap().as_u64().unwrap(), 640);
     }
 
@@ -213,12 +260,14 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![
-            ImageSizeBuilder::new("thumbnail").width(300).height(300).build(),
-        ];
+        upload.image_sizes = vec![ImageSizeBuilder::new("thumbnail")
+            .width(300)
+            .height(300)
+            .build()];
 
         let mut doc = Document::new("test-id".into());
-        doc.fields.insert("url".into(), serde_json::json!("/uploads/media/orig.pdf"));
+        doc.fields
+            .insert("url".into(), serde_json::json!("/uploads/media/orig.pdf"));
 
         assemble_sizes_object(&mut doc, &upload);
 
@@ -234,28 +283,44 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![
-            ImageSizeBuilder::new("thumb").width(100).height(100).build(),
-        ];
+        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
+            .width(100)
+            .height(100)
+            .build()];
         upload.format_options = FormatOptions {
             webp: None,
             avif: Some(FormatQuality::new(50, false)),
         };
 
         let mut doc = Document::new("id1".into());
-        doc.fields.insert("thumb_url".into(), serde_json::json!("/uploads/m/t.png"));
-        doc.fields.insert("thumb_width".into(), serde_json::json!(100));
-        doc.fields.insert("thumb_height".into(), serde_json::json!(100));
-        doc.fields.insert("thumb_avif_url".into(), serde_json::json!("/uploads/m/t.avif"));
+        doc.fields
+            .insert("thumb_url".into(), serde_json::json!("/uploads/m/t.png"));
+        doc.fields
+            .insert("thumb_width".into(), serde_json::json!(100));
+        doc.fields
+            .insert("thumb_height".into(), serde_json::json!(100));
+        doc.fields.insert(
+            "thumb_avif_url".into(),
+            serde_json::json!("/uploads/m/t.avif"),
+        );
 
         assemble_sizes_object(&mut doc, &upload);
 
         let sizes = doc.fields.get("sizes").expect("sizes should exist");
         let thumb = sizes.get("thumb").expect("thumb");
         let formats = thumb.get("formats").expect("formats");
-        assert!(formats.get("avif").is_some(), "AVIF format should be in assembled object");
+        assert!(
+            formats.get("avif").is_some(),
+            "AVIF format should be in assembled object"
+        );
         assert_eq!(
-            formats.get("avif").unwrap().get("url").unwrap().as_str().unwrap(),
+            formats
+                .get("avif")
+                .unwrap()
+                .get("url")
+                .unwrap()
+                .as_str()
+                .unwrap(),
             "/uploads/m/t.avif"
         );
         // webp should not be present
@@ -268,9 +333,10 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![
-            ImageSizeBuilder::new("thumb").width(100).height(100).build(),
-        ];
+        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
+            .width(100)
+            .height(100)
+            .build()];
         upload.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: Some(FormatQuality::new(50, false)),
@@ -278,15 +344,30 @@ mod tests {
 
         let mut doc = Document::new("id1".into());
         // No thumb_url, but format columns exist (edge case: orphaned format columns)
-        doc.fields.insert("thumb_webp_url".into(), serde_json::json!("/uploads/m/t.webp"));
-        doc.fields.insert("thumb_avif_url".into(), serde_json::json!("/uploads/m/t.avif"));
+        doc.fields.insert(
+            "thumb_webp_url".into(),
+            serde_json::json!("/uploads/m/t.webp"),
+        );
+        doc.fields.insert(
+            "thumb_avif_url".into(),
+            serde_json::json!("/uploads/m/t.avif"),
+        );
 
         assemble_sizes_object(&mut doc, &upload);
 
         // The else branch should remove format columns even without URL
-        assert!(!doc.fields.contains_key("thumb_webp_url"), "Orphaned webp column should be removed");
-        assert!(!doc.fields.contains_key("thumb_avif_url"), "Orphaned avif column should be removed");
-        assert!(!doc.fields.contains_key("sizes"), "No sizes object since no URL");
+        assert!(
+            !doc.fields.contains_key("thumb_webp_url"),
+            "Orphaned webp column should be removed"
+        );
+        assert!(
+            !doc.fields.contains_key("thumb_avif_url"),
+            "Orphaned avif column should be removed"
+        );
+        assert!(
+            !doc.fields.contains_key("sizes"),
+            "No sizes object since no URL"
+        );
     }
 
     #[test]
@@ -295,33 +376,40 @@ mod tests {
 
         let mut upload = CollectionUpload::default();
         upload.enabled = true;
-        upload.image_sizes = vec![
-            ImageSizeBuilder::new("thumb").width(100).height(100).build(),
-        ];
+        upload.image_sizes = vec![ImageSizeBuilder::new("thumb")
+            .width(100)
+            .height(100)
+            .build()];
 
         let mut doc = Document::new("id1".into());
-        doc.fields.insert("thumb_url".into(), serde_json::json!("/uploads/m/t.png"));
+        doc.fields
+            .insert("thumb_url".into(), serde_json::json!("/uploads/m/t.png"));
         // Only width, no height
-        doc.fields.insert("thumb_width".into(), serde_json::json!(100));
+        doc.fields
+            .insert("thumb_width".into(), serde_json::json!(100));
 
         assemble_sizes_object(&mut doc, &upload);
 
         let sizes = doc.fields.get("sizes").expect("sizes");
         let thumb = sizes.get("thumb").expect("thumb");
         assert!(thumb.get("width").is_some());
-        assert!(thumb.get("height").is_none(), "Missing height should not appear");
+        assert!(
+            thumb.get("height").is_none(),
+            "Missing height should not appear"
+        );
         // No formats since format_options is default (None)
         assert!(thumb.get("formats").is_none());
     }
 
     #[test]
     fn inject_upload_metadata_basic() {
-        let processed = ProcessedUploadBuilder::new("abc_photo.png", "/uploads/media/abc_photo.png")
-            .mime_type("image/png")
-            .filesize(12345)
-            .width(800)
-            .height(600)
-            .build();
+        let processed =
+            ProcessedUploadBuilder::new("abc_photo.png", "/uploads/media/abc_photo.png")
+                .mime_type("image/png")
+                .filesize(12345)
+                .width(800)
+                .height(600)
+                .build();
         let mut form_data = HashMap::new();
         inject_upload_metadata(&mut form_data, &processed);
 
@@ -330,7 +418,10 @@ mod tests {
         assert_eq!(form_data.get("filesize").unwrap(), "12345");
         assert_eq!(form_data.get("width").unwrap(), "800");
         assert_eq!(form_data.get("height").unwrap(), "600");
-        assert_eq!(form_data.get("url").unwrap(), "/uploads/media/abc_photo.png");
+        assert_eq!(
+            form_data.get("url").unwrap(),
+            "/uploads/media/abc_photo.png"
+        );
     }
 
     #[test]
@@ -352,11 +443,14 @@ mod tests {
         let mut formats = HashMap::new();
         formats.insert("webp".into(), FormatResult::new("/uploads/m/t.webp"));
         let mut sizes = HashMap::new();
-        sizes.insert("thumb".into(), SizeResultBuilder::new("/uploads/m/t.png")
-            .width(100)
-            .height(100)
-            .formats(formats)
-            .build());
+        sizes.insert(
+            "thumb".into(),
+            SizeResultBuilder::new("/uploads/m/t.png")
+                .width(100)
+                .height(100)
+                .formats(formats)
+                .build(),
+        );
 
         let processed = ProcessedUploadBuilder::new("img.png", "/uploads/m/img.png")
             .mime_type("image/png")
@@ -371,7 +465,10 @@ mod tests {
         assert_eq!(form_data.get("thumb_url").unwrap(), "/uploads/m/t.png");
         assert_eq!(form_data.get("thumb_width").unwrap(), "100");
         assert_eq!(form_data.get("thumb_height").unwrap(), "100");
-        assert_eq!(form_data.get("thumb_webp_url").unwrap(), "/uploads/m/t.webp");
+        assert_eq!(
+            form_data.get("thumb_webp_url").unwrap(),
+            "/uploads/m/t.webp"
+        );
     }
 
     #[test]
@@ -393,7 +490,10 @@ mod tests {
     fn delete_upload_files_handles_missing_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut doc_fields = HashMap::new();
-        doc_fields.insert("url".into(), serde_json::json!("/uploads/media/nonexistent.png"));
+        doc_fields.insert(
+            "url".into(),
+            serde_json::json!("/uploads/media/nonexistent.png"),
+        );
 
         // Should not panic even if file doesn't exist
         delete_upload_files(tmp.path(), &doc_fields);
@@ -403,8 +503,14 @@ mod tests {
     fn delete_upload_files_skips_non_upload_urls() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut doc_fields = HashMap::new();
-        doc_fields.insert("url".into(), serde_json::json!("https://external.com/image.png"));
-        doc_fields.insert("website_url".into(), serde_json::json!("https://example.com"));
+        doc_fields.insert(
+            "url".into(),
+            serde_json::json!("https://external.com/image.png"),
+        );
+        doc_fields.insert(
+            "website_url".into(),
+            serde_json::json!("https://example.com"),
+        );
 
         // Should not panic and not try to delete external URLs
         delete_upload_files(tmp.path(), &doc_fields);
@@ -425,8 +531,14 @@ mod tests {
 
         let mut doc_fields = HashMap::new();
         doc_fields.insert("url".into(), serde_json::json!("/uploads/media/orig.png"));
-        doc_fields.insert("thumb_url".into(), serde_json::json!("/uploads/media/orig_thumb.png"));
-        doc_fields.insert("thumb_webp_url".into(), serde_json::json!("/uploads/media/orig_thumb.webp"));
+        doc_fields.insert(
+            "thumb_url".into(),
+            serde_json::json!("/uploads/media/orig_thumb.png"),
+        );
+        doc_fields.insert(
+            "thumb_webp_url".into(),
+            serde_json::json!("/uploads/media/orig_thumb.webp"),
+        );
 
         delete_upload_files(tmp.path(), &doc_fields);
         assert!(!orig_path.exists());
@@ -444,7 +556,10 @@ mod tests {
         std::fs::write(&file_path, b"keep me").unwrap();
 
         let mut doc_fields = HashMap::new();
-        doc_fields.insert("image_url".into(), serde_json::json!("/uploads/media/keep.png"));
+        doc_fields.insert(
+            "image_url".into(),
+            serde_json::json!("/uploads/media/keep.png"),
+        );
 
         delete_upload_files(tmp.path(), &doc_fields);
         assert!(file_path.exists(), "image_url fields should be skipped");

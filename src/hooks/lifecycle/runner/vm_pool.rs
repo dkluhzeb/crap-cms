@@ -22,19 +22,29 @@ impl VmPool {
     /// Acquire a VM from the pool, blocking up to 5 seconds.
     pub(super) fn acquire(&self) -> anyhow::Result<VmGuard<'_>> {
         let timeout = Duration::from_secs(5);
-        let mut pool = self.vms.lock()
+        let mut pool = self
+            .vms
+            .lock()
             .map_err(|e| anyhow::anyhow!("VM pool lock poisoned: {}", e))?;
         loop {
             if let Some(vm) = pool.pop() {
-                return Ok(VmGuard { pool: self, vm: Some(vm) });
+                return Ok(VmGuard {
+                    pool: self,
+                    vm: Some(vm),
+                });
             }
-            let (guard, wait_result) = self.available.wait_timeout(pool, timeout)
+            let (guard, wait_result) = self
+                .available
+                .wait_timeout(pool, timeout)
                 .map_err(|e| anyhow::anyhow!("VM pool condvar wait failed: {}", e))?;
             pool = guard;
             if wait_result.timed_out() {
                 // Try one more time after timeout — another thread may have returned a VM
                 if let Some(vm) = pool.pop() {
-                    return Ok(VmGuard { pool: self, vm: Some(vm) });
+                    return Ok(VmGuard {
+                        pool: self,
+                        vm: Some(vm),
+                    });
                 }
                 bail!("VM pool acquire timed out after 5s");
             }
@@ -119,12 +129,18 @@ mod tests {
         // lifetime escape issue.
         let handle_a = thread::spawn(move || {
             let guard = pool_a.acquire().expect("thread A: acquire should succeed");
-            let v: i64 = guard.load("return 1").eval().expect("lua eval on guard_a failed");
+            let v: i64 = guard
+                .load("return 1")
+                .eval()
+                .expect("lua eval on guard_a failed");
             v
         });
         let handle_b = thread::spawn(move || {
             let guard = pool_b.acquire().expect("thread B: acquire should succeed");
-            let v: i64 = guard.load("return 2").eval().expect("lua eval on guard_b failed");
+            let v: i64 = guard
+                .load("return 2")
+                .eval()
+                .expect("lua eval on guard_b failed");
             v
         });
 

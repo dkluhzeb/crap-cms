@@ -50,8 +50,18 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     fs::create_dir_all(&target)
         .with_context(|| format!("Failed to create directory '{}'", target.display()))?;
 
-    for subdir in &["collections", "globals", "hooks", "access", "jobs", "plugins",
-                    "templates", "static", "migrations", "types"] {
+    for subdir in &[
+        "collections",
+        "globals",
+        "hooks",
+        "access",
+        "jobs",
+        "plugins",
+        "templates",
+        "static",
+        "migrations",
+        "types",
+    ] {
         fs::create_dir_all(target.join(subdir))
             .with_context(|| format!("Failed to create {}/", subdir))?;
     }
@@ -78,7 +88,9 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     if opts.locales.is_empty() {
         toml.push_str("\n# [locale]\n# default_locale = \"en\"         # default locale for content\n# locales = [\"en\", \"de\"]        # supported locales (empty = disabled)\n# fallback = true               # fall back to default locale if field is empty\n");
     } else {
-        let locales_str = opts.locales.iter()
+        let locales_str = opts
+            .locales
+            .iter()
             .map(|l| format!("\"{}\"", l))
             .collect::<Vec<_>>()
             .join(", ");
@@ -98,8 +110,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     toml.push_str("\n# [access]\n# default_deny = false           # when true, collections without access functions deny all\n");
     toml.push_str("\n# [mcp]\n# enabled = true                 # enable MCP (Model Context Protocol) server\n# http = false                   # enable HTTP transport on /mcp (POST)\n# config_tools = false           # enable config generation tools (write access to config dir)\n# api_key = \"\"                   # API key for HTTP transport auth (empty = no auth)\n# include_collections = []       # whitelist (empty = all)\n# exclude_collections = []       # blacklist (takes precedence over include)\n");
 
-    fs::write(&toml_path, &toml)
-        .context("Failed to write crap.toml")?;
+    fs::write(&toml_path, &toml).context("Failed to write crap.toml")?;
 
     // init.lua — entry point with commented examples
     fs::write(
@@ -243,6 +254,9 @@ mod tests {
 
         let result = init(Some(target), &InitOptions::default());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("refusing to overwrite"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("refusing to overwrite"));
     }
 }

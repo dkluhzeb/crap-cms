@@ -3,14 +3,14 @@
 
 use std::path::Path;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{bail, Context as _, Result};
 use serde_json::{json, Value};
 
 use crate::config::McpConfig;
 use crate::core::Registry;
 
+use super::super::schema::{collection_input_schema, global_input_schema, CrudOp};
 use super::should_include;
-use super::super::schema::{CrudOp, collection_input_schema, global_input_schema};
 
 pub(super) fn exec_list_collections(registry: &Registry, mcp_config: &McpConfig) -> Result<String> {
     let mut result = Vec::new();
@@ -38,8 +38,14 @@ pub(super) fn exec_list_collections(registry: &Registry, mcp_config: &McpConfig)
     Ok(serde_json::to_string_pretty(&result)?)
 }
 
-pub(super) fn exec_describe_collection(args: &Value, registry: &Registry, mcp_config: &McpConfig) -> Result<String> {
-    let slug = args.get("slug").and_then(|v| v.as_str())
+pub(super) fn exec_describe_collection(
+    args: &Value,
+    registry: &Registry,
+    mcp_config: &McpConfig,
+) -> Result<String> {
+    let slug = args
+        .get("slug")
+        .and_then(|v| v.as_str())
         .context("Missing 'slug' argument")?;
 
     if let Some(def) = registry.collections.get(slug) {
@@ -217,7 +223,8 @@ pub(super) fn exec_cli_reference(args: &Value) -> Result<String> {
                         }
                     ]
                 }),
-                "blueprint" | "blueprint save" | "blueprint use" | "blueprint list" | "blueprint remove" => json!({
+                "blueprint" | "blueprint save" | "blueprint use" | "blueprint list"
+                | "blueprint remove" => json!({
                     "command": "crap-cms blueprint <SUBCOMMAND>",
                     "description": "Manage saved blueprints",
                     "subcommands": [
@@ -227,7 +234,13 @@ pub(super) fn exec_cli_reference(args: &Value) -> Result<String> {
                         { "name": "remove", "usage": "crap-cms blueprint remove [NAME]", "description": "Remove a saved blueprint" }
                     ]
                 }),
-                "user" | "user create" | "user list" | "user delete" | "user lock" | "user unlock" | "user change-password" => json!({
+                "user"
+                | "user create"
+                | "user list"
+                | "user delete"
+                | "user lock"
+                | "user unlock"
+                | "user change-password" => json!({
                     "command": "crap-cms user <SUBCOMMAND>",
                     "description": "User management for auth collections",
                     "subcommands": [
@@ -271,7 +284,8 @@ pub(super) fn exec_cli_reference(args: &Value) -> Result<String> {
                         }
                     ]
                 }),
-                "migrate" | "migrate create" | "migrate up" | "migrate down" | "migrate list" | "migrate fresh" => json!({
+                "migrate" | "migrate create" | "migrate up" | "migrate down" | "migrate list"
+                | "migrate fresh" => json!({
                     "command": "crap-cms migrate <CONFIG_DIR> <SUBCOMMAND>",
                     "description": "Run database migrations",
                     "subcommands": [
@@ -386,7 +400,8 @@ pub(super) fn exec_cli_reference(args: &Value) -> Result<String> {
                         }
                     ]
                 }),
-                "jobs" | "jobs list" | "jobs trigger" | "jobs status" | "jobs purge" | "jobs healthcheck" => json!({
+                "jobs" | "jobs list" | "jobs trigger" | "jobs status" | "jobs purge"
+                | "jobs healthcheck" => json!({
                     "command": "crap-cms jobs <SUBCOMMAND>",
                     "description": "Manage background jobs",
                     "subcommands": [
@@ -420,46 +435,50 @@ pub(super) fn exec_cli_reference(args: &Value) -> Result<String> {
                         { "name": "healthcheck", "usage": "crap-cms jobs healthcheck <CONFIG_DIR>", "description": "Check job system health" }
                     ]
                 }),
-                "images" | "images list" | "images stats" | "images retry" | "images purge" => json!({
-                    "command": "crap-cms images <SUBCOMMAND>",
-                    "description": "Manage image processing queue",
-                    "subcommands": [
-                        {
-                            "name": "list",
-                            "usage": "crap-cms images list <CONFIG_DIR> [OPTIONS]",
-                            "description": "List image processing queue entries",
-                            "flags": [
-                                { "flag": "-s, --status <STATUS>", "description": "Filter: pending, processing, completed, failed" },
-                                { "flag": "-l, --limit <N>", "description": "Max entries (default: 20)" }
-                            ]
-                        },
-                        { "name": "stats", "usage": "crap-cms images stats <CONFIG_DIR>", "description": "Show queue statistics by status" },
-                        {
-                            "name": "retry",
-                            "usage": "crap-cms images retry <CONFIG_DIR> [OPTIONS]",
-                            "description": "Retry failed queue entries",
-                            "flags": [
-                                { "flag": "--id <ID>", "description": "Retry a specific entry by ID" },
-                                { "flag": "--all", "description": "Retry all failed entries" },
-                                { "flag": "-y, --confirm", "description": "Confirm retry all (required with --all)" }
-                            ]
-                        },
-                        {
-                            "name": "purge",
-                            "usage": "crap-cms images purge <CONFIG_DIR> [OPTIONS]",
-                            "description": "Purge old completed/failed entries",
-                            "flags": [
-                                { "flag": "--older-than <DURATION>", "description": "Delete entries older than this (e.g., '7d'). Default: 7d" }
-                            ]
-                        }
-                    ]
-                }),
+                "images" | "images list" | "images stats" | "images retry" | "images purge" => {
+                    json!({
+                        "command": "crap-cms images <SUBCOMMAND>",
+                        "description": "Manage image processing queue",
+                        "subcommands": [
+                            {
+                                "name": "list",
+                                "usage": "crap-cms images list <CONFIG_DIR> [OPTIONS]",
+                                "description": "List image processing queue entries",
+                                "flags": [
+                                    { "flag": "-s, --status <STATUS>", "description": "Filter: pending, processing, completed, failed" },
+                                    { "flag": "-l, --limit <N>", "description": "Max entries (default: 20)" }
+                                ]
+                            },
+                            { "name": "stats", "usage": "crap-cms images stats <CONFIG_DIR>", "description": "Show queue statistics by status" },
+                            {
+                                "name": "retry",
+                                "usage": "crap-cms images retry <CONFIG_DIR> [OPTIONS]",
+                                "description": "Retry failed queue entries",
+                                "flags": [
+                                    { "flag": "--id <ID>", "description": "Retry a specific entry by ID" },
+                                    { "flag": "--all", "description": "Retry all failed entries" },
+                                    { "flag": "-y, --confirm", "description": "Confirm retry all (required with --all)" }
+                                ]
+                            },
+                            {
+                                "name": "purge",
+                                "usage": "crap-cms images purge <CONFIG_DIR> [OPTIONS]",
+                                "description": "Purge old completed/failed entries",
+                                "flags": [
+                                    { "flag": "--older-than <DURATION>", "description": "Delete entries older than this (e.g., '7d'). Default: 7d" }
+                                ]
+                            }
+                        ]
+                    })
+                }
                 "mcp" => json!({
                     "command": "crap-cms mcp <CONFIG_DIR>",
                     "description": "Start the MCP (Model Context Protocol) server using stdio transport",
                     "examples": ["crap-cms mcp ./my-site"]
                 }),
-                _ => json!({ "error": format!("Unknown command: '{}'. Call cli_reference without a command argument to see all available commands.", cmd) }),
+                _ => {
+                    json!({ "error": format!("Unknown command: '{}'. Call cli_reference without a command argument to see all available commands.", cmd) })
+                }
             };
             Ok(serde_json::to_string_pretty(&detail)?)
         }
@@ -481,7 +500,8 @@ pub(super) fn safe_config_path(config_dir: &Path, relative: &str) -> Result<std:
     // Canonicalize and verify the result stays within config_dir.
     // For read/list, the file/dir must already exist for canonicalize to work.
     // For write, the parent must exist (create_dir_all handles this upstream).
-    let canonical_base = config_dir.canonicalize()
+    let canonical_base = config_dir
+        .canonicalize()
         .with_context(|| format!("Config dir not found: {}", config_dir.display()))?;
     // If file exists, canonicalize it. Otherwise verify the parent is inside config_dir.
     if full_path.exists() {
@@ -502,7 +522,9 @@ pub(super) fn safe_config_path(config_dir: &Path, relative: &str) -> Result<std:
 }
 
 pub(super) fn exec_read_config_file(args: &Value, config_dir: &Path) -> Result<String> {
-    let path = args.get("path").and_then(|v| v.as_str())
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
         .context("Missing 'path' argument")?;
     let full_path = safe_config_path(config_dir, path)?;
     let content = std::fs::read_to_string(&full_path)
@@ -511,9 +533,13 @@ pub(super) fn exec_read_config_file(args: &Value, config_dir: &Path) -> Result<S
 }
 
 pub(super) fn exec_write_config_file(args: &Value, config_dir: &Path) -> Result<String> {
-    let path = args.get("path").and_then(|v| v.as_str())
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
         .context("Missing 'path' argument")?;
-    let content = args.get("content").and_then(|v| v.as_str())
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
         .context("Missing 'content' argument")?;
     let full_path = safe_config_path(config_dir, path)?;
     if let Some(parent) = full_path.parent() {

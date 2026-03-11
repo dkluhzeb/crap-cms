@@ -1,14 +1,14 @@
 use axum::{
     extract::{Form, State},
+    http::StatusCode,
     response::IntoResponse,
     Extension,
-    http::StatusCode,
 };
 
-use crate::admin::AdminState;
-use crate::db::query;
-use crate::core::auth::AuthUser;
 use super::LocaleForm;
+use crate::admin::AdminState;
+use crate::core::auth::AuthUser;
+use crate::db::query;
 
 /// POST /admin/api/locale — save user's preferred admin UI locale.
 pub async fn save_locale(
@@ -39,7 +39,8 @@ pub async fn save_locale(
         let json_str = serde_json::to_string(&settings)?;
         query::set_user_settings(&conn, &user_id, &json_str)?;
         Ok::<_, anyhow::Error>(())
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),

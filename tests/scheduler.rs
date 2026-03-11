@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::job::{JobDefinition, JobStatus};
-use crap_cms::db::{migrate, pool, query};
 use crap_cms::db::query::jobs as job_query;
+use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::scheduler;
@@ -12,7 +12,12 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/job_tests")
 }
 
-fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry, HookRunner) {
+fn setup() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+    HookRunner,
+) {
     let config_dir = fixture_dir();
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).expect("Failed to init Lua");
@@ -40,11 +45,19 @@ fn execute_job_echo_completes_successfully() {
 
     // Insert and claim a job
     let conn = pool.get().expect("DB connection");
-    let run = job_query::insert_job(&conn, "test_echo_job", "{\"hello\":\"world\"}", "manual", 1, "default")
-        .expect("insert_job");
+    let run = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{\"hello\":\"world\"}",
+        "manual",
+        1,
+        "default",
+    )
+    .expect("insert_job");
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -79,10 +92,12 @@ fn execute_job_creates_document() {
         "manual",
         1,
         "default",
-    ).expect("insert_job");
+    )
+    .expect("insert_job");
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -99,10 +114,13 @@ fn execute_job_creates_document() {
     drop(reg);
 
     let conn = pool.get().expect("DB connection");
-    let docs = query::find(&conn, "posts", &def, &query::FindQuery::default(), None)
-        .expect("find posts");
+    let docs =
+        query::find(&conn, "posts", &def, &query::FindQuery::default(), None).expect("find posts");
     assert!(!docs.is_empty(), "Job should have created a post");
-    assert_eq!(docs[0].fields.get("title").and_then(|v| v.as_str()), Some("Scheduler Created"));
+    assert_eq!(
+        docs[0].fields.get("title").and_then(|v| v.as_str()),
+        Some("Scheduler Created")
+    );
 
     // Verify the job run is completed
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
@@ -120,7 +138,8 @@ fn execute_job_failing_handler_marks_failed() {
         .expect("insert_job");
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -135,7 +154,11 @@ fn execute_job_failing_handler_marks_failed() {
     let conn = pool.get().expect("DB connection");
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
     assert_eq!(fetched.status, JobStatus::Failed);
-    assert!(fetched.error.as_ref().unwrap().contains("intentional failure"));
+    assert!(fetched
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("intentional failure"));
 }
 
 // ── execute_job: failing handler with retry ─────────────────────────────
@@ -150,7 +173,8 @@ fn execute_job_failing_handler_retries() {
         .expect("insert_job");
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
     assert_eq!(claimed.len(), 1);
     drop(conn);
 
@@ -179,14 +203,16 @@ fn recover_stale_jobs_on_full_setup() {
     let run = job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
     assert_eq!(claimed.len(), 1);
 
     // Backdate the heartbeat to make it appear stale
     conn.execute(
         "UPDATE _crap_jobs SET heartbeat_at = datetime('now', '-600 seconds') WHERE id = ?1",
         [&run.id],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Recover stale jobs
     scheduler::recover_stale_jobs(&conn, &registry).unwrap();
@@ -205,7 +231,9 @@ fn check_cron_schedules_fires_test_cron_job() {
     // Verify the test_cron_job definition was loaded
     {
         let reg = registry.read().unwrap();
-        let def = reg.get_job("test_cron_job").expect("test_cron_job should be defined");
+        let def = reg
+            .get_job("test_cron_job")
+            .expect("test_cron_job should be defined");
         assert_eq!(def.schedule.as_deref(), Some("* * * * *"));
         assert!(def.skip_if_running);
     }
@@ -233,7 +261,8 @@ fn check_cron_schedules_skip_if_running_integration() {
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'test_cron_job'",
             [],
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     let now = chrono::Utc::now();
@@ -243,10 +272,13 @@ fn check_cron_schedules_skip_if_running_integration() {
 
     // test_cron_job has skip_if_running=true, so no new pending job
     let conn = pool.get().unwrap();
-    let pending = job_query::list_job_runs(&conn, Some("test_cron_job"), Some("pending"), 100, 0).unwrap();
+    let pending =
+        job_query::list_job_runs(&conn, Some("test_cron_job"), Some("pending"), 100, 0).unwrap();
     assert_eq!(pending.len(), 0);
 
     // But test_cron_nonskip has skip_if_running=false, so it should have a pending job
-    let nonskip = job_query::list_job_runs(&conn, Some("test_cron_nonskip"), Some("pending"), 100, 0).unwrap();
+    let nonskip =
+        job_query::list_job_runs(&conn, Some("test_cron_nonskip"), Some("pending"), 100, 0)
+            .unwrap();
     assert_eq!(nonskip.len(), 1);
 }

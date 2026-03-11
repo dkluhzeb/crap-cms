@@ -10,7 +10,7 @@ use crate::config::CrapConfig;
 use crate::core::SharedRegistry;
 use crate::hooks::lifecycle::crud::register_crud_functions;
 use crate::hooks::lifecycle::execution::scan_registered_events;
-use crate::hooks::lifecycle::types::{HookDepth, MaxHookDepth, DefaultDeny};
+use crate::hooks::lifecycle::types::{DefaultDeny, HookDepth, MaxHookDepth};
 
 use super::vm_pool::VmPool;
 use super::HookRunner;
@@ -94,7 +94,9 @@ fn create_lua_vm(
         "#,
         config_str
     );
-    lua.load(&code).exec().context("Failed to set package paths")?;
+    lua.load(&code)
+        .exec()
+        .context("Failed to set package paths")?;
 
     // Register crap.log, crap.util, crap.collections.define, etc.
     crate::hooks::api::register_api(&lua, registry.clone(), config_dir, config)?;

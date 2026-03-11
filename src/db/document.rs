@@ -1,7 +1,7 @@
 //! Row-to-document conversion from SQLite result sets.
 
-use rusqlite::Row;
 use crate::core::Document;
+use rusqlite::Row;
 use std::collections::HashMap;
 
 /// Convert a rusqlite Row to a Document given the column names.
@@ -15,10 +15,14 @@ pub fn row_to_document(row: &Row, column_names: &[String]) -> rusqlite::Result<D
         match name.as_str() {
             "id" => continue,
             "created_at" => {
-                created_at = row.get::<_, Option<String>>(name.as_str())?.map(normalize_timestamp);
+                created_at = row
+                    .get::<_, Option<String>>(name.as_str())?
+                    .map(normalize_timestamp);
             }
             "updated_at" => {
-                updated_at = row.get::<_, Option<String>>(name.as_str())?.map(normalize_timestamp);
+                updated_at = row
+                    .get::<_, Option<String>>(name.as_str())?
+                    .map(normalize_timestamp);
             }
             _ => {
                 let value = sqlite_value_to_json(row, name)?;
@@ -78,30 +82,37 @@ mod tests {
                 null_col TEXT,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 
     #[test]
     fn sqlite_value_to_json_integer() {
         let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, int_col) VALUES ('1', 42)", []).unwrap();
-        let mut stmt = conn.prepare("SELECT int_col FROM test WHERE id='1'").unwrap();
-        let val: serde_json::Value = stmt.query_row([], |row| {
-            sqlite_value_to_json(row, "int_col")
-        }).unwrap();
+        conn.execute("INSERT INTO test (id, int_col) VALUES ('1', 42)", [])
+            .unwrap();
+        let mut stmt = conn
+            .prepare("SELECT int_col FROM test WHERE id='1'")
+            .unwrap();
+        let val: serde_json::Value = stmt
+            .query_row([], |row| sqlite_value_to_json(row, "int_col"))
+            .unwrap();
         assert_eq!(val, serde_json::json!(42));
     }
 
     #[test]
     fn sqlite_value_to_json_float() {
         let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, real_col) VALUES ('1', 3.14)", []).unwrap();
-        let mut stmt = conn.prepare("SELECT real_col FROM test WHERE id='1'").unwrap();
-        let val: serde_json::Value = stmt.query_row([], |row| {
-            sqlite_value_to_json(row, "real_col")
-        }).unwrap();
+        conn.execute("INSERT INTO test (id, real_col) VALUES ('1', 3.14)", [])
+            .unwrap();
+        let mut stmt = conn
+            .prepare("SELECT real_col FROM test WHERE id='1'")
+            .unwrap();
+        let val: serde_json::Value = stmt
+            .query_row([], |row| sqlite_value_to_json(row, "real_col"))
+            .unwrap();
         // SQLite stores 3.14 as float; check it's close
         assert!(val.as_f64().unwrap() > 3.13 && val.as_f64().unwrap() < 3.15);
     }
@@ -109,22 +120,28 @@ mod tests {
     #[test]
     fn sqlite_value_to_json_text() {
         let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, text_col) VALUES ('1', 'hello')", []).unwrap();
-        let mut stmt = conn.prepare("SELECT text_col FROM test WHERE id='1'").unwrap();
-        let val: serde_json::Value = stmt.query_row([], |row| {
-            sqlite_value_to_json(row, "text_col")
-        }).unwrap();
+        conn.execute("INSERT INTO test (id, text_col) VALUES ('1', 'hello')", [])
+            .unwrap();
+        let mut stmt = conn
+            .prepare("SELECT text_col FROM test WHERE id='1'")
+            .unwrap();
+        let val: serde_json::Value = stmt
+            .query_row([], |row| sqlite_value_to_json(row, "text_col"))
+            .unwrap();
         assert_eq!(val, serde_json::json!("hello"));
     }
 
     #[test]
     fn sqlite_value_to_json_null() {
         let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, null_col) VALUES ('1', NULL)", []).unwrap();
-        let mut stmt = conn.prepare("SELECT null_col FROM test WHERE id='1'").unwrap();
-        let val: serde_json::Value = stmt.query_row([], |row| {
-            sqlite_value_to_json(row, "null_col")
-        }).unwrap();
+        conn.execute("INSERT INTO test (id, null_col) VALUES ('1', NULL)", [])
+            .unwrap();
+        let mut stmt = conn
+            .prepare("SELECT null_col FROM test WHERE id='1'")
+            .unwrap();
+        let val: serde_json::Value = stmt
+            .query_row([], |row| sqlite_value_to_json(row, "null_col"))
+            .unwrap();
         assert!(val.is_null());
     }
 
@@ -142,12 +159,19 @@ mod tests {
             "created_at".to_string(),
             "updated_at".to_string(),
         ];
-        let mut stmt = conn.prepare("SELECT id, text_col, int_col, created_at, updated_at FROM test WHERE id='doc1'").unwrap();
-        let doc = stmt.query_row([], |row| {
-            row_to_document(row, &columns)
-        }).unwrap();
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, text_col, int_col, created_at, updated_at FROM test WHERE id='doc1'",
+            )
+            .unwrap();
+        let doc = stmt
+            .query_row([], |row| row_to_document(row, &columns))
+            .unwrap();
         assert_eq!(doc.id, "doc1");
-        assert_eq!(doc.fields.get("text_col").unwrap(), &serde_json::json!("hello"));
+        assert_eq!(
+            doc.fields.get("text_col").unwrap(),
+            &serde_json::json!("hello")
+        );
         assert_eq!(doc.fields.get("int_col").unwrap(), &serde_json::json!(42));
         assert_eq!(doc.created_at.as_deref(), Some("2024-01-01"));
         assert_eq!(doc.updated_at.as_deref(), Some("2024-01-02"));

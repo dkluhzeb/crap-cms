@@ -125,8 +125,12 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
             .with_context(|| format!("Failed to remove existing blueprint '{}'", name))?;
     }
 
-    fs::create_dir_all(&target)
-        .with_context(|| format!("Failed to create blueprint directory '{}'", target.display()))?;
+    fs::create_dir_all(&target).with_context(|| {
+        format!(
+            "Failed to create blueprint directory '{}'",
+            target.display()
+        )
+    })?;
 
     copy_dir_recursive(config_dir, &target, BLUEPRINT_SKIP)
         .with_context(|| format!("Failed to copy config to blueprint '{}'", name))?;
@@ -183,8 +187,13 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
     fs::create_dir_all(&target)
         .with_context(|| format!("Failed to create directory '{}'", target.display()))?;
 
-    copy_dir_recursive(&source, &target, &[])
-        .with_context(|| format!("Failed to copy blueprint '{}' to '{}'", name, target.display()))?;
+    copy_dir_recursive(&source, &target, &[]).with_context(|| {
+        format!(
+            "Failed to copy blueprint '{}' to '{}'",
+            name,
+            target.display()
+        )
+    })?;
 
     // Write types/crap.lua — blueprints skip the types/ dir during save,
     // so we regenerate it from the compiled-in source.
@@ -194,7 +203,11 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
         .context("Failed to write types/crap.lua")?;
 
     let abs = target.canonicalize().unwrap_or_else(|_| target.clone());
-    println!("Created project from blueprint '{}': {}", name, abs.display());
+    println!(
+        "Created project from blueprint '{}': {}",
+        name,
+        abs.display()
+    );
     println!();
     println!("Start the server: crap-cms serve {}", target.display());
 
@@ -310,7 +323,10 @@ fn count_lua_files(dir: &Path) -> usize {
             entries
                 .filter_map(|e| e.ok())
                 .filter(|e| {
-                    e.path().extension().map(|ext| ext == "lua").unwrap_or(false)
+                    e.path()
+                        .extension()
+                        .map(|ext| ext == "lua")
+                        .unwrap_or(false)
                 })
                 .count()
         })
@@ -322,7 +338,10 @@ fn validate_blueprint_name(name: &str) -> Result<()> {
     if name.is_empty() {
         anyhow::bail!("Blueprint name cannot be empty");
     }
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_') {
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
         anyhow::bail!(
             "Invalid blueprint name '{}' — use alphanumeric characters, hyphens, and underscores only",
             name
@@ -474,10 +493,16 @@ mod tests {
         fs::create_dir_all(&dst).unwrap();
         copy_dir_recursive(&src, &dst, &["data"]).unwrap();
 
-        assert!(!dst.join("data").exists(), "top-level data/ should be skipped");
+        assert!(
+            !dst.join("data").exists(),
+            "top-level data/ should be skipped"
+        );
         // Nested "data" inside "subdir" should NOT be skipped because skip
         // only applies at the top level; the recursive call passes &[].
-        assert!(dst.join("subdir/data/file.txt").exists(), "nested data/ should NOT be skipped");
+        assert!(
+            dst.join("subdir/data/file.txt").exists(),
+            "nested data/ should NOT be skipped"
+        );
     }
 
     #[test]
@@ -545,11 +570,16 @@ mod tests {
         assert!(bp_target.join("init.lua").exists());
         assert!(bp_target.join("collections/posts.lua").exists());
         assert!(!bp_target.join("data").exists(), "data/ should be excluded");
-        assert!(!bp_target.join("uploads").exists(), "uploads/ should be excluded");
+        assert!(
+            !bp_target.join("uploads").exists(),
+            "uploads/ should be excluded"
+        );
 
         // Verify manifest was created
         assert!(bp_target.join(MANIFEST_FILENAME).exists());
-        let manifest = read_manifest(&bp_target).unwrap().expect("manifest should exist");
+        let manifest = read_manifest(&bp_target)
+            .unwrap()
+            .expect("manifest should exist");
         assert_eq!(manifest.crap_version, env!("CARGO_PKG_VERSION"));
         assert!(manifest.created_at.is_some());
 
@@ -574,7 +604,9 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         write_manifest(tmp.path()).unwrap();
 
-        let manifest = read_manifest(tmp.path()).unwrap().expect("manifest should exist");
+        let manifest = read_manifest(tmp.path())
+            .unwrap()
+            .expect("manifest should exist");
         assert_eq!(manifest.crap_version, env!("CARGO_PKG_VERSION"));
         assert!(manifest.created_at.is_some());
 
@@ -664,11 +696,18 @@ mod tests {
         // Write types like blueprint_use does
         let types_dir = target.join("types");
         fs::create_dir_all(&types_dir).unwrap();
-        fs::write(types_dir.join("crap.lua"), crate::scaffold::init::LUA_API_TYPES).unwrap();
+        fs::write(
+            types_dir.join("crap.lua"),
+            crate::scaffold::init::LUA_API_TYPES,
+        )
+        .unwrap();
 
         // Verify types/crap.lua exists and is non-empty
         let types_file = target.join("types/crap.lua");
-        assert!(types_file.exists(), "types/crap.lua should exist after blueprint use");
+        assert!(
+            types_file.exists(),
+            "types/crap.lua should exist after blueprint use"
+        );
         let content = fs::read_to_string(&types_file).unwrap();
         assert!(!content.is_empty(), "types/crap.lua should be non-empty");
     }
@@ -804,7 +843,11 @@ mod tests {
             let tmp = tempfile::tempdir().expect("tempdir");
 
             // Create a valid config dir
-            fs::write(tmp.path().join("crap.toml"), "[server]\nadmin_port = 3000\n").unwrap();
+            fs::write(
+                tmp.path().join("crap.toml"),
+                "[server]\nadmin_port = 3000\n",
+            )
+            .unwrap();
             fs::write(tmp.path().join("init.lua"), "-- hello").unwrap();
 
             // Pre-create the blueprint target with old content
@@ -815,12 +858,25 @@ mod tests {
 
             // Force overwrite
             let result = blueprint_save(tmp.path(), "overwrite-bp", true);
-            assert!(result.is_ok(), "blueprint_save with force failed: {:?}", result);
+            assert!(
+                result.is_ok(),
+                "blueprint_save with force failed: {:?}",
+                result
+            );
 
             // Old file should be gone, new content should be there
-            assert!(!bp_target.join("old-file.txt").exists(), "old file should be removed");
-            assert!(bp_target.join("crap.toml").exists(), "crap.toml should be copied");
-            assert!(bp_target.join(MANIFEST_FILENAME).exists(), "manifest should be written");
+            assert!(
+                !bp_target.join("old-file.txt").exists(),
+                "old file should be removed"
+            );
+            assert!(
+                bp_target.join("crap.toml").exists(),
+                "crap.toml should be copied"
+            );
+            assert!(
+                bp_target.join(MANIFEST_FILENAME).exists(),
+                "manifest should be written"
+            );
         });
     }
 
@@ -834,7 +890,11 @@ mod tests {
             fs::create_dir_all(tmp.path().join("data")).unwrap();
             fs::create_dir_all(tmp.path().join("uploads")).unwrap();
             fs::create_dir_all(tmp.path().join("types")).unwrap();
-            fs::write(tmp.path().join("crap.toml"), "[server]\nadmin_port = 3000\n").unwrap();
+            fs::write(
+                tmp.path().join("crap.toml"),
+                "[server]\nadmin_port = 3000\n",
+            )
+            .unwrap();
             fs::write(tmp.path().join("collections/posts.lua"), "-- posts").unwrap();
             fs::write(tmp.path().join("data/crap.db"), "should skip").unwrap();
             fs::write(tmp.path().join("uploads/photo.jpg"), "should skip").unwrap();
@@ -904,7 +964,11 @@ mod tests {
             assert!(result.is_err());
             let err = result.unwrap_err().to_string();
             assert!(err.contains("not found"), "got: {}", err);
-            assert!(err.contains("other-bp"), "should list available blueprints, got: {}", err);
+            assert!(
+                err.contains("other-bp"),
+                "should list available blueprints, got: {}",
+                err
+            );
         });
     }
 
@@ -931,8 +995,15 @@ mod tests {
             // (it warns but doesn't block)
             let target = tmp.path().join("new-project");
             let result = blueprint_use("old-version-bp", Some(target.clone()));
-            assert!(result.is_ok(), "blueprint_use should succeed with version mismatch: {:?}", result);
-            assert!(target.join("crap.toml").exists(), "project should be created");
+            assert!(
+                result.is_ok(),
+                "blueprint_use should succeed with version mismatch: {:?}",
+                result
+            );
+            assert!(
+                target.join("crap.toml").exists(),
+                "project should be created"
+            );
         });
     }
 

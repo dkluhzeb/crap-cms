@@ -50,7 +50,8 @@ pub(super) fn sync_indexes(
             if !crate::db::query::is_valid_identifier(field_name) {
                 anyhow::bail!(
                     "Invalid field name '{}' in compound index for collection '{}'",
-                    field_name, slug
+                    field_name,
+                    slug
                 );
             }
         }
@@ -64,7 +65,11 @@ pub(super) fn sync_indexes(
             match spec {
                 Some(s) if s.is_localized => {
                     // For localized fields in compound indexes, use default locale column
-                    expanded_cols.push(format!("{}__{}", field_name, sanitize_locale(&locale_config.default_locale)));
+                    expanded_cols.push(format!(
+                        "{}__{}",
+                        field_name,
+                        sanitize_locale(&locale_config.default_locale)
+                    ));
                 }
                 _ => {
                     expanded_cols.push(field_name.clone());
@@ -87,7 +92,7 @@ pub(super) fn sync_indexes(
     let prefix = format!("idx_{}_", slug);
     let mut existing: HashSet<String> = HashSet::new();
     let mut stmt = conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND name LIKE ?2"
+        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND name LIKE ?2",
     )?;
     let rows = stmt.query_map(rusqlite::params![slug, format!("{}%", prefix)], |row| {
         row.get::<_, String>(0)
@@ -114,16 +119,16 @@ pub(super) fn sync_indexes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::test_helpers::*;
     use super::super::create::create_collection_table;
+    use super::super::test_helpers::*;
+    use super::*;
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldType};
 
     fn get_indexes(conn: &rusqlite::Connection, table: &str) -> HashSet<String> {
-        let mut stmt = conn.prepare(
-            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1"
-        ).unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1")
+            .unwrap();
         stmt.query_map([table], |row| row.get::<_, String>(0))
             .unwrap()
             .filter_map(|r| r.ok())
@@ -134,43 +139,49 @@ mod tests {
     fn sync_indexes_creates_index_for_indexed_field() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("status", FieldType::Text)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("status", FieldType::Text)
                 .index(true)
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
 
         let indexes = get_indexes(&conn, "posts");
-        assert!(indexes.contains("idx_posts_status"), "Should create index for index=true field");
+        assert!(
+            indexes.contains("idx_posts_status"),
+            "Should create index for index=true field"
+        );
     }
 
     #[test]
     fn sync_indexes_skips_unique_field() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("slug", FieldType::Text)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("slug", FieldType::Text)
                 .unique(true)
                 .index(true) // should be skipped because unique=true
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
 
         let indexes = get_indexes(&conn, "posts");
-        assert!(!indexes.contains("idx_posts_slug"), "Should skip index when unique=true");
+        assert!(
+            !indexes.contains("idx_posts_slug"),
+            "Should skip index when unique=true"
+        );
     }
 
     #[test]
     fn sync_indexes_creates_compound_index() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let mut def = simple_collection("posts", vec![
-            text_field("status"),
-            text_field("category"),
-        ]);
+        let mut def =
+            simple_collection("posts", vec![text_field("status"), text_field("category")]);
         def.indexes = vec![IndexDefinition {
             fields: vec!["status".to_string(), "category".to_string()],
             unique: false,
@@ -179,17 +190,17 @@ mod tests {
         sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
 
         let indexes = get_indexes(&conn, "posts");
-        assert!(indexes.contains("idx_posts_status_category"), "Should create compound index");
+        assert!(
+            indexes.contains("idx_posts_status_category"),
+            "Should create compound index"
+        );
     }
 
     #[test]
     fn sync_indexes_creates_compound_unique_index() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let mut def = simple_collection("posts", vec![
-            text_field("category"),
-            text_field("slug"),
-        ]);
+        let mut def = simple_collection("posts", vec![text_field("category"), text_field("slug")]);
         def.indexes = vec![IndexDefinition {
             fields: vec!["category".to_string(), "slug".to_string()],
             unique: true,
@@ -198,17 +209,18 @@ mod tests {
         sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
 
         let indexes = get_indexes(&conn, "posts");
-        assert!(indexes.contains("idx_posts_category_slug"), "Should create compound unique index");
+        assert!(
+            indexes.contains("idx_posts_category_slug"),
+            "Should create compound unique index"
+        );
     }
 
     #[test]
     fn sync_indexes_drops_stale_indexes() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let mut def = simple_collection("posts", vec![
-            text_field("status"),
-            text_field("category"),
-        ]);
+        let mut def =
+            simple_collection("posts", vec![text_field("status"), text_field("category")]);
         def.indexes = vec![IndexDefinition {
             fields: vec!["status".to_string()],
             unique: false,
@@ -225,37 +237,51 @@ mod tests {
         sync_indexes(&conn, "posts", &def, &no_locale()).unwrap();
 
         let indexes = get_indexes(&conn, "posts");
-        assert!(!indexes.contains("idx_posts_status"), "Old index should be dropped");
-        assert!(indexes.contains("idx_posts_category"), "New index should be created");
+        assert!(
+            !indexes.contains("idx_posts_status"),
+            "Old index should be dropped"
+        );
+        assert!(
+            indexes.contains("idx_posts_category"),
+            "New index should be created"
+        );
     }
 
     #[test]
     fn sync_indexes_localized_field() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("title", FieldType::Text)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("title", FieldType::Text)
                 .localized(true)
                 .index(true)
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
         sync_indexes(&conn, "posts", &def, &locale_en_de()).unwrap();
 
         let indexes = get_indexes(&conn, "posts");
-        assert!(indexes.contains("idx_posts_title__en"), "Should create index per locale: en");
-        assert!(indexes.contains("idx_posts_title__de"), "Should create index per locale: de");
+        assert!(
+            indexes.contains("idx_posts_title__en"),
+            "Should create index per locale: en"
+        );
+        assert!(
+            indexes.contains("idx_posts_title__de"),
+            "Should create index per locale: de"
+        );
     }
 
     #[test]
     fn sync_indexes_idempotent() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("status", FieldType::Text)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("status", FieldType::Text)
                 .index(true)
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         // Run twice — should not error
@@ -278,6 +304,9 @@ mod tests {
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let result = sync_indexes(&conn, "posts", &def, &no_locale());
-        assert!(result.is_err(), "Should reject invalid identifier in compound index");
+        assert!(
+            result.is_err(),
+            "Should reject invalid identifier in compound index"
+        );
     }
 }

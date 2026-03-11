@@ -3,11 +3,12 @@
 use mlua::{Lua, Value};
 
 /// Convert a LocalizedString to a Lua value (string or locale table).
-pub(super) fn localized_string_to_lua(lua: &Lua, ls: &crate::core::field::LocalizedString) -> mlua::Result<Value> {
+pub(super) fn localized_string_to_lua(
+    lua: &Lua,
+    ls: &crate::core::field::LocalizedString,
+) -> mlua::Result<Value> {
     match ls {
-        crate::core::field::LocalizedString::Plain(s) => {
-            Ok(Value::String(lua.create_string(s)?))
-        }
+        crate::core::field::LocalizedString::Plain(s) => Ok(Value::String(lua.create_string(s)?)),
         crate::core::field::LocalizedString::Localized(map) => {
             let tbl = lua.create_table()?;
             for (k, v) in map {
@@ -24,11 +25,9 @@ pub fn lua_to_json(_lua: &Lua, value: &Value) -> mlua::Result<serde_json::Value>
         Value::Nil => Ok(serde_json::Value::Null),
         Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
         Value::Integer(i) => Ok(serde_json::Value::Number((*i).into())),
-        Value::Number(n) => {
-            serde_json::Number::from_f64(*n)
-                .map(serde_json::Value::Number)
-                .ok_or_else(|| mlua::Error::RuntimeError("Invalid float value".into()))
-        }
+        Value::Number(n) => serde_json::Number::from_f64(*n)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| mlua::Error::RuntimeError("Invalid float value".into())),
         Value::String(s) => Ok(serde_json::Value::String(s.to_str()?.to_string())),
         Value::Table(t) => {
             let len = t.raw_len();
@@ -66,9 +65,7 @@ pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> 
                 Ok(Value::Nil)
             }
         }
-        serde_json::Value::String(s) => {
-            Ok(Value::String(lua.create_string(s)?))
-        }
+        serde_json::Value::String(s) => Ok(Value::String(lua.create_string(s)?)),
         serde_json::Value::Array(arr) => {
             let tbl = lua.create_table()?;
             for (i, v) in arr.iter().enumerate() {

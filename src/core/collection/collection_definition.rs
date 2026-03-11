@@ -1,8 +1,8 @@
 //! Full definition of a collection, parsed from a Lua file. Maps to one SQLite table.
 
 use super::{
-    Access, AdminConfig, Auth, Hooks, Labels,
-    IndexDefinition, LiveSetting, McpConfig, VersionsConfig,
+    Access, AdminConfig, Auth, Hooks, IndexDefinition, Labels, LiveSetting, McpConfig,
+    VersionsConfig,
 };
 use crate::core::field::FieldDefinition;
 use crate::core::upload::CollectionUpload;
@@ -64,7 +64,10 @@ impl Default for CollectionDefinition {
 
 impl CollectionDefinition {
     pub fn new(slug: impl Into<String>) -> Self {
-        Self { slug: slug.into(), ..Default::default() }
+        Self {
+            slug: slug.into(),
+            ..Default::default()
+        }
     }
 
     pub fn builder(slug: impl Into<String>) -> super::CollectionDefinitionBuilder {
@@ -73,7 +76,9 @@ impl CollectionDefinition {
 
     /// Get the display label (plural form, falls back to slug). Uses default resolution.
     pub fn display_name(&self) -> &str {
-        self.labels.plural.as_ref()
+        self.labels
+            .plural
+            .as_ref()
             .map(|ls| ls.resolve_default())
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.slug)
@@ -81,7 +86,9 @@ impl CollectionDefinition {
 
     /// Get the singular label (falls back to slug). Uses default resolution.
     pub fn singular_name(&self) -> &str {
-        self.labels.singular.as_ref()
+        self.labels
+            .singular
+            .as_ref()
             .map(|ls| ls.resolve_default())
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.slug)
@@ -90,7 +97,9 @@ impl CollectionDefinition {
     /// Get the display label resolved for a specific locale.
     #[allow(dead_code)]
     pub fn display_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        self.labels.plural.as_ref()
+        self.labels
+            .plural
+            .as_ref()
             .map(|ls| ls.resolve(locale, default_locale))
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.slug)
@@ -99,7 +108,9 @@ impl CollectionDefinition {
     /// Get the singular label resolved for a specific locale.
     #[allow(dead_code)]
     pub fn singular_name_for(&self, locale: &str, default_locale: &str) -> &str {
-        self.labels.singular.as_ref()
+        self.labels
+            .singular
+            .as_ref()
             .map(|ls| ls.resolve(locale, default_locale))
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.slug)
@@ -137,7 +148,12 @@ mod tests {
     use crate::core::field::LocalizedString;
     use std::collections::HashMap;
 
-    fn make_collection(slug: &str, singular: Option<&str>, plural: Option<&str>, title_field: Option<&str>) -> CollectionDefinition {
+    fn make_collection(
+        slug: &str,
+        singular: Option<&str>,
+        plural: Option<&str>,
+        title_field: Option<&str>,
+    ) -> CollectionDefinition {
         let mut def = CollectionDefinition::new(slug);
         def.labels = Labels {
             singular: singular.map(|s| LocalizedString::Plain(s.to_string())),

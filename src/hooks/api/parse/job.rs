@@ -22,7 +22,11 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition>
     if let Some(ref expr) = schedule {
         let normalized = {
             let fields: Vec<&str> = expr.split_whitespace().collect();
-            if fields.len() == 5 { format!("0 {}", expr) } else { expr.clone() }
+            if fields.len() == 5 {
+                format!("0 {}", expr)
+            } else {
+                expr.clone()
+            }
         };
         if cron::Schedule::from_str(&normalized).is_err() {
             anyhow::bail!("Job '{}' has invalid cron expression '{}'", slug, expr);
@@ -30,9 +34,21 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition>
     }
 
     let queue = get_string(config, "queue").unwrap_or_else(|| "default".to_string());
-    let retries = config.get::<Option<u32>>("retries").ok().flatten().unwrap_or(0);
-    let timeout = config.get::<Option<u64>>("timeout").ok().flatten().unwrap_or(60);
-    let concurrency = config.get::<Option<u32>>("concurrency").ok().flatten().unwrap_or(1);
+    let retries = config
+        .get::<Option<u32>>("retries")
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+    let timeout = config
+        .get::<Option<u64>>("timeout")
+        .ok()
+        .flatten()
+        .unwrap_or(60);
+    let concurrency = config
+        .get::<Option<u32>>("concurrency")
+        .ok()
+        .flatten()
+        .unwrap_or(1);
     let skip_if_running = get_bool(config, "skip_if_running", true);
     let access = get_string(config, "access");
 
@@ -119,7 +135,10 @@ mod tests {
         let tbl = lua.create_table().unwrap();
         let result = parse_job_definition("bad-job", &tbl);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing required 'handler'"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing required 'handler'"));
     }
 
     #[test]
@@ -130,7 +149,10 @@ mod tests {
         tbl.set("schedule", "not a cron").unwrap();
         let result = parse_job_definition("bad-job", &tbl);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid cron expression"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid cron expression"));
     }
 
     #[test]

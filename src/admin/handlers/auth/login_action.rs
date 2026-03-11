@@ -3,11 +3,11 @@ use axum::{
     response::{IntoResponse, Redirect},
 };
 
+use super::{login_error, session_cookies, LoginForm};
 use crate::admin::AdminState;
 use crate::core::auth;
 use crate::core::auth::ClaimsBuilder;
 use crate::db::query;
-use super::{LoginForm, login_error, session_cookies};
 
 /// POST /admin/login — verify credentials, set cookie, redirect.
 pub async fn login_action(
@@ -40,14 +40,20 @@ pub async fn login_action(
         let user = query::find_by_email(&conn, &slug, &def_owned, &email)?;
         let user = match user {
             Some(u) => u,
-            None => { auth::dummy_verify(); return Ok(None); }
+            None => {
+                auth::dummy_verify();
+                return Ok(None);
+            }
         };
 
         // Verify password
         let hash = query::get_password_hash(&conn, &slug, &user.id)?;
         let hash = match hash {
             Some(h) => h,
-            None => { auth::dummy_verify(); return Ok(None); }
+            None => {
+                auth::dummy_verify();
+                return Ok(None);
+            }
         };
 
         if !auth::verify_password(&password, &hash)? {
@@ -68,7 +74,8 @@ pub async fn login_action(
         }
 
         Ok::<_, anyhow::Error>(Some(Ok(user)))
-    }).await;
+    })
+    .await;
 
     let user = match result {
         Ok(Ok(Some(Ok(user)))) => user,
@@ -94,13 +101,17 @@ pub async fn login_action(
     state.login_limiter.clear(&form.email);
 
     // Get email from user document
-    let user_email = user.fields.get("email")
+    let user_email = user
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or(&form.email)
         .to_string();
 
     // Determine token expiry
-    let expiry = def.auth.as_ref()
+    let expiry = def
+        .auth
+        .as_ref()
         .map(|a| a.token_expiry)
         .unwrap_or(state.config.auth.token_expiry);
 

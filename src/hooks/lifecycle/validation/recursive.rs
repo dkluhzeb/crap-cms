@@ -4,8 +4,8 @@ use mlua::Lua;
 
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::validate::FieldError;
-use crate::db::query::{LocaleContext, LocaleMode};
 use crate::db::query::sanitize_locale;
+use crate::db::query::{LocaleContext, LocaleMode};
 
 use super::checks;
 use super::sub_fields::validate_sub_fields_inner;
@@ -36,21 +36,48 @@ pub(super) fn validate_fields_recursive(
                     format!("{}__{}", prefix, field.name)
                 };
                 validate_fields_recursive(
-                    lua, &field.fields, data, conn, table, exclude_id, is_draft, &new_prefix,
-                    locale_ctx, inherited_localized || field.localized, errors,
+                    lua,
+                    &field.fields,
+                    data,
+                    conn,
+                    table,
+                    exclude_id,
+                    is_draft,
+                    &new_prefix,
+                    locale_ctx,
+                    inherited_localized || field.localized,
+                    errors,
                 );
             }
             FieldType::Row | FieldType::Collapsible => {
                 validate_fields_recursive(
-                    lua, &field.fields, data, conn, table, exclude_id, is_draft, prefix,
-                    locale_ctx, inherited_localized, errors,
+                    lua,
+                    &field.fields,
+                    data,
+                    conn,
+                    table,
+                    exclude_id,
+                    is_draft,
+                    prefix,
+                    locale_ctx,
+                    inherited_localized,
+                    errors,
                 );
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
                     validate_fields_recursive(
-                        lua, &tab.fields, data, conn, table, exclude_id, is_draft, prefix,
-                        locale_ctx, inherited_localized, errors,
+                        lua,
+                        &tab.fields,
+                        data,
+                        conn,
+                        table,
+                        exclude_id,
+                        is_draft,
+                        prefix,
+                        locale_ctx,
+                        inherited_localized,
+                        errors,
                     );
                 }
             }
@@ -59,8 +86,17 @@ pub(super) fn validate_fields_recursive(
             }
             _ => {
                 validate_scalar_field(
-                    lua, field, data, conn, table, exclude_id, is_draft, prefix,
-                    locale_ctx, inherited_localized, errors,
+                    lua,
+                    field,
+                    data,
+                    conn,
+                    table,
+                    exclude_id,
+                    is_draft,
+                    prefix,
+                    locale_ctx,
+                    inherited_localized,
+                    errors,
                 );
             }
         }
@@ -98,7 +134,9 @@ fn validate_scalar_field(
     };
     let is_update = exclude_id.is_some();
 
-    checks::check_required(field, &data_key, value, is_empty, is_draft, is_update, errors);
+    checks::check_required(
+        field, &data_key, value, is_empty, is_draft, is_update, errors,
+    );
     checks::check_row_bounds(field, &data_key, value, is_draft, errors);
 
     // Validate sub-fields within Array/Blocks rows
@@ -110,7 +148,8 @@ fn validate_scalar_field(
                     None => continue,
                 };
                 let sub_fields: &[FieldDefinition] = if field.field_type == FieldType::Blocks {
-                    let block_type = row_obj.get("_block_type")
+                    let block_type = row_obj
+                        .get("_block_type")
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
                     match field.blocks.iter().find(|b| b.block_type == block_type) {
@@ -139,7 +178,9 @@ fn validate_scalar_field(
         data_key.clone()
     };
 
-    checks::check_unique(field, &data_key, &col_name, value, is_empty, conn, table, exclude_id, errors);
+    checks::check_unique(
+        field, &data_key, &col_name, value, is_empty, conn, table, exclude_id, errors,
+    );
     checks::check_length_bounds(field, &data_key, value, is_empty, errors);
     checks::check_numeric_bounds(field, &data_key, value, is_empty, errors);
     checks::check_email_format(field, &data_key, value, is_empty, errors);
@@ -160,11 +201,12 @@ mod tests {
     fn test_validate_group_subfield_required() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-            ])
+            .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("seo__title".to_string(), json!(""));
@@ -178,11 +220,12 @@ mod tests {
     fn test_validate_required_inside_collapsible() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, notes TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, notes TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("extra", FieldType::Collapsible)
-            .fields(vec![
-                FieldDefinition::builder("notes", FieldType::Text).required(true).build(),
-            ])
+            .fields(vec![FieldDefinition::builder("notes", FieldType::Text)
+                .required(true)
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("notes".to_string(), json!(""));
@@ -195,11 +238,15 @@ mod tests {
     fn test_validate_required_inside_tabs() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new("Content", vec![
-                FieldDefinition::builder("body", FieldType::Text).required(true).build(),
-            ])])
+            .tabs(vec![FieldTab::new(
+                "Content",
+                vec![FieldDefinition::builder("body", FieldType::Text)
+                    .required(true)
+                    .build()],
+            )])
             .build()];
         let mut data = HashMap::new();
         data.insert("body".to_string(), json!(""));
@@ -212,15 +259,17 @@ mod tests {
     fn test_validate_group_inside_tabs_required() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new("SEO", vec![
-                FieldDefinition::builder("seo", FieldType::Group)
-                    .fields(vec![
-                        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-                    ])
-                    .build(),
-            ])])
+            .tabs(vec![FieldTab::new(
+                "SEO",
+                vec![FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                        .required(true)
+                        .build()])
+                    .build()],
+            )])
             .build()];
         let mut data = HashMap::new();
         data.insert("seo__title".to_string(), json!(""));
@@ -233,15 +282,14 @@ mod tests {
     fn test_validate_group_inside_collapsible_required() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("extra", FieldType::Collapsible)
-            .fields(vec![
-                FieldDefinition::builder("seo", FieldType::Group)
-                    .fields(vec![
-                        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-                    ])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                    .required(true)
+                    .build()])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("seo__title".to_string(), json!(""));
@@ -254,11 +302,13 @@ mod tests {
     fn test_validate_date_inside_tabs() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, publish_date TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, publish_date TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new("Meta", vec![
-                FieldDefinition::builder("publish_date", FieldType::Date).build(),
-            ])])
+            .tabs(vec![FieldTab::new(
+                "Meta",
+                vec![FieldDefinition::builder("publish_date", FieldType::Date).build()],
+            )])
             .build()];
         let mut data = HashMap::new();
         data.insert("publish_date".to_string(), json!("not-a-date"));
@@ -273,12 +323,16 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT);
-             INSERT INTO test (id, slug) VALUES ('existing', 'taken');"
-        ).unwrap();
+             INSERT INTO test (id, slug) VALUES ('existing', 'taken');",
+        )
+        .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new("Meta", vec![
-                FieldDefinition::builder("slug", FieldType::Text).unique(true).build(),
-            ])])
+            .tabs(vec![FieldTab::new(
+                "Meta",
+                vec![FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build()],
+            )])
             .build()];
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!("taken"));
@@ -290,51 +344,62 @@ mod tests {
     #[test]
     fn test_validate_custom_function_inside_tabs() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_tabs_field = function(value, ctx)
                 if value == "bad" then return "tabs validation error" end
                 return true
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new("Content", vec![
-                FieldDefinition::builder("body", FieldType::Text)
+            .tabs(vec![FieldTab::new(
+                "Content",
+                vec![FieldDefinition::builder("body", FieldType::Text)
                     .validate("validators.validate_tabs_field")
-                    .build(),
-            ])])
+                    .build()],
+            )])
             .build()];
         let mut data = HashMap::new();
         data.insert("body".to_string(), json!("bad"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0].message.contains("tabs validation error"));
+        assert!(result.unwrap_err().errors[0]
+            .message
+            .contains("tabs validation error"));
     }
 
     #[test]
     fn test_validate_deeply_nested_tabs_collapsible_group() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, og__title TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, og__title TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new("Advanced", vec![
-                FieldDefinition::builder("advanced", FieldType::Collapsible)
-                    .fields(vec![
-                        FieldDefinition::builder("og", FieldType::Group)
-                            .fields(vec![
-                                FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-                            ])
-                            .build(),
-                    ])
-                    .build(),
-            ])])
+            .tabs(vec![FieldTab::new(
+                "Advanced",
+                vec![FieldDefinition::builder("advanced", FieldType::Collapsible)
+                    .fields(vec![FieldDefinition::builder("og", FieldType::Group)
+                        .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                            .required(true)
+                            .build()])
+                        .build()])
+                    .build()],
+            )])
             .build()];
         let mut data = HashMap::new();
         data.insert("og__title".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Deeply nested Group inside Collapsible inside Tabs should validate");
+        assert!(
+            result.is_err(),
+            "Deeply nested Group inside Collapsible inside Tabs should validate"
+        );
         assert_eq!(result.unwrap_err().errors[0].field, "og__title");
     }
 
@@ -342,16 +407,23 @@ mod tests {
     fn test_validate_layout_fields_skipped_for_drafts() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![FieldTab::new("Content", vec![
-                FieldDefinition::builder("body", FieldType::Text).required(true).build(),
-            ])])
+            .tabs(vec![FieldTab::new(
+                "Content",
+                vec![FieldDefinition::builder("body", FieldType::Text)
+                    .required(true)
+                    .build()],
+            )])
             .build()];
         let mut data = HashMap::new();
         data.insert("body".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
-        assert!(result.is_ok(), "Draft saves should skip required checks in layout fields");
+        assert!(
+            result.is_ok(),
+            "Draft saves should skip required checks in layout fields"
+        );
     }
 
     // ── Group containing layout fields ─────
@@ -360,15 +432,14 @@ mod tests {
     fn test_validate_group_containing_row_required() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("r", FieldType::Row)
-                    .fields(vec![
-                        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-                    ])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+                .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                    .required(true)
+                    .build()])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("meta__title".to_string(), json!(""));
@@ -381,20 +452,22 @@ mod tests {
     fn test_validate_group_containing_collapsible_required() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__robots TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__robots TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("c", FieldType::Collapsible)
-                    .fields(vec![
-                        FieldDefinition::builder("robots", FieldType::Text).required(true).build(),
-                    ])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("c", FieldType::Collapsible)
+                .fields(vec![FieldDefinition::builder("robots", FieldType::Text)
+                    .required(true)
+                    .build()])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("seo__robots".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Group→Collapsible: required field should fail");
+        assert!(
+            result.is_err(),
+            "Group→Collapsible: required field should fail"
+        );
         assert_eq!(result.unwrap_err().errors[0].field, "seo__robots");
     }
 
@@ -402,15 +475,17 @@ mod tests {
     fn test_validate_group_containing_tabs_required() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, settings__theme TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, settings__theme TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("settings", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("t", FieldType::Tabs)
-                    .tabs(vec![FieldTab::new("General", vec![
-                        FieldDefinition::builder("theme", FieldType::Text).required(true).build(),
-                    ])])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "General",
+                    vec![FieldDefinition::builder("theme", FieldType::Text)
+                        .required(true)
+                        .build()],
+                )])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("settings__theme".to_string(), json!(""));
@@ -423,24 +498,27 @@ mod tests {
     fn test_validate_group_tabs_group_three_levels_required() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__deep TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__deep TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("outer", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("t", FieldType::Tabs)
-                    .tabs(vec![FieldTab::new("Tab", vec![
-                        FieldDefinition::builder("inner", FieldType::Group)
-                            .fields(vec![
-                                FieldDefinition::builder("deep", FieldType::Text).required(true).build(),
-                            ])
-                            .build(),
-                    ])])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Tab",
+                    vec![FieldDefinition::builder("inner", FieldType::Group)
+                        .fields(vec![FieldDefinition::builder("deep", FieldType::Text)
+                            .required(true)
+                            .build()])
+                        .build()],
+                )])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("outer__inner__deep".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Group→Tabs→Group: required field should fail");
+        assert!(
+            result.is_err(),
+            "Group→Tabs→Group: required field should fail"
+        );
         assert_eq!(result.unwrap_err().errors[0].field, "outer__inner__deep");
     }
 
@@ -450,21 +528,26 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, config__slug TEXT);
-             INSERT INTO test (id, config__slug) VALUES ('existing', 'taken');"
-        ).unwrap();
+             INSERT INTO test (id, config__slug) VALUES ('existing', 'taken');",
+        )
+        .unwrap();
         let fields = vec![FieldDefinition::builder("config", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("t", FieldType::Tabs)
-                    .tabs(vec![FieldTab::new("Tab", vec![
-                        FieldDefinition::builder("slug", FieldType::Text).unique(true).build(),
-                    ])])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Tab",
+                    vec![FieldDefinition::builder("slug", FieldType::Text)
+                        .unique(true)
+                        .build()],
+                )])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("config__slug".to_string(), json!("taken"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Group→Tabs: unique field should fail on duplicate");
+        assert!(
+            result.is_err(),
+            "Group→Tabs: unique field should fail on duplicate"
+        );
         assert_eq!(result.unwrap_err().errors[0].field, "config__slug");
     }
 
@@ -472,15 +555,14 @@ mod tests {
     fn test_validate_group_containing_row_date_format() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__date TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__date TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("r", FieldType::Row)
-                    .fields(vec![
-                        FieldDefinition::builder("date", FieldType::Date).build(),
-                    ])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("date", FieldType::Date).build()
+                ])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("meta__date".to_string(), json!("not-a-date"));
@@ -493,15 +575,14 @@ mod tests {
     fn test_validate_group_containing_row_valid_passes() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("r", FieldType::Row)
-                    .fields(vec![
-                        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-                    ])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+                .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                    .required(true)
+                    .build()])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("meta__title".to_string(), json!("Valid Title"));
@@ -513,34 +594,40 @@ mod tests {
     fn join_field_skipped_in_validation() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("posts", FieldType::Join)
             .required(true)
             .join(JoinConfig::new("posts", "author"))
             .build()];
         let data = HashMap::new();
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_ok(), "Join field should be skipped entirely during validation");
+        assert!(
+            result.is_ok(),
+            "Join field should be skipped entirely during validation"
+        );
     }
 
     #[test]
     fn test_validate_nested_group_in_group_prefix() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__field TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__field TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("outer", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("inner", FieldType::Group)
-                    .fields(vec![
-                        FieldDefinition::builder("field", FieldType::Text).required(true).build(),
-                    ])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("inner", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("field", FieldType::Text)
+                    .required(true)
+                    .build()])
+                .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("outer__inner__field".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Nested group prefix should be outer__inner__field");
+        assert!(
+            result.is_err(),
+            "Nested group prefix should be outer__inner__field"
+        );
         assert_eq!(result.unwrap_err().errors[0].field, "outer__inner__field");
     }
 
@@ -548,16 +635,20 @@ mod tests {
     fn test_validate_date_inside_collapsible_top_level() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, pub_date TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, pub_date TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("extra", FieldType::Collapsible)
             .fields(vec![
-                FieldDefinition::builder("pub_date", FieldType::Date).build(),
+                FieldDefinition::builder("pub_date", FieldType::Date).build()
             ])
             .build()];
         let mut data = HashMap::new();
         data.insert("pub_date".to_string(), json!("not-a-date"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Invalid date inside collapsible at top-level should fail");
+        assert!(
+            result.is_err(),
+            "Invalid date inside collapsible at top-level should fail"
+        );
         assert!(result.unwrap_err().errors[0].message.contains("valid date"));
     }
 
@@ -565,16 +656,22 @@ mod tests {
     fn test_validate_date_inside_row_top_level() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, event_date TEXT)").unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, event_date TEXT)")
+            .unwrap();
         let fields = vec![FieldDefinition::builder("layout", FieldType::Row)
-            .fields(vec![
-                FieldDefinition::builder("event_date", FieldType::Date).build(),
-            ])
+            .fields(vec![FieldDefinition::builder(
+                "event_date",
+                FieldType::Date,
+            )
+            .build()])
             .build()];
         let mut data = HashMap::new();
         data.insert("event_date".to_string(), json!("not-a-date"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Invalid date inside row at top-level should fail");
+        assert!(
+            result.is_err(),
+            "Invalid date inside row at top-level should fail"
+        );
         assert!(result.unwrap_err().errors[0].message.contains("valid date"));
     }
 }

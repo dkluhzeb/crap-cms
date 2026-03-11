@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::FieldError;
+use std::collections::HashMap;
 
 /// Validate min_rows / max_rows for Array, Blocks, and has-many Relationship fields.
 pub(crate) fn check_row_bounds(
@@ -19,12 +19,28 @@ pub(crate) fn check_row_bounds(
     };
     if let Some(min) = field.min_rows {
         if row_count < min {
-            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} requires at least {} item(s)", field.name, min), "validation.min_rows", HashMap::from([("field".to_string(), field.name.clone()), ("min".to_string(), min.to_string())])));
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} requires at least {} item(s)", field.name, min),
+                "validation.min_rows",
+                HashMap::from([
+                    ("field".to_string(), field.name.clone()),
+                    ("min".to_string(), min.to_string()),
+                ]),
+            ));
         }
     }
     if let Some(max) = field.max_rows {
         if row_count > max {
-            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} allows at most {} item(s)", field.name, max), "validation.max_rows", HashMap::from([("field".to_string(), field.name.clone()), ("max".to_string(), max.to_string())])));
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} allows at most {} item(s)", field.name, max),
+                "validation.max_rows",
+                HashMap::from([
+                    ("field".to_string(), field.name.clone()),
+                    ("max".to_string(), max.to_string()),
+                ]),
+            ));
         }
     }
 }
@@ -40,8 +56,11 @@ mod tests {
     fn test_validate_min_rows() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array).min_rows(2).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
+            .min_rows(2)
+            .build()];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"label": "one"}]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -53,8 +72,11 @@ mod tests {
     fn test_validate_max_rows() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array).max_rows(1).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
+            .max_rows(1)
+            .build()];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"a": 1}, {"a": 2}]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -66,36 +88,54 @@ mod tests {
     fn test_validate_min_rows_skipped_for_draft() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array).min_rows(3).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
+            .min_rows(3)
+            .build()];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"x": 1}]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
-        assert!(result.is_ok(), "min_rows should not be checked for draft saves");
+        assert!(
+            result.is_ok(),
+            "min_rows should not be checked for draft saves"
+        );
     }
 
     #[test]
     fn test_validate_max_rows_skipped_for_draft() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array).max_rows(1).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
+            .max_rows(1)
+            .build()];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"a": 1}, {"a": 2}, {"a": 3}]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
-        assert!(result.is_ok(), "max_rows should not be checked for draft saves");
+        assert!(
+            result.is_ok(),
+            "max_rows should not be checked for draft saves"
+        );
     }
 
     #[test]
     fn test_validate_min_rows_non_array_value_treated_as_zero() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array).min_rows(1).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
+            .min_rows(1)
+            .build()];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!("not-an-array"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Non-array value with min_rows=1 should fail (count=0)");
+        assert!(
+            result.is_err(),
+            "Non-array value with min_rows=1 should fail (count=0)"
+        );
         assert!(result.unwrap_err().errors[0].message.contains("at least 1"));
     }
 }

@@ -10,10 +10,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
+use crap_cms::admin::AdminState;
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
@@ -32,9 +32,9 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -46,10 +46,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -59,9 +65,7 @@ fn make_global_def() -> GlobalDefinition {
         singular: Some(LocalizedString::Plain("Settings".to_string())),
         plural: None,
     };
-    def.fields = vec![
-        FieldDefinition::builder("site_name", FieldType::Text).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
     def
 }
 
@@ -73,10 +77,7 @@ struct TestApp {
     jwt_secret: String,
 }
 
-fn setup_app(
-    collections: Vec<CollectionDefinition>,
-    globals: Vec<GlobalDefinition>,
-) -> TestApp {
+fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".to_string();
@@ -107,19 +108,17 @@ fn setup_app_with_config(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = {
         let reg = registry.read().unwrap();
@@ -136,8 +135,12 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".to_string(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            5, 300,
+        )),
+        forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -220,7 +223,9 @@ fn make_localized_global_def() -> GlobalDefinition {
         plural: None,
     };
     def.fields = vec![
-        FieldDefinition::builder("welcome_text", FieldType::Text).localized(true).build(),
+        FieldDefinition::builder("welcome_text", FieldType::Text)
+            .localized(true)
+            .build(),
         FieldDefinition::builder("max_items", FieldType::Number).build(),
     ];
     def
@@ -234,7 +239,8 @@ async fn global_edit_form_returns_200() {
     let user_id = create_test_user(&app, "global@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "global@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/globals/settings")
                 .header("cookie", &cookie)
@@ -252,7 +258,8 @@ async fn global_update_action() {
     let user_id = create_test_user(&app, "global_update@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "global_update@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/globals/settings")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -364,7 +371,9 @@ async fn global_versions_page_non_versioned_redirects() {
         .unwrap();
     let status = resp.status();
     assert!(
-        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::TEMPORARY_REDIRECT,
+        status == StatusCode::SEE_OTHER
+            || status == StatusCode::FOUND
+            || status == StatusCode::TEMPORARY_REDIRECT,
         "Non-versioned global versions page should redirect, got {}",
         status
     );
@@ -402,7 +411,9 @@ async fn global_update_with_draft_action() {
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("site_name=Draft+Site&tagline=WIP&_action=save_draft"))
+                .body(Body::from(
+                    "site_name=Draft+Site&tagline=WIP&_action=save_draft",
+                ))
                 .unwrap(),
         )
         .await
@@ -443,7 +454,9 @@ async fn global_update_unpublish_action() {
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("site_name=Published+Site&tagline=Live&_action=unpublish"))
+                .body(Body::from(
+                    "site_name=Published+Site&tagline=Live&_action=unpublish",
+                ))
                 .unwrap(),
         )
         .await
@@ -539,7 +552,10 @@ async fn global_restore_non_versioned_redirects() {
         .unwrap();
     let status = resp.status();
     assert!(
-        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::TEMPORARY_REDIRECT || status == StatusCode::OK,
+        status == StatusCode::SEE_OTHER
+            || status == StatusCode::FOUND
+            || status == StatusCode::TEMPORARY_REDIRECT
+            || status == StatusCode::OK,
         "Non-versioned restore should redirect, got {}",
         status
     );
@@ -622,7 +638,9 @@ async fn localized_global_update_with_locale() {
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("welcome_text=Willkommen&max_items=10&_locale=de"))
+                .body(Body::from(
+                    "welcome_text=Willkommen&max_items=10&_locale=de",
+                ))
                 .unwrap(),
         )
         .await
@@ -684,7 +702,8 @@ async fn global_update_nonexistent_redirects() {
         .unwrap();
     let status = resp.status();
     assert!(
-        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND
+        status == StatusCode::SEE_OTHER
+            || status == StatusCode::FOUND
             || status == StatusCode::TEMPORARY_REDIRECT,
         "Update nonexistent global should redirect, got {}",
         status
@@ -750,4 +769,3 @@ async fn dashboard_renders_collection_counts() {
 }
 
 // ── Globals: Update with locale ───────────────────────────────────────────
-

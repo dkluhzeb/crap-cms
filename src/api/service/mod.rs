@@ -17,12 +17,12 @@ use crate::config::{EmailConfig, LocaleConfig, ServerConfig};
 use crate::core::auth::AuthUser;
 use crate::core::email::EmailRenderer;
 use crate::core::event::EventBus;
+use crate::core::event::EventUser;
 use crate::core::rate_limit::LoginRateLimiter;
 use crate::core::Registry;
+use crate::db::query;
 use crate::db::query::AccessResult;
 use crate::db::DbPool;
-use crate::db::query;
-use crate::core::event::EventUser;
 use crate::hooks::lifecycle::HookRunner;
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
@@ -110,7 +110,8 @@ impl ContentService {
 
     #[allow(clippy::result_large_err)]
     fn get_collection_def(&self, slug: &str) -> Result<crate::core::CollectionDefinition, Status> {
-        self.registry.get_collection(slug)
+        self.registry
+            .get_collection(slug)
             .cloned()
             .ok_or_else(|| Status::not_found(format!("Collection '{}' not found", slug)))
     }
@@ -120,7 +121,8 @@ impl ContentService {
         &self,
         slug: &str,
     ) -> Result<crate::core::collection::GlobalDefinition, Status> {
-        self.registry.get_global(slug)
+        self.registry
+            .get_global(slug)
             .cloned()
             .ok_or_else(|| Status::not_found(format!("Global '{}' not found", slug)))
     }
@@ -152,19 +154,29 @@ impl ContentService {
             .pool
             .get()
             .map_err(|_| Status::unavailable("Database connection pool exhausted (retryable)"))?;
-        let tx = conn.transaction()
-            .map_err(|e| { tracing::error!("Access check tx error: {}", e); Status::internal("Internal error") })?;
-        let result = self.hook_runner
+        let tx = conn.transaction().map_err(|e| {
+            tracing::error!("Access check tx error: {}", e);
+            Status::internal("Internal error")
+        })?;
+        let result = self
+            .hook_runner
             .check_access(access_ref, user_doc, id, data, &tx)
-            .map_err(|e| { tracing::error!("Access check error: {}", e); Status::internal("Internal error") })?;
-        tx.commit()
-            .map_err(|e| { tracing::error!("Access check commit error: {}", e); Status::internal("Internal error") })?;
+            .map_err(|e| {
+                tracing::error!("Access check error: {}", e);
+                Status::internal("Internal error")
+            })?;
+        tx.commit().map_err(|e| {
+            tracing::error!("Access check commit error: {}", e);
+            Status::internal("Internal error")
+        })?;
         Ok(result)
     }
 
     /// Extract an EventUser from the gRPC AuthUser (for SSE event attribution).
     fn event_user_from(auth_user: &Option<AuthUser>) -> Option<EventUser> {
-        auth_user.as_ref().map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
+        auth_user
+            .as_ref()
+            .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
     }
 
     /// Strip field-level read-denied fields from a proto document.
@@ -179,19 +191,29 @@ impl ContentService {
         let denied = match self.pool.get() {
             Ok(mut conn) => match conn.transaction() {
                 Ok(tx) => {
-                    let d = self.hook_runner.check_field_read_access(fields, user_doc, &tx);
+                    let d = self
+                        .hook_runner
+                        .check_field_read_access(fields, user_doc, &tx);
                     // Read-only access check — commit result is irrelevant, rollback on drop is safe
                     let _ = tx.commit();
                     d
                 }
                 Err(e) => {
                     tracing::error!("Field access check tx error (fail closed): {}", e);
-                    fields.iter().filter(|f| f.access.read.is_some()).map(|f| f.name.clone()).collect()
+                    fields
+                        .iter()
+                        .filter(|f| f.access.read.is_some())
+                        .map(|f| f.name.clone())
+                        .collect()
                 }
             },
             Err(e) => {
                 tracing::error!("Field access check pool error (fail closed): {}", e);
-                fields.iter().filter(|f| f.access.read.is_some()).map(|f| f.name.clone()).collect()
+                fields
+                    .iter()
+                    .filter(|f| f.access.read.is_some())
+                    .map(|f| f.name.clone())
+                    .collect()
             }
         };
         if let Some(ref mut s) = doc.fields {

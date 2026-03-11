@@ -9,12 +9,12 @@ use std::time::Duration;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
+use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tokio_util::sync::WaitForCancellationFutureOwned;
 
+use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 use crate::db::query::AccessResult;
-use crate::admin::AdminState;
 
 /// Stream wrapper that ends when a CancellationToken fires.
 struct CancellableStream {
@@ -66,7 +66,11 @@ pub async fn sse_handler(
                 if let Ok(tx) = conn.transaction() {
                     for (slug, def) in &state.registry.collections {
                         match state.hook_runner.check_access(
-                            def.access.read.as_deref(), user_doc, None, None, &tx,
+                            def.access.read.as_deref(),
+                            user_doc,
+                            None,
+                            None,
+                            &tx,
                         ) {
                             Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
                                 allowed_collections.insert(slug.clone());
@@ -77,7 +81,11 @@ pub async fn sse_handler(
 
                     for (slug, def) in &state.registry.globals {
                         match state.hook_runner.check_access(
-                            def.access.read.as_deref(), user_doc, None, None, &tx,
+                            def.access.read.as_deref(),
+                            user_doc,
+                            None,
+                            None,
+                            &tx,
                         ) {
                             Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
                                 allowed_globals.insert(slug.clone());
@@ -94,52 +102,51 @@ pub async fn sse_handler(
 
     let stream = if let Some(bus) = event_bus {
         let rx = bus.subscribe();
-        let filtered = BroadcastStream::new(rx)
-            .filter_map(move |result| {
-                match result {
-                    Ok(event) => {
-                        let allowed = match event.target {
-                            crate::core::event::EventTarget::Collection => {
-                                allowed_collections.contains(&event.collection)
-                            }
-                            crate::core::event::EventTarget::Global => {
-                                allowed_globals.contains(&event.collection)
-                            }
-                        };
-                        if !allowed {
-                            return None;
+        let filtered = BroadcastStream::new(rx).filter_map(move |result| {
+            match result {
+                Ok(event) => {
+                    let allowed = match event.target {
+                        crate::core::event::EventTarget::Collection => {
+                            allowed_collections.contains(&event.collection)
                         }
-
-                        let target_str = match event.target {
-                            crate::core::event::EventTarget::Collection => "collection",
-                            crate::core::event::EventTarget::Global => "global",
-                        };
-                        let op_str = match event.operation {
-                            crate::core::event::EventOperation::Create => "create",
-                            crate::core::event::EventOperation::Update => "update",
-                            crate::core::event::EventOperation::Delete => "delete",
-                        };
-
-                        let payload = serde_json::json!({
-                            "sequence": event.sequence,
-                            "timestamp": event.timestamp,
-                            "target": target_str,
-                            "operation": op_str,
-                            "collection": event.collection,
-                            "document_id": event.document_id,
-                            "edited_by": event.edited_by,
-                        });
-
-                        let sse_event = Event::default()
-                            .event("mutation")
-                            .id(event.sequence.to_string())
-                            .data(payload.to_string());
-
-                        Some(Ok::<_, Infallible>(sse_event))
+                        crate::core::event::EventTarget::Global => {
+                            allowed_globals.contains(&event.collection)
+                        }
+                    };
+                    if !allowed {
+                        return None;
                     }
-                    Err(_) => None, // lagged — skip
+
+                    let target_str = match event.target {
+                        crate::core::event::EventTarget::Collection => "collection",
+                        crate::core::event::EventTarget::Global => "global",
+                    };
+                    let op_str = match event.operation {
+                        crate::core::event::EventOperation::Create => "create",
+                        crate::core::event::EventOperation::Update => "update",
+                        crate::core::event::EventOperation::Delete => "delete",
+                    };
+
+                    let payload = serde_json::json!({
+                        "sequence": event.sequence,
+                        "timestamp": event.timestamp,
+                        "target": target_str,
+                        "operation": op_str,
+                        "collection": event.collection,
+                        "document_id": event.document_id,
+                        "edited_by": event.edited_by,
+                    });
+
+                    let sse_event = Event::default()
+                        .event("mutation")
+                        .id(event.sequence.to_string())
+                        .data(payload.to_string());
+
+                    Some(Ok::<_, Infallible>(sse_event))
                 }
-            });
+                Err(_) => None, // lagged — skip
+            }
+        });
         Box::pin(filtered) as Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>
     } else {
         // No event bus — return an empty stream that never yields

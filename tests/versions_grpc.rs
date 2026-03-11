@@ -19,8 +19,8 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::Registry;
 use crap_cms::db::{migrate, pool, query};
-use crap_cms::service;
 use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::service;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -32,7 +32,9 @@ fn make_versioned_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.versions = Some(VersionsConfig::new(true, 0));
@@ -61,7 +63,13 @@ fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
     (tmp, db_pool)
 }
 
-fn setup_db(defs: Vec<CollectionDefinition>) -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry) {
+fn setup_db(
+    defs: Vec<CollectionDefinition>,
+) -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+) {
     let (tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     {
@@ -124,7 +132,13 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, _pool: db_pool, _registry: registry, _runner: hook_runner }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        _pool: db_pool,
+        _registry: registry,
+        _runner: hook_runner,
+    }
 }
 
 fn make_struct(fields: &[(&str, &str)]) -> Struct {
@@ -155,7 +169,6 @@ fn get_proto_field(doc: &content::Document, name: &str) -> Option<String> {
 
 // ── DB-Level Version Tests ──────────────────────────────────────────────
 
-
 #[tokio::test]
 async fn grpc_find_where_published_status() {
     let ts = setup_service(vec![make_versioned_def()]);
@@ -182,7 +195,8 @@ async fn grpc_find_where_published_status() {
         .unwrap();
 
     // Find without draft flag — should only return published
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             ..Default::default()
@@ -192,7 +206,10 @@ async fn grpc_find_where_published_status() {
         .into_inner();
 
     assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
-    assert_eq!(get_proto_field(&resp.documents[0], "title").as_deref(), Some("Published"));
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "title").as_deref(),
+        Some("Published")
+    );
 }
 
 #[tokio::test]
@@ -220,7 +237,8 @@ async fn grpc_find_with_draft_returns_all() {
         .unwrap();
 
     // Find with draft=true — should return all
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             draft: Some(true),
@@ -238,7 +256,8 @@ async fn grpc_draft_update_is_version_only() {
     let ts = setup_service(vec![make_versioned_def()]);
 
     // Create published article
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Original")])),
@@ -265,7 +284,8 @@ async fn grpc_draft_update_is_version_only() {
         .unwrap();
 
     // Regular find should still show "Original" (main table unchanged)
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             ..Default::default()
@@ -275,7 +295,10 @@ async fn grpc_draft_update_is_version_only() {
         .into_inner();
 
     assert_eq!(resp.documents.len(), 1);
-    assert_eq!(get_proto_field(&resp.documents[0], "title").as_deref(), Some("Original"));
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "title").as_deref(),
+        Some("Original")
+    );
 }
 
 #[tokio::test]
@@ -283,7 +306,8 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
     let ts = setup_service(vec![make_versioned_def()]);
 
     // Create published article
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Original")])),
@@ -310,7 +334,8 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
         .unwrap();
 
     // FindByID with draft=true should load the draft version
-    let resp = ts.service
+    let resp = ts
+        .service
         .find_by_id(Request::new(content::FindByIdRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -324,14 +349,18 @@ async fn grpc_find_by_id_draft_returns_latest_version() {
         .into_inner();
 
     let found = resp.document.unwrap();
-    assert_eq!(get_proto_field(&found, "title").as_deref(), Some("Draft Title"));
+    assert_eq!(
+        get_proto_field(&found, "title").as_deref(),
+        Some("Draft Title")
+    );
 }
 
 #[tokio::test]
 async fn grpc_find_by_id_no_draft_returns_main_table() {
     let ts = setup_service(vec![make_versioned_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Main Table")])),
@@ -358,7 +387,8 @@ async fn grpc_find_by_id_no_draft_returns_main_table() {
         .unwrap();
 
     // FindByID without draft should return main table data
-    let resp = ts.service
+    let resp = ts
+        .service
         .find_by_id(Request::new(content::FindByIdRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -372,14 +402,18 @@ async fn grpc_find_by_id_no_draft_returns_main_table() {
         .into_inner();
 
     let found = resp.document.unwrap();
-    assert_eq!(get_proto_field(&found, "title").as_deref(), Some("Main Table"));
+    assert_eq!(
+        get_proto_field(&found, "title").as_deref(),
+        Some("Main Table")
+    );
 }
 
 #[tokio::test]
 async fn grpc_list_versions() {
     let ts = setup_service(vec![make_versioned_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Versioned")])),
@@ -407,7 +441,8 @@ async fn grpc_list_versions() {
             .unwrap();
     }
 
-    let resp = ts.service
+    let resp = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -431,7 +466,8 @@ async fn grpc_list_versions() {
 async fn grpc_list_versions_with_limit() {
     let ts = setup_service(vec![make_versioned_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Many Versions")])),
@@ -458,7 +494,8 @@ async fn grpc_list_versions_with_limit() {
             .unwrap();
     }
 
-    let resp = ts.service
+    let resp = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -475,7 +512,8 @@ async fn grpc_list_versions_with_limit() {
 async fn grpc_list_versions_nonversioned_fails() {
     let ts = setup_service(vec![make_nonversioned_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "notes".to_string(),
             data: Some(make_struct(&[("title", "Note")])),
@@ -488,7 +526,8 @@ async fn grpc_list_versions_nonversioned_fails() {
         .document
         .unwrap();
 
-    let err = ts.service
+    let err = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "notes".to_string(),
             id: doc.id.clone(),
@@ -505,7 +544,8 @@ async fn grpc_restore_version() {
     let ts = setup_service(vec![make_versioned_def()]);
 
     // Create article
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Version 1")])),
@@ -519,7 +559,8 @@ async fn grpc_restore_version() {
         .unwrap();
 
     // Get version 1 ID
-    let v1_list = ts.service
+    let v1_list = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -544,7 +585,8 @@ async fn grpc_restore_version() {
         .unwrap();
 
     // Verify current title is Version 2
-    let current = ts.service
+    let current = ts
+        .service
         .find_by_id(Request::new(content::FindByIdRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -558,10 +600,14 @@ async fn grpc_restore_version() {
         .into_inner()
         .document
         .unwrap();
-    assert_eq!(get_proto_field(&current, "title").as_deref(), Some("Version 2"));
+    assert_eq!(
+        get_proto_field(&current, "title").as_deref(),
+        Some("Version 2")
+    );
 
     // Restore version 1
-    let restored = ts.service
+    let restored = ts
+        .service
         .restore_version(Request::new(content::RestoreVersionRequest {
             collection: "articles".to_string(),
             document_id: doc.id.clone(),
@@ -573,10 +619,14 @@ async fn grpc_restore_version() {
         .document
         .unwrap();
 
-    assert_eq!(get_proto_field(&restored, "title").as_deref(), Some("Version 1"));
+    assert_eq!(
+        get_proto_field(&restored, "title").as_deref(),
+        Some("Version 1")
+    );
 
     // Should now have 3 versions (original + update + restore)
-    let versions = ts.service
+    let versions = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -592,7 +642,8 @@ async fn grpc_restore_version() {
 async fn grpc_restore_version_nonversioned_fails() {
     let ts = setup_service(vec![make_nonversioned_def()]);
 
-    let err = ts.service
+    let err = ts
+        .service
         .restore_version(Request::new(content::RestoreVersionRequest {
             collection: "notes".to_string(),
             document_id: "fake".to_string(),
@@ -609,7 +660,8 @@ async fn grpc_describe_collection_shows_drafts() {
     let ts = setup_service(vec![make_versioned_def(), make_nonversioned_def()]);
 
     // Versioned with drafts
-    let resp = ts.service
+    let resp = ts
+        .service
         .describe_collection(Request::new(content::DescribeCollectionRequest {
             slug: "articles".to_string(),
             is_global: false,
@@ -620,7 +672,8 @@ async fn grpc_describe_collection_shows_drafts() {
     assert!(resp.drafts, "articles should have drafts=true");
 
     // Non-versioned
-    let resp = ts.service
+    let resp = ts
+        .service
         .describe_collection(Request::new(content::DescribeCollectionRequest {
             slug: "notes".to_string(),
             is_global: false,
@@ -637,7 +690,8 @@ async fn grpc_draft_create_skips_required_validation() {
 
     // Title is required, but draft=true should skip validation
     // Only providing body, no title
-    let result = ts.service
+    let result = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("body", "Just a body, no title")])),
@@ -647,7 +701,10 @@ async fn grpc_draft_create_skips_required_validation() {
         .await;
 
     // Should succeed because draft skips required
-    assert!(result.is_ok(), "Draft create should skip required validation");
+    assert!(
+        result.is_ok(),
+        "Draft create should skip required validation"
+    );
 }
 
 #[tokio::test]
@@ -655,7 +712,8 @@ async fn grpc_publish_enforces_required_validation() {
     let ts = setup_service(vec![make_versioned_def()]);
 
     // Create without required title and draft=false (publish)
-    let result = ts.service
+    let result = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("body", "No title")])),
@@ -665,7 +723,10 @@ async fn grpc_publish_enforces_required_validation() {
         .await;
 
     // Should fail because title is required for publish
-    assert!(result.is_err(), "Publish should enforce required validation");
+    assert!(
+        result.is_err(),
+        "Publish should enforce required validation"
+    );
 }
 
 #[tokio::test]
@@ -694,7 +755,8 @@ async fn grpc_versioned_no_drafts_does_not_filter_by_status() {
         .unwrap();
 
     // Find should return both (no _status filtering for drafts=false)
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "docs".to_string(),
             ..Default::default()
@@ -710,7 +772,8 @@ async fn grpc_versioned_no_drafts_does_not_filter_by_status() {
 async fn grpc_versioned_no_drafts_still_creates_versions() {
     let ts = setup_service(vec![make_versioned_no_drafts_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "docs".to_string(),
             data: Some(make_struct(&[("title", "Versioned Doc")])),
@@ -723,7 +786,8 @@ async fn grpc_versioned_no_drafts_still_creates_versions() {
         .document
         .unwrap();
 
-    let resp = ts.service
+    let resp = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "docs".to_string(),
             id: doc.id.clone(),
@@ -741,7 +805,8 @@ async fn grpc_max_versions_prunes_old() {
     // docs collection has max_versions = 5
     let ts = setup_service(vec![make_versioned_no_drafts_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "docs".to_string(),
             data: Some(make_struct(&[("title", "Prunable")])),
@@ -770,7 +835,8 @@ async fn grpc_max_versions_prunes_old() {
     }
 
     // max_versions=5, so only 5 should remain
-    let resp = ts.service
+    let resp = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "docs".to_string(),
             id: doc.id.clone(),
@@ -790,10 +856,14 @@ async fn grpc_full_draft_publish_workflow() {
     let ts = setup_service(vec![make_versioned_def()]);
 
     // 1. Create as draft
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
-            data: Some(make_struct(&[("title", "New Article"), ("body", "WIP content")])),
+            data: Some(make_struct(&[
+                ("title", "New Article"),
+                ("body", "WIP content"),
+            ])),
             locale: None,
             draft: Some(true),
         }))
@@ -804,7 +874,8 @@ async fn grpc_full_draft_publish_workflow() {
         .unwrap();
 
     // 2. Should not be in regular find
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             ..Default::default()
@@ -812,10 +883,15 @@ async fn grpc_full_draft_publish_workflow() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 0, "draft should not appear in regular find");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        0,
+        "draft should not appear in regular find"
+    );
 
     // 3. Should appear with draft=true
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             draft: Some(true),
@@ -824,14 +900,21 @@ async fn grpc_full_draft_publish_workflow() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "draft should appear with draft=true");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "draft should appear with draft=true"
+    );
 
     // 4. Make a draft update
     ts.service
         .update(Request::new(content::UpdateRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
-            data: Some(make_struct(&[("title", "Revised Article"), ("body", "Better content")])),
+            data: Some(make_struct(&[
+                ("title", "Revised Article"),
+                ("body", "Better content"),
+            ])),
             locale: None,
             draft: Some(true),
             unpublish: None,
@@ -844,7 +927,10 @@ async fn grpc_full_draft_publish_workflow() {
         .update(Request::new(content::UpdateRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
-            data: Some(make_struct(&[("title", "Final Article"), ("body", "Final content")])),
+            data: Some(make_struct(&[
+                ("title", "Final Article"),
+                ("body", "Final content"),
+            ])),
             locale: None,
             draft: Some(false),
             unpublish: None,
@@ -853,7 +939,8 @@ async fn grpc_full_draft_publish_workflow() {
         .unwrap();
 
     // 6. Should now appear in regular find
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             ..Default::default()
@@ -862,10 +949,14 @@ async fn grpc_full_draft_publish_workflow() {
         .unwrap()
         .into_inner();
     assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1);
-    assert_eq!(get_proto_field(&resp.documents[0], "title").as_deref(), Some("Final Article"));
+    assert_eq!(
+        get_proto_field(&resp.documents[0], "title").as_deref(),
+        Some("Final Article")
+    );
 
     // 7. Should have 3 versions (create draft + draft update + publish)
-    let versions = ts.service
+    let versions = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -887,10 +978,14 @@ async fn grpc_update_unpublish() {
     let ts = setup_service(vec![make_versioned_def()]);
 
     // 1. Create a published document
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
-            data: Some(make_struct(&[("title", "To Unpublish"), ("body", "Published content")])),
+            data: Some(make_struct(&[
+                ("title", "To Unpublish"),
+                ("body", "Published content"),
+            ])),
             locale: None,
             draft: None,
         }))
@@ -901,7 +996,8 @@ async fn grpc_update_unpublish() {
         .unwrap();
 
     // Verify it's published (appears in regular find)
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             ..Default::default()
@@ -909,10 +1005,15 @@ async fn grpc_update_unpublish() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "should be visible as published");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "should be visible as published"
+    );
 
     // 2. Unpublish via update with unpublish=true
-    let unpublished = ts.service
+    let unpublished = ts
+        .service
         .update(Request::new(content::UpdateRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -929,7 +1030,8 @@ async fn grpc_update_unpublish() {
     assert_eq!(unpublished.id, doc.id);
 
     // 3. Should NOT appear in regular find (status is now "draft")
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             ..Default::default()
@@ -937,10 +1039,15 @@ async fn grpc_update_unpublish() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 0, "unpublished doc should not appear in regular find");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        0,
+        "unpublished doc should not appear in regular find"
+    );
 
     // 4. Should appear with draft=true
-    let resp = ts.service
+    let resp = ts
+        .service
         .find(Request::new(content::FindRequest {
             collection: "articles".to_string(),
             draft: Some(true),
@@ -949,10 +1056,15 @@ async fn grpc_update_unpublish() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "unpublished doc should appear with draft=true");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "unpublished doc should appear with draft=true"
+    );
 
     // 5. Verify a draft version was created
-    let versions = ts.service
+    let versions = ts
+        .service
         .list_versions(Request::new(content::ListVersionsRequest {
             collection: "articles".to_string(),
             id: doc.id.clone(),
@@ -962,8 +1074,15 @@ async fn grpc_update_unpublish() {
         .unwrap()
         .into_inner();
     // Should have 2 versions: initial published + unpublish draft
-    assert!(versions.versions.len() >= 2, "should have at least 2 versions, got {}", versions.versions.len());
-    assert_eq!(versions.versions[0].status, "draft", "latest version should be draft");
+    assert!(
+        versions.versions.len() >= 2,
+        "should have at least 2 versions, got {}",
+        versions.versions.len()
+    );
+    assert_eq!(
+        versions.versions[0].status, "draft",
+        "latest version should be draft"
+    );
 }
 
 // ── persist_* Direct Tests ────────────────────────────────────────────────
@@ -977,12 +1096,24 @@ fn persist_create_published() {
     let final_data: HashMap<String, String> = [
         ("title".into(), "Persist Published".into()),
         ("body".into(), "Content".into()),
-    ].into();
-    let hook_data: HashMap<String, serde_json::Value> = final_data.iter()
+    ]
+    .into();
+    let hook_data: HashMap<String, serde_json::Value> = final_data
+        .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
-    let doc = service::persist_create(&conn, "articles", &def, &final_data, &hook_data, None, None, false).unwrap();
+    let doc = service::persist_create(
+        &conn,
+        "articles",
+        &def,
+        &final_data,
+        &hook_data,
+        None,
+        None,
+        false,
+    )
+    .unwrap();
     assert_eq!(doc.get_str("title"), Some("Persist Published"));
 
     // Document should exist in main table
@@ -1005,14 +1136,23 @@ fn persist_create_draft() {
     let (_tmp, pool, _registry) = setup_db(vec![def.clone()]);
     let conn = pool.get().unwrap();
 
-    let final_data: HashMap<String, String> = [
-        ("title".into(), "Persist Draft".into()),
-    ].into();
-    let hook_data: HashMap<String, serde_json::Value> = final_data.iter()
+    let final_data: HashMap<String, String> = [("title".into(), "Persist Draft".into())].into();
+    let hook_data: HashMap<String, serde_json::Value> = final_data
+        .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
-    let doc = service::persist_create(&conn, "articles", &def, &final_data, &hook_data, None, None, true).unwrap();
+    let doc = service::persist_create(
+        &conn,
+        "articles",
+        &def,
+        &final_data,
+        &hook_data,
+        None,
+        None,
+        true,
+    )
+    .unwrap();
 
     // Document should exist with _status = "draft"
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
@@ -1031,25 +1171,37 @@ fn persist_update_publishes() {
     let conn = pool.get().unwrap();
 
     // Create a document first
-    let create_data: HashMap<String, String> = [
-        ("title".into(), "Before Update".into()),
-    ].into();
+    let create_data: HashMap<String, String> = [("title".into(), "Before Update".into())].into();
     let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
 
     // Now use persist_update
     let update_data: HashMap<String, String> = [
         ("title".into(), "After Update".into()),
         ("body".into(), "New body".into()),
-    ].into();
-    let hook_data: HashMap<String, serde_json::Value> = update_data.iter()
+    ]
+    .into();
+    let hook_data: HashMap<String, serde_json::Value> = update_data
+        .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
-    let updated = service::persist_update(&conn, "articles", &doc.id, &def, &update_data, &hook_data, None, None).unwrap();
+    let updated = service::persist_update(
+        &conn,
+        "articles",
+        &doc.id,
+        &def,
+        &update_data,
+        &hook_data,
+        None,
+        None,
+    )
+    .unwrap();
     assert_eq!(updated.get_str("title"), Some("After Update"));
 
     // Main table should be updated
-    let found = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    let found = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     assert_eq!(found.get_str("title"), Some("After Update"));
 
     // Version snapshot should exist with status "published"
@@ -1068,21 +1220,27 @@ fn persist_draft_version_merges_data() {
     let create_data: HashMap<String, String> = [
         ("title".into(), "Original".into()),
         ("body".into(), "Original body".into()),
-    ].into();
+    ]
+    .into();
     let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
 
     // Call persist_draft_version with modified hook data
-    let hook_data: HashMap<String, serde_json::Value> = [
-        ("title".to_string(), serde_json::Value::String("Draft Title".to_string())),
-    ].into();
+    let hook_data: HashMap<String, serde_json::Value> = [(
+        "title".to_string(),
+        serde_json::Value::String("Draft Title".to_string()),
+    )]
+    .into();
 
-    let existing = service::persist_draft_version(&conn, "articles", &doc.id, &def, &hook_data, None).unwrap();
+    let existing =
+        service::persist_draft_version(&conn, "articles", &doc.id, &def, &hook_data, None).unwrap();
 
     // Returned doc is the existing (unchanged) doc
     assert_eq!(existing.get_str("title"), Some("Original"));
 
     // Main table should still have original data
-    let main = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    let main = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     assert_eq!(main.get_str("title"), Some("Original"));
 
     // Draft version snapshot should have the merged "Draft Title"
@@ -1109,9 +1267,7 @@ fn persist_unpublish_sets_draft_status() {
     let conn = pool.get().unwrap();
 
     // Create a published document
-    let create_data: HashMap<String, String> = [
-        ("title".into(), "To Unpublish".into()),
-    ].into();
+    let create_data: HashMap<String, String> = [("title".into(), "To Unpublish".into())].into();
     let doc = query::create(&conn, "articles", &def, &create_data, None).unwrap();
     query::set_document_status(&conn, "articles", &doc.id, "published").unwrap();
 
@@ -1186,37 +1342,54 @@ fn service_update_draft_uses_locale_context() {
     let data: HashMap<String, String> = [
         ("title".into(), "English Title".into()),
         ("body".into(), "Body".into()),
-    ].into();
+    ]
+    .into();
     let (doc, _) = service::create_document(
-        &db_pool, &hook_runner, "articles", &def,
+        &db_pool,
+        &hook_runner,
+        "articles",
+        &def,
         service::WriteInput {
-            data, join_data: &HashMap::new(), password: None,
-            locale_ctx: Some(&en_ctx), locale: Some("en".to_string()), draft: false, ui_locale: None,
+            data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: Some(&en_ctx),
+            locale: Some("en".to_string()),
+            draft: false,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // 2. Add German translation via direct query
-    let de_data: HashMap<String, String> = [
-        ("title".into(), "Deutscher Titel".into()),
-    ].into();
+    let de_data: HashMap<String, String> = [("title".into(), "Deutscher Titel".into())].into();
     {
         let conn = db_pool.get().unwrap();
         query::update(&conn, "articles", &def, &doc.id, &de_data, Some(&de_ctx)).unwrap();
     }
 
     // 3. Draft update with DE locale, changing the German title
-    let draft_data: HashMap<String, String> = [
-        ("title".into(), "Neuer Deutscher Titel".into()),
-    ].into();
+    let draft_data: HashMap<String, String> =
+        [("title".into(), "Neuer Deutscher Titel".into())].into();
     let (result, _) = service::update_document(
-        &db_pool, &hook_runner, "articles", &doc.id, &def,
+        &db_pool,
+        &hook_runner,
+        "articles",
+        &doc.id,
+        &def,
         service::WriteInput {
-            data: draft_data, join_data: &HashMap::new(), password: None,
-            locale_ctx: Some(&de_ctx), locale: Some("de".to_string()), draft: true, ui_locale: None,
+            data: draft_data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: Some(&de_ctx),
+            locale: Some("de".to_string()),
+            draft: true,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Result should be the existing doc (main table unchanged by draft)
     // With the fix, persist_draft_version reads with DE locale context,
@@ -1226,8 +1399,14 @@ fn service_update_draft_uses_locale_context() {
     // 4. Main table EN title should be unchanged
     {
         let conn = db_pool.get().unwrap();
-        let en_doc = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&en_ctx)).unwrap().unwrap();
-        assert_eq!(en_doc.get_str("title"), Some("English Title"), "EN title should be unchanged");
+        let en_doc = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&en_ctx))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            en_doc.get_str("title"),
+            Some("English Title"),
+            "EN title should be unchanged"
+        );
     }
 
     // 5. The draft version snapshot should have the new DE title

@@ -12,7 +12,10 @@ pub struct QueuedConversion {
 }
 
 impl QueuedConversion {
-    pub fn builder(source_path: impl Into<String>, target_path: impl Into<String>) -> QueuedConversionBuilder {
+    pub fn builder(
+        source_path: impl Into<String>,
+        target_path: impl Into<String>,
+    ) -> QueuedConversionBuilder {
         QueuedConversionBuilder::new(source_path, target_path)
     }
 }

@@ -38,9 +38,8 @@ pub(super) fn register_locale(lua: &Lua, crap: &Table, config: &CrapConfig) -> R
     let locale_table = lua.create_table()?;
 
     let default_locale = config.locale.default_locale.clone();
-    let get_default_fn = lua.create_function(move |_, ()| -> mlua::Result<String> {
-        Ok(default_locale.clone())
-    })?;
+    let get_default_fn =
+        lua.create_function(move |_, ()| -> mlua::Result<String> { Ok(default_locale.clone()) })?;
     locale_table.set("get_default", get_default_fn)?;
 
     let locales = config.locale.locales.clone();
@@ -54,9 +53,7 @@ pub(super) fn register_locale(lua: &Lua, crap: &Table, config: &CrapConfig) -> R
     locale_table.set("get_all", get_all_fn)?;
 
     let enabled = config.locale.is_enabled();
-    let is_enabled_fn = lua.create_function(move |_, ()| -> mlua::Result<bool> {
-        Ok(enabled)
-    })?;
+    let is_enabled_fn = lua.create_function(move |_, ()| -> mlua::Result<bool> { Ok(enabled) })?;
     locale_table.set("is_enabled", is_enabled_fn)?;
 
     crap.set("locale", locale_table)?;
@@ -113,10 +110,7 @@ mod tests {
         let (lua, _crap) = setup_lua(&config);
 
         // "server" without a sub-key should return a table, not nil.
-        let result: mlua::Value = lua
-            .load("return crap.config.get('server')")
-            .eval()
-            .unwrap();
+        let result: mlua::Value = lua.load("return crap.config.get('server')").eval().unwrap();
 
         assert!(
             matches!(result, mlua::Value::Table(_)),
@@ -202,10 +196,7 @@ mod tests {
         };
         let (lua, _crap) = setup_lua(&config);
 
-        let result: String = lua
-            .load("return crap.locale.get_default()")
-            .eval()
-            .unwrap();
+        let result: String = lua.load("return crap.locale.get_default()").eval().unwrap();
 
         assert_eq!(result, "fr");
     }
@@ -216,10 +207,7 @@ mod tests {
         let config = CrapConfig::default();
         let (lua, _crap) = setup_lua(&config);
 
-        let result: String = lua
-            .load("return crap.locale.get_default()")
-            .eval()
-            .unwrap();
+        let result: String = lua.load("return crap.locale.get_default()").eval().unwrap();
 
         assert_eq!(result, "en");
     }
@@ -238,10 +226,7 @@ mod tests {
         };
         let (lua, _crap) = setup_lua(&config);
 
-        let result: mlua::Table = lua
-            .load("return crap.locale.get_all()")
-            .eval()
-            .unwrap();
+        let result: mlua::Table = lua.load("return crap.locale.get_all()").eval().unwrap();
 
         let locales: Vec<String> = result
             .sequence_values::<String>()
@@ -257,17 +242,17 @@ mod tests {
         let config = CrapConfig::default();
         let (lua, _crap) = setup_lua(&config);
 
-        let result: mlua::Table = lua
-            .load("return crap.locale.get_all()")
-            .eval()
-            .unwrap();
+        let result: mlua::Table = lua.load("return crap.locale.get_all()").eval().unwrap();
 
         let locales: Vec<String> = result
             .sequence_values::<String>()
             .collect::<mlua::Result<_>>()
             .unwrap();
 
-        assert!(locales.is_empty(), "expected empty table when no locales configured");
+        assert!(
+            locales.is_empty(),
+            "expected empty table when no locales configured"
+        );
     }
 
     // --- crap.locale.is_enabled ---
@@ -277,10 +262,7 @@ mod tests {
         let config = CrapConfig::default(); // locales = []
         let (lua, _crap) = setup_lua(&config);
 
-        let result: bool = lua
-            .load("return crap.locale.is_enabled()")
-            .eval()
-            .unwrap();
+        let result: bool = lua.load("return crap.locale.is_enabled()").eval().unwrap();
 
         assert!(!result, "expected false when no locales are configured");
     }
@@ -297,10 +279,7 @@ mod tests {
         };
         let (lua, _crap) = setup_lua(&config);
 
-        let result: bool = lua
-            .load("return crap.locale.is_enabled()")
-            .eval()
-            .unwrap();
+        let result: bool = lua.load("return crap.locale.is_enabled()").eval().unwrap();
 
         assert!(result, "expected true when locales are configured");
     }

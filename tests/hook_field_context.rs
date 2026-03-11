@@ -2,18 +2,23 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::Document;
-use crap_cms::core::field::FieldDefinition;
 use crap_cms::core::collection::Hooks;
+use crap_cms::core::field::FieldDefinition;
+use crap_cms::core::Document;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
-use crap_cms::hooks::lifecycle::{HookRunner, HookContext, HookEvent, FieldHookEvent};
+use crap_cms::hooks::lifecycle::{FieldHookEvent, HookContext, HookEvent, HookRunner};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
 }
 
-fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry, HookRunner) {
+fn setup() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+    HookRunner,
+) {
     let config_dir = fixture_dir();
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).expect("Failed to init Lua");
@@ -39,7 +44,10 @@ fn create_article(
     data: &HashMap<String, String>,
 ) -> Document {
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").expect("articles not found").clone();
+    let def = reg
+        .get_collection("articles")
+        .expect("articles not found")
+        .clone();
     drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
@@ -50,7 +58,6 @@ fn create_article(
 }
 
 // ── 2A. Hook Execution ──────────────────────────────────────────────────────
-
 
 #[test]
 fn check_live_setting_disabled_blocks() {
@@ -63,7 +70,10 @@ fn check_live_setting_disabled_blocks() {
         &HashMap::new(),
     );
     assert!(result.is_ok());
-    assert!(!result.unwrap(), "Disabled live setting should block broadcast");
+    assert!(
+        !result.unwrap(),
+        "Disabled live setting should block broadcast"
+    );
 }
 
 #[test]
@@ -74,19 +84,19 @@ fn check_live_setting_function() {
     // The filter_published function allows create/update but blocks delete
     let live = LiveSetting::Function("hooks.live.filter_published".to_string());
 
-    let result = runner.check_live_setting(
-        Some(&live), "articles", "create", &HashMap::new(),
-    ).expect("should not error");
+    let result = runner
+        .check_live_setting(Some(&live), "articles", "create", &HashMap::new())
+        .expect("should not error");
     assert!(result, "create should be allowed");
 
-    let result = runner.check_live_setting(
-        Some(&live), "articles", "update", &HashMap::new(),
-    ).expect("should not error");
+    let result = runner
+        .check_live_setting(Some(&live), "articles", "update", &HashMap::new())
+        .expect("should not error");
     assert!(result, "update should be allowed");
 
-    let result = runner.check_live_setting(
-        Some(&live), "articles", "delete", &HashMap::new(),
-    ).expect("should not error");
+    let result = runner
+        .check_live_setting(Some(&live), "articles", "delete", &HashMap::new())
+        .expect("should not error");
     assert!(!result, "delete should be suppressed");
 }
 
@@ -108,9 +118,8 @@ fn field_after_read_hook_transforms_value() {
     drop(reg);
 
     // Apply after_read hooks (collection-level after_read adds _was_read marker)
-    let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc, None, None,
-    );
+    let transformed =
+        runner.apply_after_read(&def.hooks, &def.fields, "articles", "find", doc, None, None);
     assert_eq!(
         transformed.fields.get("_was_read").and_then(|v| v.as_str()),
         Some("true"),
@@ -166,12 +175,13 @@ fn before_broadcast_no_hooks_passes_through() {
     let mut data = HashMap::new();
     data.insert("title".to_string(), serde_json::json!("Broadcast Test"));
 
-    let result = runner.run_before_broadcast(
-        &def.hooks, "articles", "create", data,
-    );
+    let result = runner.run_before_broadcast(&def.hooks, "articles", "create", data);
     assert!(result.is_ok());
     let data = result.unwrap();
-    assert!(data.is_some(), "No before_broadcast hooks → data should pass through");
+    assert!(
+        data.is_some(),
+        "No before_broadcast hooks → data should pass through"
+    );
     assert_eq!(
         data.unwrap().get("title").and_then(|v| v.as_str()),
         Some("Broadcast Test"),
@@ -191,7 +201,8 @@ fn before_broadcast_transforms_data() {
     let mut data = HashMap::new();
     data.insert("title".to_string(), serde_json::json!("Original"));
 
-    let result = runner.run_before_broadcast(&hooks, "articles", "create", data)
+    let result = runner
+        .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("should not error");
     assert!(result.is_some(), "Should not suppress");
     let data = result.unwrap();
@@ -213,9 +224,13 @@ fn before_broadcast_suppresses_event() {
 
     let data = HashMap::new();
 
-    let result = runner.run_before_broadcast(&hooks, "articles", "create", data)
+    let result = runner
+        .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("should not error");
-    assert!(result.is_none(), "suppress_broadcast should suppress the event");
+    assert!(
+        result.is_none(),
+        "suppress_broadcast should suppress the event"
+    );
 }
 
 // ── 5A. Additional Hook Lifecycle Tests ──────────────────────────────────────
@@ -250,9 +265,21 @@ fn validate_required_field_errors() {
     // run_before_write runs field hooks, validation, then collection hooks.
     // It should fail because "title" is required.
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false, None, None,
+        &def.hooks,
+        &def.fields,
+        ctx,
+        &tx,
+        "articles",
+        None,
+        None,
+        false,
+        None,
+        None,
     );
-    assert!(result.is_err(), "Should fail when required field 'title' is missing");
+    assert!(
+        result.is_err(),
+        "Should fail when required field 'title' is missing"
+    );
 
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
@@ -280,7 +307,13 @@ fn after_read_hooks_fire() {
 
     // The articles collection has an after_read hook that adds _was_read = "true"
     let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc.clone(), None, None,
+        &def.hooks,
+        &def.fields,
+        "articles",
+        "find",
+        doc.clone(),
+        None,
+        None,
     );
 
     // Verify the after_read hook ran
@@ -310,9 +343,8 @@ fn hook_error_rolls_back_transaction() {
     drop(reg);
 
     // First verify the collection is empty
-    let initial_count = crap_cms::db::ops::count_documents(
-        &pool, "articles", &def, &[], None,
-    ).expect("count");
+    let initial_count =
+        crap_cms::db::ops::count_documents(&pool, "articles", &def, &[], None).expect("count");
     assert_eq!(initial_count, 0, "Should start with 0 articles");
 
     // Attempt to create a document inside a transaction, but have the hook error
@@ -337,9 +369,8 @@ fn hook_error_rolls_back_transaction() {
     drop(tx);
 
     // Verify the document was NOT persisted
-    let final_count = crap_cms::db::ops::count_documents(
-        &pool, "articles", &def, &[], None,
-    ).expect("count");
+    let final_count =
+        crap_cms::db::ops::count_documents(&pool, "articles", &def, &[], None).expect("count");
     assert_eq!(
         final_count, 0,
         "Document should not be persisted after transaction rollback due to hook error"
@@ -364,9 +395,8 @@ fn field_after_read_hooks_transform_values() {
 
     // apply_after_read should run field-level after_read hooks (uppercase_value on title)
     // AND collection-level after_read hooks (_was_read marker)
-    let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc, None, None,
-    );
+    let transformed =
+        runner.apply_after_read(&def.hooks, &def.fields, "articles", "find", doc, None, None);
 
     // Field hook uppercases the title
     assert_eq!(
@@ -399,7 +429,13 @@ fn field_after_read_hooks_with_apply_after_read_many() {
     drop(reg);
 
     let results = runner.apply_after_read_many(
-        &def.hooks, &def.fields, "articles", "find", vec![doc1, doc2], None, None,
+        &def.hooks,
+        &def.fields,
+        "articles",
+        "find",
+        vec![doc1, doc2],
+        None,
+        None,
     );
 
     assert_eq!(results.len(), 2);
@@ -440,15 +476,17 @@ fn run_after_write_runs_field_after_change_hooks() {
     let tx = conn.transaction().unwrap();
 
     // run_after_write with AfterChange event should trigger field-level after_change hooks
-    let result = runner.run_after_write(
-        &def.hooks,
-        &def.fields,
-        HookEvent::AfterChange,
-        ctx,
-        &tx,
-        None,
-        None,
-    ).expect("run_after_write failed");
+    let result = runner
+        .run_after_write(
+            &def.hooks,
+            &def.fields,
+            HookEvent::AfterChange,
+            ctx,
+            &tx,
+            None,
+            None,
+        )
+        .expect("run_after_write failed");
 
     // The collection-level after_change hook runs (logs but doesn't modify data)
     // The result should succeed
@@ -552,14 +590,9 @@ fn hook_context_passes_locale_and_draft() {
     let tx = conn.transaction().unwrap();
 
     // Should not error even with locale and draft set
-    let result = runner.run_hooks_with_conn(
-        &def.hooks,
-        HookEvent::BeforeChange,
-        ctx,
-        &tx,
-        None,
-        None,
-    ).expect("Hook execution failed");
+    let result = runner
+        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx, None, None)
+        .expect("Hook execution failed");
 
     assert_eq!(result.locale, Some("en".to_string()));
     assert_eq!(result.draft, Some(true));
@@ -578,7 +611,10 @@ fn hook_context_table_flows_through() {
     data.insert("title".to_string(), serde_json::json!("Test"));
 
     let mut context = HashMap::new();
-    context.insert("before_marker".to_string(), serde_json::json!("set-by-test"));
+    context.insert(
+        "before_marker".to_string(),
+        serde_json::json!("set-by-test"),
+    );
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -595,14 +631,9 @@ fn hook_context_table_flows_through() {
     let tx = conn.transaction().unwrap();
 
     // The hooks should receive the context table
-    let result = runner.run_hooks_with_conn(
-        &def.hooks,
-        HookEvent::BeforeChange,
-        ctx,
-        &tx,
-        None,
-        None,
-    ).expect("Hook execution failed");
+    let result = runner
+        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx, None, None)
+        .expect("Hook execution failed");
 
     // The result should still contain the before_marker since hooks don't clear it
     // (unless they modify the context table)
@@ -624,16 +655,18 @@ fn field_before_validate_hook_trims_title() {
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
 
-    runner.run_field_hooks_with_conn(
-        &def.fields,
-        FieldHookEvent::BeforeValidate,
-        &mut data,
-        "articles",
-        "create",
-        &tx,
-        None,
-        None,
-    ).expect("Field hook failed");
+    runner
+        .run_field_hooks_with_conn(
+            &def.fields,
+            FieldHookEvent::BeforeValidate,
+            &mut data,
+            "articles",
+            "create",
+            &tx,
+            None,
+            None,
+        )
+        .expect("Field hook failed");
 
     // The title field has a before_validate trim hook
     assert_eq!(
@@ -652,9 +685,9 @@ fn check_live_setting_function_returns_nil_means_false() {
 
     // suppress_broadcast returns nil, which should be treated as false
     let live = LiveSetting::Function("hooks.live.suppress_broadcast".to_string());
-    let result = runner.check_live_setting(
-        Some(&live), "articles", "create", &HashMap::new(),
-    ).expect("should not error");
+    let result = runner
+        .check_live_setting(Some(&live), "articles", "create", &HashMap::new())
+        .expect("should not error");
     assert!(!result, "nil return should mean suppress (false)");
 }
 
@@ -679,27 +712,31 @@ fn multiple_field_hooks_run_in_sequence() {
     let tx = conn.transaction().unwrap();
 
     // First: before_validate trims
-    runner.run_field_hooks_with_conn(
-        &def.fields,
-        FieldHookEvent::BeforeValidate,
-        &mut data,
-        "articles",
-        "create",
-        &tx,
-        None,
-        None,
-    ).expect("before_validate field hook");
+    runner
+        .run_field_hooks_with_conn(
+            &def.fields,
+            FieldHookEvent::BeforeValidate,
+            &mut data,
+            "articles",
+            "create",
+            &tx,
+            None,
+            None,
+        )
+        .expect("before_validate field hook");
 
     assert_eq!(data.get("title").and_then(|v| v.as_str()), Some("hello"));
 
     // Then: after_read uppercases
-    runner.run_field_hooks(
-        &def.fields,
-        FieldHookEvent::AfterRead,
-        &mut data,
-        "articles",
-        "find",
-    ).expect("after_read field hook");
+    runner
+        .run_field_hooks(
+            &def.fields,
+            FieldHookEvent::AfterRead,
+            &mut data,
+            "articles",
+            "find",
+        )
+        .expect("after_read field hook");
 
     assert_eq!(data.get("title").and_then(|v| v.as_str()), Some("HELLO"));
 }
@@ -740,9 +777,20 @@ fn run_before_write_with_user_context() {
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
 
-    let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, Some(&user), false, None, None,
-    ).expect("run_before_write with user failed");
+    let result = runner
+        .run_before_write(
+            &def.hooks,
+            &def.fields,
+            ctx,
+            &tx,
+            "articles",
+            None,
+            Some(&user),
+            false,
+            None,
+            None,
+        )
+        .expect("run_before_write with user failed");
 
     assert!(result.data.contains_key("title"));
 }
@@ -752,13 +800,16 @@ fn run_before_write_with_user_context() {
 #[test]
 fn apply_after_read_many_empty_hooks_passthrough() {
     let (_tmp, pool, registry, runner) = setup();
-    let doc = create_article(&pool, &registry, &HashMap::from([
-        ("title".to_string(), "Test".to_string()),
-    ]));
+    let doc = create_article(
+        &pool,
+        &registry,
+        &HashMap::from([("title".to_string(), "Test".to_string())]),
+    );
     let hooks = Hooks::default();
     let fields: Vec<FieldDefinition> = Vec::new();
     let docs = vec![doc.clone()];
-    let result = runner.apply_after_read_many(&hooks, &fields, "articles", "find", docs, None, None);
+    let result =
+        runner.apply_after_read_many(&hooks, &fields, "articles", "find", docs, None, None);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].id, doc.id);
 }
@@ -774,11 +825,15 @@ fn registered_before_broadcast_suppresses_event() {
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(tmp.path().join("init.lua"), r#"
+    std::fs::write(
+        tmp.path().join("init.lua"),
+        r#"
         crap.hooks.register("before_broadcast", function(ctx)
             return nil  -- suppress
         end)
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
@@ -792,9 +847,13 @@ fn registered_before_broadcast_suppresses_event() {
     let hooks = Hooks::default();
     let mut data = HashMap::new();
     data.insert("title".to_string(), serde_json::json!("Test"));
-    let result = runner.run_before_broadcast(&hooks, "articles", "create", data)
+    let result = runner
+        .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("run_before_broadcast");
-    assert!(result.is_none(), "Registered before_broadcast returning nil should suppress");
+    assert!(
+        result.is_none(),
+        "Registered before_broadcast returning nil should suppress"
+    );
 }
 
 #[test]
@@ -806,12 +865,16 @@ fn registered_before_broadcast_transforms_data() {
         collections_dir.join("articles.lua"),
         r#"crap.collections.define("articles", { fields = { { name = "title", type = "text" } } })"#,
     ).unwrap();
-    std::fs::write(tmp.path().join("init.lua"), r#"
+    std::fs::write(
+        tmp.path().join("init.lua"),
+        r#"
         crap.hooks.register("before_broadcast", function(ctx)
             ctx.data._registered_marker = "yes"
             return ctx
         end)
-    "#).unwrap();
+    "#,
+    )
+    .unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
@@ -825,12 +888,15 @@ fn registered_before_broadcast_transforms_data() {
     let hooks = Hooks::default();
     let mut data = HashMap::new();
     data.insert("title".to_string(), serde_json::json!("Test"));
-    let result = runner.run_before_broadcast(&hooks, "articles", "create", data)
+    let result = runner
+        .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("run_before_broadcast");
     assert!(result.is_some());
     let result_data = result.unwrap();
     assert_eq!(
-        result_data.get("_registered_marker").and_then(|v| v.as_str()),
+        result_data
+            .get("_registered_marker")
+            .and_then(|v| v.as_str()),
         Some("yes"),
     );
 }

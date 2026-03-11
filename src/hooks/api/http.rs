@@ -8,7 +8,8 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
     let http_table = lua.create_table()?;
     let http_request_fn = lua.create_function(|lua, opts: Table| -> mlua::Result<Table> {
         let url: String = opts.get("url")?;
-        let method: String = opts.get::<Option<String>>("method")?
+        let method: String = opts
+            .get::<Option<String>>("method")?
             .unwrap_or_else(|| "GET".to_string())
             .to_uppercase();
         let timeout: u64 = opts.get::<Option<u64>>("timeout")?.unwrap_or(30);
@@ -22,7 +23,8 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
 
         // Collect headers
         let headers: Vec<(String, String)> = if let Ok(headers_tbl) = opts.get::<Table>("headers") {
-            headers_tbl.pairs::<String, String>()
+            headers_tbl
+                .pairs::<String, String>()
                 .collect::<mlua::Result<Vec<_>>>()?
         } else {
             Vec::new()
@@ -59,9 +61,12 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
                     req.send("")
                 }
             }
-            _ => return Err(mlua::Error::RuntimeError(
-                format!("unsupported HTTP method: {}", method)
-            )),
+            _ => {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "unsupported HTTP method: {}",
+                    method
+                )))
+            }
         };
 
         let result = lua.create_table()?;
@@ -75,16 +80,16 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
                     }
                 }
                 result.set("headers", headers_out)?;
-                let body_str = resp.body_mut().read_to_string()
-                    .map_err(|e| mlua::Error::RuntimeError(
-                        format!("failed to read response body: {}", e)
-                    ))?;
+                let body_str = resp.body_mut().read_to_string().map_err(|e| {
+                    mlua::Error::RuntimeError(format!("failed to read response body: {}", e))
+                })?;
                 result.set("body", body_str)?;
             }
             Err(e) => {
-                return Err(mlua::Error::RuntimeError(
-                    format!("HTTP transport error: {}", e)
-                ));
+                return Err(mlua::Error::RuntimeError(format!(
+                    "HTTP transport error: {}",
+                    e
+                )));
             }
         }
 

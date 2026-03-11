@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::db::DbPool;
 use crap_cms::core::SharedRegistry;
+use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -30,7 +30,9 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 /// Set up a HookRunner with a real synced database (tables created from Lua definitions).
@@ -61,27 +63,33 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 #[allow(dead_code)]
 fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── 3D. Definition Parsing Edge Cases ────────────────────────────────────────
 
-
 #[test]
 fn schema_get_collection_nonexistent() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local schema = crap.schema.get_collection("nonexistent")
         if schema ~= nil then return "NOT_NIL" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn schema_get_global() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local schema = crap.schema.get_global("settings")
         if schema == nil then return "NIL" end
         if schema.slug ~= "settings" then return "SLUG:" .. tostring(schema.slug) end
@@ -89,25 +97,31 @@ fn schema_get_global() {
         if schema.fields[1].name ~= "site_name" then return "F1:" .. schema.fields[1].name end
         if schema.fields[2].name ~= "maintenance_mode" then return "F2:" .. schema.fields[2].name end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn schema_get_global_nonexistent() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local schema = crap.schema.get_global("nonexistent")
         if schema ~= nil then return "NOT_NIL" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn schema_list_collections() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local list = crap.schema.list_collections()
         if #list < 1 then return "EMPTY" end
         -- Should contain articles
@@ -122,14 +136,17 @@ fn schema_list_collections() {
         end
         if not found then return "NO_ARTICLES" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn schema_list_globals() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local list = crap.schema.list_globals()
         if #list < 1 then return "EMPTY" end
         -- Should contain settings
@@ -141,28 +158,34 @@ fn schema_list_globals() {
         end
         if not found then return "NO_SETTINGS" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn schema_collection_metadata() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local schema = crap.schema.get_collection("articles")
         -- articles fixture doesn't have auth/upload/versions
         if schema.has_auth then return "HAS_AUTH" end
         if schema.has_upload then return "HAS_UPLOAD" end
         if schema.has_versions then return "HAS_VERSIONS" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn schema_field_with_options() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local schema = crap.schema.get_collection("articles")
         -- Find the status field which has select options
         local status_field = nil
@@ -175,7 +198,8 @@ fn schema_field_with_options() {
         if status_field.options[1].value ~= "draft" then return "OPT1:" .. status_field.options[1].value end
         if status_field.options[2].value ~= "published" then return "OPT2:" .. status_field.options[2].value end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -186,21 +210,26 @@ fn schema_field_with_options() {
 #[test]
 fn lua_crypto_sha256() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local hash = crap.crypto.sha256("hello")
         -- Known SHA256 of "hello"
         if hash == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" then
             return "ok"
         end
         return "WRONG:" .. hash
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crypto_hmac_sha256() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local sig = crap.crypto.hmac_sha256("message", "secret_key")
         -- HMAC should be a 64-char hex string
         if #sig ~= 64 then return "BAD_LEN:" .. tostring(#sig) end
@@ -213,14 +242,17 @@ fn lua_crypto_hmac_sha256() {
         local sig3 = crap.crypto.hmac_sha256("message", "other_key")
         if sig == sig3 then return "SAME_WITH_DIFFERENT_KEY" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crypto_base64_encode_decode() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local encoded = crap.crypto.base64_encode("Hello, World!")
         if encoded ~= "SGVsbG8sIFdvcmxkIQ==" then
             return "ENCODE:" .. encoded
@@ -230,27 +262,33 @@ fn lua_crypto_base64_encode_decode() {
             return "DECODE:" .. decoded
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crypto_base64_decode_invalid() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local ok, err = pcall(function()
             crap.crypto.base64_decode("!!!invalid!!!")
         end)
         if ok then return "SHOULD_FAIL" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crypto_encrypt_decrypt_roundtrip() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local plaintext = "secret message 123"
         local encrypted = crap.crypto.encrypt(plaintext)
         -- Encrypted text should be a base64 string, different from plaintext
@@ -262,14 +300,17 @@ fn lua_crypto_encrypt_decrypt_roundtrip() {
             return "MISMATCH:" .. decrypted
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crypto_decrypt_invalid() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local ok, err = pcall(function()
             -- Too-short ciphertext (less than 12 bytes for nonce)
             crap.crypto.decrypt("AQID")
@@ -280,14 +321,17 @@ fn lua_crypto_decrypt_invalid() {
             return "ok"
         end
         return "UNEXPECTED:" .. err_str
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crypto_random_bytes() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local bytes16 = crap.crypto.random_bytes(16)
         -- Should produce 32-char hex string (16 bytes * 2 chars per byte)
         if #bytes16 ~= 32 then return "BAD_LEN:" .. tostring(#bytes16) end
@@ -297,7 +341,8 @@ fn lua_crypto_random_bytes() {
         local bytes16_2 = crap.crypto.random_bytes(16)
         if bytes16 == bytes16_2 then return "NOT_RANDOM" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -308,7 +353,10 @@ fn lua_crypto_random_bytes() {
 #[test]
 fn lua_schema_get_collection() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local schema = crap.schema.get_collection("articles")
         if schema == nil then return "NIL" end
         if schema.slug ~= "articles" then return "WRONG_SLUG:" .. tostring(schema.slug) end
@@ -321,50 +369,66 @@ fn lua_schema_get_collection() {
         if f.name == nil then return "NO_FIELD_NAME" end
         if f.type == nil then return "NO_FIELD_TYPE" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_schema_get_collection_nonexistent() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local schema = crap.schema.get_collection("nonexistent")
         if schema == nil then return "ok" end
         return "NOT_NIL"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_schema_get_global() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local schema = crap.schema.get_global("settings")
         if schema == nil then return "NIL" end
         if schema.slug ~= "settings" then return "WRONG_SLUG:" .. tostring(schema.slug) end
         if schema.fields == nil then return "NO_FIELDS" end
         if #schema.fields == 0 then return "EMPTY_FIELDS" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_schema_get_global_nonexistent() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local schema = crap.schema.get_global("nonexistent")
         if schema == nil then return "ok" end
         return "NOT_NIL"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_schema_list_collections() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local list = crap.schema.list_collections()
         if list == nil then return "NIL" end
         if #list == 0 then return "EMPTY" end
@@ -377,14 +441,18 @@ fn lua_schema_list_collections() {
         end
         if not found_articles then return "NO_ARTICLES" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_schema_list_globals() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local list = crap.schema.list_globals()
         if list == nil then return "NIL" end
         if #list == 0 then return "EMPTY" end
@@ -396,7 +464,8 @@ fn lua_schema_list_globals() {
         end
         if not found_settings then return "NO_SETTINGS" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -418,7 +487,8 @@ crap.collections.define("items", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -471,7 +541,8 @@ crap.collections.define("posts", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -487,7 +558,9 @@ crap.collections.define("posts", {
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local schema = crap.schema.get_collection("posts")
         if schema == nil then return "NIL" end
         -- Check author field
@@ -505,7 +578,11 @@ crap.collections.define("posts", {
             return "WRONG_MAX_DEPTH:" .. tostring(tags.relationship.max_depth)
         end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -532,7 +609,8 @@ crap.collections.define("pages", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -548,7 +626,9 @@ crap.collections.define("pages", {
     db_config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local schema = crap.schema.get_collection("pages")
         if schema == nil then return "NIL" end
         -- Check blocks field
@@ -566,7 +646,11 @@ crap.collections.define("pages", {
         if meta.fields == nil then return "NO_GROUP_FIELDS" end
         if #meta.fields ~= 2 then return "WRONG_GROUP_FIELDS:" .. tostring(#meta.fields) end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -596,7 +680,8 @@ crap.collections.define("pages", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -657,7 +742,8 @@ crap.collections.define("posts", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -714,7 +800,8 @@ crap.collections.define("posts", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(
         collections_dir.join("users.lua"),
         r#"
@@ -724,7 +811,8 @@ crap.collections.define("users", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -742,7 +830,9 @@ crap.collections.define("users", {
     let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
 
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local def = crap.schema.get_collection("posts")
         if def == nil then return "NIL" end
         local author_field = nil
@@ -755,7 +845,11 @@ crap.collections.define("users", {
         if author_field.relationship.has_many ~= true then return "NOT_HAS_MANY" end
         if author_field.relationship.max_depth ~= 2 then return "WRONG_MAX_DEPTH" end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -779,7 +873,8 @@ crap.collections.define("posts", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -797,7 +892,9 @@ crap.collections.define("posts", {
     let pool = crap_cms::db::pool::create_pool(tmp2.path(), &db_config).expect("pool");
     let conn = pool.get().expect("conn");
 
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local def = crap.schema.get_collection("posts")
         local status_field = nil
         for _, f in ipairs(def.fields) do
@@ -809,7 +906,11 @@ crap.collections.define("posts", {
         if status_field.options[1].value ~= "draft" then return "WRONG_VALUE_1" end
         if status_field.options[1].label ~= "Draft" then return "WRONG_LABEL_1" end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
@@ -828,7 +929,8 @@ crap.collections.define("pages", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
@@ -836,7 +938,9 @@ crap.collections.define("pages", {
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("pages").expect("pages should be registered");
+    let def = reg
+        .get_collection("pages")
+        .expect("pages should be registered");
     let field = def.fields.iter().find(|f| f.name == "content").unwrap();
     assert_eq!(field.admin.richtext_format.as_deref(), Some("json"));
 }
@@ -856,7 +960,8 @@ crap.collections.define("pages", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
@@ -864,7 +969,9 @@ crap.collections.define("pages", {
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("pages").expect("pages should be registered");
+    let def = reg
+        .get_collection("pages")
+        .expect("pages should be registered");
     let field = def.fields.iter().find(|f| f.name == "content").unwrap();
     assert!(field.admin.richtext_format.is_none());
 }

@@ -22,7 +22,10 @@ pub fn send_verification_email(
 ) {
     tokio::task::spawn_blocking(move || {
         if !crate::core::email::is_configured(&email_config) {
-            tracing::warn!("Email not configured — skipping verification email for {}", user_email);
+            tracing::warn!(
+                "Email not configured — skipping verification email for {}",
+                user_email
+            );
             return;
         }
 
@@ -36,7 +39,9 @@ pub fn send_verification_email(
                 return;
             }
         };
-        if let Err(e) = crate::db::query::set_verification_token(&conn, &slug, &user_id, &token, exp) {
+        if let Err(e) =
+            crate::db::query::set_verification_token(&conn, &slug, &user_id, &token, exp)
+        {
             tracing::error!("Failed to set verification token: {}", e);
             return;
         }
@@ -55,7 +60,11 @@ pub fn send_verification_email(
         };
 
         if let Err(e) = crate::core::email::send_email(
-            &email_config, &user_email, "Verify your email", &html, None,
+            &email_config,
+            &user_email,
+            "Verify your email",
+            &html,
+            None,
         ) {
             tracing::error!("Failed to send verification email: {}", e);
         }

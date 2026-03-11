@@ -3,18 +3,23 @@
 use mlua::{Lua, Value};
 use std::collections::HashMap;
 
-use crate::db::query::{FindQuery, Filter, FilterOp, FilterClause};
+use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
 
 // ── Lua <-> Rust type conversion helpers ────────────────────────────────────
 
 /// Convert a Lua data table to HashMap<String, serde_json::Value>.
 /// Preserves nested tables (blocks, arrays, has-many IDs) unlike lua_table_to_hashmap
 /// which only handles scalars.
-pub(crate) fn lua_table_to_json_map(lua: &Lua, tbl: &mlua::Table) -> mlua::Result<HashMap<String, serde_json::Value>> {
+pub(crate) fn lua_table_to_json_map(
+    lua: &Lua,
+    tbl: &mlua::Table,
+) -> mlua::Result<HashMap<String, serde_json::Value>> {
     let mut map = HashMap::new();
     for pair in tbl.pairs::<String, Value>() {
         let (k, v) = pair?;
-        if matches!(v, Value::Nil) { continue; }
+        if matches!(v, Value::Nil) {
+            continue;
+        }
         map.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
     }
     Ok(map)
@@ -127,17 +132,24 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQu
     } else {
         tbl.get("offset").ok()
     };
-    let select: Option<Vec<String>> = tbl.get::<mlua::Table>("select").ok()
-        .map(|t| t.sequence_values::<String>().filter_map(|r| r.ok()).collect());
+    let select: Option<Vec<String>> = tbl.get::<mlua::Table>("select").ok().map(|t| {
+        t.sequence_values::<String>()
+            .filter_map(|r| r.ok())
+            .collect()
+    });
 
     let after_cursor = match tbl.get::<Option<String>>("after_cursor").ok().flatten() {
-        Some(s) => Some(crate::db::query::cursor::CursorData::decode(&s)
-            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?),
+        Some(s) => Some(
+            crate::db::query::cursor::CursorData::decode(&s)
+                .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?,
+        ),
         None => None,
     };
     let before_cursor = match tbl.get::<Option<String>>("before_cursor").ok().flatten() {
-        Some(s) => Some(crate::db::query::cursor::CursorData::decode(&s)
-            .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?),
+        Some(s) => Some(
+            crate::db::query::cursor::CursorData::decode(&s)
+                .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?,
+        ),
         None => None,
     };
 
@@ -163,7 +175,9 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> mlua::Result<
             Value::Integer(i) => Ok(i.to_string()),
             Value::Number(n) => Ok(n.to_string()),
             Value::Boolean(b) => Ok(b.to_string()),
-            _ => Err(mlua::Error::RuntimeError("filter value must be string, number, or boolean".into())),
+            _ => Err(mlua::Error::RuntimeError(
+                "filter value must be string, number, or boolean".into(),
+            )),
         }
     };
 
@@ -184,7 +198,9 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> mlua::Result<
                 }
                 Ok(FilterOp::In(vals))
             } else {
-                Err(mlua::Error::RuntimeError("'in' operator requires a table/array".into()))
+                Err(mlua::Error::RuntimeError(
+                    "'in' operator requires a table/array".into(),
+                ))
             }
         }
         "not_in" => {
@@ -195,12 +211,17 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> mlua::Result<
                 }
                 Ok(FilterOp::NotIn(vals))
             } else {
-                Err(mlua::Error::RuntimeError("'not_in' operator requires a table/array".into()))
+                Err(mlua::Error::RuntimeError(
+                    "'not_in' operator requires a table/array".into(),
+                ))
             }
         }
         "exists" => Ok(FilterOp::Exists),
         "not_exists" => Ok(FilterOp::NotExists),
-        _ => Err(mlua::Error::RuntimeError(format!("unknown filter operator '{}'", op_name))),
+        _ => Err(mlua::Error::RuntimeError(format!(
+            "unknown filter operator '{}'",
+            op_name
+        ))),
     }
 }
 
@@ -253,7 +274,10 @@ pub(crate) fn flatten_lua_groups(
 }
 
 /// Convert a Document to a Lua table.
-pub(crate) fn document_to_lua_table(lua: &Lua, doc: &crate::core::Document) -> mlua::Result<mlua::Table> {
+pub(crate) fn document_to_lua_table(
+    lua: &Lua,
+    doc: &crate::core::Document,
+) -> mlua::Result<mlua::Table> {
     let tbl = lua.create_table()?;
     tbl.set("id", doc.id.as_str())?;
     for (k, v) in &doc.fields {
@@ -269,7 +293,11 @@ pub(crate) fn document_to_lua_table(lua: &Lua, doc: &crate::core::Document) -> m
 }
 
 /// Convert a find result (documents + total) to a Lua table.
-pub(crate) fn find_result_to_lua(lua: &Lua, docs: &[crate::core::Document], pagination: mlua::Table) -> mlua::Result<mlua::Table> {
+pub(crate) fn find_result_to_lua(
+    lua: &Lua,
+    docs: &[crate::core::Document],
+    pagination: mlua::Table,
+) -> mlua::Result<mlua::Table> {
     let tbl = lua.create_table()?;
     let docs_tbl = lua.create_table()?;
     for (i, doc) in docs.iter().enumerate() {
@@ -283,9 +311,9 @@ pub(crate) fn find_result_to_lua(lua: &Lua, docs: &[crate::core::Document], pagi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mlua::Lua;
     use crate::core::document::DocumentBuilder;
     use crate::core::field::{FieldDefinition, FieldType};
+    use mlua::Lua;
 
     // --- lua_parse_filter_op tests ---
 
@@ -400,7 +428,10 @@ mod tests {
     fn test_filter_op_unknown() {
         let result = lua_parse_filter_op("bogus", &Value::Nil);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown filter operator"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unknown filter operator"));
     }
 
     // --- lua_table_to_hashmap tests ---
@@ -478,7 +509,11 @@ mod tests {
         // No "seo" key at all
 
         let fields = vec![FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![FieldDefinition::builder("meta_title", FieldType::Text).build()])
+            .fields(vec![FieldDefinition::builder(
+                "meta_title",
+                FieldType::Text,
+            )
+            .build()])
             .build()];
 
         let mut data = HashMap::new();

@@ -89,8 +89,27 @@ fn help_shows_all_commands() {
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success(), "help should succeed");
-    for cmd in &["serve", "status", "user", "make", "init", "export", "import", "backup", "restore", "migrate", "typegen", "proto", "blueprint"] {
-        assert!(stdout.contains(cmd), "help should list '{}' command, got:\n{}", cmd, stdout);
+    for cmd in &[
+        "serve",
+        "status",
+        "user",
+        "make",
+        "init",
+        "export",
+        "import",
+        "backup",
+        "restore",
+        "migrate",
+        "typegen",
+        "proto",
+        "blueprint",
+    ] {
+        assert!(
+            stdout.contains(cmd),
+            "help should list '{}' command, got:\n{}",
+            cmd,
+            stdout
+        );
     }
 }
 
@@ -102,7 +121,10 @@ fn version_flag() {
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    assert!(stdout.contains("crap-cms"), "version should contain binary name");
+    assert!(
+        stdout.contains("crap-cms"),
+        "version should contain binary name"
+    );
 }
 
 #[test]
@@ -113,8 +135,20 @@ fn user_subcommand_help() {
         .expect("failed to run binary");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
-    for sub in &["create", "list", "delete", "lock", "unlock", "change-password"] {
-        assert!(stdout.contains(sub), "user help should list '{}', got:\n{}", sub, stdout);
+    for sub in &[
+        "create",
+        "list",
+        "delete",
+        "lock",
+        "unlock",
+        "change-password",
+    ] {
+        assert!(
+            stdout.contains(sub),
+            "user help should list '{}', got:\n{}",
+            sub,
+            stdout
+        );
     }
 }
 
@@ -127,7 +161,12 @@ fn make_subcommand_help() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
     for sub in &["collection", "global", "hook", "migration"] {
-        assert!(stdout.contains(sub), "make help should list '{}', got:\n{}", sub, stdout);
+        assert!(
+            stdout.contains(sub),
+            "make help should list '{}', got:\n{}",
+            sub,
+            stdout
+        );
     }
 }
 
@@ -140,7 +179,12 @@ fn migrate_subcommand_help() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(output.status.success());
     for sub in &["create", "up", "down", "list", "fresh"] {
-        assert!(stdout.contains(sub), "migrate help should list '{}', got:\n{}", sub, stdout);
+        assert!(
+            stdout.contains(sub),
+            "migrate help should list '{}', got:\n{}",
+            sub,
+            stdout
+        );
     }
 }
 
@@ -151,11 +195,19 @@ fn migrate_create_via_binary() {
     copy_dir(&fixture_dir(), &config_dir);
 
     let output = std::process::Command::new(crap_bin())
-        .args(["migrate", config_dir.to_str().unwrap(), "create", "add_tags"])
+        .args([
+            "migrate",
+            config_dir.to_str().unwrap(),
+            "create",
+            "add_tags",
+        ])
         .output()
         .expect("failed to run binary");
-    assert!(output.status.success(), "migrate create should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "migrate create should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let migrations_dir = config_dir.join("migrations");
     let files: Vec<_> = std::fs::read_dir(&migrations_dir)
@@ -221,7 +273,10 @@ fn init_types_content() {
 
     let content = std::fs::read_to_string(target.join("types/crap.lua")).unwrap();
     assert!(!content.is_empty(), "types/crap.lua should not be empty");
-    assert!(content.contains("crap"), "types/crap.lua should contain crap API definitions");
+    assert!(
+        content.contains("crap"),
+        "types/crap.lua should contain crap API definitions"
+    );
 }
 
 #[test]
@@ -233,7 +288,10 @@ fn init_refuses_existing() {
 
     let result = scaffold::init(Some(target), &scaffold::InitOptions::default());
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("refusing to overwrite"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("refusing to overwrite"));
 }
 
 #[test]
@@ -253,7 +311,11 @@ fn init_content_valid() {
     scaffold::init(Some(target.clone()), &scaffold::InitOptions::default()).unwrap();
 
     let cfg = CrapConfig::load(&target);
-    assert!(cfg.is_ok(), "scaffolded crap.toml should load: {:?}", cfg.err());
+    assert!(
+        cfg.is_ok(),
+        "scaffolded crap.toml should load: {:?}",
+        cfg.err()
+    );
 }
 
 #[test]
@@ -264,7 +326,11 @@ fn init_lua_loadable() {
 
     let cfg = CrapConfig::load(&target).unwrap();
     let result = hooks::init_lua(&target, &cfg);
-    assert!(result.is_ok(), "scaffolded init.lua should load: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "scaffolded init.lua should load: {:?}",
+        result.err()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -274,7 +340,8 @@ fn init_lua_loadable() {
 #[test]
 fn make_collection_default() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
+    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false)
+        .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
     assert!(content.contains("crap.collections.define(\"posts\""));
@@ -287,10 +354,16 @@ fn make_collection_default() {
 fn make_collection_fields_shorthand() {
     let tmp = tempfile::tempdir().expect("tempdir");
     scaffold::make_collection(
-        tmp.path(), "articles",
+        tmp.path(),
+        "articles",
         Some("title:text:required,body:textarea"),
-        false, false, false, false, false,
-    ).unwrap();
+        false,
+        false,
+        false,
+        false,
+        false,
+    )
+    .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("collections/articles.lua")).unwrap();
     assert!(content.contains("crap.fields.text({"));
@@ -312,8 +385,10 @@ fn make_collection_no_timestamps() {
 #[test]
 fn make_collection_refuses_overwrite() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
-    let result = scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false);
+    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false)
+        .unwrap();
+    let result =
+        scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("--force"));
 }
@@ -321,17 +396,53 @@ fn make_collection_refuses_overwrite() {
 #[test]
 fn make_collection_force_overwrite() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
-    assert!(scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, true).is_ok());
+    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false)
+        .unwrap();
+    assert!(
+        scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, true)
+            .is_ok()
+    );
 }
 
 #[test]
 fn make_collection_invalid_slug() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    assert!(scaffold::make_collection(tmp.path(), "Posts", None, false, false, false, false, false).is_err());
-    assert!(scaffold::make_collection(tmp.path(), "my-slug", None, false, false, false, false, false).is_err());
-    assert!(scaffold::make_collection(tmp.path(), "_private", None, false, false, false, false, false).is_err());
-    assert!(scaffold::make_collection(tmp.path(), "", None, false, false, false, false, false).is_err());
+    assert!(scaffold::make_collection(
+        tmp.path(),
+        "Posts",
+        None,
+        false,
+        false,
+        false,
+        false,
+        false
+    )
+    .is_err());
+    assert!(scaffold::make_collection(
+        tmp.path(),
+        "my-slug",
+        None,
+        false,
+        false,
+        false,
+        false,
+        false
+    )
+    .is_err());
+    assert!(scaffold::make_collection(
+        tmp.path(),
+        "_private",
+        None,
+        false,
+        false,
+        false,
+        false,
+        false
+    )
+    .is_err());
+    assert!(
+        scaffold::make_collection(tmp.path(), "", None, false, false, false, false, false).is_err()
+    );
 }
 
 #[test]
@@ -340,12 +451,25 @@ fn make_collection_roundtrip() {
     let config_dir = tmp.path().join("project");
     scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
 
-    scaffold::make_collection(&config_dir, "articles", Some("title:text:required,body:richtext"), false, false, false, false, false).unwrap();
+    scaffold::make_collection(
+        &config_dir,
+        "articles",
+        Some("title:text:required,body:richtext"),
+        false,
+        false,
+        false,
+        false,
+        false,
+    )
+    .unwrap();
 
     let cfg = CrapConfig::load(&config_dir).unwrap();
     let registry = hooks::init_lua(&config_dir, &cfg).unwrap();
     let reg = registry.read().unwrap();
-    assert!(reg.get_collection("articles").is_some(), "articles should be in registry");
+    assert!(
+        reg.get_collection("articles").is_some(),
+        "articles should be in registry"
+    );
     let def = reg.get_collection("articles").unwrap();
     assert_eq!(def.fields.len(), 2);
     assert_eq!(def.fields[0].name, "title");
@@ -387,7 +511,10 @@ fn make_global_roundtrip() {
     let cfg = CrapConfig::load(&config_dir).unwrap();
     let registry = hooks::init_lua(&config_dir, &cfg).unwrap();
     let reg = registry.read().unwrap();
-    assert!(reg.get_global("navigation").is_some(), "navigation should be in registry");
+    assert!(
+        reg.get_global("navigation").is_some(),
+        "navigation should be in registry"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -403,15 +530,30 @@ fn hook_opts<'a>(
     field: Option<&'a str>,
     force: bool,
 ) -> scaffold::MakeHookOptions<'a> {
-    scaffold::MakeHookOptions { config_dir, name, hook_type, collection, position, field, force, condition_field: None, is_global: false }
+    scaffold::MakeHookOptions {
+        config_dir,
+        name,
+        hook_type,
+        collection,
+        position,
+        field,
+        force,
+        condition_field: None,
+        is_global: false,
+    }
 }
 
 #[test]
 fn make_hook_creates_file() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "auto_slug", scaffold::HookType::Collection,
-        "posts", "before_change", None, false,
+        tmp.path(),
+        "auto_slug",
+        scaffold::HookType::Collection,
+        "posts",
+        "before_change",
+        None,
+        false,
     );
     scaffold::make_hook(&opts).unwrap();
 
@@ -425,8 +567,13 @@ fn make_hook_creates_file() {
 fn make_hook_collection_hook() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "auto_slug", scaffold::HookType::Collection,
-        "posts", "before_change", None, false,
+        tmp.path(),
+        "auto_slug",
+        scaffold::HookType::Collection,
+        "posts",
+        "before_change",
+        None,
+        false,
     );
     scaffold::make_hook(&opts).unwrap();
 
@@ -441,13 +588,21 @@ fn make_hook_collection_hook() {
 fn make_hook_field_hook() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "normalize", scaffold::HookType::Field,
-        "posts", "before_validate", Some("title"), false,
+        tmp.path(),
+        "normalize",
+        scaffold::HookType::Field,
+        "posts",
+        "before_validate",
+        Some("title"),
+        false,
     );
     scaffold::make_hook(&opts).unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("hooks/posts/normalize.lua")).unwrap();
-    assert!(content.contains("crap.field_hook.Posts"), "should use typed field hook context");
+    assert!(
+        content.contains("crap.field_hook.Posts"),
+        "should use typed field hook context"
+    );
     assert!(content.contains("return function(value, context)"));
     assert!(content.contains("return value"));
 }
@@ -456,8 +611,13 @@ fn make_hook_field_hook() {
 fn make_hook_access_hook() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "admin_only", scaffold::HookType::Access,
-        "posts", "read", None, false,
+        tmp.path(),
+        "admin_only",
+        scaffold::HookType::Access,
+        "posts",
+        "read",
+        None,
+        false,
     );
     scaffold::make_hook(&opts).unwrap();
 
@@ -470,8 +630,13 @@ fn make_hook_access_hook() {
 fn make_hook_refuses_overwrite() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "auto_slug", scaffold::HookType::Collection,
-        "posts", "before_change", None, false,
+        tmp.path(),
+        "auto_slug",
+        scaffold::HookType::Collection,
+        "posts",
+        "before_change",
+        None,
+        false,
     );
     scaffold::make_hook(&opts).unwrap();
     let result = scaffold::make_hook(&opts);
@@ -483,13 +648,23 @@ fn make_hook_refuses_overwrite() {
 fn make_hook_force_overwrite() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "auto_slug", scaffold::HookType::Collection,
-        "posts", "before_change", None, false,
+        tmp.path(),
+        "auto_slug",
+        scaffold::HookType::Collection,
+        "posts",
+        "before_change",
+        None,
+        false,
     );
     scaffold::make_hook(&opts).unwrap();
     let opts_force = hook_opts(
-        tmp.path(), "auto_slug", scaffold::HookType::Collection,
-        "posts", "before_change", None, true,
+        tmp.path(),
+        "auto_slug",
+        scaffold::HookType::Collection,
+        "posts",
+        "before_change",
+        None,
+        true,
     );
     assert!(scaffold::make_hook(&opts_force).is_ok());
 }
@@ -498,8 +673,13 @@ fn make_hook_force_overwrite() {
 fn make_hook_invalid_position() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "bad", scaffold::HookType::Collection,
-        "posts", "not_a_real_position", None, false,
+        tmp.path(),
+        "bad",
+        scaffold::HookType::Collection,
+        "posts",
+        "not_a_real_position",
+        None,
+        false,
     );
     let result = scaffold::make_hook(&opts);
     assert!(result.is_err());
@@ -511,8 +691,13 @@ fn make_hook_prints_hook_ref() {
     // The hook ref should be "hooks.<collection>.<name>"
     let tmp = tempfile::tempdir().expect("tempdir");
     let opts = hook_opts(
-        tmp.path(), "auto_slug", scaffold::HookType::Collection,
-        "posts", "before_change", None, false,
+        tmp.path(),
+        "auto_slug",
+        scaffold::HookType::Collection,
+        "posts",
+        "before_change",
+        None,
+        false,
     );
     scaffold::make_hook(&opts).unwrap();
 
@@ -536,7 +721,11 @@ fn make_migration_creates_file() {
         .collect();
     assert_eq!(files.len(), 1);
     let filename = files[0].file_name().to_string_lossy().to_string();
-    assert!(filename.ends_with("_add_categories.lua"), "got: {}", filename);
+    assert!(
+        filename.ends_with("_add_categories.lua"),
+        "got: {}",
+        filename
+    );
 }
 
 #[test]
@@ -625,10 +814,16 @@ fn status_auth_tag() {
     let (_tmp, _pool, registry) = full_setup();
     let reg = registry.read().unwrap();
     let users_def = reg.get_collection("users").unwrap();
-    assert!(users_def.is_auth_collection(), "users should be an auth collection");
+    assert!(
+        users_def.is_auth_collection(),
+        "users should be an auth collection"
+    );
 
     let posts_def = reg.get_collection("posts").unwrap();
-    assert!(!posts_def.is_auth_collection(), "posts should NOT be an auth collection");
+    assert!(
+        !posts_def.is_auth_collection(),
+        "posts should NOT be an auth collection"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -642,7 +837,13 @@ fn user_create_and_find() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "test@example.com", "secret123", &[("name", "Test User")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "test@example.com",
+        "secret123",
+        &[("name", "Test User")],
+    );
 
     let conn = pool.get().unwrap();
     let found = query::find_by_id(&conn, "users", &def, &doc.id, None)
@@ -659,10 +860,13 @@ fn user_create_with_fields() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "admin@example.com", "pw123", &[
-        ("name", "Admin"),
-        ("role", "admin"),
-    ]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "admin@example.com",
+        "pw123",
+        &[("name", "Admin"), ("role", "admin")],
+    );
 
     let conn = pool.get().unwrap();
     let found = query::find_by_id(&conn, "users", &def, &doc.id, None)
@@ -679,7 +883,13 @@ fn user_password_verify() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "pw@example.com", "mypassword", &[("name", "PW User")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "pw@example.com",
+        "mypassword",
+        &[("name", "PW User")],
+    );
 
     let conn = pool.get().unwrap();
     let hash = query::get_password_hash(&conn, "users", &doc.id)
@@ -697,7 +907,13 @@ fn user_find_by_email() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    create_user(&pool, &def, "lookup@example.com", "pw", &[("name", "Lookup")]);
+    create_user(
+        &pool,
+        &def,
+        "lookup@example.com",
+        "pw",
+        &[("name", "Lookup")],
+    );
 
     let conn = pool.get().unwrap();
     let found = query::find_by_email(&conn, "users", &def, "lookup@example.com")
@@ -732,7 +948,13 @@ fn user_delete() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "delete@example.com", "pw", &[("name", "Delete Me")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "delete@example.com",
+        "pw",
+        &[("name", "Delete Me")],
+    );
     let id = doc.id.clone();
 
     {
@@ -754,7 +976,13 @@ fn user_lock_unlock() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "lock@example.com", "pw", &[("name", "Lockable")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "lock@example.com",
+        "pw",
+        &[("name", "Lockable")],
+    );
 
     let conn = pool.get().unwrap();
 
@@ -772,12 +1000,20 @@ fn user_change_password() {
     let def = reg.get_collection("users").unwrap().clone();
     drop(reg);
 
-    let doc = create_user(&pool, &def, "chpw@example.com", "oldpassword", &[("name", "ChPW")]);
+    let doc = create_user(
+        &pool,
+        &def,
+        "chpw@example.com",
+        "oldpassword",
+        &[("name", "ChPW")],
+    );
 
     let conn = pool.get().unwrap();
     query::update_password(&conn, "users", &doc.id, "newpassword").unwrap();
 
-    let hash = query::get_password_hash(&conn, "users", &doc.id).unwrap().unwrap();
+    let hash = query::get_password_hash(&conn, "users", &doc.id)
+        .unwrap()
+        .unwrap();
     assert!(auth::verify_password("newpassword", &hash).unwrap());
     assert!(!auth::verify_password("oldpassword", &hash).unwrap());
 }
@@ -833,7 +1069,8 @@ fn export_all() {
     let mut collections_data = serde_json::Map::new();
     for (slug, def) in &reg.collections {
         let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
-        let docs_json: Vec<serde_json::Value> = docs.into_iter()
+        let docs_json: Vec<serde_json::Value> = docs
+            .into_iter()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -885,7 +1122,10 @@ fn export_empty() {
 fn export_nonexistent_fails() {
     let (_tmp, _pool, registry) = full_setup();
     let reg = registry.read().unwrap();
-    assert!(reg.get_collection("nonexistent").is_none(), "nonexistent collection should not be found");
+    assert!(
+        reg.get_collection("nonexistent").is_none(),
+        "nonexistent collection should not be found"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -928,19 +1168,25 @@ fn import_basic() {
                 }
             }
         }
-        let placeholders: Vec<String> = (0..parent_cols.len()).map(|i| format!("?{}", i + 1)).collect();
+        let placeholders: Vec<String> = (0..parent_cols.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect();
         let sql = format!(
             "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
             "posts",
-            parent_cols.iter().map(|c| format!("\"{}\"", c)).collect::<Vec<_>>().join(", "),
+            parent_cols
+                .iter()
+                .map(|c| format!("\"{}\"", c))
+                .collect::<Vec<_>>()
+                .join(", "),
             placeholders.join(", ")
         );
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = parent_vals.iter()
+        let params: Vec<Box<dyn rusqlite::types::ToSql>> = parent_vals
+            .iter()
             .map(|v| Box::new(v.clone()) as Box<dyn rusqlite::types::ToSql>)
             .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter()
-            .map(|p| p.as_ref())
-            .collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         tx.execute(&sql, param_refs.as_slice()).unwrap();
     }
     tx.commit().unwrap();
@@ -982,9 +1228,13 @@ fn import_collection_filter() {
         let id = obj["id"].as_str().unwrap();
         let title = obj.get("title").and_then(|v| v.as_str()).unwrap_or("");
         tx.execute(
-            &format!("INSERT OR REPLACE INTO \"{}\" (id, title) VALUES (?1, ?2)", slug),
+            &format!(
+                "INSERT OR REPLACE INTO \"{}\" (id, title) VALUES (?1, ?2)",
+                slug
+            ),
             rusqlite::params![id, title],
-        ).unwrap();
+        )
+        .unwrap();
     }
     tx.commit().unwrap();
 
@@ -994,7 +1244,14 @@ fn import_collection_filter() {
     assert_eq!(posts.len(), 1);
 
     let users_def = reg.get_collection("users").unwrap();
-    let users = query::find(&conn, "users", users_def, &query::FindQuery::default(), None).unwrap();
+    let users = query::find(
+        &conn,
+        "users",
+        users_def,
+        &query::FindQuery::default(),
+        None,
+    )
+    .unwrap();
     assert_eq!(users.len(), 0, "users should not be imported");
 }
 
@@ -1009,7 +1266,8 @@ fn import_preserves_ids() {
     tx.execute(
         "INSERT OR REPLACE INTO posts (id, title) VALUES (?1, ?2)",
         rusqlite::params!["custom-id-123", "Custom ID Post"],
-    ).unwrap();
+    )
+    .unwrap();
     tx.commit().unwrap();
 
     let conn = pool.get().unwrap();
@@ -1030,16 +1288,28 @@ fn import_with_timestamps() {
     let tx = conn.transaction().unwrap();
     tx.execute(
         "INSERT OR REPLACE INTO posts (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params!["ts-post", "Timestamped", "2024-01-01 00:00:00", "2024-06-15 12:30:00"],
-    ).unwrap();
+        rusqlite::params![
+            "ts-post",
+            "Timestamped",
+            "2024-01-01 00:00:00",
+            "2024-06-15 12:30:00"
+        ],
+    )
+    .unwrap();
     tx.commit().unwrap();
 
     let conn = pool.get().unwrap();
     let found = query::find_by_id(&conn, "posts", def, "ts-post", None)
         .unwrap()
         .unwrap();
-    assert_eq!(found.created_at.as_deref(), Some("2024-01-01T00:00:00.000Z"));
-    assert_eq!(found.updated_at.as_deref(), Some("2024-06-15T12:30:00.000Z"));
+    assert_eq!(
+        found.created_at.as_deref(),
+        Some("2024-01-01T00:00:00.000Z")
+    );
+    assert_eq!(
+        found.updated_at.as_deref(),
+        Some("2024-06-15T12:30:00.000Z")
+    );
 }
 
 #[test]
@@ -1059,7 +1329,10 @@ fn import_unknown_collection_fails() {
     for slug in collections_obj.keys() {
         let found = reg.get_collection(slug);
         if slug == "nonexistent" {
-            assert!(found.is_none(), "nonexistent collection should not be found");
+            assert!(
+                found.is_none(),
+                "nonexistent collection should not be found"
+            );
         }
     }
 }

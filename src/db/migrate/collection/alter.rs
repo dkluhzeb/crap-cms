@@ -22,17 +22,29 @@ pub(super) fn alter_collection_table(
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
                 if !existing_columns.contains(&col_name) {
                     let mut col_def = spec.field.field_type.sqlite_type().to_string();
-                    super::create::append_default_value(&mut col_def, &spec.field.default_value, &spec.field.field_type);
+                    super::create::append_default_value(
+                        &mut col_def,
+                        &spec.field.default_value,
+                        &spec.field.field_type,
+                    );
                     let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", slug, col_name, col_def);
                     tracing::info!("Adding column to {}: {}", slug, col_name);
-                    conn.execute(&sql, [])
-                        .with_context(|| format!("Failed to add column {} to {}", col_name, slug))?;
+                    conn.execute(&sql, []).with_context(|| {
+                        format!("Failed to add column {} to {}", col_name, slug)
+                    })?;
                 }
             }
         } else if !existing_columns.contains(&spec.col_name) {
             let mut col_def = spec.field.field_type.sqlite_type().to_string();
-            super::create::append_default_value(&mut col_def, &spec.field.default_value, &spec.field.field_type);
-            let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", slug, spec.col_name, col_def);
+            super::create::append_default_value(
+                &mut col_def,
+                &spec.field.default_value,
+                &spec.field.field_type,
+            );
+            let sql = format!(
+                "ALTER TABLE {} ADD COLUMN {} {}",
+                slug, spec.col_name, col_def
+            );
             tracing::info!("Adding column to {}: {}", slug, spec.col_name);
             conn.execute(&sql, [])
                 .with_context(|| format!("Failed to add column {} to {}", spec.col_name, slug))?;
@@ -41,7 +53,10 @@ pub(super) fn alter_collection_table(
 
     // Versioned collections with drafts: ensure _status column exists
     if def.has_drafts() && !existing_columns.contains("_status") {
-        let sql = format!("ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'", slug);
+        let sql = format!(
+            "ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
+            slug
+        );
         tracing::info!("Adding _status column to {}", slug);
         conn.execute(&sql, [])
             .with_context(|| format!("Failed to add _status to {}", slug))?;
@@ -49,8 +64,17 @@ pub(super) fn alter_collection_table(
 
     // Auth collections: ensure system columns exist
     if def.is_auth_collection() {
-        for col in ["_password_hash TEXT", "_reset_token TEXT", "_reset_token_exp INTEGER", "_locked INTEGER DEFAULT 0", "_settings TEXT"] {
-            let col_name = col.split_whitespace().next().expect("static column definition");
+        for col in [
+            "_password_hash TEXT",
+            "_reset_token TEXT",
+            "_reset_token_exp INTEGER",
+            "_locked INTEGER DEFAULT 0",
+            "_settings TEXT",
+        ] {
+            let col_name = col
+                .split_whitespace()
+                .next()
+                .expect("static column definition");
             if !existing_columns.contains(col_name) {
                 let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
                 tracing::info!("Adding {} column to {}", col_name, slug);
@@ -59,8 +83,15 @@ pub(super) fn alter_collection_table(
             }
         }
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
-            for col in ["_verified INTEGER DEFAULT 0", "_verification_token TEXT", "_verification_token_exp INTEGER"] {
-                let col_name = col.split_whitespace().next().expect("static column definition");
+            for col in [
+                "_verified INTEGER DEFAULT 0",
+                "_verification_token TEXT",
+                "_verification_token_exp INTEGER",
+            ] {
+                let col_name = col
+                    .split_whitespace()
+                    .next()
+                    .expect("static column definition");
                 if !existing_columns.contains(col_name) {
                     let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
                     tracing::info!("Adding {} column to {}", col_name, slug);
@@ -135,15 +166,26 @@ pub(super) fn alter_collection_table(
         }
     }
     let system_columns: HashSet<&str> = [
-        "id", "created_at", "updated_at", "_password_hash",
-        "_reset_token", "_reset_token_exp", "_verified", "_verification_token",
-        "_verification_token_exp", "_locked", "_status", "_settings",
-    ].into();
+        "id",
+        "created_at",
+        "updated_at",
+        "_password_hash",
+        "_reset_token",
+        "_reset_token_exp",
+        "_verified",
+        "_verification_token",
+        "_verification_token_exp",
+        "_locked",
+        "_status",
+        "_settings",
+    ]
+    .into();
     for col in &existing_columns {
         if !field_names.contains(col) && !system_columns.contains(col.as_str()) {
             tracing::warn!(
                 "Column '{}' exists in table '{}' but not in Lua definition (not removed)",
-                col, slug
+                col,
+                slug
             );
         }
     }
@@ -153,11 +195,11 @@ pub(super) fn alter_collection_table(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use super::super::test_helpers::*;
     use super::super::create::create_collection_table;
+    use super::super::test_helpers::*;
+    use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType, FieldTab};
+    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
     use crate::db::migrate::helpers::get_table_columns;
 
     #[test]
@@ -167,10 +209,7 @@ mod tests {
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
 
-        let def2 = simple_collection("posts", vec![
-            text_field("title"),
-            text_field("summary"),
-        ]);
+        let def2 = simple_collection("posts", vec![text_field("title"), text_field("summary")]);
         alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -224,7 +263,8 @@ mod tests {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
         // Create a table without timestamps
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT)", []).unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT)", [])
+            .unwrap();
 
         let def = simple_collection("posts", vec![text_field("title")]);
         alter_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
@@ -242,10 +282,10 @@ mod tests {
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
 
         // Add a new localized field via alter
-        let def2 = simple_collection("posts", vec![
-            localized_field("title"),
-            localized_field("body"),
-        ]);
+        let def2 = simple_collection(
+            "posts",
+            vec![localized_field("title"), localized_field("body")],
+        );
         alter_collection_table(&conn, "posts", &def2, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -260,12 +300,15 @@ mod tests {
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
 
-        let def2 = simple_collection("posts", vec![
-            text_field("title"),
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![text_field("meta_title"), text_field("meta_desc")])
-                .build(),
-        ]);
+        let def2 = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("meta_title"), text_field("meta_desc")])
+                    .build(),
+            ],
+        );
         alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -280,13 +323,16 @@ mod tests {
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &locale_en_de()).unwrap();
 
-        let def2 = simple_collection("posts", vec![
-            text_field("title"),
-            FieldDefinition::builder("seo", FieldType::Group)
-                .localized(true)
-                .fields(vec![text_field("meta_title")])
-                .build(),
-        ]);
+        let def2 = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![text_field("meta_title")])
+                    .build(),
+            ],
+        );
         alter_collection_table(&conn, "posts", &def2, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -301,12 +347,15 @@ mod tests {
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
 
-        let def2 = simple_collection("posts", vec![
-            text_field("title"),
-            FieldDefinition::builder("names", FieldType::Row)
-                .fields(vec![text_field("first"), text_field("last")])
-                .build(),
-        ]);
+        let def2 = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("names", FieldType::Row)
+                    .fields(vec![text_field("first"), text_field("last")])
+                    .build(),
+            ],
+        );
         alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -321,12 +370,15 @@ mod tests {
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
 
-        let def2 = simple_collection("posts", vec![
-            text_field("title"),
-            FieldDefinition::builder("extra", FieldType::Collapsible)
-                .fields(vec![text_field("notes")])
-                .build(),
-        ]);
+        let def2 = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("extra", FieldType::Collapsible)
+                    .fields(vec![text_field("notes")])
+                    .build(),
+            ],
+        );
         alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -340,14 +392,15 @@ mod tests {
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
 
-        let def2 = simple_collection("posts", vec![
-            text_field("title"),
-            FieldDefinition::builder("tabs", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("T1", vec![text_field("body")]),
-                ])
-                .build(),
-        ]);
+        let def2 = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("tabs", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new("T1", vec![text_field("body")])])
+                    .build(),
+            ],
+        );
         alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -361,22 +414,30 @@ mod tests {
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
 
-        let def2 = simple_collection("posts", vec![
-            text_field("title"),
-            FieldDefinition::builder("tabs", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("SEO", vec![
-                        FieldDefinition::builder("seo", FieldType::Group)
+        let def2 = simple_collection(
+            "posts",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("tabs", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "SEO",
+                        vec![FieldDefinition::builder("seo", FieldType::Group)
                             .fields(vec![text_field("og_title"), text_field("og_desc")])
-                            .build(),
-                    ]),
-                ])
-                .build(),
-        ]);
+                            .build()],
+                    )])
+                    .build(),
+            ],
+        );
         alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("seo__og_title"), "ALTER should add Group columns inside Tabs");
-        assert!(cols.contains("seo__og_desc"), "ALTER should add Group columns inside Tabs");
+        assert!(
+            cols.contains("seo__og_title"),
+            "ALTER should add Group columns inside Tabs"
+        );
+        assert!(
+            cols.contains("seo__og_desc"),
+            "ALTER should add Group columns inside Tabs"
+        );
     }
 }

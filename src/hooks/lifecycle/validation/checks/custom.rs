@@ -46,7 +46,8 @@ mod tests {
     #[test]
     fn test_validate_custom_validate_function_returns_error() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["validators"] = {
                 validate_test = function(value, ctx)
                     if value == "bad" then
@@ -55,29 +56,48 @@ mod tests {
                     return true
                 end
             }
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).validate("validators.validate_test").build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .validate("validators.validate_test")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("bad"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0].message.contains("cannot be bad"));
+        assert!(result.unwrap_err().errors[0]
+            .message
+            .contains("cannot be bad"));
     }
 
     #[test]
     fn test_validate_custom_validate_function_returns_false() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_fail = function(value, ctx)
                 return false
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).validate("validators.validate_fail").build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .validate("validators.validate_fail")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("anything"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -88,15 +108,24 @@ mod tests {
     #[test]
     fn test_validate_custom_validate_function_returns_true() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_ok = function(value, ctx)
                 return true
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).validate("validators.validate_ok").build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .validate("validators.validate_ok")
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("good"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);

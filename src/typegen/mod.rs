@@ -6,11 +6,11 @@
 //! - `python` — Python dataclasses
 //! - `rust` — Rust structs with serde derives
 
-mod lua;
-mod typescript;
 mod go;
+mod lua;
 mod python;
 mod rust_types;
+mod typescript;
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -54,7 +54,13 @@ impl Language {
     }
 
     pub fn all() -> &'static [Self] {
-        &[Self::Lua, Self::Typescript, Self::Go, Self::Python, Self::Rust]
+        &[
+            Self::Lua,
+            Self::Typescript,
+            Self::Go,
+            Self::Python,
+            Self::Rust,
+        ]
     }
 
     pub fn label(&self) -> &'static str {
@@ -211,19 +217,25 @@ mod tests {
 
     #[test]
     fn is_optional_required_field() {
-        let f = FieldDefinition::builder("", FieldType::Text).required(true).build();
+        let f = FieldDefinition::builder("", FieldType::Text)
+            .required(true)
+            .build();
         assert!(!is_optional(&f));
     }
 
     #[test]
     fn is_optional_non_required_field() {
-        let f = FieldDefinition::builder("", FieldType::Text).required(false).build();
+        let f = FieldDefinition::builder("", FieldType::Text)
+            .required(false)
+            .build();
         assert!(is_optional(&f));
     }
 
     #[test]
     fn is_optional_checkbox_always_optional() {
-        let f = FieldDefinition::builder("", FieldType::Checkbox).required(true).build();
+        let f = FieldDefinition::builder("", FieldType::Checkbox)
+            .required(true)
+            .build();
         assert!(is_optional(&f), "checkbox should always be optional");
     }
 
@@ -286,18 +298,35 @@ mod tests {
     #[test]
     fn sorted_collection_slugs_sorted() {
         let mut registry = Registry::default();
-        registry.collections.insert("zebra".into(), make_collection("zebra"));
-        registry.collections.insert("alpha".into(), make_collection("alpha"));
-        registry.collections.insert("middle".into(), make_collection("middle"));
+        registry
+            .collections
+            .insert("zebra".into(), make_collection("zebra"));
+        registry
+            .collections
+            .insert("alpha".into(), make_collection("alpha"));
+        registry
+            .collections
+            .insert("middle".into(), make_collection("middle"));
         let slugs = sorted_collection_slugs(&registry);
-        assert_eq!(slugs, vec![&"alpha".to_string(), &"middle".to_string(), &"zebra".to_string()]);
+        assert_eq!(
+            slugs,
+            vec![
+                &"alpha".to_string(),
+                &"middle".to_string(),
+                &"zebra".to_string()
+            ]
+        );
     }
 
     #[test]
     fn sorted_global_slugs_sorted() {
         let mut registry = Registry::default();
-        registry.globals.insert("settings".into(), make_global("settings"));
-        registry.globals.insert("about".into(), make_global("about"));
+        registry
+            .globals
+            .insert("settings".into(), make_global("settings"));
+        registry
+            .globals
+            .insert("about".into(), make_global("about"));
         let slugs = sorted_global_slugs(&registry);
         assert_eq!(slugs, vec![&"about".to_string(), &"settings".to_string()]);
     }

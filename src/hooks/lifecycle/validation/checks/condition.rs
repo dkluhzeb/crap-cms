@@ -1,10 +1,7 @@
 /// Evaluate a condition table (JSON) against form data.
 /// A single condition object has `{ field, equals|not_equals|in|not_in|is_truthy|is_falsy }`.
 /// An array of conditions means AND (all must be true).
-pub fn evaluate_condition_table(
-    condition: &serde_json::Value,
-    data: &serde_json::Value,
-) -> bool {
+pub fn evaluate_condition_table(condition: &serde_json::Value, data: &serde_json::Value) -> bool {
     match condition {
         serde_json::Value::Array(arr) => arr.iter().all(|c| evaluate_condition_table(c, data)),
         serde_json::Value::Object(obj) => {
@@ -23,10 +20,18 @@ pub fn evaluate_condition_table(
             if let Some(serde_json::Value::Array(list)) = obj.get("not_in") {
                 return !list.contains(field_val);
             }
-            if obj.get("is_truthy").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if obj
+                .get("is_truthy")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 return condition_is_truthy(field_val);
             }
-            if obj.get("is_falsy").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if obj
+                .get("is_falsy")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 return !condition_is_truthy(field_val);
             }
             true // unknown operator -> show

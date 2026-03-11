@@ -3,7 +3,11 @@
 use mlua::{Lua, Table};
 
 /// Serialize the auth section of a CollectionDefinition into the Lua table.
-pub(super) fn collection_auth_to_lua(lua: &Lua, tbl: &Table, def: &crate::core::CollectionDefinition) -> mlua::Result<()> {
+pub(super) fn collection_auth_to_lua(
+    lua: &Lua,
+    tbl: &Table,
+    def: &crate::core::CollectionDefinition,
+) -> mlua::Result<()> {
     if let Some(ref auth) = def.auth {
         if auth.enabled {
             if auth.strategies.is_empty()
@@ -44,8 +48,8 @@ pub(super) fn collection_auth_to_lua(lua: &Lua, tbl: &Table, def: &crate::core::
 
 #[cfg(test)]
 mod tests {
-    use mlua::{self, Value};
     use super::super::collection::collection_config_to_lua;
+    use mlua::{self, Value};
 
     #[test]
     fn test_collection_config_to_lua_with_auth_simple() {
@@ -68,7 +72,10 @@ mod tests {
         auth.disable_local = true;
         auth.verify_email = true;
         auth.forgot_password = false;
-        auth.strategies = vec![crate::core::collection::AuthStrategy::new("oauth", "hooks.auth.oauth")];
+        auth.strategies = vec![crate::core::collection::AuthStrategy::new(
+            "oauth",
+            "hooks.auth.oauth",
+        )];
         def.auth = Some(auth);
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let auth_tbl: mlua::Table = tbl.get("auth").unwrap();

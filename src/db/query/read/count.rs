@@ -1,26 +1,38 @@
 //! `count`, `count_with_search`, `count_where_field_eq` — document counting.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{bail, Context as _, Result};
 use rusqlite::params_from_iter;
 
-use crate::core::CollectionDefinition;
-use super::super::{
-    LocaleContext, FilterClause,
-    is_valid_identifier,
-};
 use super::super::filter::{build_where_clause, resolve_filters};
+use super::super::{is_valid_identifier, FilterClause, LocaleContext};
+use crate::core::CollectionDefinition;
 
 /// Count documents in a collection.
-pub fn count(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition, filters: &[FilterClause], locale_ctx: Option<&LocaleContext>) -> Result<i64> {
+pub fn count(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    filters: &[FilterClause],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<i64> {
     count_with_search(conn, slug, def, filters, locale_ctx, None)
 }
 
 /// Count documents with optional FTS search filter.
-pub fn count_with_search(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition, filters: &[FilterClause], locale_ctx: Option<&LocaleContext>, search: Option<&str>) -> Result<i64> {
+pub fn count_with_search(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    filters: &[FilterClause],
+    locale_ctx: Option<&LocaleContext>,
+    search: Option<&str>,
+) -> Result<i64> {
     let (exact, prefixes) = super::super::get_valid_filter_paths(def, locale_ctx);
     for clause in filters {
         match clause {
-            FilterClause::Single(f) => super::super::validate_filter_field(&f.field, &exact, &prefixes)?,
+            FilterClause::Single(f) => {
+                super::super::validate_filter_field(&f.field, &exact, &prefixes)?
+            }
             FilterClause::Or(groups) => {
                 for group in groups {
                     for f in group {
@@ -42,7 +54,9 @@ pub fn count_with_search(conn: &rusqlite::Connection, slug: &str, def: &Collecti
 
     // FTS5 full-text search filter
     if let Some(search_term) = search {
-        if let Some((fts_clause, sanitized)) = super::super::fts::fts_where_clause(conn, slug, search_term) {
+        if let Some((fts_clause, sanitized)) =
+            super::super::fts::fts_where_clause(conn, slug, search_term)
+        {
             if where_clause.is_empty() {
                 sql.push_str(&format!(" WHERE {}", fts_clause));
             } else {
@@ -54,7 +68,8 @@ pub fn count_with_search(conn: &rusqlite::Connection, slug: &str, def: &Collecti
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-    let count: i64 = conn.query_row(&sql, params_from_iter(param_refs.iter()), |row| row.get(0))
+    let count: i64 = conn
+        .query_row(&sql, params_from_iter(param_refs.iter()), |row| row.get(0))
         .with_context(|| format!("Failed to count documents in '{}'", slug))?;
 
     Ok(count)
@@ -70,7 +85,10 @@ pub fn count_where_field_eq(
     exclude_id: Option<&str>,
 ) -> Result<i64> {
     if !is_valid_identifier(field) {
-        bail!("Invalid field name '{}': must be alphanumeric/underscore", field);
+        bail!(
+            "Invalid field name '{}': must be alphanumeric/underscore",
+            field
+        );
     }
     let count = match exclude_id {
         Some(eid) => {
@@ -78,14 +96,13 @@ pub fn count_where_field_eq(
                 "SELECT COUNT(*) FROM {} WHERE {} = ?1 AND id != ?2",
                 table, field
             );
-            conn.query_row(&sql, rusqlite::params![value, eid], |row| row.get::<_, i64>(0))
-                .with_context(|| format!("Unique check on {}.{}", table, field))?
+            conn.query_row(&sql, rusqlite::params![value, eid], |row| {
+                row.get::<_, i64>(0)
+            })
+            .with_context(|| format!("Unique check on {}.{}", table, field))?
         }
         None => {
-            let sql = format!(
-                "SELECT COUNT(*) FROM {} WHERE {} = ?1",
-                table, field
-            );
+            let sql = format!("SELECT COUNT(*) FROM {} WHERE {} = ?1", table, field);
             conn.query_row(&sql, [value], |row| row.get::<_, i64>(0))
                 .with_context(|| format!("Unique check on {}.{}", table, field))?
         }
@@ -95,13 +112,13 @@ pub fn count_where_field_eq(
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::write::create;
+    use super::super::super::{Filter, FilterClause, FilterOp};
     use super::*;
-    use rusqlite::Connection;
-    use std::collections::HashMap;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use super::super::super::{FilterClause, Filter, FilterOp};
-    use super::super::super::write::create;
+    use rusqlite::Connection;
+    use std::collections::HashMap;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -121,8 +138,9 @@ mod tests {
                 status TEXT,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 
@@ -179,7 +197,8 @@ mod tests {
         assert_eq!(c, 2);
 
         // Exclude one
-        let c_excl = count_where_field_eq(&conn, "posts", "status", "draft", Some(&doc2.id)).unwrap();
+        let c_excl =
+            count_where_field_eq(&conn, "posts", "status", "draft", Some(&doc2.id)).unwrap();
         assert_eq!(c_excl, 1);
     }
 
@@ -188,15 +207,18 @@ mod tests {
         let conn = setup_db();
         let result = count_where_field_eq(&conn, "posts", "bad field!", "val", None);
         assert!(result.is_err(), "Invalid field name should error");
-        assert!(result.unwrap_err().to_string().contains("Invalid field name"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid field name"));
     }
 
     // ── count_with_search: FTS search path without WHERE clause ──────────
 
     #[test]
     fn count_with_search_no_other_filters() {
-        use crate::db::query::fts;
         use crate::config::LocaleConfig;
+        use crate::db::query::fts;
 
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -206,8 +228,9 @@ mod tests {
                 status TEXT,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
 
         let def = test_def();
 

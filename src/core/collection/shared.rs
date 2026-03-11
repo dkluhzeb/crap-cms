@@ -1,7 +1,7 @@
 //! Types shared between collections and globals.
 
-use serde::{Deserialize, Serialize};
 use super::super::field::LocalizedString;
+use serde::{Deserialize, Serialize};
 
 /// MCP-specific configuration for a collection or global.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -30,7 +30,10 @@ pub struct VersionsConfig {
 
 impl VersionsConfig {
     pub fn new(drafts: bool, max_versions: u32) -> Self {
-        Self { drafts, max_versions }
+        Self {
+            drafts,
+            max_versions,
+        }
     }
 }
 
@@ -134,6 +137,9 @@ pub struct IndexDefinition {
 
 impl IndexDefinition {
     pub fn new(fields: Vec<String>) -> Self {
-        Self { fields, unique: false }
+        Self {
+            fields,
+            unique: false,
+        }
     }
 }

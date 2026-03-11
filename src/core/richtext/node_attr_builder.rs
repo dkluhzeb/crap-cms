@@ -1,5 +1,5 @@
-use crate::core::field::SelectOption;
 use super::{NodeAttr, NodeAttrType};
+use crate::core::field::SelectOption;
 
 /// Builder for [`NodeAttr`].
 ///

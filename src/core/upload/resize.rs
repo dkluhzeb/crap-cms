@@ -30,7 +30,12 @@ pub(super) fn resize_image(img: &image::DynamicImage, size: &ImageSize) -> image
             let resized = img.resize_exact(resize_w, resize_h, filter);
             let x = (resized.width().saturating_sub(size.width)) / 2;
             let y = (resized.height().saturating_sub(size.height)) / 2;
-            resized.crop_imm(x, y, size.width.min(resized.width()), size.height.min(resized.height()))
+            resized.crop_imm(
+                x,
+                y,
+                size.width.min(resized.width()),
+                size.height.min(resized.height()),
+            )
         }
         ImageFit::Contain | ImageFit::Inside => {
             // Resize to fit within bounds, preserving aspect ratio
@@ -59,12 +64,14 @@ pub(super) fn save_avif(img: &image::DynamicImage, path: &Path, quality: u8) -> 
     let rgba = img.to_rgba8();
     let mut buf = Cursor::new(Vec::new());
     let encoder = image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut buf, 8, quality);
-    encoder.write_image(
-        rgba.as_raw(),
-        img.width(),
-        img.height(),
-        image::ExtendedColorType::Rgba8,
-    ).with_context(|| "Failed to encode AVIF")?;
+    encoder
+        .write_image(
+            rgba.as_raw(),
+            img.width(),
+            img.height(),
+            image::ExtendedColorType::Rgba8,
+        )
+        .with_context(|| "Failed to encode AVIF")?;
     std::fs::write(path, buf.into_inner())
         .with_context(|| format!("Failed to write AVIF: {}", path.display()))?;
     Ok(())
@@ -83,8 +90,8 @@ pub fn process_image_entry(
         anyhow::bail!("Source image not found: {}", source_path);
     }
 
-    let img = image::open(source)
-        .with_context(|| format!("Failed to decode image: {}", source_path))?;
+    let img =
+        image::open(source).with_context(|| format!("Failed to decode image: {}", source_path))?;
 
     let target = std::path::Path::new(target_path);
     if let Some(parent) = target.parent() {
@@ -107,28 +114,29 @@ mod tests {
 
     /// Create a small test PNG image in memory.
     fn create_test_png(width: u32, height: u32) -> Vec<u8> {
-        use image::{ImageBuffer, Rgba, ImageEncoder};
+        use image::{ImageBuffer, ImageEncoder, Rgba};
         let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
             Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
         });
         let mut buf = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut buf);
-        encoder.write_image(
-            img.as_raw(),
-            width,
-            height,
-            image::ExtendedColorType::Rgba8,
-        ).expect("encode PNG");
+        encoder
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .expect("encode PNG");
         buf
     }
 
     #[test]
     fn resize_image_cover_wider_source() {
         // Source is wider than target aspect ratio (landscape → square crop)
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(400, 200, |_, _| image::Rgba([0, 0, 0, 255]))
-        );
-        let size = ImageSizeBuilder::new("thumb").width(100).height(100).fit(ImageFit::Cover).build();
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(400, 200, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("thumb")
+            .width(100)
+            .height(100)
+            .fit(ImageFit::Cover)
+            .build();
         let result = resize_image(&img, &size);
         assert_eq!(result.width(), 100);
         assert_eq!(result.height(), 100);
@@ -137,10 +145,14 @@ mod tests {
     #[test]
     fn resize_image_cover_taller_source() {
         // Source is taller than target aspect ratio (portrait → square crop)
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(200, 400, |_, _| image::Rgba([0, 0, 0, 255]))
-        );
-        let size = ImageSizeBuilder::new("thumb").width(100).height(100).fit(ImageFit::Cover).build();
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(200, 400, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("thumb")
+            .width(100)
+            .height(100)
+            .fit(ImageFit::Cover)
+            .build();
         let result = resize_image(&img, &size);
         assert_eq!(result.width(), 100);
         assert_eq!(result.height(), 100);
@@ -149,10 +161,14 @@ mod tests {
     #[test]
     fn resize_image_contain() {
         // Contain: fits within bounds, preserving aspect ratio
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(400, 200, |_, _| image::Rgba([0, 0, 0, 255]))
-        );
-        let size = ImageSizeBuilder::new("card").width(100).height(100).fit(ImageFit::Contain).build();
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(400, 200, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("card")
+            .width(100)
+            .height(100)
+            .fit(ImageFit::Contain)
+            .build();
         let result = resize_image(&img, &size);
         // Should fit within 100x100 preserving 2:1 aspect → 100x50
         assert!(result.width() <= 100);
@@ -164,10 +180,14 @@ mod tests {
     #[test]
     fn resize_image_inside() {
         // Inside: same as contain (fits within bounds)
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(200, 400, |_, _| image::Rgba([0, 0, 0, 255]))
-        );
-        let size = ImageSizeBuilder::new("card").width(100).height(100).fit(ImageFit::Inside).build();
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(200, 400, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("card")
+            .width(100)
+            .height(100)
+            .fit(ImageFit::Inside)
+            .build();
         let result = resize_image(&img, &size);
         assert!(result.width() <= 100);
         assert!(result.height() <= 100);
@@ -176,10 +196,14 @@ mod tests {
     #[test]
     fn resize_image_fill() {
         // Fill: stretch to exact dimensions, ignoring aspect ratio
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(400, 200, |_, _| image::Rgba([0, 0, 0, 255]))
-        );
-        let size = ImageSizeBuilder::new("banner").width(150).height(75).fit(ImageFit::Fill).build();
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(400, 200, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("banner")
+            .width(150)
+            .height(75)
+            .fit(ImageFit::Fill)
+            .build();
         let result = resize_image(&img, &size);
         assert_eq!(result.width(), 150);
         assert_eq!(result.height(), 75);
@@ -188,10 +212,14 @@ mod tests {
     #[test]
     fn resize_image_cover_exact_ratio() {
         // Source and target have exact same aspect ratio — should just resize, no crop
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(200, 100, |_, _| image::Rgba([0, 0, 0, 255]))
-        );
-        let size = ImageSizeBuilder::new("thumb").width(100).height(50).fit(ImageFit::Cover).build();
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(200, 100, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("thumb")
+            .width(100)
+            .height(50)
+            .fit(ImageFit::Cover)
+            .build();
         let result = resize_image(&img, &size);
         assert_eq!(result.width(), 100);
         assert_eq!(result.height(), 50);
@@ -200,25 +228,31 @@ mod tests {
     #[test]
     fn save_webp_writes_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(10, 10, |_, _| image::Rgba([255, 0, 0, 255]))
-        );
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(10, 10, |_, _| {
+            image::Rgba([255, 0, 0, 255])
+        }));
         let path = tmp.path().join("test.webp");
         save_webp(&img, &path, 80).expect("save_webp should succeed");
         assert!(path.exists(), "WebP file should be created");
-        assert!(std::fs::metadata(&path).unwrap().len() > 0, "WebP file should not be empty");
+        assert!(
+            std::fs::metadata(&path).unwrap().len() > 0,
+            "WebP file should not be empty"
+        );
     }
 
     #[test]
     fn save_avif_writes_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let img = image::DynamicImage::ImageRgba8(
-            image::ImageBuffer::from_fn(10, 10, |_, _| image::Rgba([0, 255, 0, 255]))
-        );
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(10, 10, |_, _| {
+            image::Rgba([0, 255, 0, 255])
+        }));
         let path = tmp.path().join("test.avif");
         save_avif(&img, &path, 50).expect("save_avif should succeed");
         assert!(path.exists(), "AVIF file should be created");
-        assert!(std::fs::metadata(&path).unwrap().len() > 0, "AVIF file should not be empty");
+        assert!(
+            std::fs::metadata(&path).unwrap().len() > 0,
+            "AVIF file should not be empty"
+        );
     }
 
     #[test]
@@ -238,7 +272,8 @@ mod tests {
             target.to_str().unwrap(),
             "webp",
             80,
-        ).expect("WebP conversion should succeed");
+        )
+        .expect("WebP conversion should succeed");
 
         assert!(target.exists(), "WebP file should be created");
         assert!(target.metadata().unwrap().len() > 0);
@@ -258,7 +293,8 @@ mod tests {
             target.to_str().unwrap(),
             "avif",
             50,
-        ).expect("AVIF conversion should succeed");
+        )
+        .expect("AVIF conversion should succeed");
 
         assert!(target.exists(), "AVIF file should be created");
     }

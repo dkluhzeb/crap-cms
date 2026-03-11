@@ -9,7 +9,7 @@ mod email;
 mod globals;
 mod versions;
 
-pub use collections::{create_document, update_document, unpublish_document, delete_document};
+pub use collections::{create_document, delete_document, unpublish_document, update_document};
 pub use email::send_verification_email;
 pub use globals::update_global_document;
 
@@ -50,7 +50,8 @@ pub(crate) fn build_hook_data(
     data: &HashMap<String, String>,
     join_data: &HashMap<String, serde_json::Value>,
 ) -> HashMap<String, serde_json::Value> {
-    let mut hook_data: HashMap<String, serde_json::Value> = data.iter()
+    let mut hook_data: HashMap<String, serde_json::Value> = data
+        .iter()
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
     for (k, v) in join_data {
@@ -110,7 +111,13 @@ pub(crate) fn run_after_change_hooks(
     }
     let after_ctx = builder.build();
     let after_result = runner.run_after_write(
-        hooks, fields, HookEvent::AfterChange, after_ctx, tx, user, ui_locale,
+        hooks,
+        fields,
+        HookEvent::AfterChange,
+        after_ctx,
+        tx,
+        user,
+        ui_locale,
     )?;
     Ok(after_result.context)
 }
@@ -139,8 +146,14 @@ pub fn persist_create(
 
     if def.has_versions() {
         versions::create_version_snapshot(
-            conn, slug, &doc.id, &def.fields,
-            def.versions.as_ref(), def.has_drafts(), status, &doc,
+            conn,
+            slug,
+            &doc.id,
+            &def.fields,
+            def.versions.as_ref(),
+            def.has_drafts(),
+            status,
+            &doc,
         )?;
     }
 
@@ -172,8 +185,14 @@ pub fn persist_update(
 
     if def.has_versions() {
         versions::create_version_snapshot(
-            conn, slug, &doc.id, &def.fields,
-            def.versions.as_ref(), def.has_drafts(), "published", &doc,
+            conn,
+            slug,
+            &doc.id,
+            &def.fields,
+            def.versions.as_ref(),
+            def.has_drafts(),
+            "published",
+            &doc,
         )?;
     }
 
@@ -195,8 +214,13 @@ pub fn persist_draft_version(
         .ok_or_else(|| anyhow::anyhow!("Document {} not found in {}", id, slug))?;
 
     versions::save_draft_version(
-        conn, slug, id, &def.fields, def.versions.as_ref(),
-        &existing_doc, hook_data,
+        conn,
+        slug,
+        id,
+        &def.fields,
+        def.versions.as_ref(),
+        &existing_doc,
+        hook_data,
     )?;
 
     Ok(existing_doc)
@@ -224,16 +248,14 @@ pub fn persist_unpublish(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use rusqlite::Connection;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
         def.timestamps = true;
-        def.fields = vec![
-            FieldDefinition::builder("title", FieldType::Text).build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
         def
     }
 
@@ -246,8 +268,9 @@ mod tests {
                 _status TEXT DEFAULT 'published',
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 
@@ -258,7 +281,17 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Hello".to_string());
 
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         assert!(!doc.id.is_empty());
         assert_eq!(doc.get_str("title"), Some("Hello"));
     }
@@ -270,13 +303,33 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Original".to_string());
 
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         let id = doc.id.clone();
 
         let mut update_data = HashMap::new();
         update_data.insert("title".to_string(), "Updated".to_string());
 
-        let updated = persist_update(&conn, "posts", &id, &def, &update_data, &HashMap::new(), None, None).unwrap();
+        let updated = persist_update(
+            &conn,
+            "posts",
+            &id,
+            &def,
+            &update_data,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(updated.get_str("title"), Some("Updated"));
     }
 
@@ -284,17 +337,29 @@ mod tests {
     fn persist_create_with_upload_metadata() {
         let conn = Connection::open_in_memory().unwrap();
 
-        let mut fields = vec![
-            FieldDefinition::builder("alt", FieldType::Text).required(true).build(),
-        ];
+        let mut fields = vec![FieldDefinition::builder("alt", FieldType::Text)
+            .required(true)
+            .build()];
 
         let upload_fields = vec![
-            FieldDefinition::builder("filename", FieldType::Text).required(true).build(),
-            FieldDefinition::builder("mime_type", FieldType::Text).admin(FieldAdmin::builder().hidden(true).build()).build(),
-            FieldDefinition::builder("filesize", FieldType::Number).admin(FieldAdmin::builder().hidden(true).build()).build(),
-            FieldDefinition::builder("width", FieldType::Number).admin(FieldAdmin::builder().hidden(true).build()).build(),
-            FieldDefinition::builder("height", FieldType::Number).admin(FieldAdmin::builder().hidden(true).build()).build(),
-            FieldDefinition::builder("url", FieldType::Text).admin(FieldAdmin::builder().hidden(true).build()).build(),
+            FieldDefinition::builder("filename", FieldType::Text)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("mime_type", FieldType::Text)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
+            FieldDefinition::builder("filesize", FieldType::Number)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
+            FieldDefinition::builder("width", FieldType::Number)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
+            FieldDefinition::builder("height", FieldType::Number)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
+            FieldDefinition::builder("url", FieldType::Text)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
         ];
         for (i, f) in upload_fields.into_iter().enumerate() {
             fields.insert(i, f);
@@ -316,8 +381,9 @@ mod tests {
                 alt TEXT NOT NULL,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
 
         let mut data = HashMap::new();
         data.insert("alt".to_string(), "Test Image".to_string());
@@ -326,15 +392,48 @@ mod tests {
         data.insert("filesize".to_string(), "12345".to_string());
         data.insert("width".to_string(), "1920".to_string());
         data.insert("height".to_string(), "1080".to_string());
-        data.insert("url".to_string(), "/uploads/media/abc123_test.jpg".to_string());
+        data.insert(
+            "url".to_string(),
+            "/uploads/media/abc123_test.jpg".to_string(),
+        );
 
-        let doc = persist_create(&conn, "media", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "media",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
 
         assert_eq!(doc.get_str("filename"), Some("abc123_test.jpg"));
-        assert_eq!(doc.get_str("mime_type"), Some("image/jpeg"), "mime_type should be stored");
-        assert_eq!(doc.get_str("url"), Some("/uploads/media/abc123_test.jpg"), "url should be stored");
-        assert_eq!(doc.fields.get("width").and_then(|v| v.as_f64()), Some(1920.0), "width should be stored");
-        assert_eq!(doc.fields.get("height").and_then(|v| v.as_f64()), Some(1080.0), "height should be stored");
-        assert_eq!(doc.fields.get("filesize").and_then(|v| v.as_f64()), Some(12345.0), "filesize should be stored");
+        assert_eq!(
+            doc.get_str("mime_type"),
+            Some("image/jpeg"),
+            "mime_type should be stored"
+        );
+        assert_eq!(
+            doc.get_str("url"),
+            Some("/uploads/media/abc123_test.jpg"),
+            "url should be stored"
+        );
+        assert_eq!(
+            doc.fields.get("width").and_then(|v| v.as_f64()),
+            Some(1920.0),
+            "width should be stored"
+        );
+        assert_eq!(
+            doc.fields.get("height").and_then(|v| v.as_f64()),
+            Some(1080.0),
+            "height should be stored"
+        );
+        assert_eq!(
+            doc.fields.get("filesize").and_then(|v| v.as_f64()),
+            Some(12345.0),
+            "filesize should be stored"
+        );
     }
 }

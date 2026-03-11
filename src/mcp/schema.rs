@@ -17,8 +17,11 @@ pub enum CrudOp {
 
 /// Convert a single `FieldDefinition` to a JSON Schema value.
 pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
-    let description = field.mcp.description.as_deref()
-        .or(field.admin.description.as_ref().map(|ls| ls.resolve_default()));
+    let description = field.mcp.description.as_deref().or(field
+        .admin
+        .description
+        .as_ref()
+        .map(|ls| ls.resolve_default()));
 
     let mut schema = match field.field_type {
         FieldType::Text | FieldType::Textarea | FieldType::Email | FieldType::Code => {
@@ -37,7 +40,9 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
             if field.options.is_empty() {
                 json!({ "type": "string" })
             } else if field.has_many {
-                let values: Vec<Value> = field.options.iter()
+                let values: Vec<Value> = field
+                    .options
+                    .iter()
                     .map(|o| Value::String(o.value.clone()))
                     .collect();
                 json!({
@@ -45,7 +50,9 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
                     "items": { "type": "string", "enum": values }
                 })
             } else {
-                let values: Vec<Value> = field.options.iter()
+                let values: Vec<Value> = field
+                    .options
+                    .iter()
                     .map(|o| Value::String(o.value.clone()))
                     .collect();
                 json!({ "type": "string", "enum": values })
@@ -58,7 +65,9 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
             json!({})
         }
         FieldType::Relationship | FieldType::Upload => {
-            let has_many = field.relationship.as_ref()
+            let has_many = field
+                .relationship
+                .as_ref()
                 .map(|r| r.has_many)
                 .unwrap_or(field.has_many);
             if has_many {
@@ -75,27 +84,32 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
             if field.blocks.is_empty() {
                 json!({ "type": "array" })
             } else {
-                let variants: Vec<Value> = field.blocks.iter().map(|b| {
-                    let mut props = serde_json::Map::new();
-                    props.insert("blockType".to_string(), json!({ "type": "string", "const": b.block_type }));
-                    for sf in &b.fields {
-                        props.insert(sf.name.clone(), field_to_json_schema(sf));
-                    }
-                    json!({
-                        "type": "object",
-                        "properties": props,
-                        "required": ["blockType"]
+                let variants: Vec<Value> = field
+                    .blocks
+                    .iter()
+                    .map(|b| {
+                        let mut props = serde_json::Map::new();
+                        props.insert(
+                            "blockType".to_string(),
+                            json!({ "type": "string", "const": b.block_type }),
+                        );
+                        for sf in &b.fields {
+                            props.insert(sf.name.clone(), field_to_json_schema(sf));
+                        }
+                        json!({
+                            "type": "object",
+                            "properties": props,
+                            "required": ["blockType"]
+                        })
                     })
-                }).collect();
+                    .collect();
                 json!({
                     "type": "array",
                     "items": { "oneOf": variants }
                 })
             }
         }
-        FieldType::Group => {
-            fields_to_object_schema(&field.fields)
-        }
+        FieldType::Group => fields_to_object_schema(&field.fields),
         // Layout-only types — sub-fields are promoted to parent level
         FieldType::Row | FieldType::Collapsible | FieldType::Tabs => {
             // These don't appear as individual JSON Schema properties;
@@ -159,7 +173,9 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
         "properties": props,
     });
     if !required.is_empty() {
-        schema.as_object_mut().expect("json!({}) is Object")
+        schema
+            .as_object_mut()
+            .expect("json!({}) is Object")
             .insert("required".to_string(), Value::Array(required));
     }
     schema
@@ -194,10 +210,13 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
                 // Auth collections can update password
                 if def.is_auth_collection() {
                     if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-                        props.insert("password".to_string(), json!({
-                            "type": "string",
-                            "description": "Leave empty to keep current password"
-                        }));
+                        props.insert(
+                            "password".to_string(),
+                            json!({
+                                "type": "string",
+                                "description": "Leave empty to keep current password"
+                            }),
+                        );
                     }
                 }
             }
@@ -248,9 +267,7 @@ pub fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
             // Read global — no params needed
             json!({ "type": "object", "properties": {} })
         }
-        CrudOp::Update => {
-            fields_to_object_schema(&def.fields)
-        }
+        CrudOp::Update => fields_to_object_schema(&def.fields),
         _ => json!({ "type": "object", "properties": {} }),
     }
 }
@@ -258,15 +275,17 @@ pub fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{SelectOption, McpFieldConfig, FieldAdmin};
     use crate::core::field::LocalizedString;
+    use crate::core::field::{FieldAdmin, McpFieldConfig, SelectOption};
 
     fn text_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text).build()
     }
 
     fn required_text(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).required(true).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .required(true)
+            .build()
     }
 
     #[test]
@@ -323,7 +342,9 @@ mod tests {
     #[test]
     fn mcp_description_included() {
         let f = FieldDefinition::builder("status", FieldType::Text)
-            .mcp(McpFieldConfig { description: Some("Publication status".to_string()) })
+            .mcp(McpFieldConfig {
+                description: Some("Publication status".to_string()),
+            })
             .build();
         let s = field_to_json_schema(&f);
         assert_eq!(s["description"], "Publication status");
@@ -332,9 +353,11 @@ mod tests {
     #[test]
     fn admin_description_fallback() {
         let f = FieldDefinition::builder("status", FieldType::Text)
-            .admin(FieldAdmin::builder()
-                .description(LocalizedString::Plain("Admin desc".to_string()))
-                .build())
+            .admin(
+                FieldAdmin::builder()
+                    .description(LocalizedString::Plain("Admin desc".to_string()))
+                    .build(),
+            )
             .build();
         let s = field_to_json_schema(&f);
         assert_eq!(s["description"], "Admin desc");
@@ -357,7 +380,10 @@ mod tests {
         def.fields = vec![text_field("title")];
         let s = collection_input_schema(&def, CrudOp::Update);
         assert!(s["properties"]["id"].is_object());
-        assert!(s["required"].as_array().unwrap().contains(&Value::String("id".to_string())));
+        assert!(s["required"]
+            .as_array()
+            .unwrap()
+            .contains(&Value::String("id".to_string())));
     }
 
     #[test]
@@ -613,9 +639,10 @@ mod tests {
             assert!(req.contains(&Value::String("blockType".to_string())));
         }
         // hero variant has "heading" property
-        let hero = one_of.iter().find(|v| {
-            v["properties"]["blockType"]["const"].as_str() == Some("hero")
-        }).unwrap();
+        let hero = one_of
+            .iter()
+            .find(|v| v["properties"]["blockType"]["const"].as_str() == Some("hero"))
+            .unwrap();
         assert!(hero["properties"]["heading"].is_object());
     }
 
@@ -623,10 +650,13 @@ mod tests {
 
     #[test]
     fn tabs_fields_flattened_in_object_schema() {
-        use crate::core::field::{FieldTab};
+        use crate::core::field::FieldTab;
         let tabs = FieldDefinition::builder("tabs", FieldType::Tabs)
             .tabs(vec![
-                FieldTab::new("SEO", vec![text_field("meta_title"), required_text("meta_desc")]),
+                FieldTab::new(
+                    "SEO",
+                    vec![text_field("meta_title"), required_text("meta_desc")],
+                ),
                 FieldTab::new("Content", vec![text_field("body")]),
             ])
             .build();
@@ -647,7 +677,10 @@ mod tests {
     #[test]
     fn collapsible_fields_flattened_in_object_schema() {
         let collapsible = FieldDefinition::builder("collapsible_section", FieldType::Collapsible)
-            .fields(vec![text_field("internal_notes"), required_text("reference_code")])
+            .fields(vec![
+                text_field("internal_notes"),
+                required_text("reference_code"),
+            ])
             .build();
         let mut def = CollectionDefinition::new("orders");
         def.fields = vec![collapsible];
@@ -680,7 +713,10 @@ mod tests {
         // allowing the auth code path to push "password" into it.
         let mut def = CollectionDefinition::new("users");
         def.fields = vec![required_text("email"), text_field("name")];
-        def.auth = Some(Auth { enabled: true, ..Default::default() });
+        def.auth = Some(Auth {
+            enabled: true,
+            ..Default::default()
+        });
         let s = collection_input_schema(&def, CrudOp::Create);
         assert!(s["properties"]["password"].is_object());
         // password is appended to the existing required array
@@ -693,11 +729,17 @@ mod tests {
         use crate::core::collection::Auth;
         let mut def = CollectionDefinition::new("users");
         def.fields = vec![text_field("name")];
-        def.auth = Some(Auth { enabled: true, ..Default::default() });
+        def.auth = Some(Auth {
+            enabled: true,
+            ..Default::default()
+        });
         let s = collection_input_schema(&def, CrudOp::Update);
         // password appears but is not required (optional change)
         assert!(s["properties"]["password"].is_object());
-        assert!(s["properties"]["password"]["description"].as_str().unwrap().contains("empty"));
+        assert!(s["properties"]["password"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("empty"));
         // Only "id" is required for update
         let req = s["required"].as_array().unwrap();
         assert!(req.contains(&Value::String("id".to_string())));
@@ -725,10 +767,18 @@ mod tests {
         // Delete, Create, FindById all fall through to the `_` arm → empty schema
         for op in &[CrudOp::Delete, CrudOp::Create, CrudOp::FindById] {
             let s = global_input_schema(&def, *op);
-            assert!(s["properties"].is_object(), "op {:?} should return object with properties", op);
+            assert!(
+                s["properties"].is_object(),
+                "op {:?} should return object with properties",
+                op
+            );
             // Should be empty properties
-            assert_eq!(s["properties"].as_object().unwrap().len(), 0,
-                "op {:?} should have no properties", op);
+            assert_eq!(
+                s["properties"].as_object().unwrap().len(),
+                0,
+                "op {:?} should have no properties",
+                op
+            );
         }
     }
 

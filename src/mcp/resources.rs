@@ -2,11 +2,11 @@
 
 use serde_json::{json, Value};
 
+use super::protocol::{ResourceContent, ResourceDefinition};
+use super::schema::{collection_input_schema, global_input_schema, CrudOp};
+use super::tools::should_include;
 use crate::config::CrapConfig;
 use crate::core::Registry;
-use super::protocol::{ResourceDefinition, ResourceContent};
-use super::schema::{CrudOp, collection_input_schema, global_input_schema};
-use super::tools::should_include;
 
 /// List all available MCP resources.
 pub fn list_resources() -> Vec<ResourceDefinition> {
@@ -33,7 +33,11 @@ pub fn list_resources() -> Vec<ResourceDefinition> {
 }
 
 /// Read a resource by URI.
-pub fn read_resource(uri: &str, registry: &Registry, config: &CrapConfig) -> Option<ResourceContent> {
+pub fn read_resource(
+    uri: &str,
+    registry: &Registry,
+    config: &CrapConfig,
+) -> Option<ResourceContent> {
     match uri {
         "crap://schema/collections" => {
             let mut schemas = serde_json::Map::new();
@@ -42,14 +46,17 @@ pub fn read_resource(uri: &str, registry: &Registry, config: &CrapConfig) -> Opt
                     continue;
                 }
                 let schema = collection_input_schema(def, CrudOp::Create);
-                schemas.insert(slug.clone(), json!({
-                    "label": def.display_name(),
-                    "timestamps": def.timestamps,
-                    "has_auth": def.is_auth_collection(),
-                    "has_upload": def.is_upload_collection(),
-                    "has_drafts": def.has_drafts(),
-                    "schema": schema,
-                }));
+                schemas.insert(
+                    slug.clone(),
+                    json!({
+                        "label": def.display_name(),
+                        "timestamps": def.timestamps,
+                        "has_auth": def.is_auth_collection(),
+                        "has_upload": def.is_upload_collection(),
+                        "has_drafts": def.has_drafts(),
+                        "schema": schema,
+                    }),
+                );
             }
             Some(ResourceContent {
                 uri: uri.to_string(),
@@ -61,10 +68,13 @@ pub fn read_resource(uri: &str, registry: &Registry, config: &CrapConfig) -> Opt
             let mut schemas = serde_json::Map::new();
             for (slug, def) in &registry.globals {
                 let schema = global_input_schema(def, CrudOp::Update);
-                schemas.insert(slug.clone(), json!({
-                    "label": def.display_name(),
-                    "schema": schema,
-                }));
+                schemas.insert(
+                    slug.clone(),
+                    json!({
+                        "label": def.display_name(),
+                        "schema": schema,
+                    }),
+                );
             }
             Some(ResourceContent {
                 uri: uri.to_string(),
@@ -116,7 +126,9 @@ mod tests {
     fn list_resources_returns_three() {
         let resources = list_resources();
         assert_eq!(resources.len(), 3);
-        assert!(resources.iter().any(|r| r.uri == "crap://schema/collections"));
+        assert!(resources
+            .iter()
+            .any(|r| r.uri == "crap://schema/collections"));
         assert!(resources.iter().any(|r| r.uri == "crap://schema/globals"));
         assert!(resources.iter().any(|r| r.uri == "crap://config"));
     }

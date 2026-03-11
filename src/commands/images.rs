@@ -7,22 +7,29 @@ use anyhow::{Context as _, Result};
 #[cfg(not(tarpaulin_include))]
 pub fn run(action: super::ImagesAction) -> Result<()> {
     match action {
-        super::ImagesAction::List { config, status, limit } => {
+        super::ImagesAction::List {
+            config,
+            status,
+            limit,
+        } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = crate::config::CrapConfig::load(&config_dir)?;
             let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
             let status_filter = status.as_deref();
-            let entries = crate::db::query::images::list_image_entries(&conn, status_filter, limit)?;
+            let entries =
+                crate::db::query::images::list_image_entries(&conn, status_filter, limit)?;
 
             if entries.is_empty() {
                 println!("No queue entries found.");
                 return Ok(());
             }
 
-            println!("{:<24} {:<12} {:<12} {:<8} {:<20} Status",
-                "ID", "Collection", "Document", "Format", "Created");
+            println!(
+                "{:<24} {:<12} {:<12} {:<8} {:<20} Status",
+                "ID", "Collection", "Document", "Format", "Created"
+            );
             println!("{}", "-".repeat(90));
 
             for e in &entries {
@@ -32,9 +39,15 @@ pub fn run(action: super::ImagesAction) -> Result<()> {
                 } else {
                     e.status.clone()
                 };
-                println!("{:<24} {:<12} {:<12} {:<8} {:<20} {}",
-                    &e.id[..e.id.len().min(22)], e.collection, &e.document_id[..e.document_id.len().min(10)],
-                    e.format, created, status_str);
+                println!(
+                    "{:<24} {:<12} {:<12} {:<8} {:<20} {}",
+                    &e.id[..e.id.len().min(22)],
+                    e.collection,
+                    &e.document_id[..e.document_id.len().min(10)],
+                    e.format,
+                    created,
+                    status_str
+                );
             }
 
             println!("\n{} entry/entries", entries.len());
@@ -47,9 +60,12 @@ pub fn run(action: super::ImagesAction) -> Result<()> {
 
             let conn = pool.get().context("Failed to get DB connection")?;
 
-            let pending = crate::db::query::images::count_image_entries_by_status(&conn, "pending")?;
-            let processing = crate::db::query::images::count_image_entries_by_status(&conn, "processing")?;
-            let completed = crate::db::query::images::count_image_entries_by_status(&conn, "completed")?;
+            let pending =
+                crate::db::query::images::count_image_entries_by_status(&conn, "pending")?;
+            let processing =
+                crate::db::query::images::count_image_entries_by_status(&conn, "processing")?;
+            let completed =
+                crate::db::query::images::count_image_entries_by_status(&conn, "completed")?;
             let failed = crate::db::query::images::count_image_entries_by_status(&conn, "failed")?;
 
             println!("Image processing queue:");
@@ -57,11 +73,19 @@ pub fn run(action: super::ImagesAction) -> Result<()> {
             println!("  Processing: {}", processing);
             println!("  Completed:  {}", completed);
             println!("  Failed:     {}", failed);
-            println!("  Total:      {}", pending + processing + completed + failed);
+            println!(
+                "  Total:      {}",
+                pending + processing + completed + failed
+            );
 
             Ok(())
         }
-        super::ImagesAction::Retry { config, id, all, confirm } => {
+        super::ImagesAction::Retry {
+            config,
+            id,
+            all,
+            confirm,
+        } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = crate::config::CrapConfig::load(&config_dir)?;
             let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;

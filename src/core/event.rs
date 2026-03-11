@@ -33,7 +33,10 @@ pub struct EventUser {
 
 impl EventUser {
     pub fn new(id: impl Into<String>, email: impl Into<String>) -> Self {
-        Self { id: id.into(), email: email.into() }
+        Self {
+            id: id.into(),
+            email: email.into(),
+        }
     }
 }
 
@@ -141,7 +144,10 @@ mod tests {
             "posts".to_string(),
             "id1".to_string(),
             HashMap::new(),
-            Some(EventUser { id: "u1".into(), email: "test@example.com".into() }),
+            Some(EventUser {
+                id: "u1".into(),
+                email: "test@example.com".into(),
+            }),
         );
         assert!(result.is_some());
         let event = result.unwrap();
@@ -157,8 +163,26 @@ mod tests {
     fn sequence_increments() {
         let bus = EventBus::new(16);
         let _rx = bus.subscribe();
-        let e1 = bus.publish(EventTarget::Collection, EventOperation::Create, "a".into(), "1".into(), HashMap::new(), None).unwrap();
-        let e2 = bus.publish(EventTarget::Collection, EventOperation::Update, "a".into(), "2".into(), HashMap::new(), None).unwrap();
+        let e1 = bus
+            .publish(
+                EventTarget::Collection,
+                EventOperation::Create,
+                "a".into(),
+                "1".into(),
+                HashMap::new(),
+                None,
+            )
+            .unwrap();
+        let e2 = bus
+            .publish(
+                EventTarget::Collection,
+                EventOperation::Update,
+                "a".into(),
+                "2".into(),
+                HashMap::new(),
+                None,
+            )
+            .unwrap();
         assert_eq!(e2.sequence, e1.sequence + 1);
     }
 
@@ -166,7 +190,14 @@ mod tests {
     fn subscriber_receives_event() {
         let bus = EventBus::new(16);
         let mut rx = bus.subscribe();
-        bus.publish(EventTarget::Global, EventOperation::Update, "settings".into(), "default".into(), HashMap::new(), None);
+        bus.publish(
+            EventTarget::Global,
+            EventOperation::Update,
+            "settings".into(),
+            "default".into(),
+            HashMap::new(),
+            None,
+        );
         let event = rx.try_recv().expect("should receive event");
         assert_eq!(event.collection, "settings");
         assert_eq!(event.target, EventTarget::Global);

@@ -63,19 +63,22 @@ pub fn claim_pending_images(
          LIMIT ?1"
     )?;
 
-    let entries: Vec<ImageQueueEntry> = stmt.query_map([limit as i64], |row| {
-        Ok(ImageQueueEntry {
-            id: row.get(0)?,
-            collection: row.get(1)?,
-            document_id: row.get(2)?,
-            source_path: row.get(3)?,
-            target_path: row.get(4)?,
-            format: row.get(5)?,
-            quality: row.get(6)?,
-            url_column: row.get(7)?,
-            url_value: row.get(8)?,
-        })
-    })?.filter_map(|r| r.ok()).collect();
+    let entries: Vec<ImageQueueEntry> = stmt
+        .query_map([limit as i64], |row| {
+            Ok(ImageQueueEntry {
+                id: row.get(0)?,
+                collection: row.get(1)?,
+                document_id: row.get(2)?,
+                source_path: row.get(3)?,
+                target_path: row.get(4)?,
+                format: row.get(5)?,
+                quality: row.get(6)?,
+                url_column: row.get(7)?,
+                url_value: row.get(8)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
 
     // Mark them as processing
     for entry in &entries {
@@ -135,29 +138,37 @@ pub fn list_image_entries(
     let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = match status_filter {
         Some(status) => (
             "SELECT id, collection, document_id, format, status, error, created_at, completed_at \
-             FROM _crap_image_queue WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2".to_string(),
-            vec![Box::new(status.to_string()) as Box<dyn rusqlite::types::ToSql>, Box::new(limit)],
+             FROM _crap_image_queue WHERE status = ?1 ORDER BY created_at DESC LIMIT ?2"
+                .to_string(),
+            vec![
+                Box::new(status.to_string()) as Box<dyn rusqlite::types::ToSql>,
+                Box::new(limit),
+            ],
         ),
         None => (
             "SELECT id, collection, document_id, format, status, error, created_at, completed_at \
-             FROM _crap_image_queue ORDER BY created_at DESC LIMIT ?1".to_string(),
+             FROM _crap_image_queue ORDER BY created_at DESC LIMIT ?1"
+                .to_string(),
             vec![Box::new(limit) as Box<dyn rusqlite::types::ToSql>],
         ),
     };
 
     let mut stmt = conn.prepare(&sql)?;
-    let entries = stmt.query_map(rusqlite::params_from_iter(params), |row| {
-        Ok(ImageQueueListEntry {
-            id: row.get(0)?,
-            collection: row.get(1)?,
-            document_id: row.get(2)?,
-            format: row.get(3)?,
-            status: row.get(4)?,
-            error: row.get(5)?,
-            created_at: row.get(6)?,
-            completed_at: row.get(7)?,
-        })
-    })?.filter_map(|r| r.ok()).collect();
+    let entries = stmt
+        .query_map(rusqlite::params_from_iter(params), |row| {
+            Ok(ImageQueueListEntry {
+                id: row.get(0)?,
+                collection: row.get(1)?,
+                document_id: row.get(2)?,
+                format: row.get(3)?,
+                status: row.get(4)?,
+                error: row.get(5)?,
+                created_at: row.get(6)?,
+                completed_at: row.get(7)?,
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
 
     Ok(entries)
 }
@@ -213,8 +224,9 @@ mod tests {
                 error TEXT,
                 created_at TEXT DEFAULT (datetime('now')),
                 completed_at TEXT
-            );"
-        ).unwrap();
+            );",
+        )
+        .unwrap();
         conn
     }
 
@@ -222,9 +234,17 @@ mod tests {
     fn insert_and_claim() {
         let conn = setup_db();
         let id = insert_image_queue_entry(
-            &conn, "media", "doc1", "/tmp/src.jpg", "/tmp/dst.webp",
-            "webp", 80, "thumb_webp_url", "/uploads/media/thumb.webp",
-        ).unwrap();
+            &conn,
+            "media",
+            "doc1",
+            "/tmp/src.jpg",
+            "/tmp/dst.webp",
+            "webp",
+            80,
+            "thumb_webp_url",
+            "/uploads/media/thumb.webp",
+        )
+        .unwrap();
         assert!(!id.is_empty());
 
         let entries = claim_pending_images(&conn, 10).unwrap();
@@ -240,24 +260,32 @@ mod tests {
     #[test]
     fn complete_and_fail() {
         let conn = setup_db();
-        let id1 = insert_image_queue_entry(
-            &conn, "media", "d1", "/a", "/b", "webp", 80, "col", "url",
-        ).unwrap();
-        let id2 = insert_image_queue_entry(
-            &conn, "media", "d2", "/c", "/d", "avif", 60, "col", "url",
-        ).unwrap();
+        let id1 =
+            insert_image_queue_entry(&conn, "media", "d1", "/a", "/b", "webp", 80, "col", "url")
+                .unwrap();
+        let id2 =
+            insert_image_queue_entry(&conn, "media", "d2", "/c", "/d", "avif", 60, "col", "url")
+                .unwrap();
 
         complete_image_entry(&conn, &id1).unwrap();
         fail_image_entry(&conn, &id2, "decode error").unwrap();
 
-        let status1: String = conn.query_row(
-            "SELECT status FROM _crap_image_queue WHERE id = ?1", [&id1], |r| r.get(0),
-        ).unwrap();
+        let status1: String = conn
+            .query_row(
+                "SELECT status FROM _crap_image_queue WHERE id = ?1",
+                [&id1],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(status1, "completed");
 
-        let status2: String = conn.query_row(
-            "SELECT status FROM _crap_image_queue WHERE id = ?1", [&id2], |r| r.get(0),
-        ).unwrap();
+        let status2: String = conn
+            .query_row(
+                "SELECT status FROM _crap_image_queue WHERE id = ?1",
+                [&id2],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(status2, "failed");
     }
 
@@ -286,7 +314,10 @@ mod tests {
         let claimed = claim_pending_images(&conn, 1).unwrap();
         assert_eq!(claimed.len(), 1);
         assert_eq!(count_image_entries_by_status(&conn, "pending").unwrap(), 1);
-        assert_eq!(count_image_entries_by_status(&conn, "processing").unwrap(), 1);
+        assert_eq!(
+            count_image_entries_by_status(&conn, "processing").unwrap(),
+            1
+        );
     }
 
     #[test]
@@ -302,7 +333,8 @@ mod tests {
     #[test]
     fn list_entries_filtered() {
         let conn = setup_db();
-        let id = insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+        let id =
+            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
         insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
 
         complete_image_entry(&conn, &id).unwrap();
@@ -317,7 +349,8 @@ mod tests {
     #[test]
     fn retry_single_entry() {
         let conn = setup_db();
-        let id = insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+        let id =
+            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
         fail_image_entry(&conn, &id, "test error").unwrap();
 
         assert!(retry_image_entry(&conn, &id).unwrap());
@@ -328,7 +361,8 @@ mod tests {
     #[test]
     fn retry_non_failed_returns_false() {
         let conn = setup_db();
-        let id = insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+        let id =
+            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
         // Still pending, not failed
         assert!(!retry_image_entry(&conn, &id).unwrap());
     }
@@ -336,8 +370,10 @@ mod tests {
     #[test]
     fn retry_all_failed() {
         let conn = setup_db();
-        let id1 = insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
-        let id2 = insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
+        let id1 =
+            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+        let id2 =
+            insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
         insert_image_queue_entry(&conn, "m", "d3", "/e", "/f", "webp", 80, "c", "u").unwrap();
 
         fail_image_entry(&conn, &id1, "err1").unwrap();
@@ -352,16 +388,16 @@ mod tests {
     #[test]
     fn purge_old_entries() {
         let conn = setup_db();
-        let id = insert_image_queue_entry(
-            &conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u",
-        ).unwrap();
+        let id =
+            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
         complete_image_entry(&conn, &id).unwrap();
 
         // Set completed_at to 2 days ago
         conn.execute(
             "UPDATE _crap_image_queue SET completed_at = datetime('now', '-2 days') WHERE id = ?1",
             [&id],
-        ).unwrap();
+        )
+        .unwrap();
 
         let purged = purge_old_image_entries(&conn, 86400).unwrap(); // 1 day
         assert_eq!(purged, 1);

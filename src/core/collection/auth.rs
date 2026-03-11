@@ -12,7 +12,10 @@ pub struct AuthStrategy {
 
 impl AuthStrategy {
     pub fn new(name: impl Into<String>, authenticate: impl Into<String>) -> Self {
-        Self { name: name.into(), authenticate: authenticate.into() }
+        Self {
+            name: name.into(),
+            authenticate: authenticate.into(),
+        }
     }
 }
 
@@ -44,7 +47,10 @@ fn default_token_expiry() -> u64 {
 
 impl Auth {
     pub fn new(enabled: bool) -> Self {
-        Self { enabled, ..Default::default() }
+        Self {
+            enabled,
+            ..Default::default()
+        }
     }
 }
 

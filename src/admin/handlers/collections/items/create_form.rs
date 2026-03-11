@@ -5,16 +5,14 @@ use axum::{
 };
 use std::collections::HashMap;
 
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
-use crate::admin::context::{ContextBuilder, PageType, Breadcrumb};
 use crate::core::auth::{AuthUser, Claims};
 
 use crate::admin::handlers::shared::{
-    check_access_or_forbid, extract_editor_locale,
-    build_locale_template_data, is_non_default_locale,
-    build_field_contexts, enrich_field_contexts,
-    apply_display_conditions, split_sidebar_fields,
-    render_or_error, not_found, forbidden,
+    apply_display_conditions, build_field_contexts, build_locale_template_data,
+    check_access_or_forbid, enrich_field_contexts, extract_editor_locale, forbidden,
+    is_non_default_locale, not_found, render_or_error, split_sidebar_fields,
 };
 use crate::db::query::AccessResult;
 
@@ -28,28 +26,55 @@ pub async fn create_form(
 ) -> impl IntoResponse {
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
-        None => return not_found(&state, &format!("Collection '{}' not found", slug)).into_response(),
+        None => {
+            return not_found(&state, &format!("Collection '{}' not found", slug)).into_response()
+        }
     };
 
     // Check create access
-    match check_access_or_forbid(
-        &state, def.access.create.as_deref(), &auth_user, None, None,
-    ) {
-        Ok(AccessResult::Denied) => return forbidden(&state, "You don't have permission to create items in this collection").into_response(),
+    match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {
+        Ok(AccessResult::Denied) => {
+            return forbidden(
+                &state,
+                "You don't have permission to create items in this collection",
+            )
+            .into_response()
+        }
         Err(resp) => return resp,
         _ => {}
     }
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
     let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
-    let mut fields = build_field_contexts(&def.fields, &HashMap::new(), &HashMap::new(), true, non_default_locale);
+    let mut fields = build_field_contexts(
+        &def.fields,
+        &HashMap::new(),
+        &HashMap::new(),
+        true,
+        non_default_locale,
+    );
 
     // Enrich relationship and array fields
-    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), &state, true, non_default_locale, &HashMap::new(), None);
+    enrich_field_contexts(
+        &mut fields,
+        &def.fields,
+        &HashMap::new(),
+        &state,
+        true,
+        non_default_locale,
+        &HashMap::new(),
+        None,
+    );
 
     // Evaluate display conditions (empty form data for create)
     let empty_data = serde_json::json!({});
-    apply_display_conditions(&mut fields, &def.fields, &empty_data, &state.hook_runner, true);
+    apply_display_conditions(
+        &mut fields,
+        &def.fields,
+        &empty_data,
+        &state.hook_runner,
+        true,
+    );
 
     if def.is_auth_collection() {
         fields.push(serde_json::json!({
@@ -71,8 +96,14 @@ pub async fn create_form(
     let mut data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
-        .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
+        .page(
+            PageType::CollectionCreate,
+            format!("Create {}", def.singular_name()),
+        )
+        .set(
+            "page_title",
+            serde_json::json!(format!("Create {}", def.singular_name())),
+        )
         .collection_def(&def)
         .fields(main_fields)
         .set("sidebar_fields", serde_json::json!(sidebar_fields))

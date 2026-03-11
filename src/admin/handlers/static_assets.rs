@@ -38,13 +38,10 @@ pub fn overlay_service(config_dir: &StdPath) -> Router {
 
     let router = if config_static.exists() {
         // Config dir static files first, embedded fallback for anything not found
-        let serve_dir = ServeDir::new(config_static)
-            .fallback(get(embedded_static).into_service());
-        Router::new()
-            .fallback_service(serve_dir)
+        let serve_dir = ServeDir::new(config_static).fallback(get(embedded_static).into_service());
+        Router::new().fallback_service(serve_dir)
     } else {
-        Router::new()
-            .fallback(get(embedded_static))
+        Router::new().fallback(get(embedded_static))
     };
     router.layer(middleware::from_fn(cache_control_middleware))
 }

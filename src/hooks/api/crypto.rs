@@ -14,12 +14,13 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     })?;
     crypto_table.set("sha256", sha256_fn)?;
 
-    let hmac_sha256_fn = lua.create_function(|_, (data, key): (String, String)| -> mlua::Result<String> {
-        use ring::hmac;
-        let k = hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes());
-        let tag = hmac::sign(&k, data.as_bytes());
-        Ok(hex_encode(tag.as_ref()))
-    })?;
+    let hmac_sha256_fn =
+        lua.create_function(|_, (data, key): (String, String)| -> mlua::Result<String> {
+            use ring::hmac;
+            let k = hmac::Key::new(hmac::HMAC_SHA256, key.as_bytes());
+            let tag = hmac::sign(&k, data.as_bytes());
+            Ok(hex_encode(tag.as_ref()))
+        })?;
     crypto_table.set("hmac_sha256", hmac_sha256_fn)?;
 
     let b64_encode_fn = lua.create_function(|_, data: String| -> mlua::Result<String> {
@@ -30,7 +31,8 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
 
     let b64_decode_fn = lua.create_function(|_, data: String| -> mlua::Result<String> {
         use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(data.as_bytes())
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(data.as_bytes())
             .map_err(|e| mlua::Error::RuntimeError(format!("base64 decode error: {}", e)))?;
         String::from_utf8(bytes)
             .map_err(|e| mlua::Error::RuntimeError(format!("base64 decode utf8 error: {}", e)))
@@ -39,11 +41,11 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
 
     let secret = auth_secret.to_string();
     let encrypt_fn = lua.create_function(move |_, plaintext: String| -> mlua::Result<String> {
-        use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
         use aes_gcm::Nonce;
-        use ring::digest;
+        use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
         use base64::Engine;
         use rand::RngCore;
+        use ring::digest;
 
         let key_hash = digest::digest(&digest::SHA256, secret.as_bytes());
         let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
@@ -53,7 +55,8 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
         rand::rng().fill_bytes(&mut nonce_bytes);
         let nonce = Nonce::from_slice(&nonce_bytes);
 
-        let ciphertext = cipher.encrypt(nonce, plaintext.as_bytes())
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext.as_bytes())
             .map_err(|e| mlua::Error::RuntimeError(format!("encrypt error: {}", e)))?;
 
         let mut combined = nonce_bytes.to_vec();
@@ -64,12 +67,13 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
 
     let secret2 = auth_secret.to_string();
     let decrypt_fn = lua.create_function(move |_, encoded: String| -> mlua::Result<String> {
-        use aes_gcm::{Aes256Gcm, KeyInit, aead::Aead};
         use aes_gcm::Nonce;
-        use ring::digest;
+        use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit};
         use base64::Engine;
+        use ring::digest;
 
-        let combined = base64::engine::general_purpose::STANDARD.decode(encoded.as_bytes())
+        let combined = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_bytes())
             .map_err(|e| mlua::Error::RuntimeError(format!("base64 decode: {}", e)))?;
         if combined.len() < 12 {
             return Err(mlua::Error::RuntimeError("ciphertext too short".into()));
@@ -81,7 +85,8 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
         let cipher = Aes256Gcm::new_from_slice(key_hash.as_ref())
             .map_err(|e| mlua::Error::RuntimeError(format!("cipher init: {}", e)))?;
 
-        let plaintext = cipher.decrypt(nonce, ciphertext)
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
             .map_err(|e| mlua::Error::RuntimeError(format!("decrypt error: {}", e)))?;
 
         String::from_utf8(plaintext)
@@ -150,10 +155,12 @@ mod tests {
     fn aes_gcm_roundtrip() {
         let lua = setup_lua("test-secret-key");
         let result: String = lua
-            .load(r#"
+            .load(
+                r#"
                 local ct = crap.crypto.encrypt("hello, world")
                 return crap.crypto.decrypt(ct)
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert_eq!(result, "hello, world");
@@ -163,10 +170,12 @@ mod tests {
     fn aes_gcm_roundtrip_empty_plaintext() {
         let lua = setup_lua("test-secret-key");
         let result: String = lua
-            .load(r#"
+            .load(
+                r#"
                 local ct = crap.crypto.encrypt("")
                 return crap.crypto.decrypt(ct)
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert_eq!(result, "");
@@ -177,11 +186,13 @@ mod tests {
         // Same plaintext encrypted twice should produce different ciphertext (random nonce).
         let lua = setup_lua("test-secret-key");
         let result: bool = lua
-            .load(r#"
+            .load(
+                r#"
                 local ct1 = crap.crypto.encrypt("same plaintext")
                 local ct2 = crap.crypto.encrypt("same plaintext")
                 return ct1 ~= ct2
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert!(result);
@@ -229,10 +240,12 @@ mod tests {
     fn base64_roundtrip() {
         let lua = setup_lua("s");
         let result: String = lua
-            .load(r#"
+            .load(
+                r#"
                 local encoded = crap.crypto.base64_encode("hello base64")
                 return crap.crypto.base64_decode(encoded)
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert_eq!(result, "hello base64");
@@ -277,10 +290,7 @@ mod tests {
     #[test]
     fn sha256_empty_string() {
         let lua = setup_lua("s");
-        let result: String = lua
-            .load(r#"return crap.crypto.sha256("")"#)
-            .eval()
-            .unwrap();
+        let result: String = lua.load(r#"return crap.crypto.sha256("")"#).eval().unwrap();
         // SHA-256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
         assert_eq!(
             result,
@@ -308,11 +318,13 @@ mod tests {
     fn hmac_sha256_different_keys_differ() {
         let lua = setup_lua("s");
         let result: bool = lua
-            .load(r#"
+            .load(
+                r#"
                 local h1 = crap.crypto.hmac_sha256("data", "key1")
                 local h2 = crap.crypto.hmac_sha256("data", "key2")
                 return h1 ~= h2
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert!(result);
@@ -345,11 +357,13 @@ mod tests {
     fn random_bytes_two_calls_differ() {
         let lua = setup_lua("s");
         let result: bool = lua
-            .load(r#"
+            .load(
+                r#"
                 local a = crap.crypto.random_bytes(32)
                 local b = crap.crypto.random_bytes(32)
                 return a ~= b
-            "#)
+            "#,
+            )
             .eval()
             .unwrap();
         assert!(result);

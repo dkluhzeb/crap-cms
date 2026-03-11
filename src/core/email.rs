@@ -41,7 +41,8 @@ impl EmailRenderer {
                 let entry = entry?;
                 let path = entry.path();
                 if path.extension().is_some_and(|ext| ext == "hbs") {
-                    let name = path.file_stem()
+                    let name = path
+                        .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_default();
                     let content = std::fs::read_to_string(&path)?;
@@ -56,7 +57,8 @@ impl EmailRenderer {
 
     /// Render an email template by name with the given data.
     pub fn render(&self, template: &str, data: &serde_json::Value) -> Result<String> {
-        self.hbs.render(template, data)
+        self.hbs
+            .render(template, data)
             .with_context(|| format!("Failed to render email template '{}'", template))
     }
 }
@@ -72,7 +74,10 @@ pub fn send_email(
     text: Option<&str>,
 ) -> Result<()> {
     if config.smtp_host.is_empty() {
-        tracing::warn!("Email not configured (smtp_host empty), skipping send to {}", to);
+        tracing::warn!(
+            "Email not configured (smtp_host empty), skipping send to {}",
+            to
+        );
         return Ok(());
     }
 
@@ -90,16 +95,22 @@ fn send_email_smtp(
     text: Option<&str>,
 ) -> Result<()> {
     use lettre::{
-        Message, SmtpTransport, Transport,
-        message::{Mailbox, header::ContentType, MultiPart, SinglePart},
+        message::{header::ContentType, Mailbox, MultiPart, SinglePart},
         transport::smtp::authentication::Credentials,
+        Message, SmtpTransport, Transport,
     };
 
     let from: Mailbox = format!("{} <{}>", config.from_name, config.from_address)
         .parse()
-        .with_context(|| format!("Invalid from address: {} <{}>", config.from_name, config.from_address))?;
+        .with_context(|| {
+            format!(
+                "Invalid from address: {} <{}>",
+                config.from_name, config.from_address
+            )
+        })?;
 
-    let to_mailbox: Mailbox = to.parse()
+    let to_mailbox: Mailbox = to
+        .parse()
         .with_context(|| format!("Invalid recipient address: {}", to))?;
 
     let message = if let Some(plain) = text {
@@ -109,12 +120,16 @@ fn send_email_smtp(
             .subject(subject)
             .multipart(
                 MultiPart::alternative()
-                    .singlepart(SinglePart::builder()
-                        .header(ContentType::TEXT_PLAIN)
-                        .body(plain.to_string()))
-                    .singlepart(SinglePart::builder()
-                        .header(ContentType::TEXT_HTML)
-                        .body(html.to_string()))
+                    .singlepart(
+                        SinglePart::builder()
+                            .header(ContentType::TEXT_PLAIN)
+                            .body(plain.to_string()),
+                    )
+                    .singlepart(
+                        SinglePart::builder()
+                            .header(ContentType::TEXT_HTML)
+                            .body(html.to_string()),
+                    ),
             )
             .context("Failed to build email message")?
     } else {
@@ -132,13 +147,23 @@ fn send_email_smtp(
 
     let transport = match config.smtp_tls {
         SmtpTls::Starttls => SmtpTransport::starttls_relay(&config.smtp_host)
-            .with_context(|| format!("Failed to create SMTP STARTTLS transport for {}", config.smtp_host))?
+            .with_context(|| {
+                format!(
+                    "Failed to create SMTP STARTTLS transport for {}",
+                    config.smtp_host
+                )
+            })?
             .port(config.smtp_port)
             .credentials(creds)
             .timeout(Some(timeout))
             .build(),
         SmtpTls::Tls => SmtpTransport::relay(&config.smtp_host)
-            .with_context(|| format!("Failed to create SMTP TLS transport for {}", config.smtp_host))?
+            .with_context(|| {
+                format!(
+                    "Failed to create SMTP TLS transport for {}",
+                    config.smtp_host
+                )
+            })?
             .port(config.smtp_port)
             .credentials(creds)
             .timeout(Some(timeout))
@@ -150,7 +175,8 @@ fn send_email_smtp(
             .build(),
     };
 
-    transport.send(&message)
+    transport
+        .send(&message)
         .with_context(|| format!("Failed to send email to {}", to))?;
 
     tracing::info!("Email sent to {} (subject: {})", to, subject);
@@ -172,13 +198,23 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         // Should be able to render the compiled-in password_reset template
-        let result = renderer.render("password_reset", &serde_json::json!({
-            "reset_url": "http://example.com/reset?token=abc",
-            "app_name": "Test",
-        }));
-        assert!(result.is_ok(), "Should render password_reset template: {:?}", result.err());
+        let result = renderer.render(
+            "password_reset",
+            &serde_json::json!({
+                "reset_url": "http://example.com/reset?token=abc",
+                "app_name": "Test",
+            }),
+        );
+        assert!(
+            result.is_ok(),
+            "Should render password_reset template: {:?}",
+            result.err()
+        );
         let html = result.unwrap();
-        assert!(html.contains("reset") || html.contains("password"), "Rendered template should contain reset-related content");
+        assert!(
+            html.contains("reset") || html.contains("password"),
+            "Rendered template should contain reset-related content"
+        );
     }
 
     #[test]
@@ -190,13 +226,22 @@ mod tests {
         std::fs::write(
             email_dir.join("password_reset.hbs"),
             "<p>Custom reset: {{{reset_url}}}</p>",
-        ).unwrap();
+        )
+        .unwrap();
 
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
-        let html = renderer.render("password_reset", &serde_json::json!({
-            "reset_url": "http://example.com/reset",
-        })).expect("render");
-        assert!(html.contains("Custom reset:"), "Should use the overlaid template");
+        let html = renderer
+            .render(
+                "password_reset",
+                &serde_json::json!({
+                    "reset_url": "http://example.com/reset",
+                }),
+            )
+            .expect("render");
+        assert!(
+            html.contains("Custom reset:"),
+            "Should use the overlaid template"
+        );
         assert!(html.contains("http://example.com/reset"));
     }
 
@@ -220,7 +265,11 @@ mod tests {
         let config = EmailConfig::default();
         // With empty smtp_host, send_email should return Ok without doing anything
         let result = send_email(&config, "user@example.com", "Test", "<p>Hello</p>", None);
-        assert!(result.is_ok(), "Empty smtp_host should be a no-op: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Empty smtp_host should be a no-op: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -233,7 +282,10 @@ mod tests {
             "<p>Hello</p>",
             Some("Hello plain text"),
         );
-        assert!(result.is_ok(), "Empty smtp_host should be a no-op even with text body");
+        assert!(
+            result.is_ok(),
+            "Empty smtp_host should be a no-op even with text body"
+        );
     }
 
     #[test]
@@ -254,14 +306,23 @@ mod tests {
     fn renderer_render_verify_email_template() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
-        let result = renderer.render("verify_email", &serde_json::json!({
-            "verify_url": "http://example.com/verify?token=xyz",
-            "from_name": "Test CMS",
-        }));
-        assert!(result.is_ok(), "Should render verify_email template: {:?}", result.err());
+        let result = renderer.render(
+            "verify_email",
+            &serde_json::json!({
+                "verify_url": "http://example.com/verify?token=xyz",
+                "from_name": "Test CMS",
+            }),
+        );
+        assert!(
+            result.is_ok(),
+            "Should render verify_email template: {:?}",
+            result.err()
+        );
         let html = result.unwrap();
-        assert!(html.contains("verify") || html.contains("Verify"),
-            "Rendered template should contain verify-related content");
+        assert!(
+            html.contains("verify") || html.contains("Verify"),
+            "Rendered template should contain verify-related content"
+        );
     }
 
     #[test]
@@ -272,13 +333,19 @@ mod tests {
         std::fs::write(
             email_dir.join("custom.hbs"),
             "Hello {{{name}}}, your code is {{{code}}}.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
-        let html = renderer.render("custom", &serde_json::json!({
-            "name": "Alice",
-            "code": "ABC123",
-        })).expect("render");
+        let html = renderer
+            .render(
+                "custom",
+                &serde_json::json!({
+                    "name": "Alice",
+                    "code": "ABC123",
+                }),
+            )
+            .expect("render");
         assert_eq!(html, "Hello Alice, your code is ABC123.");
     }
 
@@ -299,7 +366,10 @@ mod tests {
         assert_eq!(result.unwrap(), "Test: ok");
         // notes.txt should not be registered as a template
         let result2 = renderer.render("notes", &serde_json::json!({}));
-        assert!(result2.is_err(), "non-hbs files should not be registered as templates");
+        assert!(
+            result2.is_err(),
+            "non-hbs files should not be registered as templates"
+        );
     }
 
     #[test]
@@ -310,9 +380,12 @@ mod tests {
         // Don't create templates/email — it doesn't exist
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         // Should still be able to render compiled-in templates
-        let result = renderer.render("password_reset", &serde_json::json!({
-            "reset_url": "http://example.com/reset",
-        }));
+        let result = renderer.render(
+            "password_reset",
+            &serde_json::json!({
+                "reset_url": "http://example.com/reset",
+            }),
+        );
         assert!(result.is_ok());
     }
 
@@ -323,6 +396,9 @@ mod tests {
         // Render with empty data — Handlebars in non-strict mode should still succeed,
         // just leaving placeholders empty
         let result = renderer.render("password_reset", &serde_json::json!({}));
-        assert!(result.is_ok(), "Rendering with missing data should succeed in non-strict mode");
+        assert!(
+            result.is_ok(),
+            "Rendering with missing data should succeed in non-strict mode"
+        );
     }
 }

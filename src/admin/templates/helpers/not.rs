@@ -26,7 +26,8 @@ impl HelperDef for NotHelper {
 mod tests {
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
+        let translations =
+            std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
         let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
             .expect("create_handlebars");
         (*hbs).clone()
@@ -37,11 +38,27 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": false})).unwrap(), "YES");
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": true})).unwrap(), "NO");
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": null})).unwrap(), "YES");
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": "hello"})).unwrap(), "NO");
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": ""})).unwrap(), "YES");
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": false})).unwrap(),
+            "YES"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": true})).unwrap(),
+            "NO"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": null})).unwrap(),
+            "YES"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": "hello"}))
+                .unwrap(),
+            "NO"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": ""})).unwrap(),
+            "YES"
+        );
     }
 
     #[test]
@@ -49,9 +66,18 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": 0})).unwrap(), "YES");
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": 1})).unwrap(), "NO");
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": -1})).unwrap(), "NO");
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": 0})).unwrap(),
+            "YES"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": 1})).unwrap(),
+            "NO"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": -1})).unwrap(),
+            "NO"
+        );
     }
 
     #[test]
@@ -59,8 +85,14 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": []})).unwrap(), "YES");
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": [1]})).unwrap(), "NO");
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": []})).unwrap(),
+            "YES"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": [1]})).unwrap(),
+            "NO"
+        );
     }
 
     #[test]
@@ -68,6 +100,9 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (not val)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({"val": {}})).unwrap(), "NO");
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"val": {}})).unwrap(),
+            "NO"
+        );
     }
 }

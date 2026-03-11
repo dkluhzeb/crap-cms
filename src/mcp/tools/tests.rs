@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::McpConfig;
-use crate::core::{CollectionDefinition, collection::GlobalDefinition};
+use crate::core::{collection::GlobalDefinition, CollectionDefinition};
 use crate::db::query;
 
 fn make_registry() -> Registry {
@@ -140,13 +140,28 @@ fn list_field_types_returns_all_types() {
     assert_eq!(types.len(), 20);
 
     // Verify all expected field types are present
-    let names: Vec<&str> = types.iter()
-        .map(|t| t["name"].as_str().unwrap())
-        .collect();
+    let names: Vec<&str> = types.iter().map(|t| t["name"].as_str().unwrap()).collect();
     for expected in &[
-        "text", "number", "textarea", "select", "radio", "checkbox", "date",
-        "email", "json", "richtext", "code", "relationship", "array", "group",
-        "upload", "blocks", "row", "collapsible", "tabs", "join",
+        "text",
+        "number",
+        "textarea",
+        "select",
+        "radio",
+        "checkbox",
+        "date",
+        "email",
+        "json",
+        "richtext",
+        "code",
+        "relationship",
+        "array",
+        "group",
+        "upload",
+        "blocks",
+        "row",
+        "collapsible",
+        "tabs",
+        "join",
     ] {
         assert!(names.contains(expected), "Missing field type: {}", expected);
     }
@@ -169,7 +184,8 @@ fn cli_reference_all_commands() {
     let commands = parsed["commands"].as_array().unwrap();
     assert!(commands.len() >= 15);
 
-    let names: Vec<&str> = commands.iter()
+    let names: Vec<&str> = commands
+        .iter()
         .map(|c| c["name"].as_str().unwrap())
         .collect();
     for expected in &["serve", "migrate", "user", "backup", "jobs", "mcp"] {
@@ -183,9 +199,7 @@ fn cli_reference_specific_command() {
     let parsed: Value = serde_json::from_str(&result).unwrap();
     assert!(parsed.get("subcommands").is_some());
     let subs = parsed["subcommands"].as_array().unwrap();
-    let sub_names: Vec<&str> = subs.iter()
-        .map(|s| s["name"].as_str().unwrap())
-        .collect();
+    let sub_names: Vec<&str> = subs.iter().map(|s| s["name"].as_str().unwrap()).collect();
     assert!(sub_names.contains(&"up"));
     assert!(sub_names.contains(&"down"));
     assert!(sub_names.contains(&"create"));
@@ -377,20 +391,23 @@ fn parse_where_scalar_operators() {
             serde_json::Value::Object(root)
         };
         let clauses = parse_where_filters(&args);
-        assert_eq!(clauses.len(), 1, "operator {} produced wrong clause count", op_name);
+        assert_eq!(
+            clauses.len(),
+            1,
+            "operator {} produced wrong clause count",
+            op_name
+        );
         match &clauses[0] {
-            query::FilterClause::Single(f) => {
-                match (&f.op, *expected_variant) {
-                    (query::FilterOp::NotEquals(_), "not_equals") => {}
-                    (query::FilterOp::Contains(_), "contains") => {}
-                    (query::FilterOp::GreaterThan(_), "greater_than") => {}
-                    (query::FilterOp::GreaterThanOrEqual(_), "greater_than_equal") => {}
-                    (query::FilterOp::LessThan(_), "less_than") => {}
-                    (query::FilterOp::LessThanOrEqual(_), "less_than_equal") => {}
-                    (query::FilterOp::Like(_), "like") => {}
-                    _ => panic!("Wrong op variant for operator {}: got {:?}", op_name, f.op),
-                }
-            }
+            query::FilterClause::Single(f) => match (&f.op, *expected_variant) {
+                (query::FilterOp::NotEquals(_), "not_equals") => {}
+                (query::FilterOp::Contains(_), "contains") => {}
+                (query::FilterOp::GreaterThan(_), "greater_than") => {}
+                (query::FilterOp::GreaterThanOrEqual(_), "greater_than_equal") => {}
+                (query::FilterOp::LessThan(_), "less_than") => {}
+                (query::FilterOp::LessThanOrEqual(_), "less_than_equal") => {}
+                (query::FilterOp::Like(_), "like") => {}
+                _ => panic!("Wrong op variant for operator {}: got {:?}", op_name, f.op),
+            },
             other => panic!("Expected Single for {}, got {:?}", op_name, other),
         }
     }
@@ -470,7 +487,8 @@ fn exec_list_collections_returns_all() {
     let items: Vec<Value> = serde_json::from_str(&result).unwrap();
     // posts, users (collections) + settings (global)
     assert!(items.len() >= 3);
-    let slugs: Vec<&str> = items.iter()
+    let slugs: Vec<&str> = items
+        .iter()
         .map(|i| i["slug"].as_str().unwrap_or(""))
         .collect();
     assert!(slugs.contains(&"posts"));
@@ -486,7 +504,8 @@ fn exec_list_collections_respects_exclude() {
     };
     let result = super::exec_list_collections(&reg, &config).unwrap();
     let items: Vec<Value> = serde_json::from_str(&result).unwrap();
-    let slugs: Vec<&str> = items.iter()
+    let slugs: Vec<&str> = items
+        .iter()
         .map(|i| i["slug"].as_str().unwrap_or(""))
         .collect();
     assert!(!slugs.contains(&"users"));
@@ -635,7 +654,8 @@ fn exec_list_config_files_root() {
     let result = super::exec_list_config_files(&args, dir.path()).unwrap();
     let files: Vec<Value> = serde_json::from_str(&result).unwrap();
     assert!(files.len() >= 3);
-    let names: Vec<&str> = files.iter()
+    let names: Vec<&str> = files
+        .iter()
         .map(|f| f["name"].as_str().unwrap_or(""))
         .collect();
     assert!(names.contains(&"a.txt"));
@@ -657,7 +677,8 @@ fn exec_list_config_files_subdirectory() {
     let args = json!({ "path": "collections" });
     let result = super::exec_list_config_files(&args, dir.path()).unwrap();
     let files: Vec<Value> = serde_json::from_str(&result).unwrap();
-    let names: Vec<&str> = files.iter()
+    let names: Vec<&str> = files
+        .iter()
         .map(|f| f["name"].as_str().unwrap_or(""))
         .collect();
     assert!(names.contains(&"posts.lua"));
@@ -745,7 +766,8 @@ fn execute_tool_config_tools_disabled_returns_error() {
         &runner,
         tmp.path(),
         &config,
-    ).unwrap_err();
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("config_tools"));
 }
 
@@ -777,7 +799,8 @@ fn execute_tool_unknown_tool_errors() {
         &runner,
         tmp.path(),
         &config,
-    ).unwrap_err();
+    )
+    .unwrap_err();
     assert!(err.to_string().contains("Unknown tool"));
 }
 

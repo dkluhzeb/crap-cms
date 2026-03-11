@@ -19,7 +19,10 @@ pub fn create_collection_table(
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
                 let mut col = format!("{} {}", col_name, spec.field.field_type.sqlite_type());
-                if spec.field.required && *locale == locale_config.default_locale && !def.has_drafts() {
+                if spec.field.required
+                    && *locale == locale_config.default_locale
+                    && !def.has_drafts()
+                {
                     col.push_str(" NOT NULL");
                 }
                 if spec.field.unique {
@@ -77,12 +80,20 @@ pub fn create_collection_table(
 }
 
 /// Append a DEFAULT value clause to a column definition string.
-pub fn append_default_value(col: &mut String, default_value: &Option<serde_json::Value>, field_type: &FieldType) {
+pub fn append_default_value(
+    col: &mut String,
+    default_value: &Option<serde_json::Value>,
+    field_type: &FieldType,
+) {
     if let Some(ref default) = default_value {
         match default {
-            serde_json::Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''"))),
+            serde_json::Value::String(s) => {
+                col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''")))
+            }
             serde_json::Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
-            serde_json::Value::Bool(b) => col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 })),
+            serde_json::Value::Bool(b) => {
+                col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 }))
+            }
             _ => {}
         }
     } else if *field_type == FieldType::Checkbox {
@@ -92,20 +103,17 @@ pub fn append_default_value(col: &mut String, default_value: &Option<serde_json:
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_helpers::*;
+    use super::*;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType, FieldTab};
-    use crate::db::migrate::helpers::{table_exists, get_table_columns};
+    use crate::core::field::{FieldDefinition, FieldTab, FieldType};
+    use crate::db::migrate::helpers::{get_table_columns, table_exists};
 
     #[test]
     fn create_simple_collection_table() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            text_field("title"),
-            text_field("body"),
-        ]);
+        let def = simple_collection("posts", vec![text_field("title"), text_field("body")]);
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         assert!(table_exists(&conn, "posts").unwrap());
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -167,31 +175,38 @@ mod tests {
     fn group_field_creates_prefixed_columns() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("seo", FieldType::Group)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("seo", FieldType::Group)
                 .fields(vec![text_field("meta_title"), text_field("meta_desc")])
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("seo__meta_title"));
         assert!(cols.contains("seo__meta_desc"));
-        assert!(!cols.contains("seo"), "group field itself should not be a column");
+        assert!(
+            !cols.contains("seo"),
+            "group field itself should not be a column"
+        );
     }
 
     #[test]
     fn create_with_default_values() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("status", FieldType::Text)
-                .default_value(serde_json::json!("draft"))
-                .build(),
-            FieldDefinition::builder("count", FieldType::Number)
-                .default_value(serde_json::json!(0))
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("status", FieldType::Text)
+                    .default_value(serde_json::json!("draft"))
+                    .build(),
+                FieldDefinition::builder("count", FieldType::Number)
+                    .default_value(serde_json::json!(0))
+                    .build(),
+            ],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         // Just verify it was created (defaults encoded in DDL)
         assert!(table_exists(&conn, "posts").unwrap());
@@ -201,12 +216,13 @@ mod tests {
     fn create_with_required_unique_fields() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("slug", FieldType::Text)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("slug", FieldType::Text)
                 .required(true)
                 .unique(true)
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         assert!(table_exists(&conn, "posts").unwrap());
     }
@@ -228,15 +244,14 @@ mod tests {
     fn create_localized_group_subfield() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("title", FieldType::Text)
-                        .localized(true)
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                    .localized(true)
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
@@ -248,13 +263,14 @@ mod tests {
     fn create_required_localized_field() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("title", FieldType::Text)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("title", FieldType::Text)
                 .localized(true)
                 .required(true)
                 .unique(true)
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
 
         // Should succeed — NOT NULL only on default locale
@@ -265,17 +281,16 @@ mod tests {
     fn create_required_localized_group_subfield() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("seo", FieldType::Group)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("seo", FieldType::Group)
                 .localized(true)
-                .fields(vec![
-                    FieldDefinition::builder("title", FieldType::Text)
-                        .required(true)
-                        .unique(true)
-                        .build(),
-                ])
-                .build(),
-        ]);
+                .fields(vec![FieldDefinition::builder("title", FieldType::Text)
+                    .required(true)
+                    .unique(true)
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("seo__title__en"));
@@ -286,101 +301,153 @@ mod tests {
     fn row_field_promotes_sub_fields_without_prefix() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("layout", FieldType::Row)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("layout", FieldType::Row)
                 .fields(vec![text_field("first_name"), text_field("last_name")])
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("first_name"), "Row sub-field should be a top-level column");
-        assert!(cols.contains("last_name"), "Row sub-field should be a top-level column");
-        assert!(!cols.contains("layout"), "Row field itself should not be a column");
-        assert!(!cols.contains("layout__first_name"), "Row should not use prefix");
+        assert!(
+            cols.contains("first_name"),
+            "Row sub-field should be a top-level column"
+        );
+        assert!(
+            cols.contains("last_name"),
+            "Row sub-field should be a top-level column"
+        );
+        assert!(
+            !cols.contains("layout"),
+            "Row field itself should not be a column"
+        );
+        assert!(
+            !cols.contains("layout__first_name"),
+            "Row should not use prefix"
+        );
     }
 
     #[test]
     fn collapsible_field_promotes_sub_fields_without_prefix() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("details", FieldType::Collapsible)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("details", FieldType::Collapsible)
                 .fields(vec![text_field("summary"), text_field("notes")])
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("summary"), "Collapsible sub-field should be promoted");
-        assert!(cols.contains("notes"), "Collapsible sub-field should be promoted");
-        assert!(!cols.contains("details"), "Collapsible container should not be a column");
-        assert!(!cols.contains("details__summary"), "Collapsible should not use prefix");
+        assert!(
+            cols.contains("summary"),
+            "Collapsible sub-field should be promoted"
+        );
+        assert!(
+            cols.contains("notes"),
+            "Collapsible sub-field should be promoted"
+        );
+        assert!(
+            !cols.contains("details"),
+            "Collapsible container should not be a column"
+        );
+        assert!(
+            !cols.contains("details__summary"),
+            "Collapsible should not use prefix"
+        );
     }
 
     #[test]
     fn tabs_field_promotes_sub_fields_without_prefix() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![
                     FieldTab::new("Content", vec![text_field("body")]),
                     FieldTab::new("SEO", vec![text_field("meta_title")]),
                 ])
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
         assert!(cols.contains("body"), "Tabs sub-field should be promoted");
-        assert!(cols.contains("meta_title"), "Tabs sub-field should be promoted");
-        assert!(!cols.contains("layout"), "Tabs container should not be a column");
+        assert!(
+            cols.contains("meta_title"),
+            "Tabs sub-field should be promoted"
+        );
+        assert!(
+            !cols.contains("layout"),
+            "Tabs container should not be a column"
+        );
     }
 
     #[test]
     fn tabs_containing_group_creates_prefixed_columns() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![
-                    FieldTab::new("Social", vec![
-                        FieldDefinition::builder("social", FieldType::Group)
+                    FieldTab::new(
+                        "Social",
+                        vec![FieldDefinition::builder("social", FieldType::Group)
                             .fields(vec![text_field("github"), text_field("twitter")])
-                            .build(),
-                    ]),
+                            .build()],
+                    ),
                     FieldTab::new("Content", vec![text_field("body")]),
                 ])
-                .build(),
-        ]);
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("social__github"), "Group inside Tabs should use group__subfield");
-        assert!(cols.contains("social__twitter"), "Group inside Tabs should use group__subfield");
-        assert!(cols.contains("body"), "Plain field in Tabs should be promoted flat");
-        assert!(!cols.contains("social"), "Group itself should not be a column");
+        assert!(
+            cols.contains("social__github"),
+            "Group inside Tabs should use group__subfield"
+        );
+        assert!(
+            cols.contains("social__twitter"),
+            "Group inside Tabs should use group__subfield"
+        );
+        assert!(
+            cols.contains("body"),
+            "Plain field in Tabs should be promoted flat"
+        );
+        assert!(
+            !cols.contains("social"),
+            "Group itself should not be a column"
+        );
     }
 
     #[test]
     fn collapsible_containing_group_creates_prefixed_columns() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("extra", FieldType::Collapsible)
-                .fields(vec![
-                    FieldDefinition::builder("seo", FieldType::Group)
-                        .fields(vec![text_field("title"), text_field("desc")])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("extra", FieldType::Collapsible)
+                .fields(vec![FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("title"), text_field("desc")])
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("seo__title"), "Group inside Collapsible should use group__subfield");
-        assert!(cols.contains("seo__desc"), "Group inside Collapsible should use group__subfield");
+        assert!(
+            cols.contains("seo__title"),
+            "Group inside Collapsible should use group__subfield"
+        );
+        assert!(
+            cols.contains("seo__desc"),
+            "Group inside Collapsible should use group__subfield"
+        );
         assert!(!cols.contains("seo"), "Group itself should not be a column");
     }
 
@@ -388,162 +455,199 @@ mod tests {
     fn deeply_nested_tabs_collapsible_group() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("Advanced", vec![
-                        FieldDefinition::builder("advanced", FieldType::Collapsible)
-                            .fields(vec![
-                                FieldDefinition::builder("og", FieldType::Group)
-                                    .fields(vec![text_field("image"), text_field("title")])
-                                    .build(),
-                                text_field("canonical"),
-                            ])
-                            .build(),
-                    ]),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Advanced",
+                    vec![FieldDefinition::builder("advanced", FieldType::Collapsible)
+                        .fields(vec![
+                            FieldDefinition::builder("og", FieldType::Group)
+                                .fields(vec![text_field("image"), text_field("title")])
+                                .build(),
+                            text_field("canonical"),
+                        ])
+                        .build()],
+                )])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("og__image"), "Deeply nested Group inside Collapsible inside Tabs");
-        assert!(cols.contains("og__title"), "Deeply nested Group inside Collapsible inside Tabs");
-        assert!(cols.contains("canonical"), "Plain field in Collapsible inside Tabs");
+        assert!(
+            cols.contains("og__image"),
+            "Deeply nested Group inside Collapsible inside Tabs"
+        );
+        assert!(
+            cols.contains("og__title"),
+            "Deeply nested Group inside Collapsible inside Tabs"
+        );
+        assert!(
+            cols.contains("canonical"),
+            "Plain field in Collapsible inside Tabs"
+        );
     }
 
     #[test]
     fn group_containing_row() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("meta", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("row1", FieldType::Row)
-                        .fields(vec![text_field("title"), text_field("slug")])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("row1", FieldType::Row)
+                    .fields(vec![text_field("title"), text_field("slug")])
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("meta__title"), "Group→Row should produce meta__title");
-        assert!(cols.contains("meta__slug"), "Group→Row should produce meta__slug");
+        assert!(
+            cols.contains("meta__title"),
+            "Group→Row should produce meta__title"
+        );
+        assert!(
+            cols.contains("meta__slug"),
+            "Group→Row should produce meta__slug"
+        );
     }
 
     #[test]
     fn group_containing_collapsible() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("advanced", FieldType::Collapsible)
-                        .fields(vec![text_field("robots"), text_field("canonical")])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![FieldDefinition::builder(
+                    "advanced",
+                    FieldType::Collapsible,
+                )
+                .fields(vec![text_field("robots"), text_field("canonical")])
+                .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("seo__robots"), "Group→Collapsible should produce seo__robots");
-        assert!(cols.contains("seo__canonical"), "Group→Collapsible should produce seo__canonical");
+        assert!(
+            cols.contains("seo__robots"),
+            "Group→Collapsible should produce seo__robots"
+        );
+        assert!(
+            cols.contains("seo__canonical"),
+            "Group→Collapsible should produce seo__canonical"
+        );
     }
 
     #[test]
     fn group_containing_tabs() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("settings", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("layout", FieldType::Tabs)
-                        .tabs(vec![
-                            FieldTab::new("General", vec![text_field("theme")]),
-                            FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
-                        ])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("settings", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![
+                        FieldTab::new("General", vec![text_field("theme")]),
+                        FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
+                    ])
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("settings__theme"), "Group→Tabs should produce settings__theme");
-        assert!(cols.contains("settings__cache_ttl"), "Group→Tabs should produce settings__cache_ttl");
+        assert!(
+            cols.contains("settings__theme"),
+            "Group→Tabs should produce settings__theme"
+        );
+        assert!(
+            cols.contains("settings__cache_ttl"),
+            "Group→Tabs should produce settings__cache_ttl"
+        );
     }
 
     #[test]
     fn group_tabs_group_three_levels() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("outer", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("layout", FieldType::Tabs)
-                        .tabs(vec![FieldTab::new("Nested", vec![
-                            FieldDefinition::builder("inner", FieldType::Group)
-                                .fields(vec![text_field("deep_value")])
-                                .build(),
-                        ])])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("outer", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Nested",
+                        vec![FieldDefinition::builder("inner", FieldType::Group)
+                            .fields(vec![text_field("deep_value")])
+                            .build()],
+                    )])
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("outer__inner__deep_value"), "Group→Tabs→Group should produce outer__inner__deep_value");
+        assert!(
+            cols.contains("outer__inner__deep_value"),
+            "Group→Tabs→Group should produce outer__inner__deep_value"
+        );
     }
 
     #[test]
     fn group_row_group_collapsible_four_levels() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("a", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("r", FieldType::Row)
-                        .fields(vec![
-                            FieldDefinition::builder("b", FieldType::Group)
-                                .fields(vec![
-                                    FieldDefinition::builder("c", FieldType::Collapsible)
-                                        .fields(vec![text_field("leaf")])
-                                        .build(),
-                                ])
-                                .build(),
-                        ])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("a", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+                    .fields(vec![FieldDefinition::builder("b", FieldType::Group)
+                        .fields(vec![FieldDefinition::builder("c", FieldType::Collapsible)
+                            .fields(vec![text_field("leaf")])
+                            .build()])
+                        .build()])
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("a__b__leaf"), "Group→Row→Group→Collapsible: a__b__leaf");
+        assert!(
+            cols.contains("a__b__leaf"),
+            "Group→Row→Group→Collapsible: a__b__leaf"
+        );
     }
 
     #[test]
     fn group_containing_tabs_with_locale() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("meta", FieldType::Group)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("meta", FieldType::Group)
                 .localized(true)
-                .fields(vec![
-                    FieldDefinition::builder("layout", FieldType::Tabs)
-                        .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
-                        .build(),
-                ])
-                .build(),
-        ]);
+                .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
+                    .build()])
+                .build()],
+        );
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
         let cols = get_table_columns(&conn, "posts").unwrap();
-        assert!(cols.contains("meta__title__en"), "Localized Group→Tabs: meta__title__en");
-        assert!(cols.contains("meta__title__de"), "Localized Group→Tabs: meta__title__de");
+        assert!(
+            cols.contains("meta__title__en"),
+            "Localized Group→Tabs: meta__title__en"
+        );
+        assert!(
+            cols.contains("meta__title__de"),
+            "Localized Group→Tabs: meta__title__de"
+        );
     }
 
     #[test]
     fn append_default_string() {
         let mut col = "name TEXT".to_string();
-        append_default_value(&mut col, &Some(serde_json::json!("hello")), &FieldType::Text);
+        append_default_value(
+            &mut col,
+            &Some(serde_json::json!("hello")),
+            &FieldType::Text,
+        );
         assert!(col.contains("DEFAULT 'hello'"));
     }
 
@@ -557,7 +661,11 @@ mod tests {
     #[test]
     fn append_default_bool() {
         let mut col = "active INTEGER".to_string();
-        append_default_value(&mut col, &Some(serde_json::json!(true)), &FieldType::Checkbox);
+        append_default_value(
+            &mut col,
+            &Some(serde_json::json!(true)),
+            &FieldType::Checkbox,
+        );
         assert!(col.contains("DEFAULT 1"));
     }
 

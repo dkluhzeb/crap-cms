@@ -6,7 +6,9 @@ use crate::core::collection::{CollectionDefinition, GlobalDefinition};
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::Registry;
 
-use super::{is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case};
+use super::{
+    is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
+};
 
 pub(super) fn render(registry: &Registry) -> String {
     let mut out = String::new();
@@ -34,7 +36,8 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     for f in &col.fields {
         if f.field_type == FieldType::Array && !f.fields.is_empty() {
             let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
-            writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]").expect("write to String");
+            writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")
+                .expect("write to String");
             writeln!(out, "pub struct {} {{", sub_pascal).expect("write to String");
             for sf in &f.fields {
                 write_field(out, sf);
@@ -51,9 +54,17 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
         write_field_with_context(out, f, &pascal);
     }
     if col.timestamps {
-        writeln!(out, "    #[serde(skip_serializing_if = \"Option::is_none\")]").expect("write to String");
+        writeln!(
+            out,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .expect("write to String");
         writeln!(out, "    pub created_at: Option<String>,").expect("write to String");
-        writeln!(out, "    #[serde(skip_serializing_if = \"Option::is_none\")]").expect("write to String");
+        writeln!(
+            out,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .expect("write to String");
         writeln!(out, "    pub updated_at: Option<String>,").expect("write to String");
     }
     writeln!(out, "}}\n").expect("write to String");
@@ -68,9 +79,17 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     for f in &global.fields {
         write_field(out, f);
     }
-    writeln!(out, "    #[serde(skip_serializing_if = \"Option::is_none\")]").expect("write to String");
+    writeln!(
+        out,
+        "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+    )
+    .expect("write to String");
     writeln!(out, "    pub created_at: Option<String>,").expect("write to String");
-    writeln!(out, "    #[serde(skip_serializing_if = \"Option::is_none\")]").expect("write to String");
+    writeln!(
+        out,
+        "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+    )
+    .expect("write to String");
     writeln!(out, "    pub updated_at: Option<String>,").expect("write to String");
     writeln!(out, "}}\n").expect("write to String");
 }
@@ -108,13 +127,22 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
         if let Some(rc) = &field.relationship {
             if rc.is_polymorphic() {
                 let targets = rc.all_collections().join(", ");
-                writeln!(out, "    /// Polymorphic relationship — targets: {}", targets).expect("write to String");
+                writeln!(
+                    out,
+                    "    /// Polymorphic relationship — targets: {}",
+                    targets
+                )
+                .expect("write to String");
             }
         }
     }
     let rust_type = field_to_rust(field, parent_pascal);
     if is_optional(field) {
-        writeln!(out, "    #[serde(skip_serializing_if = \"Option::is_none\")]").expect("write to String");
+        writeln!(
+            out,
+            "    #[serde(skip_serializing_if = \"Option::is_none\")]"
+        )
+        .expect("write to String");
         writeln!(out, "    pub {}: Option<{}>,", field.name, rust_type).expect("write to String");
     } else {
         writeln!(out, "    pub {}: {},", field.name, rust_type).expect("write to String");
@@ -124,10 +152,17 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
 fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
         FieldType::Text => {
-            if field.has_many { "Vec<String>".to_string() } else { "String".to_string() }
+            if field.has_many {
+                "Vec<String>".to_string()
+            } else {
+                "String".to_string()
+            }
         }
-        FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext | FieldType::Code => "String".to_string(),
+        FieldType::Textarea
+        | FieldType::Email
+        | FieldType::Date
+        | FieldType::Richtext
+        | FieldType::Code => "String".to_string(),
         FieldType::Upload => {
             if rel_has_many(field) {
                 "Vec<String>".to_string()
@@ -143,18 +178,20 @@ fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
             }
         }
         FieldType::Number => {
-            if field.has_many { "Vec<f64>".to_string() } else { "f64".to_string() }
+            if field.has_many {
+                "Vec<f64>".to_string()
+            } else {
+                "f64".to_string()
+            }
         }
         FieldType::Checkbox => "bool".to_string(),
         FieldType::Json => "serde_json::Value".to_string(),
-        FieldType::Relationship => {
-            match &field.relationship {
-                Some(rc) if rc.is_polymorphic() && rc.has_many => "Vec<String>".to_string(),
-                Some(rc) if rc.is_polymorphic() => "String".to_string(),
-                Some(rc) if rc.has_many => "Vec<String>".to_string(),
-                _ => "String".to_string(),
-            }
-        }
+        FieldType::Relationship => match &field.relationship {
+            Some(rc) if rc.is_polymorphic() && rc.has_many => "Vec<String>".to_string(),
+            Some(rc) if rc.is_polymorphic() => "String".to_string(),
+            Some(rc) if rc.has_many => "Vec<String>".to_string(),
+            _ => "String".to_string(),
+        },
         FieldType::Array => {
             if field.fields.is_empty() {
                 "Vec<serde_json::Value>".to_string()
@@ -177,7 +214,9 @@ mod tests {
     use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).required(required).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .required(required)
+            .build()
     }
 
     fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
@@ -189,7 +228,10 @@ mod tests {
 
     #[test]
     fn rust_collection_output() {
-        let col = make_col("posts", vec![text_field("title", true), text_field("content", false)]);
+        let col = make_col(
+            "posts",
+            vec![text_field("title", true), text_field("content", false)],
+        );
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -204,11 +246,12 @@ mod tests {
 
     #[test]
     fn rust_relationship_has_many() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("tags", FieldType::Relationship)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("tags", FieldType::Relationship)
                 .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Option<Vec<String>>"));
@@ -218,47 +261,82 @@ mod tests {
     fn rust_polymorphic_has_one() {
         let mut rc = RelationshipConfig::new("posts", false);
         rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
-        let col = make_col("comments", vec![
-            FieldDefinition::builder("subject", FieldType::Relationship)
+        let col = make_col(
+            "comments",
+            vec![FieldDefinition::builder("subject", FieldType::Relationship)
                 .required(true)
                 .relationship(rc)
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Polymorphic has-one = String (stores "collection/id" composite)
-        assert!(out.contains("pub subject: String,"), "polymorphic has-one should be String: {}", out);
-        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
-        assert!(out.contains("posts"), "comment should list target collections: {}", out);
-        assert!(out.contains("pages"), "comment should list target collections: {}", out);
+        assert!(
+            out.contains("pub subject: String,"),
+            "polymorphic has-one should be String: {}",
+            out
+        );
+        assert!(
+            out.contains("Polymorphic relationship"),
+            "should have polymorphic comment: {}",
+            out
+        );
+        assert!(
+            out.contains("posts"),
+            "comment should list target collections: {}",
+            out
+        );
+        assert!(
+            out.contains("pages"),
+            "comment should list target collections: {}",
+            out
+        );
     }
 
     #[test]
     fn rust_polymorphic_has_many() {
         let mut rc = RelationshipConfig::new("articles", true);
         rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("related", FieldType::Relationship)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("related", FieldType::Relationship)
                 .relationship(rc)
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Polymorphic has-many = Vec<String> (array of "collection/id" composites)
-        assert!(out.contains("Vec<String>"), "polymorphic has-many should be Vec<String>: {}", out);
-        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
-        assert!(out.contains("articles"), "comment should list target collections: {}", out);
-        assert!(out.contains("videos"), "comment should list target collections: {}", out);
+        assert!(
+            out.contains("Vec<String>"),
+            "polymorphic has-many should be Vec<String>: {}",
+            out
+        );
+        assert!(
+            out.contains("Polymorphic relationship"),
+            "should have polymorphic comment: {}",
+            out
+        );
+        assert!(
+            out.contains("articles"),
+            "comment should list target collections: {}",
+            out
+        );
+        assert!(
+            out.contains("videos"),
+            "comment should list target collections: {}",
+            out
+        );
     }
 
     #[test]
     fn rust_relationship_has_one_required() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("author", FieldType::Relationship)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("author", FieldType::Relationship)
                 .required(true)
                 .relationship(RelationshipConfig::new("users", false))
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("pub author: String,"));
@@ -266,11 +344,16 @@ mod tests {
 
     #[test]
     fn rust_number_checkbox_json_fields() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("price", FieldType::Number).required(true).build(),
-            FieldDefinition::builder("active", FieldType::Checkbox).build(),
-            FieldDefinition::builder("meta", FieldType::Json).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("price", FieldType::Number)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("active", FieldType::Checkbox).build(),
+                FieldDefinition::builder("meta", FieldType::Json).build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("pub price: f64,"));
@@ -280,11 +363,12 @@ mod tests {
 
     #[test]
     fn rust_array_with_subfields() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("items", FieldType::Array)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("items", FieldType::Array)
                 .fields(vec![text_field("label", true)])
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("pub struct PostsItems {"));
@@ -293,9 +377,10 @@ mod tests {
 
     #[test]
     fn rust_array_without_subfields() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("data", FieldType::Array).build(),
-        ]);
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("data", FieldType::Array).build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Option<Vec<serde_json::Value>>"));
@@ -303,27 +388,47 @@ mod tests {
 
     #[test]
     fn rust_group_and_blocks_fields() {
-        let col = make_col("pages", vec![
-            FieldDefinition::builder("seo", FieldType::Group).build(),
-            FieldDefinition::builder("content", FieldType::Blocks)
-                .blocks(vec![BlockDefinition::new("text", vec![text_field("body", true)])])
-                .build(),
-        ]);
+        let col = make_col(
+            "pages",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group).build(),
+                FieldDefinition::builder("content", FieldType::Blocks)
+                    .blocks(vec![BlockDefinition::new(
+                        "text",
+                        vec![text_field("body", true)],
+                    )])
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("Option<serde_json::Value>"), "group should be serde_json::Value");
-        assert!(out.contains("Option<Vec<serde_json::Value>>"), "blocks should be Vec<serde_json::Value>");
+        assert!(
+            out.contains("Option<serde_json::Value>"),
+            "group should be serde_json::Value"
+        );
+        assert!(
+            out.contains("Option<Vec<serde_json::Value>>"),
+            "blocks should be Vec<serde_json::Value>"
+        );
     }
 
     #[test]
     fn rust_upload_and_select_fields() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("image", FieldType::Upload).required(true).build(),
-            FieldDefinition::builder("status", FieldType::Select)
-                .required(true)
-                .options(vec![SelectOption::new(LocalizedString::Plain("Draft".into()), "draft")])
-                .build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("image", FieldType::Upload)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("status", FieldType::Select)
+                    .required(true)
+                    .options(vec![SelectOption::new(
+                        LocalizedString::Plain("Draft".into()),
+                        "draft",
+                    )])
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("pub image: String,"));
@@ -332,15 +437,20 @@ mod tests {
 
     #[test]
     fn upload_has_many_generates_array_type() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("images", FieldType::Upload)
+        let col = make_col(
+            "items",
+            vec![FieldDefinition::builder("images", FieldType::Upload)
                 .required(true)
                 .relationship(RelationshipConfig::new("", true))
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub images: Vec<String>,"), "has-many upload should be Vec<String>: {}", out);
+        assert!(
+            out.contains("pub images: Vec<String>,"),
+            "has-many upload should be Vec<String>: {}",
+            out
+        );
     }
 
     #[test]
@@ -379,36 +489,79 @@ mod tests {
 
     #[test]
     fn rust_text_has_many() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("tags", FieldType::Text).has_many(true).required(true).build(),
-            FieldDefinition::builder("labels", FieldType::Text).has_many(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("tags", FieldType::Text)
+                    .has_many(true)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("labels", FieldType::Text)
+                    .has_many(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub tags: Vec<String>,"), "required has-many text should be Vec<String>: {}", out);
-        assert!(out.contains("Option<Vec<String>>"), "optional has-many text should be Option<Vec<String>>: {}", out);
+        assert!(
+            out.contains("pub tags: Vec<String>,"),
+            "required has-many text should be Vec<String>: {}",
+            out
+        );
+        assert!(
+            out.contains("Option<Vec<String>>"),
+            "optional has-many text should be Option<Vec<String>>: {}",
+            out
+        );
     }
 
     #[test]
     fn rust_number_has_many() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("scores", FieldType::Number).has_many(true).required(true).build(),
-            FieldDefinition::builder("weights", FieldType::Number).has_many(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("scores", FieldType::Number)
+                    .has_many(true)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("weights", FieldType::Number)
+                    .has_many(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub scores: Vec<f64>,"), "required has-many number should be Vec<f64>: {}", out);
-        assert!(out.contains("Option<Vec<f64>>"), "optional has-many number should be Option<Vec<f64>>: {}", out);
+        assert!(
+            out.contains("pub scores: Vec<f64>,"),
+            "required has-many number should be Vec<f64>: {}",
+            out
+        );
+        assert!(
+            out.contains("Option<Vec<f64>>"),
+            "optional has-many number should be Option<Vec<f64>>: {}",
+            out
+        );
     }
 
     #[test]
     fn rust_email_date_richtext_textarea() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("email", FieldType::Email).required(true).build(),
-            FieldDefinition::builder("date", FieldType::Date).required(true).build(),
-            FieldDefinition::builder("body", FieldType::Richtext).required(true).build(),
-            FieldDefinition::builder("notes", FieldType::Textarea).required(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("email", FieldType::Email)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("date", FieldType::Date)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("body", FieldType::Richtext)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("notes", FieldType::Textarea)
+                    .required(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // All string types
@@ -420,55 +573,127 @@ mod tests {
 
     #[test]
     fn rust_code_join_radio_fields() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("snippet", FieldType::Code).required(true).build(),
-            FieldDefinition::builder("refs", FieldType::Join).build(),
-            FieldDefinition::builder("color", FieldType::Radio).required(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("snippet", FieldType::Code)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("refs", FieldType::Join).build(),
+                FieldDefinition::builder("color", FieldType::Radio)
+                    .required(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub snippet: String,"), "code field should map to String: {}", out);
-        assert!(out.contains("Option<Vec<serde_json::Value>>"), "join field should map to Vec<serde_json::Value>: {}", out);
-        assert!(out.contains("pub color: String,"), "radio without options should be String: {}", out);
+        assert!(
+            out.contains("pub snippet: String,"),
+            "code field should map to String: {}",
+            out
+        );
+        assert!(
+            out.contains("Option<Vec<serde_json::Value>>"),
+            "join field should map to Vec<serde_json::Value>: {}",
+            out
+        );
+        assert!(
+            out.contains("pub color: String,"),
+            "radio without options should be String: {}",
+            out
+        );
     }
 
     #[test]
     fn rust_select_has_many() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("tags", FieldType::Select).has_many(true).required(true).build(),
-            FieldDefinition::builder("sizes", FieldType::Radio).has_many(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("tags", FieldType::Select)
+                    .has_many(true)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("sizes", FieldType::Radio)
+                    .has_many(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("pub tags: Vec<String>,"), "required select has-many should be Vec<String>: {}", out);
-        assert!(out.contains("Option<Vec<String>>"), "optional radio has-many should be Option<Vec<String>>: {}", out);
+        assert!(
+            out.contains("pub tags: Vec<String>,"),
+            "required select has-many should be Vec<String>: {}",
+            out
+        );
+        assert!(
+            out.contains("Option<Vec<String>>"),
+            "optional radio has-many should be Option<Vec<String>>: {}",
+            out
+        );
     }
 
     #[test]
     fn rust_row_collapsible_tabs_promote_subfields() {
         use crate::core::field::FieldTab;
-        let col = make_col("items", vec![
-            FieldDefinition::builder("layout_row", FieldType::Row)
-                .fields(vec![text_field("first_name", true), text_field("last_name", false)])
-                .build(),
-            FieldDefinition::builder("details", FieldType::Collapsible)
-                .fields(vec![text_field("bio", false)])
-                .build(),
-            FieldDefinition::builder("sections", FieldType::Tabs)
-                .tabs(vec![FieldTab::new("Tab1", vec![text_field("tab_field", true)])])
-                .build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("layout_row", FieldType::Row)
+                    .fields(vec![
+                        text_field("first_name", true),
+                        text_field("last_name", false),
+                    ])
+                    .build(),
+                FieldDefinition::builder("details", FieldType::Collapsible)
+                    .fields(vec![text_field("bio", false)])
+                    .build(),
+                FieldDefinition::builder("sections", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Tab1",
+                        vec![text_field("tab_field", true)],
+                    )])
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Row sub-fields promoted — layout_row should not appear as a field
-        assert!(!out.contains("layout_row"), "row field name should not appear as a struct field: {}", out);
-        assert!(out.contains("pub first_name: String,"), "row required sub-field promoted: {}", out);
-        assert!(out.contains("pub last_name: Option<String>,"), "row optional sub-field promoted: {}", out);
+        assert!(
+            !out.contains("layout_row"),
+            "row field name should not appear as a struct field: {}",
+            out
+        );
+        assert!(
+            out.contains("pub first_name: String,"),
+            "row required sub-field promoted: {}",
+            out
+        );
+        assert!(
+            out.contains("pub last_name: Option<String>,"),
+            "row optional sub-field promoted: {}",
+            out
+        );
         // Collapsible sub-fields promoted
-        assert!(!out.contains("details"), "collapsible field name should not appear: {}", out);
-        assert!(out.contains("pub bio: Option<String>,"), "collapsible sub-field promoted: {}", out);
+        assert!(
+            !out.contains("details"),
+            "collapsible field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("pub bio: Option<String>,"),
+            "collapsible sub-field promoted: {}",
+            out
+        );
         // Tabs sub-fields promoted
-        assert!(!out.contains("sections"), "tabs field name should not appear: {}", out);
-        assert!(out.contains("pub tab_field: String,"), "tabs sub-field promoted: {}", out);
+        assert!(
+            !out.contains("sections"),
+            "tabs field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("pub tab_field: String,"),
+            "tabs sub-field promoted: {}",
+            out
+        );
     }
 }

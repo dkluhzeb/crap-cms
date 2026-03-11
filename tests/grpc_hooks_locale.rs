@@ -30,7 +30,9 @@ fn make_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("status", FieldType::Select)
             .default_value(serde_json::json!("draft"))
             .build(),
@@ -63,7 +65,9 @@ fn get_proto_field(doc: &content::Document, field: &str) -> Option<String> {
 }
 
 fn str_val(s: &str) -> Value {
-    Value { kind: Some(Kind::StringValue(s.to_string())) }
+    Value {
+        kind: Some(Kind::StringValue(s.to_string())),
+    }
 }
 
 fn struct_val(pairs: &[(&str, Value)]) -> Value {
@@ -113,16 +117,14 @@ fn setup_service(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -143,7 +145,11 @@ fn setup_service(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 fn setup_service_with_locale(
@@ -174,16 +180,14 @@ fn setup_service_with_locale(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -204,7 +208,11 @@ fn setup_service_with_locale(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 fn make_localized_posts_def() -> CollectionDefinition {
@@ -215,7 +223,10 @@ fn make_localized_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).localized(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .localized(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def
@@ -229,7 +240,9 @@ fn make_versioned_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.versions = Some(VersionsConfig::new(true, 10));
@@ -243,7 +256,9 @@ fn make_tags_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Tags".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![FieldDefinition::builder("name", FieldType::Text).required(true).build()];
+    def.fields = vec![FieldDefinition::builder("name", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -255,7 +270,9 @@ fn make_posts_with_has_many() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("tags", FieldType::Relationship)
             .relationship(RelationshipConfig::new("tags", true))
             .build(),
@@ -284,9 +301,10 @@ fn make_complex_global_def() -> GlobalDefinition {
             ])
             .build(),
         FieldDefinition::builder("sections", FieldType::Blocks)
-            .blocks(vec![BlockDefinition::new("hero", vec![
-                FieldDefinition::builder("heading", FieldType::Text).build(),
-            ])])
+            .blocks(vec![BlockDefinition::new(
+                "hero",
+                vec![FieldDefinition::builder("heading", FieldType::Text).build()],
+            )])
             .build(),
     ];
     def
@@ -296,11 +314,7 @@ fn make_complex_global_def() -> GlobalDefinition {
 
 #[tokio::test]
 async fn create_and_find_with_locale() {
-    let ts = setup_service_with_locale(
-        vec![make_localized_posts_def()],
-        vec![],
-        vec!["en", "de"],
-    );
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
 
     // Create with locale=en
     ts.service
@@ -335,11 +349,7 @@ async fn create_and_find_with_locale() {
 
 #[tokio::test]
 async fn create_and_find_with_locale_fallback() {
-    let ts = setup_service_with_locale(
-        vec![make_localized_posts_def()],
-        vec![],
-        vec!["en", "de"],
-    );
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
 
     // Create with locale=en only
     ts.service
@@ -374,11 +384,7 @@ async fn create_and_find_with_locale_fallback() {
 
 #[tokio::test]
 async fn create_and_find_with_locale_all() {
-    let ts = setup_service_with_locale(
-        vec![make_localized_posts_def()],
-        vec![],
-        vec!["en", "de"],
-    );
+    let ts = setup_service_with_locale(vec![make_localized_posts_def()], vec![], vec!["en", "de"]);
 
     // Create English version
     let doc = ts
@@ -480,7 +486,11 @@ async fn create_draft_and_find() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "draft=true should find the draft");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "draft=true should find the draft"
+    );
 
     // Find without draft flag should NOT return drafts
     let resp = ts
@@ -492,7 +502,11 @@ async fn create_draft_and_find() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 0, "default find should not return drafts");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        0,
+        "default find should not return drafts"
+    );
 }
 
 #[tokio::test]
@@ -561,7 +575,11 @@ async fn publish_draft() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "Published post should be findable");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "Published post should be findable"
+    );
 }
 
 // ── Group 8: Complex Globals (gRPC) ──────────────────────────────────────
@@ -654,10 +672,7 @@ async fn update_global_with_nested_fields() {
 
 #[tokio::test]
 async fn find_with_has_many_relationship_filter() {
-    let ts = setup_service(
-        vec![make_tags_def(), make_posts_with_has_many()],
-        vec![],
-    );
+    let ts = setup_service(vec![make_tags_def(), make_posts_with_has_many()], vec![]);
 
     // Create tags
     let tag_rust = ts
@@ -691,10 +706,7 @@ async fn find_with_has_many_relationship_filter() {
     // Create posts with tags (has-many: pass as comma-separated or list)
     let mut post1_fields = BTreeMap::new();
     post1_fields.insert("title".to_string(), str_val("Rust Post"));
-    post1_fields.insert(
-        "tags".to_string(),
-        list_val(vec![str_val(&tag_rust.id)]),
-    );
+    post1_fields.insert("tags".to_string(), list_val(vec![str_val(&tag_rust.id)]));
     ts.service
         .create(Request::new(content::CreateRequest {
             collection: "posts".to_string(),
@@ -709,10 +721,7 @@ async fn find_with_has_many_relationship_filter() {
 
     let mut post2_fields = BTreeMap::new();
     post2_fields.insert("title".to_string(), str_val("Web Post"));
-    post2_fields.insert(
-        "tags".to_string(),
-        list_val(vec![str_val(&tag_web.id)]),
-    );
+    post2_fields.insert("tags".to_string(), list_val(vec![str_val(&tag_web.id)]));
     ts.service
         .create(Request::new(content::CreateRequest {
             collection: "posts".to_string(),
@@ -755,7 +764,8 @@ async fn find_with_has_many_relationship_filter() {
         .unwrap()
         .into_inner();
     assert_eq!(
-        resp.pagination.as_ref().unwrap().total_docs, 2,
+        resp.pagination.as_ref().unwrap().total_docs,
+        2,
         "Should find 2 posts with rust tag (Rust Post + Both Post)"
     );
 }
@@ -766,11 +776,7 @@ async fn find_with_has_many_relationship_filter() {
 async fn update_many_with_filter() {
     let ts = setup_service(vec![make_posts_def()], vec![]);
 
-    for (title, status) in &[
-        ("A", "draft"),
-        ("B", "draft"),
-        ("C", "published"),
-    ] {
+    for (title, status) in &[("A", "draft"), ("B", "draft"), ("C", "published")] {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
@@ -863,4 +869,3 @@ async fn delete_many_with_where() {
 }
 
 // ── Group 11: Versions (gRPC) ────────────────────────────────────────────
-

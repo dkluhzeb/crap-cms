@@ -1,26 +1,29 @@
-use crate::core::field::{FieldType, FieldDefinition};
+use crate::admin::context::{ContextBuilder, PageType};
+use crate::admin::handlers::collections::forms::{
+    extract_join_data_from_form, transform_select_has_many,
+};
+use crate::admin::handlers::shared::{
+    apply_display_conditions, auto_label_from_name, build_field_contexts, build_list_url,
+    check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user, get_user_doc,
+    html_with_toast, htmx_redirect, is_column_eligible, redirect_response, server_error,
+    split_sidebar_fields, translate_validation_errors, url_decode,
+};
+use crate::admin::AdminState;
+use crate::core::auth::AuthUser;
 use crate::core::collection::CollectionDefinition;
 use crate::core::document::Document;
-use crate::core::upload::{UploadedFile, inject_upload_metadata, process_upload, delete_upload_files, enqueue_conversions};
-use crate::db::query::{self, FilterClause, FilterOp, AccessResult, LocaleContext, LocaleMode};
-use crate::admin::AdminState;
-use crate::admin::context::{PageType, ContextBuilder};
-use crate::admin::handlers::shared::{
-    auto_label_from_name, is_column_eligible, build_list_url, url_decode,
-    build_field_contexts, enrich_field_contexts,
-    apply_display_conditions, split_sidebar_fields,
-    html_with_toast, get_user_doc, get_event_user, translate_validation_errors,
-    htmx_redirect, redirect_response, server_error, forbidden, check_access_or_forbid,
+use crate::core::event::{EventOperation, EventTarget};
+use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::upload::{
+    delete_upload_files, enqueue_conversions, inject_upload_metadata, process_upload, UploadedFile,
 };
-use crate::core::auth::AuthUser;
-use crate::core::event::{EventTarget, EventOperation};
 use crate::core::validate::ValidationError;
+use crate::db::query::{self, AccessResult, FilterClause, FilterOp, LocaleContext, LocaleMode};
 use crate::service;
-use crate::admin::handlers::collections::forms::{extract_join_data_from_form, transform_select_has_many};
-use std::collections::HashMap;
-use axum::Extension;
-use axum::response::IntoResponse;
 use anyhow::Context;
+use axum::response::IntoResponse;
+use axum::Extension;
+use std::collections::HashMap;
 
 /// Get the display label for a field (admin label or auto-generated from name).
 pub(super) fn field_label(field: &FieldDefinition) -> String {
@@ -43,8 +46,13 @@ pub(super) fn resolve_columns(
     let mut keys: Vec<String> = if let Some(cols) = user_cols {
         cols.iter()
             .filter(|k| {
-                k.as_str() == "created_at" || k.as_str() == "updated_at" || k.as_str() == "_status"
-                    || def.fields.iter().any(|f| f.name == **k && is_column_eligible(&f.field_type))
+                k.as_str() == "created_at"
+                    || k.as_str() == "updated_at"
+                    || k.as_str() == "_status"
+                    || def
+                        .fields
+                        .iter()
+                        .any(|f| f.name == **k && is_column_eligible(&f.field_type))
             })
             .cloned()
             .collect()
@@ -63,37 +71,39 @@ pub(super) fn resolve_columns(
     let sort_field = sort.map(|s| s.strip_prefix('-').unwrap_or(s));
     let sort_desc = sort.map(|s| s.starts_with('-')).unwrap_or(false);
 
-    keys.iter().map(|key| {
-        let (label, sortable) = match key.as_str() {
-            "created_at" => ("Created".to_string(), true),
-            "updated_at" => ("Updated".to_string(), true),
-            "_status" => ("Status".to_string(), true),
-            _ => {
-                if let Some(f) = def.fields.iter().find(|f| f.name == *key) {
-                    (field_label(f), true)
-                } else {
-                    (auto_label_from_name(key), false)
+    keys.iter()
+        .map(|key| {
+            let (label, sortable) = match key.as_str() {
+                "created_at" => ("Created".to_string(), true),
+                "updated_at" => ("Updated".to_string(), true),
+                "_status" => ("Status".to_string(), true),
+                _ => {
+                    if let Some(f) = def.fields.iter().find(|f| f.name == *key) {
+                        (field_label(f), true)
+                    } else {
+                        (auto_label_from_name(key), false)
+                    }
                 }
-            }
-        };
+            };
 
-        let is_sorted = sort_field == Some(key.as_str());
-        let next_sort = if is_sorted && !sort_desc {
-            format!("-{}", key)
-        } else {
-            key.clone()
-        };
-        let sort_url = build_list_url(base_url, 1, None, search, Some(&next_sort), raw_where);
+            let is_sorted = sort_field == Some(key.as_str());
+            let next_sort = if is_sorted && !sort_desc {
+                format!("-{}", key)
+            } else {
+                key.clone()
+            };
+            let sort_url = build_list_url(base_url, 1, None, search, Some(&next_sort), raw_where);
 
-        serde_json::json!({
-            "key": key,
-            "label": label,
-            "sortable": sortable,
-            "sort_url": sort_url,
-            "is_sorted_asc": is_sorted && !sort_desc,
-            "is_sorted_desc": is_sorted && sort_desc,
+            serde_json::json!({
+                "key": key,
+                "label": label,
+                "sortable": sortable,
+                "sort_url": sort_url,
+                "is_sorted_asc": is_sorted && !sort_desc,
+                "is_sorted_desc": is_sorted && sort_desc,
+            })
         })
-    }).collect()
+        .collect()
 }
 
 /// Pre-compute cell values for a document row, parallel to the columns array.
@@ -102,78 +112,89 @@ pub(super) fn compute_cells(
     columns: &[serde_json::Value],
     def: &CollectionDefinition,
 ) -> Vec<serde_json::Value> {
-    columns.iter().map(|col| {
-        let key = col["key"].as_str().unwrap_or("");
-        match key {
-            "_status" => {
-                let status = doc.fields.get("_status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("published");
-                serde_json::json!({ "value": status, "is_badge": true })
-            }
-            "created_at" => {
-                serde_json::json!({ "value": doc.created_at, "is_date": true })
-            }
-            "updated_at" => {
-                serde_json::json!({ "value": doc.updated_at, "is_date": true })
-            }
-            _ => {
-                let field_def = def.fields.iter().find(|f| f.name == key);
-                let raw = doc.fields.get(key).cloned().unwrap_or(serde_json::Value::Null);
+    columns
+        .iter()
+        .map(|col| {
+            let key = col["key"].as_str().unwrap_or("");
+            match key {
+                "_status" => {
+                    let status = doc
+                        .fields
+                        .get("_status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("published");
+                    serde_json::json!({ "value": status, "is_badge": true })
+                }
+                "created_at" => {
+                    serde_json::json!({ "value": doc.created_at, "is_date": true })
+                }
+                "updated_at" => {
+                    serde_json::json!({ "value": doc.updated_at, "is_date": true })
+                }
+                _ => {
+                    let field_def = def.fields.iter().find(|f| f.name == key);
+                    let raw = doc
+                        .fields
+                        .get(key)
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null);
 
-                if let Some(f) = field_def {
-                    match f.field_type {
-                        FieldType::Checkbox => {
-                            let checked = match &raw {
-                                serde_json::Value::Bool(b) => *b,
-                                serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
-                                _ => false,
-                            };
-                            serde_json::json!({ "value": checked, "is_bool": true })
+                    if let Some(f) = field_def {
+                        match f.field_type {
+                            FieldType::Checkbox => {
+                                let checked = match &raw {
+                                    serde_json::Value::Bool(b) => *b,
+                                    serde_json::Value::Number(n) => n.as_i64().unwrap_or(0) != 0,
+                                    _ => false,
+                                };
+                                serde_json::json!({ "value": checked, "is_bool": true })
+                            }
+                            FieldType::Date => {
+                                let val = raw.as_str().unwrap_or("");
+                                serde_json::json!({ "value": val, "is_date": true })
+                            }
+                            FieldType::Select | FieldType::Radio => {
+                                let raw_val = raw.as_str().unwrap_or("");
+                                let label = f
+                                    .options
+                                    .iter()
+                                    .find(|o| o.value == raw_val)
+                                    .map(|o| o.label.resolve_default().to_string())
+                                    .unwrap_or_else(|| raw_val.to_string());
+                                serde_json::json!({ "value": label })
+                            }
+                            FieldType::Textarea => {
+                                let text = raw.as_str().unwrap_or("");
+                                let truncated = if text.len() > 80 {
+                                    format!("{}…", &text[..80])
+                                } else {
+                                    text.to_string()
+                                };
+                                serde_json::json!({ "value": truncated })
+                            }
+                            _ => {
+                                let val = match &raw {
+                                    serde_json::Value::String(s) => s.clone(),
+                                    serde_json::Value::Number(n) => n.to_string(),
+                                    serde_json::Value::Bool(b) => b.to_string(),
+                                    serde_json::Value::Null => String::new(),
+                                    other => other.to_string(),
+                                };
+                                serde_json::json!({ "value": val })
+                            }
                         }
-                        FieldType::Date => {
-                            let val = raw.as_str().unwrap_or("");
-                            serde_json::json!({ "value": val, "is_date": true })
-                        }
-                        FieldType::Select | FieldType::Radio => {
-                            let raw_val = raw.as_str().unwrap_or("");
-                            let label = f.options.iter()
-                                .find(|o| o.value == raw_val)
-                                .map(|o| o.label.resolve_default().to_string())
-                                .unwrap_or_else(|| raw_val.to_string());
-                            serde_json::json!({ "value": label })
-                        }
-                        FieldType::Textarea => {
-                            let text = raw.as_str().unwrap_or("");
-                            let truncated = if text.len() > 80 {
-                                format!("{}…", &text[..80])
-                            } else {
-                                text.to_string()
-                            };
-                            serde_json::json!({ "value": truncated })
-                        }
-                        _ => {
-                            let val = match &raw {
-                                serde_json::Value::String(s) => s.clone(),
-                                serde_json::Value::Number(n) => n.to_string(),
-                                serde_json::Value::Bool(b) => b.to_string(),
-                                serde_json::Value::Null => String::new(),
-                                other => other.to_string(),
-                            };
-                            serde_json::json!({ "value": val })
-                        }
+                    } else {
+                        let val = match &raw {
+                            serde_json::Value::String(s) => s.clone(),
+                            serde_json::Value::Null => String::new(),
+                            other => other.to_string(),
+                        };
+                        serde_json::json!({ "value": val })
                     }
-                } else {
-                    let val = match &raw {
-                        serde_json::Value::String(s) => s.clone(),
-                        serde_json::Value::Null => String::new(),
-                        other => other.to_string(),
-                    };
-                    serde_json::json!({ "value": val })
                 }
             }
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 /// Build the list of all eligible columns for the column picker UI.
@@ -255,11 +276,15 @@ pub(super) fn build_filter_fields(def: &CollectionDefinition) -> Vec<serde_json:
             "field_type": ft,
         });
         if !f.options.is_empty() {
-            let opts: Vec<serde_json::Value> = f.options.iter()
-                .map(|o| serde_json::json!({
-                    "label": o.label.resolve_default(),
-                    "value": o.value,
-                }))
+            let opts: Vec<serde_json::Value> = f
+                .options
+                .iter()
+                .map(|o| {
+                    serde_json::json!({
+                        "label": o.label.resolve_default(),
+                        "value": o.value,
+                    })
+                })
                 .collect();
             field_info["options"] = serde_json::json!(opts);
         }
@@ -275,52 +300,60 @@ pub(super) fn build_filter_pills(
     def: &CollectionDefinition,
     raw_query: &str,
 ) -> Vec<serde_json::Value> {
-    parsed.iter().filter_map(|clause| {
-        let FilterClause::Single(filter) = clause else { return None };
-        let field_label_str = match filter.field.as_str() {
-            "created_at" => "Created".to_string(),
-            "updated_at" => "Updated".to_string(),
-            "_status" => "Status".to_string(),
-            name => def.fields.iter()
-                .find(|f| f.name == name)
-                .map(field_label)
-                .unwrap_or_else(|| auto_label_from_name(name)),
-        };
+    parsed
+        .iter()
+        .filter_map(|clause| {
+            let FilterClause::Single(filter) = clause else {
+                return None;
+            };
+            let field_label_str = match filter.field.as_str() {
+                "created_at" => "Created".to_string(),
+                "updated_at" => "Updated".to_string(),
+                "_status" => "Status".to_string(),
+                name => def
+                    .fields
+                    .iter()
+                    .find(|f| f.name == name)
+                    .map(field_label)
+                    .unwrap_or_else(|| auto_label_from_name(name)),
+            };
 
-        let (op_label, value) = match &filter.op {
-            FilterOp::Equals(v) => ("is", v.clone()),
-            FilterOp::NotEquals(v) => ("is not", v.clone()),
-            FilterOp::Contains(v) => ("contains", v.clone()),
-            FilterOp::Like(v) => ("like", v.clone()),
-            FilterOp::GreaterThan(v) => (">", v.clone()),
-            FilterOp::LessThan(v) => ("<", v.clone()),
-            FilterOp::GreaterThanOrEqual(v) => (">=", v.clone()),
-            FilterOp::LessThanOrEqual(v) => ("<=", v.clone()),
-            FilterOp::Exists => ("exists", String::new()),
-            FilterOp::NotExists => ("not exists", String::new()),
-            _ => return None,
-        };
+            let (op_label, value) = match &filter.op {
+                FilterOp::Equals(v) => ("is", v.clone()),
+                FilterOp::NotEquals(v) => ("is not", v.clone()),
+                FilterOp::Contains(v) => ("contains", v.clone()),
+                FilterOp::Like(v) => ("like", v.clone()),
+                FilterOp::GreaterThan(v) => (">", v.clone()),
+                FilterOp::LessThan(v) => ("<", v.clone()),
+                FilterOp::GreaterThanOrEqual(v) => (">=", v.clone()),
+                FilterOp::LessThanOrEqual(v) => ("<=", v.clone()),
+                FilterOp::Exists => ("exists", String::new()),
+                FilterOp::NotExists => ("not exists", String::new()),
+                _ => return None,
+            };
 
-        let filter_key = format!("where[{}][{}]", filter.field, op_to_param_name(&filter.op));
-        let remove_query: Vec<&str> = raw_query.split('&')
-            .filter(|p| {
-                let decoded = url_decode(p.split('=').next().unwrap_or(""));
-                decoded != filter_key
-            })
-            .collect();
-        let remove_url = if remove_query.is_empty() {
-            String::new()
-        } else {
-            format!("?{}", remove_query.join("&"))
-        };
+            let filter_key = format!("where[{}][{}]", filter.field, op_to_param_name(&filter.op));
+            let remove_query: Vec<&str> = raw_query
+                .split('&')
+                .filter(|p| {
+                    let decoded = url_decode(p.split('=').next().unwrap_or(""));
+                    decoded != filter_key
+                })
+                .collect();
+            let remove_url = if remove_query.is_empty() {
+                String::new()
+            } else {
+                format!("?{}", remove_query.join("&"))
+            };
 
-        Some(serde_json::json!({
-            "field_label": field_label_str,
-            "op": op_label,
-            "value": value,
-            "remove_url": remove_url,
-        }))
-    }).collect()
+            Some(serde_json::json!({
+                "field_label": field_label_str,
+                "op": op_label,
+                "value": value,
+                "remove_url": remove_url,
+            }))
+        })
+        .collect()
 }
 
 /// Delete a list of files, ignoring errors (best-effort orphan cleanup).
@@ -339,14 +372,35 @@ pub(super) fn render_upload_error(
     err_msg: &str,
 ) -> axum::response::Response {
     let mut fields = build_field_contexts(&def.fields, form_data, &HashMap::new(), true, false);
-    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new(), None);
+    enrich_field_contexts(
+        &mut fields,
+        &def.fields,
+        &HashMap::new(),
+        state,
+        true,
+        false,
+        &HashMap::new(),
+        None,
+    );
     let empty_data = serde_json::json!({});
-    apply_display_conditions(&mut fields, &def.fields, &empty_data, &state.hook_runner, true);
+    apply_display_conditions(
+        &mut fields,
+        &def.fields,
+        &empty_data,
+        &state.hook_runner,
+        true,
+    );
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
     let data = ContextBuilder::new(state, None)
         .locale_from_auth(auth_user)
-        .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
-        .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
+        .page(
+            PageType::CollectionCreate,
+            format!("Create {}", def.singular_name()),
+        )
+        .set(
+            "page_title",
+            serde_json::json!(format!("Create {}", def.singular_name())),
+        )
         .collection_def(def)
         .fields(main_fields)
         .set("sidebar_fields", serde_json::json!(sidebar_fields))
@@ -361,12 +415,13 @@ pub(super) fn collect_upload_hidden_fields(
     fields: &[crate::core::field::FieldDefinition],
     form_data: &HashMap<String, String>,
 ) -> serde_json::Value {
-    let hidden_fields: Vec<serde_json::Value> = fields.iter()
+    let hidden_fields: Vec<serde_json::Value> = fields
+        .iter()
         .filter(|f| f.admin.hidden)
         .filter_map(|f| {
-            form_data.get(&f.name).map(|v| {
-                serde_json::json!({"name": &f.name, "value": v})
-            })
+            form_data
+                .get(&f.name)
+                .map(|v| serde_json::json!({"name": &f.name, "value": v}))
         })
         .collect();
     serde_json::json!(hidden_fields)
@@ -382,14 +437,38 @@ pub(super) fn render_edit_upload_error(
     err_msg: &str,
 ) -> axum::response::Response {
     let mut fields = build_field_contexts(&def.fields, form_data, &HashMap::new(), true, false);
-    enrich_field_contexts(&mut fields, &def.fields, &HashMap::new(), state, true, false, &HashMap::new(), Some(id));
-    let form_json = serde_json::json!(form_data.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
-    apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
+    enrich_field_contexts(
+        &mut fields,
+        &def.fields,
+        &HashMap::new(),
+        state,
+        true,
+        false,
+        &HashMap::new(),
+        Some(id),
+    );
+    let form_json = serde_json::json!(form_data
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect::<serde_json::Map<String, serde_json::Value>>());
+    apply_display_conditions(
+        &mut fields,
+        &def.fields,
+        &form_json,
+        &state.hook_runner,
+        true,
+    );
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
     let data = ContextBuilder::new(state, None)
         .locale_from_auth(auth_user)
-        .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
-        .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
+        .page(
+            PageType::CollectionEdit,
+            format!("Edit {}", def.singular_name()),
+        )
+        .set(
+            "page_title",
+            serde_json::json!(format!("Edit {}", def.singular_name())),
+        )
         .collection_def(def)
         .document_stub(id)
         .fields(main_fields)
@@ -400,7 +479,14 @@ pub(super) fn render_edit_upload_error(
     html_with_toast(state, "collections/edit", &data, err_msg)
 }
 
-pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form_data: HashMap<String, String>, file: Option<UploadedFile>, auth_user: &Option<Extension<AuthUser>>) -> axum::response::Response {
+pub(super) async fn do_update(
+    state: &AdminState,
+    slug: &str,
+    id: &str,
+    mut form_data: HashMap<String, String>,
+    file: Option<UploadedFile>,
+    auth_user: &Option<Extension<AuthUser>>,
+) -> axum::response::Response {
     let def = match state.registry.get_collection(slug) {
         Some(d) => d.clone(),
         None => return redirect_response("/admin/collections").into_response(),
@@ -411,15 +497,21 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
     let draft = action == "save_draft";
 
     let form_locale = form_data.remove("_locale");
-    let locale_ctx = LocaleContext::from_locale_string(
-        form_locale.as_deref(), &state.config.locale,
-    );
+    let locale_ctx =
+        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
 
     // Check update access
     match check_access_or_forbid(
-        state, def.access.update.as_deref(), auth_user, Some(id), None,
+        state,
+        def.access.update.as_deref(),
+        auth_user,
+        Some(id),
+        None,
     ) {
-        Ok(AccessResult::Denied) => return forbidden(state, "You don't have permission to update this item").into_response(),
+        Ok(AccessResult::Denied) => {
+            return forbidden(state, "You don't have permission to update this item")
+                .into_response()
+        }
         Err(resp) => return resp,
         _ => {}
     }
@@ -432,7 +524,9 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         if let Some(upload_config) = def.upload.clone() {
             // Load old document to get old file paths for cleanup
             if let Ok(conn) = state.pool.get() {
-                if let Ok(Some(old_doc)) = query::find_by_id(&conn, slug, &def, id, locale_ctx.as_ref()) {
+                if let Ok(Some(old_doc)) =
+                    query::find_by_id(&conn, slug, &def, id, locale_ctx.as_ref())
+                {
                     old_doc_fields = Some(old_doc.fields.clone());
                 }
             }
@@ -442,7 +536,8 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
             let global_max = state.config.upload.max_file_size;
             let upload_result = tokio::task::spawn_blocking(move || {
                 process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
-            }).await;
+            })
+            .await;
             match upload_result {
                 Ok(Ok(processed)) => {
                     queued_conversions = processed.queued_conversions.clone();
@@ -451,11 +546,27 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Upload processing error: {}", e);
-                    return render_edit_upload_error(state, &def, &form_data, id, auth_user, &e.to_string()).into_response();
+                    return render_edit_upload_error(
+                        state,
+                        &def,
+                        &form_data,
+                        id,
+                        auth_user,
+                        &e.to_string(),
+                    )
+                    .into_response();
                 }
                 Err(e) => {
                     tracing::error!("Upload task error: {}", e);
-                    return render_edit_upload_error(state, &def, &form_data, id, auth_user, &e.to_string()).into_response();
+                    return render_edit_upload_error(
+                        state,
+                        &def,
+                        &form_data,
+                        id,
+                        auth_user,
+                        &e.to_string(),
+                    )
+                    .into_response();
                 }
             }
         }
@@ -466,13 +577,22 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         let user_doc = get_user_doc(auth_user);
         let mut conn = match state.pool.get() {
             Ok(c) => c,
-            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check pool error: {}", e);
+                return server_error(state, "Database error").into_response();
+            }
         };
         let tx = match conn.transaction() {
             Ok(t) => t,
-            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check tx error: {}", e);
+                return server_error(state, "Database error").into_response();
+            }
         };
-        let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
+        let denied =
+            state
+                .hook_runner
+                .check_field_write_access(&def.fields, user_doc, "update", &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         for name in &denied {
@@ -496,7 +616,13 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
     if let Some(ref pw) = password {
         if !pw.is_empty() {
             if let Err(e) = state.config.auth.password_policy.validate(pw) {
-                return html_with_toast(state, "collections/edit_form", &serde_json::json!({}), &e.to_string()).into_response();
+                return html_with_toast(
+                    state,
+                    "collections/edit_form",
+                    &serde_json::json!({}),
+                    &e.to_string(),
+                )
+                .into_response();
             }
         }
     }
@@ -525,12 +651,21 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         // Handle unpublish: set _status to 'draft' and create a version
         let result = if action_owned == "unpublish" && def_owned.has_versions() {
             let doc = service::unpublish_document(
-                &pool, &runner, &slug_owned, &id_owned, &def_owned, user_doc.as_ref(),
+                &pool,
+                &runner,
+                &slug_owned,
+                &id_owned,
+                &def_owned,
+                user_doc.as_ref(),
             )?;
             Ok((doc, HashMap::new()))
         } else {
             service::update_document(
-                &pool, &runner, &slug_owned, &id_owned, &def_owned,
+                &pool,
+                &runner,
+                &slug_owned,
+                &id_owned,
+                &def_owned,
                 service::WriteInput {
                     data: form_data,
                     join_data: &join_data,
@@ -547,8 +682,8 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         // Update lock status for auth collections (after successful update)
         if result.is_ok() {
             if let Some(locked_field) = locked_value {
-                let should_lock = locked_field.as_deref() == Some("on")
-                    || locked_field.as_deref() == Some("1");
+                let should_lock =
+                    locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
                 let conn = pool.get().context("DB connection for lock update")?;
                 if should_lock {
                     query::auth::lock_user(&conn, &slug_owned, &id_owned)?;
@@ -559,7 +694,8 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         }
 
         result
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok((doc, _req_context))) => {
@@ -578,10 +714,14 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
             }
 
             state.hook_runner.publish_event(
-                &state.event_bus, &def.hooks, def.live.as_ref(),
+                &state.event_bus,
+                &def.hooks,
+                def.live.as_ref(),
                 EventTarget::Collection,
                 EventOperation::Update,
-                slug.to_string(), id.to_string(), doc.fields.clone(),
+                slug.to_string(),
+                id.to_string(),
+                doc.fields.clone(),
                 get_event_user(auth_user),
             );
             htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
@@ -589,20 +729,46 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
         Ok(Err(e)) => {
             cleanup_created_files(&created_files);
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user.as_ref()
+                let locale = auth_user
+                    .as_ref()
                     .map(|Extension(au)| au.ui_locale.as_str())
                     .unwrap_or("en");
                 let error_map = translate_validation_errors(ve, &state.translations, locale);
                 let toast_msg = state.translations.get(locale, "validation.error_summary");
-                let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, state, true, false, &error_map, Some(id));
-                let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
-                apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
+                let mut fields =
+                    build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
+                enrich_field_contexts(
+                    &mut fields,
+                    &def.fields,
+                    &join_data_clone,
+                    state,
+                    true,
+                    false,
+                    &error_map,
+                    Some(id),
+                );
+                let form_json = serde_json::json!(form_data_clone
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect::<serde_json::Map<String, serde_json::Value>>());
+                apply_display_conditions(
+                    &mut fields,
+                    &def.fields,
+                    &form_json,
+                    &state.hook_runner,
+                    true,
+                );
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
                 let mut data = ContextBuilder::new(state, None)
                     .locale_from_auth(auth_user)
-                    .page(PageType::CollectionEdit, format!("Edit {}", def.singular_name()))
-                    .set("page_title", serde_json::json!(format!("Edit {}", def.singular_name())))
+                    .page(
+                        PageType::CollectionEdit,
+                        format!("Edit {}", def.singular_name()),
+                    )
+                    .set(
+                        "page_title",
+                        serde_json::json!(format!("Edit {}", def.singular_name())),
+                    )
                     .collection_def(&def)
                     .document_stub(id)
                     .fields(main_fields)
@@ -612,7 +778,8 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
                     .build();
                 // Preserve upload metadata as hidden inputs so they survive form re-submission
                 if def.is_upload_collection() {
-                    data["upload_hidden_fields"] = collect_upload_hidden_fields(&def.fields, &form_data_clone);
+                    data["upload_hidden_fields"] =
+                        collect_upload_hidden_fields(&def.fields, &form_data_clone);
                 }
                 html_with_toast(state, "collections/edit", &data, toast_msg).into_response()
             } else {
@@ -628,7 +795,12 @@ pub(super) async fn do_update(state: &AdminState, slug: &str, id: &str, mut form
     }
 }
 
-pub(super) async fn delete_action_impl(state: &AdminState, slug: &str, id: &str, auth_user: &Option<Extension<AuthUser>>) -> axum::response::Response {
+pub(super) async fn delete_action_impl(
+    state: &AdminState,
+    slug: &str,
+    id: &str,
+    auth_user: &Option<Extension<AuthUser>>,
+) -> axum::response::Response {
     let def = match state.registry.get_collection(slug) {
         Some(d) => d.clone(),
         None => return axum::response::Redirect::to("/admin/collections").into_response(),
@@ -636,9 +808,16 @@ pub(super) async fn delete_action_impl(state: &AdminState, slug: &str, id: &str,
 
     // Check delete access
     match check_access_or_forbid(
-        state, def.access.delete.as_deref(), auth_user, Some(id), None,
+        state,
+        def.access.delete.as_deref(),
+        auth_user,
+        Some(id),
+        None,
     ) {
-        Ok(AccessResult::Denied) => return forbidden(state, "You don't have permission to delete this item").into_response(),
+        Ok(AccessResult::Denied) => {
+            return forbidden(state, "You don't have permission to delete this item")
+                .into_response()
+        }
         Err(resp) => return resp,
         _ => {}
     }
@@ -653,18 +832,28 @@ pub(super) async fn delete_action_impl(state: &AdminState, slug: &str, id: &str,
     let config_dir = state.config_dir.clone();
     let result = tokio::task::spawn_blocking(move || {
         service::delete_document(
-            &pool, &runner, &slug_owned, &id_owned, &def_clone, user_doc.as_ref(),
+            &pool,
+            &runner,
+            &slug_owned,
+            &id_owned,
+            &def_clone,
+            user_doc.as_ref(),
             Some(&config_dir),
         )
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok(_req_context)) => {
             state.hook_runner.publish_event(
-                &state.event_bus, &def.hooks, def.live.as_ref(),
+                &state.event_bus,
+                &def.hooks,
+                def.live.as_ref(),
                 EventTarget::Collection,
                 EventOperation::Delete,
-                slug.to_string(), id.to_string(), std::collections::HashMap::new(),
+                slug.to_string(),
+                id.to_string(),
+                std::collections::HashMap::new(),
                 get_event_user(auth_user),
             );
         }
@@ -699,9 +888,11 @@ pub(super) fn op_to_param_name(op: &FilterOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{FieldAdmin, FieldDefinition, FieldType, SelectOption, LocalizedString};
     use crate::core::collection::*;
     use crate::core::document::DocumentBuilder;
+    use crate::core::field::{
+        FieldAdmin, FieldDefinition, FieldType, LocalizedString, SelectOption,
+    };
 
     fn test_collection() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -729,7 +920,11 @@ mod tests {
     #[test]
     fn field_label_uses_admin_label() {
         let f = FieldDefinition::builder("my_field", FieldType::Text)
-            .admin(FieldAdmin::builder().label(LocalizedString::Plain("Custom Label".into())).build())
+            .admin(
+                FieldAdmin::builder()
+                    .label(LocalizedString::Plain("Custom Label".into()))
+                    .build(),
+            )
             .build();
         assert_eq!(field_label(&f), "Custom Label");
     }
@@ -752,7 +947,14 @@ mod tests {
     fn resolve_columns_user_cols() {
         let def = test_collection();
         let user_cols = vec!["status".to_string(), "views".to_string()];
-        let cols = resolve_columns(&def, Some(&user_cols), None, "/admin/collections/posts", "", None);
+        let cols = resolve_columns(
+            &def,
+            Some(&user_cols),
+            None,
+            "/admin/collections/posts",
+            "",
+            None,
+        );
         assert_eq!(cols.len(), 2);
         assert_eq!(cols[0]["key"], "status");
         assert_eq!(cols[1]["key"], "views");
@@ -762,7 +964,14 @@ mod tests {
     fn resolve_columns_filters_invalid() {
         let def = test_collection();
         let user_cols = vec!["title".to_string(), "body".to_string(), "views".to_string()];
-        let cols = resolve_columns(&def, Some(&user_cols), None, "/admin/collections/posts", "", None);
+        let cols = resolve_columns(
+            &def,
+            Some(&user_cols),
+            None,
+            "/admin/collections/posts",
+            "",
+            None,
+        );
         assert_eq!(cols.len(), 1);
         assert_eq!(cols[0]["key"], "views");
     }
@@ -771,7 +980,14 @@ mod tests {
     fn resolve_columns_sort_state() {
         let def = test_collection();
         let user_cols = vec!["views".to_string()];
-        let cols = resolve_columns(&def, Some(&user_cols), Some("views"), "/admin/collections/posts", "", None);
+        let cols = resolve_columns(
+            &def,
+            Some(&user_cols),
+            Some("views"),
+            "/admin/collections/posts",
+            "",
+            None,
+        );
         assert_eq!(cols[0]["is_sorted_asc"], true);
         assert_eq!(cols[0]["is_sorted_desc"], false);
     }
@@ -780,7 +996,14 @@ mod tests {
     fn resolve_columns_sort_desc_state() {
         let def = test_collection();
         let user_cols = vec!["views".to_string()];
-        let cols = resolve_columns(&def, Some(&user_cols), Some("-views"), "/admin/collections/posts", "", None);
+        let cols = resolve_columns(
+            &def,
+            Some(&user_cols),
+            Some("-views"),
+            "/admin/collections/posts",
+            "",
+            None,
+        );
         assert_eq!(cols[0]["is_sorted_asc"], false);
         assert_eq!(cols[0]["is_sorted_desc"], true);
     }
@@ -789,7 +1012,8 @@ mod tests {
     fn compute_cells_status_badge() {
         let def = test_collection();
         let mut doc = DocumentBuilder::new("1").build();
-        doc.fields.insert("_status".into(), serde_json::json!("draft"));
+        doc.fields
+            .insert("_status".into(), serde_json::json!("draft"));
 
         let columns = vec![serde_json::json!({"key": "_status"})];
         let cells = compute_cells(&doc, &columns, &def);
@@ -801,7 +1025,8 @@ mod tests {
     fn compute_cells_select_shows_label() {
         let def = test_collection();
         let mut doc = DocumentBuilder::new("1").build();
-        doc.fields.insert("status".into(), serde_json::json!("published"));
+        doc.fields
+            .insert("status".into(), serde_json::json!("published"));
 
         let columns = vec![serde_json::json!({"key": "status"})];
         let cells = compute_cells(&doc, &columns, &def);
@@ -877,12 +1102,24 @@ mod tests {
     #[test]
     fn op_to_param_name_all_ops() {
         assert_eq!(op_to_param_name(&FilterOp::Equals("x".into())), "equals");
-        assert_eq!(op_to_param_name(&FilterOp::NotEquals("x".into())), "not_equals");
-        assert_eq!(op_to_param_name(&FilterOp::Contains("x".into())), "contains");
+        assert_eq!(
+            op_to_param_name(&FilterOp::NotEquals("x".into())),
+            "not_equals"
+        );
+        assert_eq!(
+            op_to_param_name(&FilterOp::Contains("x".into())),
+            "contains"
+        );
         assert_eq!(op_to_param_name(&FilterOp::GreaterThan("x".into())), "gt");
         assert_eq!(op_to_param_name(&FilterOp::LessThan("x".into())), "lt");
-        assert_eq!(op_to_param_name(&FilterOp::GreaterThanOrEqual("x".into())), "gte");
-        assert_eq!(op_to_param_name(&FilterOp::LessThanOrEqual("x".into())), "lte");
+        assert_eq!(
+            op_to_param_name(&FilterOp::GreaterThanOrEqual("x".into())),
+            "gte"
+        );
+        assert_eq!(
+            op_to_param_name(&FilterOp::LessThanOrEqual("x".into())),
+            "lte"
+        );
         assert_eq!(op_to_param_name(&FilterOp::Exists), "exists");
         assert_eq!(op_to_param_name(&FilterOp::NotExists), "not_exists");
     }
@@ -891,9 +1128,27 @@ mod tests {
     fn collect_upload_hidden_fields_basic() {
         let fields = vec![
             FieldDefinition::builder("filename", FieldType::Text).build(),
-            FieldDefinition::builder("mime_type", FieldType::Text).admin(crate::core::field::FieldAdmin::builder().hidden(true).build()).build(),
-            FieldDefinition::builder("url", FieldType::Text).admin(crate::core::field::FieldAdmin::builder().hidden(true).build()).build(),
-            FieldDefinition::builder("width", FieldType::Number).admin(crate::core::field::FieldAdmin::builder().hidden(true).build()).build(),
+            FieldDefinition::builder("mime_type", FieldType::Text)
+                .admin(
+                    crate::core::field::FieldAdmin::builder()
+                        .hidden(true)
+                        .build(),
+                )
+                .build(),
+            FieldDefinition::builder("url", FieldType::Text)
+                .admin(
+                    crate::core::field::FieldAdmin::builder()
+                        .hidden(true)
+                        .build(),
+                )
+                .build(),
+            FieldDefinition::builder("width", FieldType::Number)
+                .admin(
+                    crate::core::field::FieldAdmin::builder()
+                        .hidden(true)
+                        .build(),
+                )
+                .build(),
             FieldDefinition::builder("alt", FieldType::Text).build(),
         ];
         let mut form_data = HashMap::new();
@@ -907,16 +1162,26 @@ mod tests {
         let arr = result.as_array().unwrap();
 
         assert_eq!(arr.len(), 3);
-        assert!(arr.iter().any(|f| f["name"] == "mime_type" && f["value"] == "image/jpeg"));
-        assert!(arr.iter().any(|f| f["name"] == "url" && f["value"] == "/uploads/media/test.jpg"));
-        assert!(arr.iter().any(|f| f["name"] == "width" && f["value"] == "1920"));
+        assert!(arr
+            .iter()
+            .any(|f| f["name"] == "mime_type" && f["value"] == "image/jpeg"));
+        assert!(arr
+            .iter()
+            .any(|f| f["name"] == "url" && f["value"] == "/uploads/media/test.jpg"));
+        assert!(arr
+            .iter()
+            .any(|f| f["name"] == "width" && f["value"] == "1920"));
     }
 
     #[test]
     fn collect_upload_hidden_fields_missing_values() {
         let fields = vec![
-            FieldDefinition::builder("url", FieldType::Text).admin(FieldAdmin::builder().hidden(true).build()).build(),
-            FieldDefinition::builder("mime_type", FieldType::Text).admin(FieldAdmin::builder().hidden(true).build()).build(),
+            FieldDefinition::builder("url", FieldType::Text)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
+            FieldDefinition::builder("mime_type", FieldType::Text)
+                .admin(FieldAdmin::builder().hidden(true).build())
+                .build(),
         ];
         // Only url is in form_data, not mime_type
         let mut form_data = HashMap::new();
@@ -930,9 +1195,7 @@ mod tests {
 
     #[test]
     fn collect_upload_hidden_fields_no_hidden() {
-        let fields = vec![
-            FieldDefinition::builder("alt", FieldType::Text).build(),
-        ];
+        let fields = vec![FieldDefinition::builder("alt", FieldType::Text).build()];
         let form_data = HashMap::new();
         let result = collect_upload_hidden_fields(&fields, &form_data);
         assert_eq!(result.as_array().unwrap().len(), 0);

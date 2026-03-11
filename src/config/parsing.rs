@@ -309,7 +309,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[upload]\nmax_file_size = 52428800\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.upload.max_file_size, 52_428_800);
     }
@@ -320,7 +321,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[upload]\nmax_file_size = \"50MB\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.upload.max_file_size, 50 * 1024 * 1024);
     }
@@ -331,7 +333,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[upload]\nmax_file_size = \"1GB\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.upload.max_file_size, 1024 * 1024 * 1024);
     }
@@ -342,7 +345,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[auth]\ntoken_expiry = 7200\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.token_expiry, 7200);
     }
@@ -353,7 +357,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[auth]\ntoken_expiry = \"2h\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.token_expiry, 7200);
     }
@@ -364,7 +369,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[auth]\nlogin_lockout_seconds = \"5m\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.auth.login_lockout_seconds, 300);
     }
@@ -375,7 +381,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[database]\nbusy_timeout = \"30s\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.busy_timeout, 30000);
     }
@@ -386,7 +393,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[database]\nbusy_timeout = 15000\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.busy_timeout, 15000);
     }
@@ -397,7 +405,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[database]\nconnection_timeout = \"10s\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.connection_timeout, 10);
     }
@@ -408,7 +417,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[jobs]\nauto_purge = \"7d\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, Some(7 * 86400));
     }
@@ -416,10 +426,7 @@ mod tests {
     #[test]
     fn serde_duration_option_integer() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join("crap.toml"),
-            "[jobs]\nauto_purge = 86400\n",
-        ).unwrap();
+        std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nauto_purge = 86400\n").unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, Some(86400));
     }
@@ -427,10 +434,7 @@ mod tests {
     #[test]
     fn serde_duration_option_absent_uses_default() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join("crap.toml"),
-            "[jobs]\nmax_concurrent = 5\n",
-        ).unwrap();
+        std::fs::write(tmp.path().join("crap.toml"), "[jobs]\nmax_concurrent = 5\n").unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.auto_purge, Some(7 * 86400)); // default
     }

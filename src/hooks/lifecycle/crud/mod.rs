@@ -1,9 +1,9 @@
 //! Lua CRUD function registration — split into per-operation modules.
 
-mod find;
-mod write;
 mod delete;
+mod find;
 mod globals;
+mod write;
 
 use anyhow::Result;
 use mlua::Lua;
@@ -16,12 +16,13 @@ use super::TxContext;
 /// Get the active transaction connection from Lua app_data.
 /// Returns an error if called outside of `run_hooks_with_conn`.
 pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const rusqlite::Connection> {
-    let ctx = lua.app_data_ref::<TxContext>()
-        .ok_or_else(|| mlua::Error::RuntimeError(
+    let ctx = lua.app_data_ref::<TxContext>().ok_or_else(|| {
+        mlua::Error::RuntimeError(
             "crap.collections CRUD functions are only available inside hooks \
              with transaction context (before_change, before_delete, etc.)"
-                .into()
-        ))?;
+                .into(),
+        )
+    })?;
     Ok(ctx.0)
 }
 
@@ -39,7 +40,13 @@ pub(crate) fn register_crud_functions(
     let crap: mlua::Table = lua.globals().get("crap")?;
     let collections: mlua::Table = crap.get("collections")?;
 
-    find::register_find(lua, &collections, registry.clone(), locale_config, pagination_config)?;
+    find::register_find(
+        lua,
+        &collections,
+        registry.clone(),
+        locale_config,
+        pagination_config,
+    )?;
     find::register_find_by_id(lua, &collections, registry.clone(), locale_config)?;
     write::register_create(lua, &collections, registry.clone(), locale_config)?;
     write::register_update(lua, &collections, registry.clone(), locale_config)?;
@@ -68,6 +75,9 @@ mod tests {
         let lua = Lua::new();
         let result = get_tx_conn(&lua);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("only available inside hooks"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("only available inside hooks"));
     }
 }

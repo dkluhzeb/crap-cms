@@ -62,8 +62,13 @@ impl ContentService {
 
             let mut find_query = FindQuery::new();
             find_query.filters = filters;
-            let docs =
-                query::find(&tx, &collection, &def_owned, &find_query, locale_ctx.as_ref())?;
+            let docs = query::find(
+                &tx,
+                &collection,
+                &def_owned,
+                &find_query,
+                locale_ctx.as_ref(),
+            )?;
 
             // All-or-nothing update access check
             if def_owned.access.update.is_some() {

@@ -59,10 +59,16 @@ pub struct Breadcrumb {
 
 impl Breadcrumb {
     pub fn link(label: impl Into<String>, url: impl Into<String>) -> Self {
-        Self { label: label.into(), url: Some(url.into()) }
+        Self {
+            label: label.into(),
+            url: Some(url.into()),
+        }
     }
     pub fn current(label: impl Into<String>) -> Self {
-        Self { label: label.into(), url: None }
+        Self {
+            label: label.into(),
+            url: None,
+        }
     }
 }
 
@@ -77,31 +83,46 @@ impl ContextBuilder {
         let mut data = Map::new();
 
         // crap metadata
-        data.insert("crap".into(), json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "build_hash": env!("BUILD_HASH"),
-            "dev_mode": state.config.admin.dev_mode,
-            "auth_enabled": has_auth_collections(state),
-        }));
+        data.insert(
+            "crap".into(),
+            json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "build_hash": env!("BUILD_HASH"),
+                "dev_mode": state.config.admin.dev_mode,
+                "auth_enabled": has_auth_collections(state),
+            }),
+        );
 
         // nav
-        data.insert("nav".into(), json!({
-            "collections": build_nav_collections(state),
-            "globals": build_nav_globals(state),
-        }));
+        data.insert(
+            "nav".into(),
+            json!({
+                "collections": build_nav_collections(state),
+                "globals": build_nav_globals(state),
+            }),
+        );
 
         // user
         if let Some(c) = claims {
-            data.insert("user".into(), json!({
-                "email": c.email,
-                "id": c.sub,
-                "collection": c.collection,
-            }));
+            data.insert(
+                "user".into(),
+                json!({
+                    "email": c.email,
+                    "id": c.sub,
+                    "collection": c.collection,
+                }),
+            );
         }
 
         // locale defaults
-        data.insert("_locale".into(), Value::String(state.config.locale.default_locale.clone()));
-        data.insert("available_locales".into(), json!(state.translations.available_locales()));
+        data.insert(
+            "_locale".into(),
+            Value::String(state.config.locale.default_locale.clone()),
+        );
+        data.insert(
+            "available_locales".into(),
+            json!(state.translations.available_locales()),
+        );
 
         Self { data }
     }
@@ -109,26 +130,39 @@ impl ContextBuilder {
     /// Create a minimal builder for auth pages (no nav, no user).
     pub fn auth(state: &AdminState) -> Self {
         let mut data = Map::new();
-        data.insert("crap".into(), json!({
-            "version": env!("CARGO_PKG_VERSION"),
-            "build_hash": env!("BUILD_HASH"),
-            "dev_mode": state.config.admin.dev_mode,
-            "auth_enabled": true,
-        }));
+        data.insert(
+            "crap".into(),
+            json!({
+                "version": env!("CARGO_PKG_VERSION"),
+                "build_hash": env!("BUILD_HASH"),
+                "dev_mode": state.config.admin.dev_mode,
+                "auth_enabled": true,
+            }),
+        );
         // locale defaults for auth pages
-        data.insert("_locale".into(), Value::String(state.config.locale.default_locale.clone()));
-        data.insert("available_locales".into(), json!(state.translations.available_locales()));
+        data.insert(
+            "_locale".into(),
+            Value::String(state.config.locale.default_locale.clone()),
+        );
+        data.insert(
+            "available_locales".into(),
+            json!(state.translations.available_locales()),
+        );
         Self { data }
     }
 
     /// Set the locale for this context (overrides the default).
     pub fn locale(mut self, locale: &str) -> Self {
-        self.data.insert("_locale".into(), Value::String(locale.to_string()));
+        self.data
+            .insert("_locale".into(), Value::String(locale.to_string()));
         self
     }
 
     /// Set the locale from an optional auth user (convenience for handlers).
-    pub fn locale_from_auth(self, auth_user: &Option<axum::Extension<crate::core::auth::AuthUser>>) -> Self {
+    pub fn locale_from_auth(
+        self,
+        auth_user: &Option<axum::Extension<crate::core::auth::AuthUser>>,
+    ) -> Self {
         if let Some(axum::Extension(au)) = auth_user {
             self.locale(&au.ui_locale)
         } else {
@@ -140,7 +174,8 @@ impl ContextBuilder {
     pub fn page(mut self, page_type: PageType, title: impl Into<String>) -> Self {
         let title_str = title.into();
         // Top-level `title` for layout/base backward compat during transition
-        self.data.insert("title".into(), Value::String(title_str.clone()));
+        self.data
+            .insert("title".into(), Value::String(title_str.clone()));
         let page = self.data.entry("page").or_insert_with(|| json!({}));
         if let Some(obj) = page.as_object_mut() {
             obj.insert("title".into(), Value::String(title_str));
@@ -151,27 +186,32 @@ impl ContextBuilder {
 
     /// Set breadcrumbs on the page object.
     pub fn breadcrumbs(mut self, crumbs: Vec<Breadcrumb>) -> Self {
-        let crumbs_json: Vec<Value> = crumbs.into_iter().map(|c| {
-            let mut m = serde_json::Map::new();
-            m.insert("label".into(), Value::String(c.label));
-            if let Some(url) = c.url {
-                m.insert("url".into(), Value::String(url));
-            }
-            Value::Object(m)
-        }).collect();
+        let crumbs_json: Vec<Value> = crumbs
+            .into_iter()
+            .map(|c| {
+                let mut m = serde_json::Map::new();
+                m.insert("label".into(), Value::String(c.label));
+                if let Some(url) = c.url {
+                    m.insert("url".into(), Value::String(url));
+                }
+                Value::Object(m)
+            })
+            .collect();
         // Set on page.breadcrumbs
         let page = self.data.entry("page").or_insert_with(|| json!({}));
         if let Some(obj) = page.as_object_mut() {
             obj.insert("breadcrumbs".into(), Value::Array(crumbs_json.clone()));
         }
         // Also top-level for backward compat with breadcrumb partial
-        self.data.insert("breadcrumbs".into(), Value::Array(crumbs_json));
+        self.data
+            .insert("breadcrumbs".into(), Value::Array(crumbs_json));
         self
     }
 
     /// Set the collection definition context.
     pub fn collection_def(mut self, def: &CollectionDefinition) -> Self {
-        self.data.insert("collection".into(), build_collection_context(def));
+        self.data
+            .insert("collection".into(), build_collection_context(def));
         self
     }
 
@@ -222,24 +262,29 @@ impl ContextBuilder {
         next_url: String,
     ) -> Self {
         let total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
-        self.data.insert("pagination".into(), json!({
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "has_prev": page > 1,
-            "has_next": page < total_pages,
-            "prev_url": prev_url,
-            "next_url": next_url,
-        }));
+        self.data.insert(
+            "pagination".into(),
+            json!({
+                "page": page,
+                "per_page": per_page,
+                "total": total,
+                "total_pages": total_pages,
+                "has_prev": page > 1,
+                "has_next": page < total_pages,
+                "prev_url": prev_url,
+                "next_url": next_url,
+            }),
+        );
         // Backward compat: top-level pagination vars for templates
-        self.data.insert("has_pagination".into(), json!(total_pages > 1));
+        self.data
+            .insert("has_pagination".into(), json!(total_pages > 1));
         self.data.insert("page".into(), json!(page));
         self.data.insert("per_page".into(), json!(per_page));
         self.data.insert("total".into(), json!(total));
         self.data.insert("total_pages".into(), json!(total_pages));
         self.data.insert("has_prev".into(), json!(page > 1));
-        self.data.insert("has_next".into(), json!(page < total_pages));
+        self.data
+            .insert("has_next".into(), json!(page < total_pages));
         self.data.insert("prev_url".into(), Value::String(prev_url));
         self.data.insert("next_url".into(), Value::String(next_url));
         self
@@ -252,20 +297,29 @@ impl ContextBuilder {
     }
 
     /// Set editor locale context (content locales from config, not UI translation locales).
-    pub fn editor_locale(mut self, editor_locale: Option<&str>, config: &crate::config::LocaleConfig) -> Self {
+    pub fn editor_locale(
+        mut self,
+        editor_locale: Option<&str>,
+        config: &crate::config::LocaleConfig,
+    ) -> Self {
         if !config.is_enabled() {
             return self;
         }
         let current = editor_locale.unwrap_or(&config.default_locale);
-        let locales: Vec<Value> = config.locales.iter().map(|l| {
-            json!({
-                "value": l,
-                "label": l.to_uppercase(),
-                "selected": l == current,
+        let locales: Vec<Value> = config
+            .locales
+            .iter()
+            .map(|l| {
+                json!({
+                    "value": l,
+                    "label": l.to_uppercase(),
+                    "selected": l == current,
+                })
             })
-        }).collect();
+            .collect();
         self.data.insert("has_editor_locales".into(), json!(true));
-        self.data.insert("editor_locale".into(), Value::String(current.to_string()));
+        self.data
+            .insert("editor_locale".into(), Value::String(current.to_string()));
         self.data.insert("editor_locales".into(), json!(locales));
         self
     }
@@ -340,54 +394,71 @@ pub fn build_global_context(def: &GlobalDefinition) -> Value {
 
 /// Build field metadata array for template conditional logic.
 pub fn build_fields_meta(fields: &[FieldDefinition]) -> Value {
-    let meta: Vec<Value> = fields.iter().map(|f| {
-        json!({
-            "name": f.name,
-            "field_type": f.field_type.as_str(),
-            "required": f.required,
-            "unique": f.unique,
-            "localized": f.localized,
-            "admin": {
-                "label": f.admin.label.as_ref().map(|ls| ls.resolve_default()),
-                "hidden": f.admin.hidden,
-                "readonly": f.admin.readonly,
-                "width": f.admin.width,
-                "description": f.admin.description.as_ref().map(|ls| ls.resolve_default()),
-                "placeholder": f.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
-            },
+    let meta: Vec<Value> = fields
+        .iter()
+        .map(|f| {
+            json!({
+                "name": f.name,
+                "field_type": f.field_type.as_str(),
+                "required": f.required,
+                "unique": f.unique,
+                "localized": f.localized,
+                "admin": {
+                    "label": f.admin.label.as_ref().map(|ls| ls.resolve_default()),
+                    "hidden": f.admin.hidden,
+                    "readonly": f.admin.readonly,
+                    "width": f.admin.width,
+                    "description": f.admin.description.as_ref().map(|ls| ls.resolve_default()),
+                    "placeholder": f.admin.placeholder.as_ref().map(|ls| ls.resolve_default()),
+                },
+            })
         })
-    }).collect();
+        .collect();
     Value::Array(meta)
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────
 
 fn build_nav_collections(state: &AdminState) -> Value {
-    let mut collections: Vec<Value> = state.registry.collections.values()
-        .map(|def| json!({
-            "slug": def.slug,
-            "display_name": def.display_name(),
-            "is_auth": def.is_auth_collection(),
-            "is_upload": def.is_upload_collection(),
-        }))
+    let mut collections: Vec<Value> = state
+        .registry
+        .collections
+        .values()
+        .map(|def| {
+            json!({
+                "slug": def.slug,
+                "display_name": def.display_name(),
+                "is_auth": def.is_auth_collection(),
+                "is_upload": def.is_upload_collection(),
+            })
+        })
         .collect();
     collections.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
     Value::Array(collections)
 }
 
 fn build_nav_globals(state: &AdminState) -> Value {
-    let mut globals: Vec<Value> = state.registry.globals.values()
-        .map(|def| json!({
-            "slug": def.slug,
-            "display_name": def.display_name(),
-        }))
+    let mut globals: Vec<Value> = state
+        .registry
+        .globals
+        .values()
+        .map(|def| {
+            json!({
+                "slug": def.slug,
+                "display_name": def.display_name(),
+            })
+        })
         .collect();
     globals.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
     Value::Array(globals)
 }
 
 fn has_auth_collections(state: &AdminState) -> bool {
-    state.registry.collections.values().any(|def| def.is_auth_collection())
+    state
+        .registry
+        .collections
+        .values()
+        .any(|def| def.is_auth_collection())
 }
 
 #[cfg(test)]
@@ -437,11 +508,19 @@ mod tests {
     fn build_collection_context_includes_all_fields() {
         let mut def = CollectionDefinition::new("posts");
         def.labels = crate::core::collection::Labels {
-            singular: Some(crate::core::field::LocalizedString::Plain("Post".to_string())),
-            plural: Some(crate::core::field::LocalizedString::Plain("Posts".to_string())),
+            singular: Some(crate::core::field::LocalizedString::Plain(
+                "Post".to_string(),
+            )),
+            plural: Some(crate::core::field::LocalizedString::Plain(
+                "Posts".to_string(),
+            )),
         };
         def.timestamps = true;
-        def.fields = vec![FieldDefinition::builder("title", crate::core::field::FieldType::Text).required(true).build()];
+        def.fields = vec![
+            FieldDefinition::builder("title", crate::core::field::FieldType::Text)
+                .required(true)
+                .build(),
+        ];
         let ctx = build_collection_context(&def);
         assert_eq!(ctx["slug"], "posts");
         assert_eq!(ctx["display_name"], "Posts");
@@ -462,10 +541,15 @@ mod tests {
     fn build_global_context_includes_all_fields() {
         let mut def = crate::core::collection::GlobalDefinition::new("settings");
         def.labels = crate::core::collection::Labels {
-            singular: Some(crate::core::field::LocalizedString::Plain("Settings".to_string())),
+            singular: Some(crate::core::field::LocalizedString::Plain(
+                "Settings".to_string(),
+            )),
             plural: None,
         };
-        def.fields = vec![FieldDefinition::builder("site_name", crate::core::field::FieldType::Text).build()];
+        def.fields =
+            vec![
+                FieldDefinition::builder("site_name", crate::core::field::FieldType::Text).build(),
+            ];
         let ctx = build_global_context(&def);
         assert_eq!(ctx["slug"], "settings");
         assert_eq!(ctx["display_name"], "Settings");
@@ -486,12 +570,18 @@ mod tests {
             .localized(true)
             .admin(
                 crate::core::field::FieldAdmin::builder()
-                    .label(crate::core::field::LocalizedString::Plain("Title".to_string()))
+                    .label(crate::core::field::LocalizedString::Plain(
+                        "Title".to_string(),
+                    ))
                     .hidden(false)
                     .readonly(true)
                     .width("50%")
-                    .description(crate::core::field::LocalizedString::Plain("The title field".to_string()))
-                    .placeholder(crate::core::field::LocalizedString::Plain("Enter title".to_string()))
+                    .description(crate::core::field::LocalizedString::Plain(
+                        "The title field".to_string(),
+                    ))
+                    .placeholder(crate::core::field::LocalizedString::Plain(
+                        "Enter title".to_string(),
+                    ))
                     .build(),
             )
             .build();
@@ -707,9 +797,10 @@ mod tests {
     fn context_builder_document_with_status() {
         use crate::core::document::DocumentBuilder;
         let doc = DocumentBuilder::new("doc1")
-            .fields(std::collections::HashMap::from([
-                ("title".to_string(), json!("Hello")),
-            ]))
+            .fields(std::collections::HashMap::from([(
+                "title".to_string(),
+                json!("Hello"),
+            )]))
             .created_at("2026-01-01".to_string())
             .updated_at("2026-01-02".to_string())
             .build();
@@ -722,5 +813,4 @@ mod tests {
         assert_eq!(result["document"]["created_at"], "2026-01-01");
         assert_eq!(result["document"]["updated_at"], "2026-01-02");
     }
-
 }

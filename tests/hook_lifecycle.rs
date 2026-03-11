@@ -2,11 +2,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::Document;
-use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::core::collection::Hooks;
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::core::field::{FieldDefinition, FieldType};
+use crap_cms::core::Document;
 use crap_cms::db::query::AccessResult;
+use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -14,7 +14,12 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
 }
 
-fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry, HookRunner) {
+fn setup() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+    HookRunner,
+) {
     let config_dir = fixture_dir();
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).expect("Failed to init Lua");
@@ -40,7 +45,10 @@ fn create_article(
     data: &HashMap<String, String>,
 ) -> Document {
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").expect("articles not found").clone();
+    let def = reg
+        .get_collection("articles")
+        .expect("articles not found")
+        .clone();
     drop(reg);
 
     let mut conn = pool.get().expect("DB connection");
@@ -79,14 +87,16 @@ fn before_change_hook_modifies_data() {
 
     // run_before_write runs validate → hooks
     // But let's test run_hooks_with_conn for before_change directly
-    let result = runner.run_hooks_with_conn(
-        &def.hooks,
-        crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
-        ctx,
-        &tx,
-        None,
-        None,
-    ).expect("Hook execution failed");
+    let result = runner
+        .run_hooks_with_conn(
+            &def.hooks,
+            crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
+            ctx,
+            &tx,
+            None,
+            None,
+        )
+        .expect("Hook execution failed");
 
     // The before_change hook adds _hook_ran marker
     assert_eq!(
@@ -120,14 +130,16 @@ fn before_validate_trims_title() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let result = runner.run_hooks_with_conn(
-        &def.hooks,
-        crap_cms::hooks::lifecycle::HookEvent::BeforeValidate,
-        ctx,
-        &tx,
-        None,
-        None,
-    ).expect("Hook execution failed");
+    let result = runner
+        .run_hooks_with_conn(
+            &def.hooks,
+            crap_cms::hooks::lifecycle::HookEvent::BeforeValidate,
+            ctx,
+            &tx,
+            None,
+            None,
+        )
+        .expect("Hook execution failed");
 
     // The before_validate hook trims the title
     assert_eq!(
@@ -150,16 +162,18 @@ fn field_before_change_transforms_value() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    runner.run_field_hooks_with_conn(
-        &def.fields,
-        crap_cms::hooks::lifecycle::FieldHookEvent::BeforeChange,
-        &mut data,
-        "articles",
-        "create",
-        &tx,
-        None,
-        None,
-    ).expect("Field hook failed");
+    runner
+        .run_field_hooks_with_conn(
+            &def.fields,
+            crap_cms::hooks::lifecycle::FieldHookEvent::BeforeChange,
+            &mut data,
+            "articles",
+            "create",
+            &tx,
+            None,
+            None,
+        )
+        .expect("Field hook failed");
 
     // The slug field hook should have generated a slug from the title
     let slug = data.get("slug").and_then(|v| v.as_str());
@@ -191,14 +205,16 @@ fn registered_hook_fires_for_all_collections() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let result = runner.run_hooks_with_conn(
-        &def.hooks,
-        crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
-        ctx,
-        &tx,
-        None,
-        None,
-    ).expect("Hook execution failed");
+    let result = runner
+        .run_hooks_with_conn(
+            &def.hooks,
+            crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
+            ctx,
+            &tx,
+            None,
+            None,
+        )
+        .expect("Hook execution failed");
 
     // The global registered hook (from init.lua) should have set _global_hook_ran
     assert_eq!(
@@ -219,13 +235,12 @@ fn hook_error_rolls_back_conceptually() {
 
     // Run the Lua directly to simulate a hook that errors
     let conn = pool.get().expect("DB connection");
-    let result = runner.eval_lua_with_conn(
-        r#"error("intentional hook error")"#,
-        &conn,
-        None,
-    );
+    let result = runner.eval_lua_with_conn(r#"error("intentional hook error")"#, &conn, None);
     assert!(result.is_err(), "Lua error should propagate as Rust error");
-    assert!(result.unwrap_err().to_string().contains("intentional hook error"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("intentional hook error"));
 }
 
 // ── Run before_write lifecycle (integrated) ──────────────────────────────────
@@ -255,19 +270,42 @@ fn run_before_write_full_lifecycle() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false, None, None,
-    ).expect("run_before_write failed");
+    let result = runner
+        .run_before_write(
+            &def.hooks,
+            &def.fields,
+            ctx,
+            &tx,
+            "articles",
+            None,
+            None,
+            false,
+            None,
+            None,
+        )
+        .expect("run_before_write failed");
 
     // Title should be trimmed (before_validate hook)
-    assert_eq!(result.data.get("title").and_then(|v| v.as_str()), Some("My Article"));
+    assert_eq!(
+        result.data.get("title").and_then(|v| v.as_str()),
+        Some("My Article")
+    );
     // before_change hook marker
-    assert_eq!(result.data.get("_hook_ran").and_then(|v| v.as_str()), Some("before_change"));
+    assert_eq!(
+        result.data.get("_hook_ran").and_then(|v| v.as_str()),
+        Some("before_change")
+    );
     // global hook marker
-    assert_eq!(result.data.get("_global_hook_ran").and_then(|v| v.as_str()), Some("true"));
+    assert_eq!(
+        result.data.get("_global_hook_ran").and_then(|v| v.as_str()),
+        Some("true")
+    );
     // slug should have been generated by field hook
     let slug = result.data.get("slug").and_then(|v| v.as_str());
-    assert!(slug.is_some(), "slug should have been generated by field hook");
+    assert!(
+        slug.is_some(),
+        "slug should have been generated by field hook"
+    );
 }
 
 #[test]
@@ -295,9 +333,21 @@ fn run_before_write_fails_on_validation_error() {
     let tx = conn.transaction().expect("Start transaction");
 
     let result = runner.run_before_write(
-        &def.hooks, &def.fields, ctx, &tx, "articles", None, None, false, None, None,
+        &def.hooks,
+        &def.fields,
+        ctx,
+        &tx,
+        "articles",
+        None,
+        None,
+        false,
+        None,
+        None,
     );
-    assert!(result.is_err(), "run_before_write should fail when validation fails");
+    assert!(
+        result.is_err(),
+        "run_before_write should fail when validation fails"
+    );
 }
 
 // ── Eval lua with conn ──────────────────────────────────────────────────────
@@ -312,14 +362,16 @@ fn eval_lua_crud_in_hook_context() {
     let _doc = create_article(&pool, &registry, &data);
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.eval_lua_with_conn(
-        r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local r = crap.collections.find("articles", { overrideAccess = true })
         return tostring(r.pagination.totalDocs)
         "#,
-        &conn,
-        None,
-    ).expect("Eval failed");
+            &conn,
+            None,
+        )
+        .expect("Eval failed");
     assert_eq!(result, "1", "Should find 1 article");
 }
 
@@ -335,7 +387,11 @@ fn make_field_with_read_access(name: &str, read_ref: &str) -> FieldDefinition {
     f
 }
 
-fn make_field_with_write_access(name: &str, create_ref: Option<&str>, update_ref: Option<&str>) -> FieldDefinition {
+fn make_field_with_write_access(
+    name: &str,
+    create_ref: Option<&str>,
+    update_ref: Option<&str>,
+) -> FieldDefinition {
     let mut f = make_field(name, FieldType::Text);
     f.access.create = create_ref.map(|s| s.to_string());
     f.access.update = update_ref.map(|s| s.to_string());
@@ -349,7 +405,8 @@ fn check_access_none_ref_is_allowed() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let result = runner.check_access(None, None, None, None, &conn)
+    let result = runner
+        .check_access(None, None, None, None, &conn)
         .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Allowed),
@@ -362,9 +419,9 @@ fn check_access_returns_allowed() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let result = runner.check_access(
-        Some("hooks.access.allow_all"), None, None, None, &conn,
-    ).expect("check_access failed");
+    let result = runner
+        .check_access(Some("hooks.access.allow_all"), None, None, None, &conn)
+        .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Allowed),
         "allow_all should return Allowed"
@@ -376,9 +433,9 @@ fn check_access_returns_denied() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let result = runner.check_access(
-        Some("hooks.access.deny_all"), None, None, None, &conn,
-    ).expect("check_access failed");
+    let result = runner
+        .check_access(Some("hooks.access.deny_all"), None, None, None, &conn)
+        .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Denied),
         "deny_all should return Denied"
@@ -390,12 +447,15 @@ fn check_access_returns_constrained() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let result = runner.check_access(
-        Some("hooks.access.constrained"), None, None, None, &conn,
-    ).expect("check_access failed");
+    let result = runner
+        .check_access(Some("hooks.access.constrained"), None, None, None, &conn)
+        .expect("check_access failed");
     match result {
         AccessResult::Constrained(clauses) => {
-            assert!(!clauses.is_empty(), "Constrained should have at least one clause");
+            assert!(
+                !clauses.is_empty(),
+                "Constrained should have at least one clause"
+            );
         }
         other => panic!("Expected Constrained, got {:?}", other),
     }
@@ -416,9 +476,15 @@ fn check_access_with_user_context() {
         updated_at: None,
     };
 
-    let result = runner.check_access(
-        Some("hooks.access.check_role"), Some(&admin_user), None, None, &conn,
-    ).expect("check_access failed");
+    let result = runner
+        .check_access(
+            Some("hooks.access.check_role"),
+            Some(&admin_user),
+            None,
+            None,
+            &conn,
+        )
+        .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Allowed),
         "Admin user should be Allowed by check_role"
@@ -434,18 +500,24 @@ fn check_access_with_user_context() {
         updated_at: None,
     };
 
-    let result = runner.check_access(
-        Some("hooks.access.check_role"), Some(&regular_user), None, None, &conn,
-    ).expect("check_access failed");
+    let result = runner
+        .check_access(
+            Some("hooks.access.check_role"),
+            Some(&regular_user),
+            None,
+            None,
+            &conn,
+        )
+        .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Denied),
         "Non-admin user should be Denied by check_role"
     );
 
     // No user at all should be denied
-    let result = runner.check_access(
-        Some("hooks.access.check_role"), None, None, None, &conn,
-    ).expect("check_access failed");
+    let result = runner
+        .check_access(Some("hooks.access.check_role"), None, None, None, &conn)
+        .expect("check_access failed");
     assert!(
         matches!(result, AccessResult::Denied),
         "No user should be Denied by check_role"
@@ -553,7 +625,10 @@ fn check_field_write_access_denies_field_on_update() {
 
     // On create, no restriction since create access is None
     let denied = runner.check_field_write_access(&fields, None, "create", &conn);
-    assert!(denied.is_empty(), "No create restriction defined, should be empty");
+    assert!(
+        denied.is_empty(),
+        "No create restriction defined, should be empty"
+    );
 }
 
 // ── 3C. After-Read Hook Tests ────────────────────────────────────────────────
@@ -574,7 +649,13 @@ fn apply_after_read_transforms_doc() {
 
     // apply_after_read should run the after_read hook which adds _was_read marker
     let transformed = runner.apply_after_read(
-        &def.hooks, &def.fields, "articles", "find", doc.clone(), None, None,
+        &def.hooks,
+        &def.fields,
+        "articles",
+        "find",
+        doc.clone(),
+        None,
+        None,
     );
 
     assert_eq!(
@@ -610,7 +691,13 @@ fn apply_after_read_many_transforms_all() {
 
     let docs = vec![doc1, doc2];
     let transformed = runner.apply_after_read_many(
-        &def.hooks, &def.fields, "articles", "find", docs, None, None,
+        &def.hooks,
+        &def.fields,
+        "articles",
+        "find",
+        docs,
+        None,
+        None,
     );
 
     assert_eq!(transformed.len(), 2, "Should return same number of docs");
@@ -640,7 +727,13 @@ fn apply_after_read_no_hooks_returns_same() {
     let original_title = doc.fields.get("title").cloned();
 
     let result = runner.apply_after_read(
-        &empty_hooks, &empty_fields, "articles", "find", doc, None, None,
+        &empty_hooks,
+        &empty_fields,
+        "articles",
+        "find",
+        doc,
+        None,
+        None,
     );
 
     assert_eq!(result.id, original_id, "ID should be unchanged");
@@ -709,12 +802,14 @@ fn auth_strategy_returns_none_on_invalid_key() {
     headers.insert("x-api-key".to_string(), "wrong-key".to_string());
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.run_auth_strategy(
-        "hooks.auth_strategy.api_key_auth",
-        "articles",
-        &headers,
-        &conn,
-    ).expect("should not error");
+    let result = runner
+        .run_auth_strategy(
+            "hooks.auth_strategy.api_key_auth",
+            "articles",
+            &headers,
+            &conn,
+        )
+        .expect("should not error");
     assert!(result.is_none(), "Invalid key should return None");
 }
 
@@ -725,12 +820,14 @@ fn auth_strategy_returns_none_on_missing_header() {
     let headers = HashMap::new(); // no x-api-key header
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.run_auth_strategy(
-        "hooks.auth_strategy.api_key_auth",
-        "articles",
-        &headers,
-        &conn,
-    ).expect("should not error");
+    let result = runner
+        .run_auth_strategy(
+            "hooks.auth_strategy.api_key_auth",
+            "articles",
+            &headers,
+            &conn,
+        )
+        .expect("should not error");
     assert!(result.is_none(), "Missing header should return None");
 }
 
@@ -750,13 +847,18 @@ fn auth_strategy_has_crud_access() {
     headers.insert("x-api-key".to_string(), "valid-key".to_string());
 
     let conn = pool.get().expect("DB connection");
-    let result = runner.run_auth_strategy(
-        "hooks.auth_strategy.api_key_auth",
-        "articles",
-        &headers,
-        &conn,
-    ).expect("should not error");
-    assert!(result.is_some(), "Strategy with CRUD access should find articles and return one");
+    let result = runner
+        .run_auth_strategy(
+            "hooks.auth_strategy.api_key_auth",
+            "articles",
+            &headers,
+            &conn,
+        )
+        .expect("should not error");
+    assert!(
+        result.is_some(),
+        "Strategy with CRUD access should find articles and return one"
+    );
 }
 
 // ── 4B. Live Events ──────────────────────────────────────────────────────────
@@ -768,4 +870,3 @@ fn check_live_setting_none_allows() {
     assert!(result.is_ok());
     assert!(result.unwrap(), "None live setting should allow broadcast");
 }
-

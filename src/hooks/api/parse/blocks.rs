@@ -3,10 +3,12 @@
 use anyhow::Result;
 use mlua::Table;
 
-use super::helpers::*;
 use super::fields::parse_fields;
+use super::helpers::*;
 
-pub(super) fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<crate::core::field::BlockDefinition>> {
+pub(super) fn parse_block_definitions(
+    blocks_tbl: &Table,
+) -> Result<Vec<crate::core::field::BlockDefinition>> {
     let mut blocks = Vec::new();
     for entry in blocks_tbl.clone().sequence_values::<Table>() {
         let block_tbl = entry?;
@@ -89,12 +91,17 @@ mod tests {
         block.set("type", "hero").unwrap();
         block.set("label_field", "headline").unwrap();
         block.set("group", "Layout").unwrap();
-        block.set("image_url", "https://example.com/hero.png").unwrap();
+        block
+            .set("image_url", "https://example.com/hero.png")
+            .unwrap();
         blocks_tbl.set(1, block).unwrap();
         let blocks = parse_block_definitions(&blocks_tbl).unwrap();
         assert_eq!(blocks[0].label_field.as_deref(), Some("headline"));
         assert_eq!(blocks[0].group.as_deref(), Some("Layout"));
-        assert_eq!(blocks[0].image_url.as_deref(), Some("https://example.com/hero.png"));
+        assert_eq!(
+            blocks[0].image_url.as_deref(),
+            Some("https://example.com/hero.png")
+        );
     }
 
     #[test]
@@ -131,7 +138,10 @@ mod tests {
         let fields = parse_fields(&fields_tbl).unwrap();
         assert_eq!(fields[0].tabs.len(), 1);
         assert_eq!(fields[0].tabs[0].label, "General");
-        assert_eq!(fields[0].tabs[0].description.as_deref(), Some("General settings"));
+        assert_eq!(
+            fields[0].tabs[0].description.as_deref(),
+            Some("General settings")
+        );
         assert_eq!(fields[0].tabs[0].fields.len(), 1);
     }
 }

@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::db::DbPool;
 use crap_cms::core::SharedRegistry;
+use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -30,7 +30,9 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── 3A. crap.util Functions ──────────────────────────────────────────────────
@@ -38,10 +40,13 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
 #[test]
 fn json_encode_table() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local t = { name = "test", count = 42 }
         return crap.util.json_encode(t)
-    "#);
+    "#,
+    );
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid JSON");
     assert_eq!(parsed.get("name").unwrap().as_str().unwrap(), "test");
     assert_eq!(parsed.get("count").unwrap().as_i64().unwrap(), 42);
@@ -50,32 +55,41 @@ fn json_encode_table() {
 #[test]
 fn json_decode_string() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local t = crap.util.json_decode('{"key":"value","num":99}')
         return t.key .. ":" .. tostring(t.num)
-    "#);
+    "#,
+    );
     assert_eq!(result, "value:99");
 }
 
 #[test]
 fn json_roundtrip() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local original = { a = 1, b = "hello", c = true }
         local encoded = crap.util.json_encode(original)
         local decoded = crap.util.json_decode(encoded)
         return tostring(decoded.a) .. ":" .. decoded.b .. ":" .. tostring(decoded.c)
-    "#);
+    "#,
+    );
     assert_eq!(result, "1:hello:true");
 }
 
 #[test]
 fn json_encode_nested() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local t = { nested = { x = 1, y = 2 }, arr = { 10, 20, 30 } }
         return crap.util.json_encode(t)
-    "#);
+    "#,
+    );
     let parsed: serde_json::Value = serde_json::from_str(&result).expect("valid JSON");
     let nested = parsed.get("nested").unwrap();
     assert_eq!(nested.get("x").unwrap().as_i64().unwrap(), 1);
@@ -86,22 +100,28 @@ fn json_encode_nested() {
 #[test]
 fn nanoid_generates_unique_ids() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local id1 = crap.util.nanoid()
         local id2 = crap.util.nanoid()
         if id1 == id2 then return "SAME" end
         return "DIFFERENT"
-    "#);
+    "#,
+    );
     assert_eq!(result, "DIFFERENT");
 }
 
 #[test]
 fn nanoid_correct_length() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local id = crap.util.nanoid()
         return tostring(#id)
-    "#);
+    "#,
+    );
     let len: usize = result.parse().expect("should be a number");
     assert_eq!(len, 21, "Default nanoid length should be 21");
 }
@@ -111,31 +131,40 @@ fn nanoid_correct_length() {
 #[test]
 fn config_get_top_level() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local v = crap.config.get("database.path")
         return tostring(v)
-    "#);
+    "#,
+    );
     assert_eq!(result, "data/crap.db", "Default database path");
 }
 
 #[test]
 fn config_get_nested() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local v = crap.config.get("auth.token_expiry")
         return tostring(v)
-    "#);
+    "#,
+    );
     assert_eq!(result, "7200", "Default token expiry");
 }
 
 #[test]
 fn config_get_missing_returns_nil() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local v = crap.config.get("nonexistent.deeply.nested.key")
         if v == nil then return "nil" end
         return tostring(v)
-    "#);
+    "#,
+    );
     assert_eq!(result, "nil");
 }
 
@@ -144,10 +173,13 @@ fn env_get_existing_var() {
     // Set a test env var
     std::env::set_var("CRAP_TEST_VAR", "hello_from_env");
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local v = crap.env.get("CRAP_TEST_VAR")
         return tostring(v)
-    "#);
+    "#,
+    );
     assert_eq!(result, "hello_from_env");
     std::env::remove_var("CRAP_TEST_VAR");
 }
@@ -155,11 +187,14 @@ fn env_get_existing_var() {
 #[test]
 fn env_get_missing_returns_nil() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local v = crap.env.get("NONEXISTENT_CRAP_CMS_TEST_VAR_12345")
         if v == nil then return "nil" end
         return tostring(v)
-    "#);
+    "#,
+    );
     assert_eq!(result, "nil");
 }
 
@@ -168,33 +203,42 @@ fn env_get_missing_returns_nil() {
 #[test]
 fn lua_hash_password() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local h = crap.auth.hash_password("secret")
         if h:sub(1, 7) == "$argon2" then return "ok" end
         return h
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok", "hash_password should return an argon2 hash");
 }
 
 #[test]
 fn lua_verify_password_correct() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local h = crap.auth.hash_password("mypassword")
         local ok = crap.auth.verify_password("mypassword", h)
         return tostring(ok)
-    "#);
+    "#,
+    );
     assert_eq!(result, "true");
 }
 
 #[test]
 fn lua_verify_password_wrong() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local h = crap.auth.hash_password("mypassword")
         local ok = crap.auth.verify_password("wrongpassword", h)
         return tostring(ok)
-    "#);
+    "#,
+    );
     assert_eq!(result, "false");
 }
 
@@ -203,18 +247,24 @@ fn lua_verify_password_wrong() {
 #[test]
 fn lua_slugify() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         return crap.util.slugify("Hello World! This is a Test")
-    "#);
+    "#,
+    );
     assert_eq!(result, "hello-world-this-is-a-test");
 }
 
 #[test]
 fn lua_slugify_special_chars() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         return crap.util.slugify("Über Straße & Café")
-    "#);
+    "#,
+    );
     // Should handle unicode gracefully
     assert!(!result.is_empty());
     assert!(!result.contains(' '));
@@ -250,14 +300,19 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 #[allow(dead_code)]
 fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 // ── crap.hooks.remove ────────────────────────────────────────────────────────
 
 #[test]
 fn lua_hooks_remove() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         -- Track how many times the hook fires
         local count = 0
         local function my_hook(ctx)
@@ -294,7 +349,8 @@ fn lua_hooks_remove() {
         if still_found then return "NOT_REMOVED" end
 
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -303,28 +359,37 @@ fn lua_hooks_remove() {
 #[test]
 fn lua_locale_get_default() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         return crap.locale.get_default()
-    "#);
+    "#,
+    );
     assert_eq!(result, "en", "Default locale should be 'en'");
 }
 
 #[test]
 fn lua_locale_get_all() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local all = crap.locale.get_all()
         return tostring(#all)
-    "#);
+    "#,
+    );
     assert_eq!(result, "0", "No locales configured by default");
 }
 
 #[test]
 fn lua_locale_is_enabled() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         return tostring(crap.locale.is_enabled())
-    "#);
+    "#,
+    );
     assert_eq!(result, "false", "Locale should not be enabled by default");
 }
 
@@ -356,7 +421,10 @@ fn lua_http_request_invalid_url() {
         &conn,
         None,
     ).expect("eval failed");
-    assert_eq!(result, "ok", "HTTP request to invalid port should produce a transport error");
+    assert_eq!(
+        result, "ok",
+        "HTTP request to invalid port should produce a transport error"
+    );
 }
 
 // ── crap.email.send (no-op when not configured) ─────────────────────────────
@@ -364,15 +432,21 @@ fn lua_http_request_invalid_url() {
 #[test]
 fn lua_email_not_configured() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local ok = crap.email.send({
             to = "test@example.com",
             subject = "Test Subject",
             html = "<p>Hello</p>",
         })
         return tostring(ok)
-    "#);
-    assert_eq!(result, "true", "Email send should return true (no-op) when SMTP not configured");
+    "#,
+    );
+    assert_eq!(
+        result, "true",
+        "Email send should return true (no-op) when SMTP not configured"
+    );
 }
 
 // ── 4A. crap.http.request edge cases ─────────────────────────────────────────
@@ -415,8 +489,9 @@ fn http_request_missing_url() {
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(
-        r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
             local ok, err = pcall(function()
                 crap.http.request({ method = "GET" })
             end)
@@ -424,9 +499,10 @@ fn http_request_missing_url() {
             -- Missing url causes a type conversion error (nil to String)
             return "ok"
         "#,
-        &conn,
-        None,
-    ).expect("eval failed");
+            &conn,
+            None,
+        )
+        .expect("eval failed");
     assert_eq!(result, "ok");
 }
 
@@ -440,8 +516,9 @@ fn http_request_post_with_body() {
     let conn = pool.get().expect("conn");
     // POST to localhost:1 with a body — should fail with transport error
     // but verifies the POST + body code path doesn't crash
-    let result = runner.eval_lua_with_conn(
-        r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
             local ok, err = pcall(function()
                 crap.http.request({
                     url = "http://localhost:1",
@@ -455,9 +532,10 @@ fn http_request_post_with_body() {
             -- Transport/connection error expected
             return "ok"
         "#,
-        &conn,
-        None,
-    ).expect("eval failed");
+            &conn,
+            None,
+        )
+        .expect("eval failed");
     assert_eq!(result, "ok");
 }
 
@@ -466,7 +544,9 @@ fn http_request_post_with_body() {
 #[test]
 fn email_send_with_text_and_html() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local ok = crap.email.send({
             to = "test@example.com",
             subject = "Test",
@@ -474,7 +554,10 @@ fn email_send_with_text_and_html() {
             text = "Plain text body",
         })
         return tostring(ok)
-    "#);
-    assert_eq!(result, "true", "Email with both text and html should return true (no-op)");
+    "#,
+    );
+    assert_eq!(
+        result, "true",
+        "Email with both text and html should return true (no-op)"
+    );
 }
-

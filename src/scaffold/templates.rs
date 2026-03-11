@@ -121,15 +121,18 @@ fn print_categorized(files: &[(String, &[u8])], categories: &[FileCategory]) {
     let mut used = vec![false; files.len()];
 
     for cat in categories {
-        let matched: Vec<usize> = files.iter().enumerate()
+        let matched: Vec<usize> = files
+            .iter()
+            .enumerate()
             .filter(|(i, (path, _))| {
-                !used[*i] && cat.prefixes.iter().any(|prefix| {
-                    if prefix.starts_with('.') {
-                        path.ends_with(prefix) && !path.contains('/')
-                    } else {
-                        path.starts_with(prefix)
-                    }
-                })
+                !used[*i]
+                    && cat.prefixes.iter().any(|prefix| {
+                        if prefix.starts_with('.') {
+                            path.ends_with(prefix) && !path.contains('/')
+                        } else {
+                            path.starts_with(prefix)
+                        }
+                    })
             })
             .map(|(i, _)| i)
             .collect();
@@ -140,7 +143,14 @@ fn print_categorized(files: &[(String, &[u8])], categories: &[FileCategory]) {
 
         let total: usize = matched.iter().map(|&i| files[i].1.len()).sum();
         let n = matched.len();
-        println!("  {} ({} {}, {}) — {}", cat.label, n, if n == 1 { "file" } else { "files" }, format_size(total), cat.description);
+        println!(
+            "  {} ({} {}, {}) — {}",
+            cat.label,
+            n,
+            if n == 1 { "file" } else { "files" },
+            format_size(total),
+            cat.description
+        );
         for &i in &matched {
             println!("    {}", files[i].0);
             used[i] = true;
@@ -153,7 +163,12 @@ fn print_categorized(files: &[(String, &[u8])], categories: &[FileCategory]) {
     if !remaining.is_empty() {
         let total: usize = remaining.iter().map(|&i| files[i].1.len()).sum();
         let n = remaining.len();
-        println!("  Other ({} {}, {})", n, if n == 1 { "file" } else { "files" }, format_size(total));
+        println!(
+            "  Other ({} {}, {})",
+            n,
+            if n == 1 { "file" } else { "files" },
+            format_size(total)
+        );
         for &i in &remaining {
             println!("    {}", files[i].0);
         }
@@ -172,7 +187,9 @@ fn print_file_tree(files: &[(String, &[u8])]) {
             Some(i) => (&path[..i], &path[i + 1..]),
             None => ("", path.as_str()),
         };
-        dirs.entry(dir.to_string()).or_default().push((name, content.len()));
+        dirs.entry(dir.to_string())
+            .or_default()
+            .push((name, content.len()));
     }
 
     for (dir, entries) in &dirs {
@@ -204,7 +221,11 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
     if show_templates {
         let files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
         let total_size: usize = files.iter().map(|(_, c)| c.len()).sum();
-        println!("Templates ({} files, {}):", files.len(), format_size(total_size));
+        println!(
+            "Templates ({} files, {}):",
+            files.len(),
+            format_size(total_size)
+        );
         if verbose {
             print_file_tree(&files);
         } else {
@@ -221,7 +242,11 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
     if show_static {
         let files = collect_embedded_files_flat(&EMBEDDED_STATIC);
         let total_size: usize = files.iter().map(|(_, c)| c.len()).sum();
-        println!("Static files ({} files, {}):", files.len(), format_size(total_size));
+        println!(
+            "Static files ({} files, {}):",
+            files.len(),
+            format_size(total_size)
+        );
         if verbose {
             print_file_tree(&files);
         } else {
@@ -284,7 +309,11 @@ pub fn templates_extract(
                 count += 1;
             }
             if want_templates && !want_static {
-                println!("Extracted {} template file(s) to {}/templates/", count, config_dir.display());
+                println!(
+                    "Extracted {} template file(s) to {}/templates/",
+                    count,
+                    config_dir.display()
+                );
                 return Ok(());
             }
         }
@@ -305,11 +334,20 @@ pub fn templates_extract(
                 count += 1;
             }
             if !want_templates {
-                println!("Extracted {} static file(s) to {}/static/", count, config_dir.display());
+                println!(
+                    "Extracted {} static file(s) to {}/static/",
+                    count,
+                    config_dir.display()
+                );
                 return Ok(());
             }
-            println!("Extracted {} file(s) ({} templates, {} static) to {}/",
-                count, tpl_count, count - tpl_count, config_dir.display());
+            println!(
+                "Extracted {} file(s) ({} templates, {} static) to {}/",
+                count,
+                tpl_count,
+                count - tpl_count,
+                config_dir.display()
+            );
         }
 
         return Ok(());
@@ -353,7 +391,11 @@ pub fn templates_extract(
     }
 
     if extracted > 0 {
-        println!("Extracted {} file(s) to {}/", extracted, config_dir.display());
+        println!(
+            "Extracted {} file(s) to {}/",
+            extracted,
+            config_dir.display()
+        );
     }
 
     Ok(())
@@ -368,7 +410,8 @@ pub fn proto_export(output: Option<&Path>) -> Result<()> {
     match output {
         None => {
             // Write to stdout
-            std::io::stdout().write_all(PROTO_CONTENT.as_bytes())
+            std::io::stdout()
+                .write_all(PROTO_CONTENT.as_bytes())
                 .context("Failed to write proto to stdout")?;
         }
         Some(path) => {
@@ -378,8 +421,9 @@ pub fn proto_export(output: Option<&Path>) -> Result<()> {
                 path.join("content.proto")
             } else {
                 if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("Failed to create directory '{}'", parent.display()))?;
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("Failed to create directory '{}'", parent.display())
+                    })?;
                 }
                 path.to_path_buf()
             };
@@ -422,7 +466,10 @@ mod tests {
         assert!(tpl_files.iter().any(|(p, _)| p.ends_with(".hbs")));
 
         let static_files = collect_embedded_files_flat(&EMBEDDED_STATIC);
-        assert!(!static_files.is_empty(), "should have embedded static files");
+        assert!(
+            !static_files.is_empty(),
+            "should have embedded static files"
+        );
         assert!(static_files.iter().any(|(p, _)| p.ends_with(".css")));
     }
 
@@ -432,8 +479,11 @@ mod tests {
         templates_extract(
             tmp.path(),
             &["layout/base.hbs".to_string()],
-            false, None, false,
-        ).unwrap();
+            false,
+            None,
+            false,
+        )
+        .unwrap();
 
         assert!(tmp.path().join("templates/layout/base.hbs").exists());
         let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
@@ -443,11 +493,7 @@ mod tests {
     #[test]
     fn test_templates_extract_static_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        templates_extract(
-            tmp.path(),
-            &["styles.css".to_string()],
-            false, None, false,
-        ).unwrap();
+        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
 
         assert!(tmp.path().join("static/styles.css").exists());
     }
@@ -460,8 +506,11 @@ mod tests {
         templates_extract(
             tmp.path(),
             &["layout/base.hbs".to_string()],
-            false, None, false,
-        ).unwrap();
+            false,
+            None,
+            false,
+        )
+        .unwrap();
 
         // Write a marker to verify it doesn't get overwritten
         fs::write(tmp.path().join("templates/layout/base.hbs"), "CUSTOM").unwrap();
@@ -470,8 +519,11 @@ mod tests {
         templates_extract(
             tmp.path(),
             &["layout/base.hbs".to_string()],
-            false, None, false,
-        ).unwrap();
+            false,
+            None,
+            false,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
         assert_eq!(content, "CUSTOM", "should not overwrite without --force");
@@ -485,8 +537,11 @@ mod tests {
         templates_extract(
             tmp.path(),
             &["layout/base.hbs".to_string()],
-            false, None, false,
-        ).unwrap();
+            false,
+            None,
+            false,
+        )
+        .unwrap();
 
         // Write a marker
         fs::write(tmp.path().join("templates/layout/base.hbs"), "CUSTOM").unwrap();
@@ -495,8 +550,11 @@ mod tests {
         templates_extract(
             tmp.path(),
             &["layout/base.hbs".to_string()],
-            false, None, true,
-        ).unwrap();
+            false,
+            None,
+            true,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
         assert_ne!(content, "CUSTOM", "should overwrite with --force");
@@ -564,7 +622,10 @@ mod tests {
         templates_extract(tmp.path(), &[], true, Some("templates"), false).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("templates/layout/base.hbs")).unwrap();
-        assert_eq!(content, "CUSTOM", "Should skip existing files without --force");
+        assert_eq!(
+            content, "CUSTOM",
+            "Should skip existing files without --force"
+        );
     }
 
     #[test]
@@ -628,8 +689,11 @@ mod tests {
         templates_extract(
             tmp.path(),
             &["styles.css".to_string()],
-            false, Some("static"), false,
-        ).unwrap();
+            false,
+            Some("static"),
+            false,
+        )
+        .unwrap();
 
         assert!(tmp.path().join("static/styles.css").exists());
     }
@@ -638,19 +702,11 @@ mod tests {
     fn test_templates_extract_specific_skips_existing() {
         let tmp = tempfile::tempdir().expect("tempdir");
         // First extract
-        templates_extract(
-            tmp.path(),
-            &["styles.css".to_string()],
-            false, None, false,
-        ).unwrap();
+        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
         // Write marker
         fs::write(tmp.path().join("static/styles.css"), "CUSTOM").unwrap();
         // Extract again without force — should skip
-        templates_extract(
-            tmp.path(),
-            &["styles.css".to_string()],
-            false, None, false,
-        ).unwrap();
+        templates_extract(tmp.path(), &["styles.css".to_string()], false, None, false).unwrap();
         let content = fs::read_to_string(tmp.path().join("static/styles.css")).unwrap();
         assert_eq!(content, "CUSTOM");
     }
@@ -662,7 +718,10 @@ mod tests {
         templates_extract(
             tmp.path(),
             &["nonexistent/file.hbs".to_string()],
-            false, None, false,
-        ).unwrap();
+            false,
+            None,
+            false,
+        )
+        .unwrap();
     }
 }

@@ -6,13 +6,13 @@
 //! process-level access for stdio). Access control Lua functions are designed for per-user
 //! restrictions and don't apply to machine-to-machine access.
 
-mod static_tools;
 mod crud_tools;
+mod static_tools;
 
 use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
 use crate::config::McpConfig;
@@ -21,10 +21,10 @@ use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 use super::protocol::ToolDefinition;
-use super::schema::{CrudOp, collection_input_schema, global_input_schema};
+use super::schema::{collection_input_schema, global_input_schema, CrudOp};
 
-use static_tools::*;
 use crud_tools::*;
+use static_tools::*;
 
 /// Parsed tool name: operation + target slug.
 #[derive(Debug, PartialEq)]
@@ -69,7 +69,10 @@ pub fn generate_tools(registry: &Registry, config: &McpConfig) -> Vec<ToolDefini
         }
 
         let label = def.display_name();
-        let base_desc = def.mcp.description.as_deref()
+        let base_desc = def
+            .mcp
+            .description
+            .as_deref()
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("CRUD operations on {}", label));
 
@@ -149,7 +152,9 @@ pub fn generate_tools(registry: &Registry, config: &McpConfig) -> Vec<ToolDefini
 
     tools.push(ToolDefinition {
         name: "list_field_types".to_string(),
-        description: Some("List all available field types with descriptions and valid options".to_string()),
+        description: Some(
+            "List all available field types with descriptions and valid options".to_string(),
+        ),
         input_schema: json!({ "type": "object", "properties": {} }),
     });
 
@@ -223,7 +228,10 @@ pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
                     "delete_" => ToolOp::Delete,
                     _ => unreachable!(),
                 };
-                return Some(ParsedTool { op, slug: slug.to_string() });
+                return Some(ParsedTool {
+                    op,
+                    slug: slug.to_string(),
+                });
             }
         }
     }
@@ -237,7 +245,10 @@ pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
                     "global_update_" => ToolOp::UpdateGlobal,
                     _ => unreachable!(),
                 };
-                return Some(ParsedTool { op, slug: slug.to_string() });
+                return Some(ParsedTool {
+                    op,
+                    slug: slug.to_string(),
+                });
             }
         }
     }

@@ -99,7 +99,11 @@ impl ContentService {
         find_query.filters = filters.clone();
         find_query.order_by = req.order_by.clone();
         find_query.limit = Some(clamped_limit);
-        find_query.offset = if has_cursor { None } else { Some(internal_offset) };
+        find_query.offset = if has_cursor {
+            None
+        } else {
+            Some(internal_offset)
+        };
         find_query.select = select.clone();
         find_query.after_cursor = after_cursor.clone();
         find_query.before_cursor = before_cursor.clone();
@@ -163,8 +167,15 @@ impl ContentService {
                     }
                 }
             }
-            let docs =
-                runner.apply_after_read_many(&hooks, &fields, &collection, "find", docs, None, None);
+            let docs = runner.apply_after_read_many(
+                &hooks,
+                &fields,
+                &collection,
+                "find",
+                docs,
+                None,
+                None,
+            );
             // Populate relationships if depth > 0 (batch for efficiency)
             if depth > 0 {
                 let mut docs = docs;
@@ -329,7 +340,11 @@ impl ContentService {
                         locale_ctx: locale_ctx.as_ref(),
                     };
                     query::populate_relationships_cached(
-                        &pop_ctx, d, &mut visited, &pop_opts, cache_ref,
+                        &pop_ctx,
+                        d,
+                        &mut visited,
+                        &pop_opts,
+                        cache_ref,
                     )?;
                 }
             }

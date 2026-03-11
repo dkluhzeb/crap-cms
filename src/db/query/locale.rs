@@ -1,8 +1,8 @@
 //! Locale types and functions for locale-aware queries.
 
 use crate::config::LocaleConfig;
-use crate::core::Document;
 use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::Document;
 
 use super::validation::sanitize_locale;
 
@@ -37,7 +37,10 @@ impl LocaleContext {
             Some(l) => LocaleMode::Single(l.to_string()),
             None => LocaleMode::Default,
         };
-        Some(Self { mode, config: config.clone() })
+        Some(Self {
+            mode,
+            config: config.clone(),
+        })
     }
 }
 
@@ -53,7 +56,14 @@ pub fn get_locale_select_columns(
     let mut select_exprs = vec!["id".to_string()];
     let mut result_names = vec!["id".to_string()];
 
-    collect_locale_columns(fields, &mut select_exprs, &mut result_names, locale_ctx, "", false);
+    collect_locale_columns(
+        fields,
+        &mut select_exprs,
+        &mut result_names,
+        locale_ctx,
+        "",
+        false,
+    );
 
     if timestamps {
         select_exprs.push("created_at".to_string());
@@ -83,26 +93,47 @@ fn collect_locale_columns(
                     format!("{}__{}", prefix, field.name)
                 };
                 collect_locale_columns(
-                    &field.fields, select_exprs, result_names, locale_ctx,
-                    &new_prefix, inherited_localized || field.localized,
+                    &field.fields,
+                    select_exprs,
+                    result_names,
+                    locale_ctx,
+                    &new_prefix,
+                    inherited_localized || field.localized,
                 );
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_locale_columns(&field.fields, select_exprs, result_names, locale_ctx, prefix, inherited_localized);
+                collect_locale_columns(
+                    &field.fields,
+                    select_exprs,
+                    result_names,
+                    locale_ctx,
+                    prefix,
+                    inherited_localized,
+                );
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_locale_columns(&tab.fields, select_exprs, result_names, locale_ctx, prefix, inherited_localized);
+                    collect_locale_columns(
+                        &tab.fields,
+                        select_exprs,
+                        result_names,
+                        locale_ctx,
+                        prefix,
+                        inherited_localized,
+                    );
                 }
             }
             _ => {
-                if !field.has_parent_column() { continue; }
+                if !field.has_parent_column() {
+                    continue;
+                }
                 let base = if prefix.is_empty() {
                     field.name.clone()
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                let is_localized = (inherited_localized || field.localized) && locale_ctx.config.is_enabled();
+                let is_localized =
+                    (inherited_localized || field.localized) && locale_ctx.config.is_enabled();
                 if is_localized {
                     add_locale_columns(select_exprs, result_names, &base, locale_ctx);
                 } else {
@@ -135,11 +166,15 @@ fn add_locale_columns(
             };
             let locale = sanitize_locale(locale);
 
-            if locale_ctx.config.fallback && locale != sanitize_locale(&locale_ctx.config.default_locale) {
+            if locale_ctx.config.fallback
+                && locale != sanitize_locale(&locale_ctx.config.default_locale)
+            {
                 select_exprs.push(format!(
                     "COALESCE({}__{}, {}__{}) AS {}",
-                    field_name, locale,
-                    field_name, sanitize_locale(&locale_ctx.config.default_locale),
+                    field_name,
+                    locale,
+                    field_name,
+                    sanitize_locale(&locale_ctx.config.default_locale),
                     field_name
                 ));
             } else {
@@ -160,7 +195,11 @@ fn add_locale_columns(
 
 /// Group locale-suffixed fields into nested objects for `LocaleMode::All`.
 /// Converts `title__en: "Hello", title__de: "Hallo"` into `title: { en: "Hello", de: "Hallo" }`.
-pub(crate) fn group_locale_fields(doc: &mut Document, fields: &[FieldDefinition], locale_config: &LocaleConfig) {
+pub(crate) fn group_locale_fields(
+    doc: &mut Document,
+    fields: &[FieldDefinition],
+    locale_config: &LocaleConfig,
+) {
     group_locale_fields_inner(doc, fields, locale_config, "", false);
 }
 
@@ -180,22 +219,42 @@ fn group_locale_fields_inner(
                     format!("{}__{}", prefix, field.name)
                 };
                 group_locale_fields_inner(
-                    doc, &field.fields, locale_config,
-                    &new_prefix, inherited_localized || field.localized,
+                    doc,
+                    &field.fields,
+                    locale_config,
+                    &new_prefix,
+                    inherited_localized || field.localized,
                 );
             }
             FieldType::Row | FieldType::Collapsible => {
-                group_locale_fields_inner(doc, &field.fields, locale_config, prefix, inherited_localized);
+                group_locale_fields_inner(
+                    doc,
+                    &field.fields,
+                    locale_config,
+                    prefix,
+                    inherited_localized,
+                );
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    group_locale_fields_inner(doc, &tab.fields, locale_config, prefix, inherited_localized);
+                    group_locale_fields_inner(
+                        doc,
+                        &tab.fields,
+                        locale_config,
+                        prefix,
+                        inherited_localized,
+                    );
                 }
             }
             _ => {
-                if !field.has_parent_column() { continue; }
-                let is_localized = (inherited_localized || field.localized) && locale_config.is_enabled();
-                if !is_localized { continue; }
+                if !field.has_parent_column() {
+                    continue;
+                }
+                let is_localized =
+                    (inherited_localized || field.localized) && locale_config.is_enabled();
+                if !is_localized {
+                    continue;
+                }
                 let base = if prefix.is_empty() {
                     field.name.clone()
                 } else {
@@ -209,7 +268,8 @@ fn group_locale_fields_inner(
                     }
                 }
                 if !locale_map.is_empty() {
-                    doc.fields.insert(base, serde_json::Value::Object(locale_map));
+                    doc.fields
+                        .insert(base, serde_json::Value::Object(locale_map));
                 }
             }
         }
@@ -217,7 +277,11 @@ fn group_locale_fields_inner(
 }
 
 /// Map a flat field name to the actual locale-suffixed column name for writes.
-pub(crate) fn locale_write_column(field_name: &str, field: &FieldDefinition, locale_ctx: &Option<&LocaleContext>) -> String {
+pub(crate) fn locale_write_column(
+    field_name: &str,
+    field: &FieldDefinition,
+    locale_ctx: &Option<&LocaleContext>,
+) -> String {
     if let Some(ctx) = locale_ctx {
         if field.localized && ctx.config.is_enabled() {
             let req_locale = match &ctx.mode {
@@ -245,7 +309,10 @@ mod tests {
     fn locale_context_disabled() {
         let config = crate::config::LocaleConfig::default();
         let ctx = LocaleContext::from_locale_string(None, &config);
-        assert!(ctx.is_none(), "Should be None when localization is disabled");
+        assert!(
+            ctx.is_none(),
+            "Should be None when localization is disabled"
+        );
     }
 
     #[test]
@@ -279,17 +346,26 @@ mod tests {
     fn locale_write_column_non_localized_passthrough() {
         let field = make_field("title", FieldType::Text);
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Single("de".to_string()), config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
         let col = locale_write_column("title", &field, &ctx_ref);
-        assert_eq!(col, "title", "Non-localized field should pass through unchanged");
+        assert_eq!(
+            col, "title",
+            "Non-localized field should pass through unchanged"
+        );
     }
 
     #[test]
     fn locale_write_column_localized_single() {
         let field = make_localized_field("title", FieldType::Text);
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Single("de".to_string()), config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
         let col = locale_write_column("title", &field, &ctx_ref);
         assert_eq!(col, "title__de");
@@ -299,7 +375,10 @@ mod tests {
     fn locale_write_column_localized_default_mode() {
         let field = make_localized_field("title", FieldType::Text);
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Default, config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
         let ctx_ref: Option<&LocaleContext> = Some(&ctx);
         let col = locale_write_column("title", &field, &ctx_ref);
         assert_eq!(col, "title__en", "Default mode should use default locale");
@@ -309,7 +388,10 @@ mod tests {
     fn get_locale_select_columns_default_mode() {
         let fields = vec![make_localized_field("title", FieldType::Text)];
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Default, config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx);
         assert_eq!(exprs, vec!["id", "title__en AS title"]);
         assert_eq!(names, vec!["id", "title"]);
@@ -319,7 +401,10 @@ mod tests {
     fn get_locale_select_columns_single_with_fallback() {
         let fields = vec![make_localized_field("title", FieldType::Text)];
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Single("de".to_string()), config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx);
         assert_eq!(exprs, vec!["id", "COALESCE(title__de, title__en) AS title"]);
         assert_eq!(names, vec!["id", "title"]);
@@ -329,7 +414,10 @@ mod tests {
     fn get_locale_select_columns_all_mode() {
         let fields = vec![make_localized_field("title", FieldType::Text)];
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::All, config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::All,
+            config: locale_cfg,
+        };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx);
         assert_eq!(exprs, vec!["id", "title__en", "title__de"]);
         assert_eq!(names, vec!["id", "title__en", "title__de"]);
@@ -340,8 +428,10 @@ mod tests {
         let fields = vec![make_localized_field("title", FieldType::Text)];
         let locale_cfg = make_locale_config();
         let mut doc = crate::core::Document::new("id1".to_string());
-        doc.fields.insert("title__en".to_string(), serde_json::json!("Hello"));
-        doc.fields.insert("title__de".to_string(), serde_json::json!("Hallo"));
+        doc.fields
+            .insert("title__en".to_string(), serde_json::json!("Hello"));
+        doc.fields
+            .insert("title__de".to_string(), serde_json::json!("Hallo"));
 
         group_locale_fields(&mut doc, &fields, &locale_cfg);
 
@@ -354,19 +444,23 @@ mod tests {
 
     #[test]
     fn group_locale_fields_with_group_prefix() {
-        let fields = vec![
-            make_group_field("seo", vec![
-                make_localized_field("title", FieldType::Text),
-            ]),
-        ];
+        let fields = vec![make_group_field(
+            "seo",
+            vec![make_localized_field("title", FieldType::Text)],
+        )];
         let locale_cfg = make_locale_config();
         let mut doc = crate::core::Document::new("id1".to_string());
-        doc.fields.insert("seo__title__en".to_string(), serde_json::json!("SEO EN"));
-        doc.fields.insert("seo__title__de".to_string(), serde_json::json!("SEO DE"));
+        doc.fields
+            .insert("seo__title__en".to_string(), serde_json::json!("SEO EN"));
+        doc.fields
+            .insert("seo__title__de".to_string(), serde_json::json!("SEO DE"));
 
         group_locale_fields(&mut doc, &fields, &locale_cfg);
 
-        let seo_title = doc.fields.get("seo__title").expect("seo__title should exist");
+        let seo_title = doc
+            .fields
+            .get("seo__title")
+            .expect("seo__title should exist");
         assert_eq!(seo_title.get("en").and_then(|v| v.as_str()), Some("SEO EN"));
         assert_eq!(seo_title.get("de").and_then(|v| v.as_str()), Some("SEO DE"));
         assert!(!doc.fields.contains_key("seo__title__en"));
@@ -375,53 +469,77 @@ mod tests {
 
     #[test]
     fn get_locale_select_columns_tabs_with_group() {
-        let fields = vec![
-            make_tabs_field("layout", vec![
-                crate::core::field::FieldTab::new("Social", vec![
-                    make_group_field("social", vec![
-                        make_field("github", FieldType::Text),
-                    ]),
-                ]),
-            ]),
-        ];
+        let fields = vec![make_tabs_field(
+            "layout",
+            vec![crate::core::field::FieldTab::new(
+                "Social",
+                vec![make_group_field(
+                    "social",
+                    vec![make_field("github", FieldType::Text)],
+                )],
+            )],
+        )];
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Default, config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx);
-        assert!(exprs.contains(&"social__github".to_string()), "Group inside Tabs should appear in SELECT");
+        assert!(
+            exprs.contains(&"social__github".to_string()),
+            "Group inside Tabs should appear in SELECT"
+        );
         assert!(names.contains(&"social__github".to_string()));
     }
 
     #[test]
     fn get_locale_select_columns_tabs_with_localized_field() {
-        let fields = vec![
-            make_tabs_field("layout", vec![
-                crate::core::field::FieldTab::new("Content", vec![
-                    make_localized_field("title", FieldType::Text),
-                ]),
-            ]),
-        ];
+        let fields = vec![make_tabs_field(
+            "layout",
+            vec![crate::core::field::FieldTab::new(
+                "Content",
+                vec![make_localized_field("title", FieldType::Text)],
+            )],
+        )];
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Single("de".to_string()), config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx);
-        assert!(exprs.iter().any(|e| e.contains("title__de")), "Localized field in Tabs should have locale column");
+        assert!(
+            exprs.iter().any(|e| e.contains("title__de")),
+            "Localized field in Tabs should have locale column"
+        );
         assert!(names.contains(&"title".to_string()));
     }
 
     #[test]
     fn get_locale_select_columns_group_containing_tabs_localized() {
         let fields = vec![{
-            let mut g = make_group_field("meta", vec![
-                make_tabs_field("t", vec![
-                    crate::core::field::FieldTab::new("Content", vec![make_field("title", FieldType::Text)]),
-                ]),
-            ]);
+            let mut g = make_group_field(
+                "meta",
+                vec![make_tabs_field(
+                    "t",
+                    vec![crate::core::field::FieldTab::new(
+                        "Content",
+                        vec![make_field("title", FieldType::Text)],
+                    )],
+                )],
+            );
             g.localized = true;
             g
         }];
         let locale_cfg = make_locale_config();
-        let ctx = LocaleContext { mode: LocaleMode::Single("de".to_string()), config: locale_cfg };
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
         let (exprs, names) = get_locale_select_columns(&fields, false, &ctx);
-        assert!(exprs.iter().any(|e| e.contains("meta__title__de")), "Localized Group→Tabs: meta__title__de");
+        assert!(
+            exprs.iter().any(|e| e.contains("meta__title__de")),
+            "Localized Group→Tabs: meta__title__de"
+        );
         assert!(names.contains(&"meta__title".to_string()));
     }
 }

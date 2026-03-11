@@ -7,11 +7,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use crate::config::JobsConfig;
-use crate::core::SharedRegistry;
 use crate::core::job::JobDefinition;
-use crate::db::DbPool;
-use crate::db::query::jobs as job_query;
+use crate::core::SharedRegistry;
 use crate::db::query::images as image_query;
+use crate::db::query::jobs as job_query;
+use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 /// Start the scheduler background loop. Runs until the task is cancelled.
@@ -24,12 +24,18 @@ pub async fn start(
     config: JobsConfig,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    tracing::info!("Scheduler started (poll={}s, cron={}s, max_concurrent={})",
-        config.poll_interval, config.cron_interval, config.max_concurrent);
+    tracing::info!(
+        "Scheduler started (poll={}s, cron={}s, max_concurrent={})",
+        config.poll_interval,
+        config.cron_interval,
+        config.max_concurrent
+    );
 
     // Recover stale jobs on startup
     {
-        let conn = pool.get().context("Scheduler: failed to get DB connection for recovery")?;
+        let conn = pool
+            .get()
+            .context("Scheduler: failed to get DB connection for recovery")?;
         recover_stale_jobs(&conn, &registry)?;
     }
 
@@ -45,7 +51,8 @@ pub async fn start(
     let mut image_ticker = tokio::time::interval(poll_interval);
 
     // Track running job IDs for heartbeat updates
-    let running_jobs: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let running_jobs: Arc<std::sync::Mutex<Vec<String>>> =
+        Arc::new(std::sync::Mutex::new(Vec::new()));
 
     // Track last cron check time to avoid duplicate firing
     let mut last_cron_check = chrono::Utc::now();
@@ -130,7 +137,9 @@ pub async fn start(
 /// Process pending image format conversions from the queue.
 #[cfg(not(tarpaulin_include))]
 async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
-    let conn = pool.get().context("Image queue: failed to get DB connection")?;
+    let conn = pool
+        .get()
+        .context("Image queue: failed to get DB connection")?;
     let entries = image_query::claim_pending_images(&conn, batch_size)?;
     drop(conn);
 
@@ -149,19 +158,25 @@ async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
             )?;
 
             // Update the document's format URL column
-            let conn = pool.get().context("Image queue: failed to get DB connection")?;
+            let conn = pool
+                .get()
+                .context("Image queue: failed to get DB connection")?;
             conn.execute(
                 &format!(
                     "UPDATE \"{}\" SET \"{}\" = ?1 WHERE id = ?2",
                     entry.collection, entry.url_column
                 ),
                 rusqlite::params![entry.url_value, entry.document_id],
-            ).context("Image queue: failed to update document")?;
+            )
+            .context("Image queue: failed to update document")?;
 
             Ok::<(), anyhow::Error>(())
-        }).await;
+        })
+        .await;
 
-        let conn = pool.get().context("Image queue: failed to get DB connection")?;
+        let conn = pool
+            .get()
+            .context("Image queue: failed to get DB connection")?;
         match result {
             Ok(Ok(())) => {
                 image_query::complete_image_entry(&conn, &entry_id)?;
@@ -204,26 +219,34 @@ async fn poll_and_execute(
     // Get per-slug running counts and concurrency limits
     let running_counts = job_query::count_running_per_slug(&conn)?;
     let job_concurrency = {
-        let reg = registry.read()
+        let reg = registry
+            .read()
             .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
-        reg.jobs.iter()
+        reg.jobs
+            .iter()
             .map(|(slug, def)| (slug.clone(), def.concurrency))
             .collect::<HashMap<String, u32>>()
     };
 
-    let claimed = job_query::claim_pending_jobs(&conn, available, &running_counts, &job_concurrency)?;
+    let claimed =
+        job_query::claim_pending_jobs(&conn, available, &running_counts, &job_concurrency)?;
     drop(conn);
 
     for job_run in claimed {
         let job_def = {
-            let reg = registry.read()
+            let reg = registry
+                .read()
                 .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
             match reg.get_job(&job_run.slug) {
                 Some(def) => def.clone(),
                 None => {
-                    tracing::warn!("Job definition '{}' not found, marking as failed", job_run.slug);
+                    tracing::warn!(
+                        "Job definition '{}' not found, marking as failed",
+                        job_run.slug
+                    );
                     if let Ok(c) = pool.get() {
-                        let _ = job_query::fail_job(&c, &job_run.id, "job definition not found", false);
+                        let _ =
+                            job_query::fail_job(&c, &job_run.id, "job definition not found", false);
                     }
                     continue;
                 }
@@ -256,7 +279,9 @@ async fn poll_and_execute(
                 if let Err(e) = result {
                     tracing::error!("Job {} ({}) execution error: {}", job_id, job_run.slug, e);
                 }
-            }).await {
+            })
+            .await
+            {
                 Ok(()) => {}
                 Err(e) => tracing::error!("Job {} ({}) panicked: {}", id_log, slug_log, e),
             }
@@ -276,12 +301,19 @@ pub fn execute_job(
     let timeout = std::time::Duration::from_secs(job_def.timeout);
     let start = std::time::Instant::now();
 
-    tracing::info!("Executing job {} ({}) attempt {}/{}",
-        job_run.id, job_run.slug, job_run.attempt, job_run.max_attempts);
+    tracing::info!(
+        "Executing job {} ({}) attempt {}/{}",
+        job_run.id,
+        job_run.slug,
+        job_run.attempt,
+        job_run.max_attempts
+    );
 
     // Open a transaction for the job handler (same TxContext pattern as hooks)
     let mut conn = pool.get().context("Failed to get DB connection for job")?;
-    let tx = conn.transaction().context("Failed to begin job transaction")?;
+    let tx = conn
+        .transaction()
+        .context("Failed to begin job transaction")?;
 
     let result = hook_runner.run_job_handler(
         &job_def.handler,
@@ -295,10 +327,17 @@ pub fn execute_job(
     match result {
         Ok(result_json) => {
             tx.commit().context("Failed to commit job transaction")?;
-            let c = pool.get().context("Failed to get DB connection for completion")?;
+            let c = pool
+                .get()
+                .context("Failed to get DB connection for completion")?;
             job_query::complete_job(&c, &job_run.id, result_json.as_deref())?;
             let elapsed = start.elapsed();
-            tracing::info!("Job {} ({}) completed in {:?}", job_run.id, job_run.slug, elapsed);
+            tracing::info!(
+                "Job {} ({}) completed in {:?}",
+                job_run.id,
+                job_run.slug,
+                elapsed
+            );
         }
         Err(e) => {
             // Transaction rolls back on drop
@@ -309,14 +348,26 @@ pub fn execute_job(
                 format!("{}", e)
             };
             let should_retry = job_run.attempt < job_run.max_attempts;
-            let c = pool.get().context("Failed to get DB connection for failure")?;
+            let c = pool
+                .get()
+                .context("Failed to get DB connection for failure")?;
             job_query::fail_job(&c, &job_run.id, &error_msg, should_retry)?;
             if should_retry {
-                tracing::warn!("Job {} ({}) failed (attempt {}/{}), will retry: {}",
-                    job_run.id, job_run.slug, job_run.attempt, job_run.max_attempts, error_msg);
+                tracing::warn!(
+                    "Job {} ({}) failed (attempt {}/{}), will retry: {}",
+                    job_run.id,
+                    job_run.slug,
+                    job_run.attempt,
+                    job_run.max_attempts,
+                    error_msg
+                );
             } else {
-                tracing::error!("Job {} ({}) failed permanently: {}",
-                    job_run.id, job_run.slug, error_msg);
+                tracing::error!(
+                    "Job {} ({}) failed permanently: {}",
+                    job_run.id,
+                    job_run.slug,
+                    error_msg
+                );
             }
         }
     }
@@ -331,7 +382,8 @@ pub fn check_cron_schedules(
     last_check: chrono::DateTime<chrono::Utc>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<()> {
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
     let conn = pool.get().context("Failed to get DB connection for cron")?;
@@ -348,13 +400,19 @@ pub fn check_cron_schedules(
         let schedule = match cron::Schedule::from_str(&normalized) {
             Ok(s) => s,
             Err(e) => {
-                tracing::warn!("Invalid cron expression '{}' for job '{}': {}", schedule_str, slug, e);
+                tracing::warn!(
+                    "Invalid cron expression '{}' for job '{}': {}",
+                    schedule_str,
+                    slug,
+                    e
+                );
                 continue;
             }
         };
 
         // Check if the schedule should have fired between last_check and now
-        let should_fire = schedule.after(&last_check)
+        let should_fire = schedule
+            .after(&last_check)
             .take_while(|t| *t <= now)
             .next()
             .is_some();
@@ -373,14 +431,7 @@ pub fn check_cron_schedules(
         }
 
         // Insert a pending job
-        let job = job_query::insert_job(
-            &conn,
-            slug,
-            "{}",
-            "cron",
-            def.retries + 1,
-            &def.queue,
-        )?;
+        let job = job_query::insert_job(&conn, slug, "{}", "cron", def.retries + 1, &def.queue)?;
         tracing::info!("Cron scheduled job '{}' (run {})", slug, job.id);
     }
 
@@ -388,24 +439,23 @@ pub fn check_cron_schedules(
 }
 
 /// Recover stale jobs on startup.
-pub fn recover_stale_jobs(
-    conn: &rusqlite::Connection,
-    registry: &SharedRegistry,
-) -> Result<()> {
-    let reg = registry.read()
+pub fn recover_stale_jobs(conn: &rusqlite::Connection, registry: &SharedRegistry) -> Result<()> {
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
     // Find all running jobs — on startup, these are stale (server was restarted)
     let stale = job_query::find_stale_jobs(conn, 0)?;
 
     for job in &stale {
-        let timeout = reg.jobs.get(&job.slug)
-            .map(|d| d.timeout)
-            .unwrap_or(60);
+        let timeout = reg.jobs.get(&job.slug).map(|d| d.timeout).unwrap_or(60);
         let threshold = std::cmp::max(timeout * 2, 300);
 
         // Any job that was running when we started is stale
-        let error = format!("stale: server restarted (was running, timeout={}s)", threshold);
+        let error = format!(
+            "stale: server restarted (was running, timeout={}s)",
+            threshold
+        );
         job_query::mark_stale(conn, &job.id, &error)?;
         tracing::info!("Marked stale job {} ({})", job.id, job.slug);
     }
@@ -507,7 +557,10 @@ mod tests {
         // Verify that a normalized 5-field expression produces a valid cron schedule
         let normalized = normalize_cron("0 3 * * *");
         let schedule = cron::Schedule::from_str(&normalized);
-        assert!(schedule.is_ok(), "Normalized expression should be parseable");
+        assert!(
+            schedule.is_ok(),
+            "Normalized expression should be parseable"
+        );
     }
 
     // ── recover_stale_jobs ──────────────────────────────────────────────
@@ -533,8 +586,9 @@ mod tests {
             );
             CREATE INDEX idx_crap_jobs_status ON _crap_jobs(status);
             CREATE INDEX idx_crap_jobs_queue ON _crap_jobs(queue, status);
-            CREATE INDEX idx_crap_jobs_slug ON _crap_jobs(slug, status);"
-        ).unwrap();
+            CREATE INDEX idx_crap_jobs_slug ON _crap_jobs(slug, status);",
+        )
+        .unwrap();
         conn
     }
 
@@ -552,9 +606,10 @@ mod tests {
     #[test]
     fn recover_stale_jobs_marks_running_as_stale() {
         let conn = setup_jobs_db();
-        let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("my_job", "some.handler").timeout(120).build(),
-        ]);
+        let registry =
+            make_registry_with_jobs(vec![JobDefinition::builder("my_job", "some.handler")
+                .timeout(120)
+                .build()]);
 
         // Insert a running job (simulates server crash with running job)
         job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
@@ -567,7 +622,11 @@ mod tests {
 
         let jobs = job_query::list_job_runs(&conn, None, Some("stale"), 100, 0).unwrap();
         assert_eq!(jobs.len(), 1);
-        assert!(jobs[0].error.as_ref().unwrap().contains("stale: server restarted"));
+        assert!(jobs[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("stale: server restarted"));
         assert!(jobs[0].error.as_ref().unwrap().contains("timeout=300s"));
     }
 
@@ -575,7 +634,9 @@ mod tests {
     fn recover_stale_jobs_uses_job_timeout() {
         let conn = setup_jobs_db();
         let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("long_job", "some.handler").timeout(3600).build(), // 1 hour
+            JobDefinition::builder("long_job", "some.handler")
+                .timeout(3600)
+                .build(), // 1 hour
         ]);
 
         job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default").unwrap();
@@ -633,13 +694,18 @@ mod tests {
     fn recover_stale_jobs_multiple_running() {
         let conn = setup_jobs_db();
         let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("job_a", "handler_a").timeout(60).build(),
-            JobDefinition::builder("job_b", "handler_b").timeout(120).build(),
+            JobDefinition::builder("job_a", "handler_a")
+                .timeout(60)
+                .build(),
+            JobDefinition::builder("job_b", "handler_b")
+                .timeout(120)
+                .build(),
         ]);
 
         job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default").unwrap();
         job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running'", []).unwrap();
+        conn.execute("UPDATE _crap_jobs SET status = 'running'", [])
+            .unwrap();
 
         recover_stale_jobs(&conn, &registry).unwrap();
 
@@ -653,11 +719,12 @@ mod tests {
         use r2d2::Pool;
         use r2d2_sqlite::SqliteConnectionManager;
 
-        let manager = SqliteConnectionManager::memory()
-            .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        let manager = SqliteConnectionManager::memory().with_flags(
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
+        );
         let pool = Pool::builder()
             .max_size(2)
             .test_on_check_out(true)
@@ -685,8 +752,9 @@ mod tests {
             );
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
-            CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);"
-        ).unwrap();
+            CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);",
+        )
+        .unwrap();
         drop(conn);
 
         pool
@@ -695,14 +763,13 @@ mod tests {
     #[test]
     fn check_cron_schedules_fires_due_job() {
         let pool = make_test_pool();
-        let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("cron_job", "some.handler")
+        let registry =
+            make_registry_with_jobs(vec![JobDefinition::builder("cron_job", "some.handler")
                 .schedule("* * * * *") // every minute
                 .retries(0)
                 .queue("default")
                 .skip_if_running(false)
-                .build(),
-        ]);
+                .build()]);
 
         // Set last_check to 2 minutes ago, now to current — schedule should fire
         let now = chrono::Utc::now();
@@ -737,11 +804,10 @@ mod tests {
     #[test]
     fn check_cron_schedules_skips_not_due() {
         let pool = make_test_pool();
-        let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("hourly_job", "some.handler")
+        let registry =
+            make_registry_with_jobs(vec![JobDefinition::builder("hourly_job", "some.handler")
                 .schedule("0 * * * *") // every hour at :00
-                .build(),
-        ]);
+                .build()]);
 
         // Set the window to just 1 second — unlikely an hour boundary is crossed
         let now = chrono::Utc::now();
@@ -760,18 +826,18 @@ mod tests {
     #[test]
     fn check_cron_schedules_skip_if_running() {
         let pool = make_test_pool();
-        let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("skip_job", "some.handler")
+        let registry =
+            make_registry_with_jobs(vec![JobDefinition::builder("skip_job", "some.handler")
                 .schedule("* * * * *")
                 .skip_if_running(true)
-                .build(),
-        ]);
+                .build()]);
 
         // Insert a running job for this slug
         {
             let conn = pool.get().unwrap();
             job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default").unwrap();
-            conn.execute("UPDATE _crap_jobs SET status = 'running'", []).unwrap();
+            conn.execute("UPDATE _crap_jobs SET status = 'running'", [])
+                .unwrap();
         }
 
         let now = chrono::Utc::now();
@@ -781,25 +847,26 @@ mod tests {
 
         // Should NOT insert a new pending job because skip_if_running=true and one is running
         let conn = pool.get().unwrap();
-        let pending = job_query::list_job_runs(&conn, Some("skip_job"), Some("pending"), 100, 0).unwrap();
+        let pending =
+            job_query::list_job_runs(&conn, Some("skip_job"), Some("pending"), 100, 0).unwrap();
         assert_eq!(pending.len(), 0);
     }
 
     #[test]
     fn check_cron_schedules_no_skip_if_running_false() {
         let pool = make_test_pool();
-        let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("noskip_job", "some.handler")
+        let registry =
+            make_registry_with_jobs(vec![JobDefinition::builder("noskip_job", "some.handler")
                 .schedule("* * * * *")
                 .skip_if_running(false)
-                .build(),
-        ]);
+                .build()]);
 
         // Insert a running job
         {
             let conn = pool.get().unwrap();
             job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default").unwrap();
-            conn.execute("UPDATE _crap_jobs SET status = 'running'", []).unwrap();
+            conn.execute("UPDATE _crap_jobs SET status = 'running'", [])
+                .unwrap();
         }
 
         let now = chrono::Utc::now();
@@ -809,18 +876,18 @@ mod tests {
 
         // Should insert a new pending job even though one is running
         let conn = pool.get().unwrap();
-        let pending = job_query::list_job_runs(&conn, Some("noskip_job"), Some("pending"), 100, 0).unwrap();
+        let pending =
+            job_query::list_job_runs(&conn, Some("noskip_job"), Some("pending"), 100, 0).unwrap();
         assert_eq!(pending.len(), 1);
     }
 
     #[test]
     fn check_cron_schedules_invalid_cron_expression() {
         let pool = make_test_pool();
-        let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("bad_cron", "some.handler")
+        let registry =
+            make_registry_with_jobs(vec![JobDefinition::builder("bad_cron", "some.handler")
                 .schedule("not a valid cron")
-                .build(),
-        ]);
+                .build()]);
 
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);
@@ -836,14 +903,13 @@ mod tests {
     #[test]
     fn check_cron_schedules_retries_stored() {
         let pool = make_test_pool();
-        let registry = make_registry_with_jobs(vec![
-            JobDefinition::builder("retried_cron", "some.handler")
+        let registry =
+            make_registry_with_jobs(vec![JobDefinition::builder("retried_cron", "some.handler")
                 .schedule("* * * * *")
                 .retries(3)
                 .queue("special")
                 .skip_if_running(false)
-                .build(),
-        ]);
+                .build()]);
 
         let now = chrono::Utc::now();
         let last_check = now - chrono::Duration::minutes(2);

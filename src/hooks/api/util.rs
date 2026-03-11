@@ -2,7 +2,7 @@
 //! and pure Lua table/string utilities loaded after the namespace is set.
 
 use anyhow::{Context as _, Result};
-use mlua::{Lua, Table, Function};
+use mlua::{Function, Lua, Table};
 
 /// Pure Lua table and string helpers, loaded onto `crap.util` after the table is set.
 const LUA_UTIL_HELPERS: &str = r#"
@@ -123,14 +123,10 @@ end
 pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
     let util_table = lua.create_table()?;
 
-    let slugify_fn = lua.create_function(|_, s: String| {
-        Ok(slugify(&s))
-    })?;
+    let slugify_fn = lua.create_function(|_, s: String| Ok(slugify(&s)))?;
     util_table.set("slugify", slugify_fn)?;
 
-    let nanoid_fn = lua.create_function(|_, ()| {
-        Ok(nanoid::nanoid!())
-    })?;
+    let nanoid_fn = lua.create_function(|_, ()| Ok(nanoid::nanoid!()))?;
     util_table.set("nanoid", nanoid_fn)?;
 
     let json_encode_fn: Function = lua.create_function(|lua, value: mlua::Value| {
@@ -154,9 +150,8 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
         })?;
         util_table.set("date_now", date_now_fn)?;
 
-        let date_timestamp_fn = lua.create_function(|_, ()| -> mlua::Result<i64> {
-            Ok(chrono::Utc::now().timestamp())
-        })?;
+        let date_timestamp_fn = lua
+            .create_function(|_, ()| -> mlua::Result<i64> { Ok(chrono::Utc::now().timestamp()) })?;
         util_table.set("date_timestamp", date_timestamp_fn)?;
 
         let date_parse_fn = lua.create_function(|_, s: String| -> mlua::Result<i64> {
@@ -170,27 +165,33 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
             }
             // Try "YYYY-MM-DD"
             if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                return Ok(d.and_hms_opt(0, 0, 0).expect("00:00:00 is valid").and_utc().timestamp());
+                return Ok(d
+                    .and_hms_opt(0, 0, 0)
+                    .expect("00:00:00 is valid")
+                    .and_utc()
+                    .timestamp());
             }
-            Err(mlua::Error::RuntimeError(format!("could not parse date: {}", s)))
+            Err(mlua::Error::RuntimeError(format!(
+                "could not parse date: {}",
+                s
+            )))
         })?;
         util_table.set("date_parse", date_parse_fn)?;
 
-        let date_format_fn = lua.create_function(|_, (ts, fmt): (i64, String)| -> mlua::Result<String> {
-            let dt = chrono::DateTime::from_timestamp(ts, 0)
-                .ok_or_else(|| mlua::Error::RuntimeError("invalid timestamp".into()))?;
-            Ok(dt.format(&fmt).to_string())
-        })?;
+        let date_format_fn =
+            lua.create_function(|_, (ts, fmt): (i64, String)| -> mlua::Result<String> {
+                let dt = chrono::DateTime::from_timestamp(ts, 0)
+                    .ok_or_else(|| mlua::Error::RuntimeError("invalid timestamp".into()))?;
+                Ok(dt.format(&fmt).to_string())
+            })?;
         util_table.set("date_format", date_format_fn)?;
 
-        let date_add_fn = lua.create_function(|_, (ts, secs): (i64, i64)| -> mlua::Result<i64> {
-            Ok(ts + secs)
-        })?;
+        let date_add_fn = lua
+            .create_function(|_, (ts, secs): (i64, i64)| -> mlua::Result<i64> { Ok(ts + secs) })?;
         util_table.set("date_add", date_add_fn)?;
 
-        let date_diff_fn = lua.create_function(|_, (a, b): (i64, i64)| -> mlua::Result<i64> {
-            Ok(a - b)
-        })?;
+        let date_diff_fn =
+            lua.create_function(|_, (a, b): (i64, i64)| -> mlua::Result<i64> { Ok(a - b) })?;
         util_table.set("date_diff", date_diff_fn)?;
     }
 
@@ -201,7 +202,8 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
 
 /// Load pure Lua helpers onto `crap.util` (must be called after `crap` global is set).
 pub(super) fn load_lua_helpers(lua: &Lua) -> Result<()> {
-    lua.load(LUA_UTIL_HELPERS).exec()
+    lua.load(LUA_UTIL_HELPERS)
+        .exec()
         .context("Failed to load Lua util helpers")?;
     Ok(())
 }
@@ -209,13 +211,7 @@ pub(super) fn load_lua_helpers(lua: &Lua) -> Result<()> {
 fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
-        .map(|c| {
-            if c.is_alphanumeric() {
-                c
-            } else {
-                '-'
-            }
-        })
+        .map(|c| if c.is_alphanumeric() { c } else { '-' })
         .collect::<String>()
         .split('-')
         .filter(|s| !s.is_empty())
@@ -259,6 +255,9 @@ mod tests {
 
     #[test]
     fn slugify_unicode() {
-        assert_eq!(slugify("Caf\u{00e9} Latt\u{00e9}"), "caf\u{00e9}-latt\u{00e9}");
+        assert_eq!(
+            slugify("Caf\u{00e9} Latt\u{00e9}"),
+            "caf\u{00e9}-latt\u{00e9}"
+        );
     }
 }

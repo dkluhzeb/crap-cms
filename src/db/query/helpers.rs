@@ -108,32 +108,50 @@ mod tests {
 
     #[test]
     fn normalize_date_only_to_utc_noon() {
-        assert_eq!(normalize_date_value("2026-01-15"), "2026-01-15T12:00:00.000Z");
+        assert_eq!(
+            normalize_date_value("2026-01-15"),
+            "2026-01-15T12:00:00.000Z"
+        );
     }
 
     #[test]
     fn normalize_full_iso_utc() {
-        assert_eq!(normalize_date_value("2026-01-15T09:00:00Z"), "2026-01-15T09:00:00.000Z");
+        assert_eq!(
+            normalize_date_value("2026-01-15T09:00:00Z"),
+            "2026-01-15T09:00:00.000Z"
+        );
     }
 
     #[test]
     fn normalize_iso_with_millis() {
-        assert_eq!(normalize_date_value("2026-01-15T09:00:00.000Z"), "2026-01-15T09:00:00.000Z");
+        assert_eq!(
+            normalize_date_value("2026-01-15T09:00:00.000Z"),
+            "2026-01-15T09:00:00.000Z"
+        );
     }
 
     #[test]
     fn normalize_iso_with_offset() {
-        assert_eq!(normalize_date_value("2026-01-15T09:00:00+05:00"), "2026-01-15T04:00:00.000Z");
+        assert_eq!(
+            normalize_date_value("2026-01-15T09:00:00+05:00"),
+            "2026-01-15T04:00:00.000Z"
+        );
     }
 
     #[test]
     fn normalize_datetime_local() {
-        assert_eq!(normalize_date_value("2026-01-15T09:00"), "2026-01-15T09:00:00.000Z");
+        assert_eq!(
+            normalize_date_value("2026-01-15T09:00"),
+            "2026-01-15T09:00:00.000Z"
+        );
     }
 
     #[test]
     fn normalize_datetime_no_tz() {
-        assert_eq!(normalize_date_value("2026-01-15T09:00:00"), "2026-01-15T09:00:00.000Z");
+        assert_eq!(
+            normalize_date_value("2026-01-15T09:00:00"),
+            "2026-01-15T09:00:00.000Z"
+        );
     }
 
     #[test]

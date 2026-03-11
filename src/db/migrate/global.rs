@@ -4,7 +4,9 @@ use anyhow::{Context as _, Result};
 
 use crate::config::LocaleConfig;
 
-use super::helpers::{table_exists, get_table_columns, sync_join_tables, sync_versions_table, sanitize_locale};
+use super::helpers::{
+    get_table_columns, sanitize_locale, sync_join_tables, sync_versions_table, table_exists,
+};
 
 pub(super) fn sync_global_table(
     conn: &rusqlite::Connection,
@@ -21,7 +23,12 @@ pub(super) fn sync_global_table(
         for spec in &super::helpers::collect_column_specs(&def.fields, locale_config) {
             if spec.is_localized {
                 for locale in &locale_config.locales {
-                    let col = format!("{}__{} {}", spec.col_name, sanitize_locale(locale), spec.field.field_type.sqlite_type());
+                    let col = format!(
+                        "{}__{} {}",
+                        spec.col_name,
+                        sanitize_locale(locale),
+                        spec.field.field_type.sqlite_type()
+                    );
                     columns.push(col);
                 }
             } else {
@@ -38,11 +45,7 @@ pub(super) fn sync_global_table(
         columns.push("created_at TEXT DEFAULT (datetime('now'))".to_string());
         columns.push("updated_at TEXT DEFAULT (datetime('now'))".to_string());
 
-        let sql = format!(
-            "CREATE TABLE {} ({})",
-            table_name,
-            columns.join(", ")
-        );
+        let sql = format!("CREATE TABLE {} ({})", table_name, columns.join(", "));
 
         tracing::info!("Creating global table: {}", table_name);
         conn.execute(&sql, [])
@@ -50,7 +53,10 @@ pub(super) fn sync_global_table(
 
         // Insert the single global row
         conn.execute(
-            &format!("INSERT OR IGNORE INTO {} (id) VALUES ('default')", table_name),
+            &format!(
+                "INSERT OR IGNORE INTO {} (id) VALUES ('default')",
+                table_name
+            ),
             [],
         )?;
     } else {
@@ -64,21 +70,27 @@ pub(super) fn sync_global_table(
                     if !existing_columns.contains(&col_name) {
                         let sql = format!(
                             "ALTER TABLE {} ADD COLUMN {} {}",
-                            table_name, col_name, spec.field.field_type.sqlite_type()
+                            table_name,
+                            col_name,
+                            spec.field.field_type.sqlite_type()
                         );
                         tracing::info!("Adding column to {}: {}", table_name, col_name);
-                        conn.execute(&sql, [])
-                            .with_context(|| format!("Failed to add column {} to {}", col_name, table_name))?;
+                        conn.execute(&sql, []).with_context(|| {
+                            format!("Failed to add column {} to {}", col_name, table_name)
+                        })?;
                     }
                 }
             } else if !existing_columns.contains(&spec.col_name) {
                 let sql = format!(
                     "ALTER TABLE {} ADD COLUMN {} {}",
-                    table_name, spec.col_name, spec.field.field_type.sqlite_type()
+                    table_name,
+                    spec.col_name,
+                    spec.field.field_type.sqlite_type()
                 );
                 tracing::info!("Adding column to {}: {}", table_name, spec.col_name);
-                conn.execute(&sql, [])
-                    .with_context(|| format!("Failed to add column {} to {}", spec.col_name, table_name))?;
+                conn.execute(&sql, []).with_context(|| {
+                    format!("Failed to add column {} to {}", spec.col_name, table_name)
+                })?;
             }
         }
     }
@@ -87,7 +99,10 @@ pub(super) fn sync_global_table(
     if exists && def.has_drafts() {
         let existing_columns = get_table_columns(conn, &table_name)?;
         if !existing_columns.contains("_status") {
-            let sql = format!("ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'", table_name);
+            let sql = format!(
+                "ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
+                table_name
+            );
             tracing::info!("Adding _status column to {}", table_name);
             conn.execute(&sql, [])
                 .with_context(|| format!("Failed to add _status to {}", table_name))?;
@@ -114,11 +129,12 @@ mod tests {
     use crate::db::DbPool;
 
     fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory()
-            .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
+        );
         r2d2::Pool::builder()
             .max_size(2)
             .build(manager)
@@ -148,7 +164,9 @@ mod tests {
     }
 
     fn localized_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).localized(true).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .localized(true)
+            .build()
     }
 
     // ── global table ──────────────────────────────────────────────────────
@@ -161,9 +179,9 @@ mod tests {
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "_global_settings").unwrap());
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM _global_settings", [], |r| r.get(0)
-        ).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM _global_settings", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1, "should have exactly one default row");
     }
 
@@ -177,14 +195,17 @@ mod tests {
         sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
 
         // Now add a new field
-        let def2 = simple_global("settings", vec![
-            text_field("site_name"),
-            text_field("site_url"),
-        ]);
+        let def2 = simple_global(
+            "settings",
+            vec![text_field("site_name"), text_field("site_url")],
+        );
         sync_global_table(&conn, "settings", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
-        assert!(cols.contains("site_url"), "New column should be added via ALTER");
+        assert!(
+            cols.contains("site_url"),
+            "New column should be added via ALTER"
+        );
     }
 
     // ── global table with localized fields ──────────────────────────────
@@ -212,10 +233,10 @@ mod tests {
         sync_global_table(&conn, "settings", &def1, &locale_en_de()).unwrap();
 
         // Add a localized field to existing table
-        let def2 = simple_global("settings", vec![
-            text_field("name"),
-            localized_field("description"),
-        ]);
+        let def2 = simple_global(
+            "settings",
+            vec![text_field("name"), localized_field("description")],
+        );
         sync_global_table(&conn, "settings", &def2, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -229,11 +250,12 @@ mod tests {
     fn global_table_group_fields_create() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("seo", FieldType::Group)
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("seo", FieldType::Group)
                 .fields(vec![text_field("title"), text_field("description")])
-                .build(),
-        ]);
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -249,12 +271,15 @@ mod tests {
         sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
 
         // Add a group field to existing table
-        let def2 = simple_global("settings", vec![
-            text_field("name"),
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![text_field("title")])
-                .build(),
-        ]);
+        let def2 = simple_global(
+            "settings",
+            vec![
+                text_field("name"),
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("title")])
+                    .build(),
+            ],
+        );
         sync_global_table(&conn, "settings", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -267,12 +292,13 @@ mod tests {
     fn global_table_localized_group_create() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("seo", FieldType::Group)
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("seo", FieldType::Group)
                 .localized(true)
                 .fields(vec![text_field("title")])
-                .build(),
-        ]);
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -287,13 +313,16 @@ mod tests {
         let def1 = simple_global("settings", vec![text_field("name")]);
         sync_global_table(&conn, "settings", &def1, &locale_en_de()).unwrap();
 
-        let def2 = simple_global("settings", vec![
-            text_field("name"),
-            FieldDefinition::builder("seo", FieldType::Group)
-                .localized(true)
-                .fields(vec![text_field("title")])
-                .build(),
-        ]);
+        let def2 = simple_global(
+            "settings",
+            vec![
+                text_field("name"),
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![text_field("title")])
+                    .build(),
+            ],
+        );
         sync_global_table(&conn, "settings", &def2, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -313,7 +342,10 @@ mod tests {
 
         assert!(table_exists(&conn, "_versions__global_settings").unwrap());
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
-        assert!(cols.contains("_status"), "Drafts global should have _status column");
+        assert!(
+            cols.contains("_status"),
+            "Drafts global should have _status column"
+        );
     }
 
     // ── global table alter adds _status for drafts ──────────────────────
@@ -343,11 +375,12 @@ mod tests {
     fn global_table_creates_join_tables() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("items", FieldType::Array)
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("items", FieldType::Array)
                 .fields(vec![text_field("label")])
-                .build(),
-        ]);
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "_global_settings_items").unwrap());
@@ -359,11 +392,12 @@ mod tests {
     fn global_table_collapsible_promotes_flat() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("extra", FieldType::Collapsible)
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("extra", FieldType::Collapsible)
                 .fields(vec![text_field("notes"), text_field("footer")])
-                .build(),
-        ]);
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -379,14 +413,15 @@ mod tests {
         use crate::core::field::FieldTab;
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![
                     FieldTab::new("General", vec![text_field("site_name")]),
                     FieldTab::new("Footer", vec![text_field("copyright")]),
                 ])
-                .build(),
-        ]);
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
@@ -402,23 +437,32 @@ mod tests {
         use crate::core::field::FieldTab;
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("Social", vec![
-                        FieldDefinition::builder("social", FieldType::Group)
-                            .fields(vec![text_field("github"), text_field("twitter")])
-                            .build(),
-                    ]),
-                ])
-                .build(),
-        ]);
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Social",
+                    vec![FieldDefinition::builder("social", FieldType::Group)
+                        .fields(vec![text_field("github"), text_field("twitter")])
+                        .build()],
+                )])
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
-        assert!(cols.contains("social__github"), "Group inside Tabs should use group__subfield");
-        assert!(cols.contains("social__twitter"), "Group inside Tabs should use group__subfield");
-        assert!(!cols.contains("social"), "Group itself should not be a column");
+        assert!(
+            cols.contains("social__github"),
+            "Group inside Tabs should use group__subfield"
+        );
+        assert!(
+            cols.contains("social__twitter"),
+            "Group inside Tabs should use group__subfield"
+        );
+        assert!(
+            !cols.contains("social"),
+            "Group itself should not be a column"
+        );
     }
 
     // ── collapsible containing group ────────────────────────────────────
@@ -427,20 +471,25 @@ mod tests {
     fn global_table_collapsible_with_group_creates_prefixed_columns() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("extra", FieldType::Collapsible)
-                .fields(vec![
-                    FieldDefinition::builder("seo", FieldType::Group)
-                        .fields(vec![text_field("title"), text_field("desc")])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("extra", FieldType::Collapsible)
+                .fields(vec![FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("title"), text_field("desc")])
+                    .build()])
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
-        assert!(cols.contains("seo__title"), "Group inside Collapsible should use group__subfield");
-        assert!(cols.contains("seo__desc"), "Group inside Collapsible should use group__subfield");
+        assert!(
+            cols.contains("seo__title"),
+            "Group inside Collapsible should use group__subfield"
+        );
+        assert!(
+            cols.contains("seo__desc"),
+            "Group inside Collapsible should use group__subfield"
+        );
     }
 
     // ── alter: add tabs with group to existing global ───────────────────
@@ -453,22 +502,27 @@ mod tests {
         let def1 = simple_global("settings", vec![text_field("name")]);
         sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
 
-        let def2 = simple_global("settings", vec![
-            text_field("name"),
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("Social", vec![
-                        FieldDefinition::builder("social", FieldType::Group)
+        let def2 = simple_global(
+            "settings",
+            vec![
+                text_field("name"),
+                FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Social",
+                        vec![FieldDefinition::builder("social", FieldType::Group)
                             .fields(vec![text_field("github")])
-                            .build(),
-                    ]),
-                ])
-                .build(),
-        ]);
+                            .build()],
+                    )])
+                    .build(),
+            ],
+        );
         sync_global_table(&conn, "settings", &def2, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
-        assert!(cols.contains("social__github"), "ALTER should add group__subfield inside Tabs");
+        assert!(
+            cols.contains("social__github"),
+            "ALTER should add group__subfield inside Tabs"
+        );
     }
 
     // ── deeply nested: tabs → collapsible → group ───────────────────────
@@ -478,27 +532,33 @@ mod tests {
         use crate::core::field::FieldTab;
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("Advanced", vec![
-                        FieldDefinition::builder("advanced", FieldType::Collapsible)
-                            .fields(vec![
-                                FieldDefinition::builder("og", FieldType::Group)
-                                    .fields(vec![text_field("image")])
-                                    .build(),
-                                text_field("canonical"),
-                            ])
-                            .build(),
-                    ]),
-                ])
-                .build(),
-        ]);
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("layout", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Advanced",
+                    vec![FieldDefinition::builder("advanced", FieldType::Collapsible)
+                        .fields(vec![
+                            FieldDefinition::builder("og", FieldType::Group)
+                                .fields(vec![text_field("image")])
+                                .build(),
+                            text_field("canonical"),
+                        ])
+                        .build()],
+                )])
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
-        assert!(cols.contains("og__image"), "Deeply nested: Tabs → Collapsible → Group");
-        assert!(cols.contains("canonical"), "Deeply nested: Tabs → Collapsible → plain");
+        assert!(
+            cols.contains("og__image"),
+            "Deeply nested: Tabs → Collapsible → Group"
+        );
+        assert!(
+            cols.contains("canonical"),
+            "Deeply nested: Tabs → Collapsible → plain"
+        );
     }
 
     // ── Group containing layout fields (the former terminal-node bug) ─────
@@ -507,19 +567,21 @@ mod tests {
     fn global_group_containing_row() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("branding", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("row1", FieldType::Row)
-                        .fields(vec![text_field("logo"), text_field("favicon")])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("branding", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("row1", FieldType::Row)
+                    .fields(vec![text_field("logo"), text_field("favicon")])
+                    .build()])
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
         assert!(cols.contains("branding__logo"), "Group→Row: branding__logo");
-        assert!(cols.contains("branding__favicon"), "Group→Row: branding__favicon");
+        assert!(
+            cols.contains("branding__favicon"),
+            "Group→Row: branding__favicon"
+        );
     }
 
     #[test]
@@ -527,22 +589,27 @@ mod tests {
         use crate::core::field::FieldTab;
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("config", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("layout", FieldType::Tabs)
-                        .tabs(vec![
-                            FieldTab::new("General", vec![text_field("site_name")]),
-                            FieldTab::new("Social", vec![text_field("twitter")]),
-                        ])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("config", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![
+                        FieldTab::new("General", vec![text_field("site_name")]),
+                        FieldTab::new("Social", vec![text_field("twitter")]),
+                    ])
+                    .build()])
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
-        assert!(cols.contains("config__site_name"), "Group→Tabs: config__site_name");
-        assert!(cols.contains("config__twitter"), "Group→Tabs: config__twitter");
+        assert!(
+            cols.contains("config__site_name"),
+            "Group→Tabs: config__site_name"
+        );
+        assert!(
+            cols.contains("config__twitter"),
+            "Group→Tabs: config__twitter"
+        );
     }
 
     #[test]
@@ -550,19 +617,19 @@ mod tests {
         use crate::core::field::FieldTab;
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_global("settings", vec![
-            FieldDefinition::builder("a", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("t", FieldType::Tabs)
-                        .tabs(vec![FieldTab::new("Tab", vec![
-                            FieldDefinition::builder("b", FieldType::Group)
-                                .fields(vec![text_field("leaf")])
-                                .build(),
-                        ])])
-                        .build(),
-                ])
-                .build(),
-        ]);
+        let def = simple_global(
+            "settings",
+            vec![FieldDefinition::builder("a", FieldType::Group)
+                .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Tab",
+                        vec![FieldDefinition::builder("b", FieldType::Group)
+                            .fields(vec![text_field("leaf")])
+                            .build()],
+                    )])
+                    .build()])
+                .build()],
+        );
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
         let cols = get_table_columns(&conn, "_global_settings").unwrap();
         assert!(cols.contains("a__b__leaf"), "Group→Tabs→Group: a__b__leaf");

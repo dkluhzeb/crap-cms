@@ -4,13 +4,13 @@ use anyhow::{Context as _, Result};
 use mlua::{Lua, Value};
 use std::collections::{HashMap, HashSet};
 
-use crate::core::document::DocumentBuilder;
 use crate::core::collection::Hooks;
-use crate::core::Document;
+use crate::core::document::DocumentBuilder;
 use crate::core::field::{FieldDefinition, FieldHooks};
+use crate::core::Document;
 
 use super::context::HookContext;
-use super::types::{DisplayConditionResult, HookEvent, FieldHookEvent};
+use super::types::{DisplayConditionResult, FieldHookEvent, HookEvent};
 use super::validation::evaluate_condition_table;
 
 /// Inner implementation of `apply_after_read` — operates on a locked `&Lua`.
@@ -26,8 +26,7 @@ pub(crate) fn apply_after_read_inner(
     user: Option<&Document>,
     ui_locale: Option<&str>,
 ) -> Document {
-    let has_field_hooks = fields.iter()
-        .any(|f| !f.hooks.after_read.is_empty());
+    let has_field_hooks = fields.iter().any(|f| !f.hooks.after_read.is_empty());
 
     let has_collection_hooks = !hooks.after_read.is_empty();
     let has_registered = has_registered_hooks(lua, "after_read");
@@ -39,17 +38,27 @@ pub(crate) fn apply_after_read_inner(
     let mut data: HashMap<String, serde_json::Value> = doc.fields.clone();
     data.insert("id".to_string(), serde_json::Value::String(doc.id.clone()));
     if let Some(ref ts) = doc.created_at {
-        data.insert("created_at".to_string(), serde_json::Value::String(ts.clone()));
+        data.insert(
+            "created_at".to_string(),
+            serde_json::Value::String(ts.clone()),
+        );
     }
     if let Some(ref ts) = doc.updated_at {
-        data.insert("updated_at".to_string(), serde_json::Value::String(ts.clone()));
+        data.insert(
+            "updated_at".to_string(),
+            serde_json::Value::String(ts.clone()),
+        );
     }
 
     // Run field-level after_read hooks first
     if has_field_hooks {
         if let Err(e) = run_field_hooks_inner(
-            lua, fields, &FieldHookEvent::AfterRead,
-            &mut data, collection, operation,
+            lua,
+            fields,
+            &FieldHookEvent::AfterRead,
+            &mut data,
+            collection,
+            operation,
         ) {
             tracing::warn!("field after_read hook error for {}: {}", collection, e);
             return doc;
@@ -77,10 +86,12 @@ pub(crate) fn apply_after_read_inner(
         Ok(result_ctx) => {
             let mut fields = result_ctx.data;
             fields.remove("id");
-            let created_at = fields.remove("created_at")
+            let created_at = fields
+                .remove("created_at")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .or(doc.created_at.clone());
-            let updated_at = fields.remove("updated_at")
+            let updated_at = fields
+                .remove("updated_at")
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .or(doc.updated_at.clone());
 
@@ -112,7 +123,11 @@ pub(crate) fn run_hooks_inner(
     let hook_refs = get_hook_refs(hooks, &event);
 
     for hook_ref in hook_refs {
-        tracing::debug!("Running hook (inner): {} for {}", hook_ref, context.collection);
+        tracing::debug!(
+            "Running hook (inner): {} for {}",
+            hook_ref,
+            context.collection
+        );
         context = call_hook_ref(lua, hook_ref, context)?;
     }
 
@@ -163,14 +178,20 @@ pub(crate) fn call_display_condition_with_lua(
         Ok(val @ Value::Table(_)) => {
             let json = crate::hooks::api::lua_to_json(lua, &val).ok()?;
             let visible = evaluate_condition_table(&json, form_data);
-            Some(DisplayConditionResult::Table { condition: json, visible })
+            Some(DisplayConditionResult::Table {
+                condition: json,
+                visible,
+            })
         }
         _ => None, // error or nil → show field (safe default)
     }
 }
 
 /// Check if any fields have hooks registered for the given field-level event.
-pub(crate) fn has_field_hooks_for_event(fields: &[FieldDefinition], event: &FieldHookEvent) -> bool {
+pub(crate) fn has_field_hooks_for_event(
+    fields: &[FieldDefinition],
+    event: &FieldHookEvent,
+) -> bool {
     fields.iter().any(|f| {
         let hooks = &f.hooks;
         match event {
@@ -256,8 +277,12 @@ pub(crate) fn call_registered_before_broadcast(
     }
 
     for i in 1..=len {
-        let func: mlua::Function = list.raw_get(i)
-            .with_context(|| format!("registered before_broadcast hook at index {} is not a function", i))?;
+        let func: mlua::Function = list.raw_get(i).with_context(|| {
+            format!(
+                "registered before_broadcast hook at index {} is not a function",
+                i
+            )
+        })?;
 
         let ctx_table = context.to_lua_table(lua)?;
 
@@ -308,12 +333,15 @@ pub(crate) fn call_registered_hooks(
     }
 
     for i in 1..=len {
-        let func: mlua::Function = list.raw_get(i)
+        let func: mlua::Function = list
+            .raw_get(i)
             .with_context(|| format!("registered hook at index {} is not a function", i))?;
 
         tracing::debug!(
             "Running registered {} hook #{} for {}",
-            event.as_str(), i, context.collection
+            event.as_str(),
+            i,
+            context.collection
         );
 
         let ctx_table = context.to_lua_table(lua)?;
@@ -353,7 +381,8 @@ pub(crate) fn run_field_hooks_inner(
         }
 
         let was_present = data.contains_key(&field.name);
-        let value = data.get(&field.name)
+        let value = data
+            .get(&field.name)
             .cloned()
             .unwrap_or(serde_json::Value::Null);
 
@@ -361,11 +390,18 @@ pub(crate) fn run_field_hooks_inner(
         for hook_ref in hook_refs {
             tracing::debug!(
                 "Running field hook: {} for {}.{}",
-                hook_ref, collection, field.name
+                hook_ref,
+                collection,
+                field.name
             );
             current = call_field_hook_ref(
-                lua, hook_ref, current,
-                &field.name, collection, operation, data,
+                lua,
+                hook_ref,
+                current,
+                &field.name,
+                collection,
+                operation,
+                data,
             )?;
         }
 
@@ -382,7 +418,10 @@ pub(crate) fn run_field_hooks_inner(
 }
 
 /// Get the list of field hook references for a given event.
-pub(crate) fn get_field_hook_refs<'a>(hooks: &'a FieldHooks, event: &FieldHookEvent) -> &'a Vec<String> {
+pub(crate) fn get_field_hook_refs<'a>(
+    hooks: &'a FieldHooks,
+    event: &FieldHookEvent,
+) -> &'a Vec<String> {
     match event {
         FieldHookEvent::BeforeValidate => &hooks.before_validate,
         FieldHookEvent::BeforeChange => &hooks.before_change,
@@ -446,16 +485,25 @@ pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::F
     let module_path = parts[..parts.len() - 1].join(".");
     let func_name = parts[parts.len() - 1];
 
-    let module: mlua::Table = require.call(module_path.clone())
+    let module: mlua::Table = require
+        .call(module_path.clone())
         .with_context(|| format!("Failed to require module '{}'", module_path))?;
-    let func: mlua::Function = module.get(func_name)
-        .with_context(|| format!("Function '{}' not found in module '{}'", func_name, module_path))?;
+    let func: mlua::Function = module.get(func_name).with_context(|| {
+        format!(
+            "Function '{}' not found in module '{}'",
+            func_name, module_path
+        )
+    })?;
     Ok(func)
 }
 
 /// Resolve a dotted function reference (e.g., "hooks.posts.auto_slug")
 /// and call it with the context.
-pub(crate) fn call_hook_ref(lua: &Lua, hook_ref: &str, context: HookContext) -> Result<HookContext> {
+pub(crate) fn call_hook_ref(
+    lua: &Lua,
+    hook_ref: &str,
+    context: HookContext,
+) -> Result<HookContext> {
     let func = resolve_hook_function(lua, hook_ref)?;
 
     // Convert context to Lua table
@@ -502,7 +550,16 @@ mod tests {
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-02".to_string());
 
-        let result = apply_after_read_inner(&lua, &hooks, &fields, "posts", "find", doc.clone(), None, None);
+        let result = apply_after_read_inner(
+            &lua,
+            &hooks,
+            &fields,
+            "posts",
+            "find",
+            doc.clone(),
+            None,
+            None,
+        );
         assert_eq!(result.id, "doc1");
         assert_eq!(result.get_str("title"), Some("Hello"));
     }
@@ -517,11 +574,15 @@ mod tests {
     #[test]
     fn has_registered_hooks_with_hooks() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             _crap_event_hooks = {
                 after_read = { function() end }
             }
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
         assert!(has_registered_hooks(&lua, "after_read"));
         assert!(!has_registered_hooks(&lua, "before_change"));
     }
@@ -545,36 +606,62 @@ mod tests {
             before_broadcast: vec!["hooks.broadcast".to_string()],
         };
 
-        assert_eq!(get_hook_refs(&hooks, &HookEvent::BeforeValidate), &["hooks.validate"]);
-        assert_eq!(get_hook_refs(&hooks, &HookEvent::BeforeChange), &["hooks.change"]);
-        assert_eq!(get_hook_refs(&hooks, &HookEvent::AfterChange), &["hooks.after"]);
+        assert_eq!(
+            get_hook_refs(&hooks, &HookEvent::BeforeValidate),
+            &["hooks.validate"]
+        );
+        assert_eq!(
+            get_hook_refs(&hooks, &HookEvent::BeforeChange),
+            &["hooks.change"]
+        );
+        assert_eq!(
+            get_hook_refs(&hooks, &HookEvent::AfterChange),
+            &["hooks.after"]
+        );
         assert!(get_hook_refs(&hooks, &HookEvent::BeforeRead).is_empty());
-        assert_eq!(get_hook_refs(&hooks, &HookEvent::AfterRead), &["hooks.read"]);
+        assert_eq!(
+            get_hook_refs(&hooks, &HookEvent::AfterRead),
+            &["hooks.read"]
+        );
         assert!(get_hook_refs(&hooks, &HookEvent::BeforeDelete).is_empty());
         assert!(get_hook_refs(&hooks, &HookEvent::AfterDelete).is_empty());
-        assert_eq!(get_hook_refs(&hooks, &HookEvent::BeforeBroadcast), &["hooks.broadcast"]);
+        assert_eq!(
+            get_hook_refs(&hooks, &HookEvent::BeforeBroadcast),
+            &["hooks.broadcast"]
+        );
         assert!(get_hook_refs(&hooks, &HookEvent::BeforeRender).is_empty());
     }
 
     #[test]
     fn field_hook_receives_value_and_context() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["hooks.upper"] = function(value, context)
                 if type(value) == "string" then
                     return value:upper()
                 end
                 return value
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
-        let data: HashMap<String, serde_json::Value> =
-            [("title".to_string(), json!("hello"))].into_iter().collect();
+        let data: HashMap<String, serde_json::Value> = [("title".to_string(), json!("hello"))]
+            .into_iter()
+            .collect();
 
         let result = call_field_hook_ref(
-            &lua, "hooks.upper", json!("hello"),
-            "title", "posts", "create", &data,
-        ).unwrap();
+            &lua,
+            "hooks.upper",
+            json!("hello"),
+            "title",
+            "posts",
+            "create",
+            &data,
+        )
+        .unwrap();
 
         assert_eq!(result, json!("HELLO"));
     }
@@ -582,21 +669,31 @@ mod tests {
     #[test]
     fn field_hook_nil_value_does_not_crash() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["hooks.trim"] = function(value, context)
                 if type(value) == "string" then
                     return value:match("^%s*(.-)%s*$")
                 end
                 return value
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let data: HashMap<String, serde_json::Value> = HashMap::new();
 
         let result = call_field_hook_ref(
-            &lua, "hooks.trim", serde_json::Value::Null,
-            "title", "posts", "update", &data,
-        ).unwrap();
+            &lua,
+            "hooks.trim",
+            serde_json::Value::Null,
+            "title",
+            "posts",
+            "update",
+            &data,
+        )
+        .unwrap();
 
         assert_eq!(result, serde_json::Value::Null);
     }
@@ -604,11 +701,15 @@ mod tests {
     #[test]
     fn field_hook_absent_field_not_injected_as_null() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["hooks.noop"] = function(value, context)
                 return value
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let fields = vec![FieldDefinition::builder("title", FieldType::Text)
             .hooks(FieldHooks {
@@ -621,26 +722,37 @@ mod tests {
         data.insert("content".to_string(), json!("updated"));
 
         run_field_hooks_inner(
-            &lua, &fields, &FieldHookEvent::BeforeValidate,
-            &mut data, "posts", "update",
-        ).unwrap();
+            &lua,
+            &fields,
+            &FieldHookEvent::BeforeValidate,
+            &mut data,
+            "posts",
+            "update",
+        )
+        .unwrap();
 
-        assert!(!data.contains_key("title"),
-            "absent field should not be injected into data by field hooks");
+        assert!(
+            !data.contains_key("title"),
+            "absent field should not be injected into data by field hooks"
+        );
         assert_eq!(data.get("content"), Some(&json!("updated")));
     }
 
     #[test]
     fn field_hook_absent_field_inserted_when_hook_produces_value() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["hooks.default_val"] = function(value, context)
                 if value == nil then
                     return "generated"
                 end
                 return value
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let fields = vec![FieldDefinition::builder("slug", FieldType::Text)
             .hooks(FieldHooks {
@@ -653,9 +765,14 @@ mod tests {
         data.insert("title".to_string(), json!("Hello"));
 
         run_field_hooks_inner(
-            &lua, &fields, &FieldHookEvent::BeforeValidate,
-            &mut data, "posts", "create",
-        ).unwrap();
+            &lua,
+            &fields,
+            &FieldHookEvent::BeforeValidate,
+            &mut data,
+            "posts",
+            "create",
+        )
+        .unwrap();
 
         assert_eq!(data.get("slug"), Some(&json!("generated")));
     }
@@ -663,19 +780,30 @@ mod tests {
     #[test]
     fn field_hook_context_has_data_and_metadata() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["hooks.inspect_ctx"] = function(value, context)
                 return context.collection .. ":" .. context.field_name .. ":" .. context.operation
             end
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
-        let data: HashMap<String, serde_json::Value> =
-            [("title".to_string(), json!("hello"))].into_iter().collect();
+        let data: HashMap<String, serde_json::Value> = [("title".to_string(), json!("hello"))]
+            .into_iter()
+            .collect();
 
         let result = call_field_hook_ref(
-            &lua, "hooks.inspect_ctx", json!("hello"),
-            "title", "posts", "create", &data,
-        ).unwrap();
+            &lua,
+            "hooks.inspect_ctx",
+            json!("hello"),
+            "title",
+            "posts",
+            "create",
+            &data,
+        )
+        .unwrap();
 
         assert_eq!(result, json!("posts:title:create"));
     }

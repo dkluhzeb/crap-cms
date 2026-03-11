@@ -52,11 +52,12 @@ pub(super) mod test_helpers {
     use crate::db::DbPool;
 
     pub fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory()
-            .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
+        );
         r2d2::Pool::builder()
             .max_size(2)
             .build(manager)
@@ -86,16 +87,18 @@ pub(super) mod test_helpers {
     }
 
     pub fn localized_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).localized(true).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .localized(true)
+            .build()
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::test_helpers::*;
+    use super::*;
     use crate::core::collection::*;
-    use crate::db::migrate::helpers::{table_exists, get_table_columns};
+    use crate::db::migrate::helpers::{get_table_columns, table_exists};
 
     #[test]
     fn versioned_collection_creates_versions_table() {

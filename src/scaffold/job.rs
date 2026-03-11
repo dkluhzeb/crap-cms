@@ -21,8 +21,7 @@ pub fn make_job(
     super::validate_slug(slug)?;
 
     let jobs_dir = config_dir.join("jobs");
-    fs::create_dir_all(&jobs_dir)
-        .context("Failed to create jobs/ directory")?;
+    fs::create_dir_all(&jobs_dir).context("Failed to create jobs/ directory")?;
 
     let file_path = jobs_dir.join(format!("{}.lua", slug));
     if file_path.exists() && !force {
@@ -142,14 +141,29 @@ mod tests {
         make_job(tmp.path(), "process_inquiry", None, None, None, None, false).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("jobs/process_inquiry.lua")).unwrap();
-        assert!(content.contains("@class ProcessInquiryData"), "should hint PascalCase data class, got:\n{content}");
-        assert!(content.contains("@type ProcessInquiryData"), "should hint data cast");
+        assert!(
+            content.contains("@class ProcessInquiryData"),
+            "should hint PascalCase data class, got:\n{content}"
+        );
+        assert!(
+            content.contains("@type ProcessInquiryData"),
+            "should hint data cast"
+        );
     }
 
     #[test]
     fn test_make_job_with_schedule() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_job(tmp.path(), "nightly", Some("0 3 * * *"), None, None, None, false).unwrap();
+        make_job(
+            tmp.path(),
+            "nightly",
+            Some("0 3 * * *"),
+            None,
+            None,
+            None,
+            false,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("jobs/nightly.lua")).unwrap();
         assert!(content.contains("schedule = \"0 3 * * *\""));
@@ -158,7 +172,16 @@ mod tests {
     #[test]
     fn test_make_job_with_queue() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_job(tmp.path(), "email_send", None, Some("email"), None, None, false).unwrap();
+        make_job(
+            tmp.path(),
+            "email_send",
+            None,
+            Some("email"),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("jobs/email_send.lua")).unwrap();
         assert!(content.contains("queue = \"email\""));
@@ -203,20 +226,39 @@ mod tests {
         make_job(tmp.path(), "sync", None, None, None, None, false).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("jobs/sync.lua")).unwrap();
-        let module_pos = content.find("local M = {}").expect("local M = {} not found");
-        let define_pos = content.find("crap.jobs.define").expect("crap.jobs.define not found");
+        let module_pos = content
+            .find("local M = {}")
+            .expect("local M = {} not found");
+        let define_pos = content
+            .find("crap.jobs.define")
+            .expect("crap.jobs.define not found");
         let return_pos = content.rfind("return M").expect("return M not found");
         assert!(module_pos < define_pos, "module should come before define");
-        assert!(define_pos < return_pos, "define should come before return M");
+        assert!(
+            define_pos < return_pos,
+            "define should come before return M"
+        );
     }
 
     #[test]
     fn test_make_job_default_queue_not_emitted() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_job(tmp.path(), "cleanup", None, Some("default"), None, None, false).unwrap();
+        make_job(
+            tmp.path(),
+            "cleanup",
+            None,
+            Some("default"),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("jobs/cleanup.lua")).unwrap();
-        assert!(!content.contains("queue ="), "default queue should not be emitted");
+        assert!(
+            !content.contains("queue ="),
+            "default queue should not be emitted"
+        );
     }
 
     #[test]
@@ -225,6 +267,9 @@ mod tests {
         make_job(tmp.path(), "cleanup", None, None, None, Some(60), false).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("jobs/cleanup.lua")).unwrap();
-        assert!(!content.contains("timeout ="), "default timeout (60) should not be emitted");
+        assert!(
+            !content.contains("timeout ="),
+            "default timeout (60) should not be emitted"
+        );
     }
 }

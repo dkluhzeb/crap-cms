@@ -3,10 +3,10 @@ use axum::{
     response::Html,
 };
 
+use super::{get_auth_collections, render_forgot_success, ForgotPasswordForm};
 use crate::admin::AdminState;
 use crate::core::email;
 use crate::db::query;
-use super::{ForgotPasswordForm, get_auth_collections, render_forgot_success};
 
 /// POST /admin/forgot-password — look up user, generate token, send email.
 /// Always shows success (don't leak whether email exists).
@@ -74,11 +74,14 @@ pub async fn forgot_password_action(
                 };
                 let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
 
-                let html = match email_renderer.render("password_reset", &serde_json::json!({
-                    "reset_url": reset_url,
-                    "expiry_minutes": reset_expiry / 60,
-                    "from_name": email_config.from_name,
-                })) {
+                let html = match email_renderer.render(
+                    "password_reset",
+                    &serde_json::json!({
+                        "reset_url": reset_url,
+                        "expiry_minutes": reset_expiry / 60,
+                        "from_name": email_config.from_name,
+                    }),
+                ) {
                     Ok(h) => h,
                     Err(e) => {
                         tracing::error!("Failed to render reset email: {}", e);
@@ -86,7 +89,13 @@ pub async fn forgot_password_action(
                     }
                 };
 
-                if let Err(e) = email::send_email(&email_config, &user_email, "Reset your password", &html, None) {
+                if let Err(e) = email::send_email(
+                    &email_config,
+                    &user_email,
+                    "Reset your password",
+                    &html,
+                    None,
+                ) {
                     tracing::error!("Failed to send reset email: {}", e);
                 }
             });

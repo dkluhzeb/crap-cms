@@ -77,8 +77,7 @@ impl<'a> PaginationBuilder<'a> {
                 cursor::build_cursors(self.documents, &sort_col, sort_dir);
 
             let using_before = self.had_before_cursor;
-            let at_limit =
-                self.documents.len() as i64 >= self.limit && !self.documents.is_empty();
+            let at_limit = self.documents.len() as i64 >= self.limit && !self.documents.is_empty();
             let (has_next_page, has_prev_page) = if using_before {
                 (true, at_limit)
             } else {

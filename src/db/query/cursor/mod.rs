@@ -3,7 +3,7 @@
 //! Cursors are encoded as base64url(JSON). They contain the sort column,
 //! direction, last sort value, and document ID (tiebreaker).
 
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,8 @@ impl CursorData {
 
     /// Decode a base64url string into cursor data.
     pub fn decode(s: &str) -> Result<Self> {
-        let bytes = B64.decode(s.as_bytes())
+        let bytes = B64
+            .decode(s.as_bytes())
             .map_err(|e| anyhow::anyhow!("Invalid cursor encoding: {}", e))?;
         let json_str = std::str::from_utf8(&bytes)
             .map_err(|e| anyhow::anyhow!("Invalid cursor UTF-8: {}", e))?;
@@ -83,7 +84,10 @@ fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: &str) -> Option<Str
             None => serde_json::Value::Null,
         }
     } else {
-        doc.fields.get(sort_col).cloned().unwrap_or(serde_json::Value::Null)
+        doc.fields
+            .get(sort_col)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
     };
 
     let cursor = CursorData {
@@ -124,7 +128,10 @@ mod tests {
         let encoded = B64.encode(b"not json");
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid cursor JSON"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid cursor JSON"));
     }
 
     #[test]
@@ -133,7 +140,10 @@ mod tests {
         let encoded = B64.encode(json.as_bytes());
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing required fields"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing required fields"));
     }
 
     #[test]
@@ -142,21 +152,35 @@ mod tests {
         let encoded = B64.encode(json.as_bytes());
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("sort_dir must be ASC or DESC"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("sort_dir must be ASC or DESC"));
     }
 
     #[test]
     fn build_cursors_both_when_results_exist() {
-        let docs: Vec<Document> = (0..3).map(|i| {
-            let mut d = Document::new(format!("id{}", i));
-            d.fields.insert("title".to_string(), serde_json::json!(format!("Post {}", i)));
-            d.created_at = Some(format!("2024-0{}-01", i + 1));
-            d
-        }).collect();
+        let docs: Vec<Document> = (0..3)
+            .map(|i| {
+                let mut d = Document::new(format!("id{}", i));
+                d.fields.insert(
+                    "title".to_string(),
+                    serde_json::json!(format!("Post {}", i)),
+                );
+                d.created_at = Some(format!("2024-0{}-01", i + 1));
+                d
+            })
+            .collect();
 
         let (start, end) = build_cursors(&docs, "created_at", "ASC");
-        assert!(start.is_some(), "start_cursor should exist when results non-empty");
-        assert!(end.is_some(), "end_cursor should exist when results non-empty");
+        assert!(
+            start.is_some(),
+            "start_cursor should exist when results non-empty"
+        );
+        assert!(
+            end.is_some(),
+            "end_cursor should exist when results non-empty"
+        );
 
         let decoded_start = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded_start.id, "id0");
@@ -209,7 +233,10 @@ mod tests {
         let encoded = B64.encode(json.as_bytes());
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing required fields"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing required fields"));
     }
 
     #[test]
@@ -218,7 +245,10 @@ mod tests {
         let encoded = B64.encode(bad_bytes);
         let result = CursorData::decode(&encoded);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid cursor UTF-8"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid cursor UTF-8"));
     }
 
     #[test]
@@ -230,7 +260,10 @@ mod tests {
         let decoded_start = CursorData::decode(&start.unwrap()).unwrap();
         let decoded_end = CursorData::decode(&end.unwrap()).unwrap();
         assert_eq!(decoded_start.sort_col, "updated_at");
-        assert_eq!(decoded_start.sort_val, serde_json::Value::String("2024-06-15".to_string()));
+        assert_eq!(
+            decoded_start.sort_val,
+            serde_json::Value::String("2024-06-15".to_string())
+        );
         assert_eq!(decoded_end.sort_col, "updated_at");
     }
 
@@ -256,13 +289,17 @@ mod tests {
         let (start, _end) = build_cursors(&docs, "id", "ASC");
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "id");
-        assert_eq!(decoded.sort_val, serde_json::Value::String("the-id".to_string()));
+        assert_eq!(
+            decoded.sort_val,
+            serde_json::Value::String("the-id".to_string())
+        );
     }
 
     #[test]
     fn build_cursors_sort_by_arbitrary_field_present() {
         let mut doc = Document::new("doc3".to_string());
-        doc.fields.insert("score".to_string(), serde_json::json!(42));
+        doc.fields
+            .insert("score".to_string(), serde_json::json!(42));
         let docs = vec![doc];
         let (start, _end) = build_cursors(&docs, "score", "ASC");
         let decoded = CursorData::decode(&start.unwrap()).unwrap();

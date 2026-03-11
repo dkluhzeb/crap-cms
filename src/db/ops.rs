@@ -1,13 +1,13 @@
 //! Pool-based read-only wrappers around `query::*` functions for convenience.
 
-use std::collections::HashMap;
 use anyhow::{Context as _, Result};
+use std::collections::HashMap;
 
-use crate::core::{CollectionDefinition, Document};
-use crate::core::document::DocumentBuilder;
-use crate::core::collection::GlobalDefinition;
+use super::query::{self, Filter, FilterClause, FilterOp, FindQuery, LocaleContext};
 use super::DbPool;
-use super::query::{self, FindQuery, FilterClause, FilterOp, Filter, LocaleContext};
+use crate::core::collection::GlobalDefinition;
+use crate::core::document::DocumentBuilder;
+use crate::core::{CollectionDefinition, Document};
 
 /// Find documents (read-only, no transaction needed).
 pub fn find_documents(
@@ -34,13 +34,24 @@ pub fn find_document_by_id(
 }
 
 /// Count documents (read-only, no transaction needed).
-pub fn count_documents(pool: &DbPool, slug: &str, def: &CollectionDefinition, filters: &[FilterClause], locale_ctx: Option<&LocaleContext>) -> Result<i64> {
+pub fn count_documents(
+    pool: &DbPool,
+    slug: &str,
+    def: &CollectionDefinition,
+    filters: &[FilterClause],
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<i64> {
     let conn = pool.get().context("Failed to get DB connection")?;
     query::count(&conn, slug, def, filters, locale_ctx)
 }
 
 /// Get a global document (read-only, no transaction needed).
-pub fn get_global(pool: &DbPool, slug: &str, def: &GlobalDefinition, locale_ctx: Option<&LocaleContext>) -> Result<Document> {
+pub fn get_global(
+    pool: &DbPool,
+    slug: &str,
+    def: &GlobalDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Document> {
     let conn = pool.get().context("Failed to get DB connection")?;
     query::get_global(&conn, slug, def, locale_ctx)
 }
@@ -86,7 +97,8 @@ pub fn find_by_id_full(
         fq.filters = filters;
         let fq = fq;
         query::find(conn, slug, def, &fq, locale_ctx)?
-            .into_iter().next()
+            .into_iter()
+            .next()
     } else {
         query::find_by_id_raw(conn, slug, def, id, locale_ctx)?
     };

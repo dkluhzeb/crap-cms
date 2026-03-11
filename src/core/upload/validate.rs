@@ -17,7 +17,9 @@ pub(super) fn validate_mime_type(content_type: &str, allowed: &[String]) -> bool
     if allowed.is_empty() {
         return true;
     }
-    allowed.iter().any(|pattern| mime_matches(content_type, pattern))
+    allowed
+        .iter()
+        .any(|pattern| mime_matches(content_type, pattern))
 }
 
 /// Sanitize a filename: lowercase, replace non-alphanumeric with hyphens, collapse.
@@ -28,10 +30,18 @@ pub(super) fn sanitize_filename(name: &str) -> String {
         Some((s, e)) => (s, Some(e)),
         None => (name.as_str(), None),
     };
-    let clean_stem: String = stem.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+    let clean_stem: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect();
-    let clean_stem: String = clean_stem.split('-')
+    let clean_stem: String = clean_stem
+        .split('-')
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("-");

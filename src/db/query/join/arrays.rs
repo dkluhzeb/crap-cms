@@ -21,7 +21,10 @@ pub fn set_array_rows(
     let table_name = format!("{}_{}", collection, field_name);
     if let Some(loc) = locale {
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2", table_name),
+            &format!(
+                "DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2",
+                table_name
+            ),
             rusqlite::params![parent_id, loc],
         )?;
     } else {
@@ -40,27 +43,30 @@ pub fn set_array_rows(
     // Build column list from flattened sub-fields
     let col_names: Vec<&str> = flat_subs.iter().map(|f| f.name.as_str()).collect();
     let (all_cols, placeholders) = if locale.is_some() {
-        let all_cols = format!(
-            "id, parent_id, _order, _locale, {}",
-            col_names.join(", ")
-        );
+        let all_cols = format!("id, parent_id, _order, _locale, {}", col_names.join(", "));
         let placeholders = format!(
             "?1, ?2, ?3, ?4, {}",
-            (5..5 + col_names.len()).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(", ")
+            (5..5 + col_names.len())
+                .map(|i| format!("?{}", i))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         (all_cols, placeholders)
     } else {
-        let all_cols = format!(
-            "id, parent_id, _order, {}",
-            col_names.join(", ")
-        );
+        let all_cols = format!("id, parent_id, _order, {}", col_names.join(", "));
         let placeholders = format!(
             "?1, ?2, ?3, {}",
-            (4..4 + col_names.len()).map(|i| format!("?{}", i)).collect::<Vec<_>>().join(", ")
+            (4..4 + col_names.len())
+                .map(|i| format!("?{}", i))
+                .collect::<Vec<_>>()
+                .join(", ")
         );
         (all_cols, placeholders)
     };
-    let sql = format!("INSERT INTO {} ({}) VALUES ({})", table_name, all_cols, placeholders);
+    let sql = format!(
+        "INSERT INTO {} ({}) VALUES ({})",
+        table_name, all_cols, placeholders
+    );
 
     let mut stmt = conn.prepare(&sql)?;
     for (order, row) in rows.iter().enumerate() {
@@ -77,7 +83,8 @@ pub fn set_array_rows(
             let value = row.get(&sf.name).cloned().unwrap_or_default();
             params.push(coerce_value(&sf.field_type, &value));
         }
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p.as_ref()).collect();
         stmt.execute(rusqlite::params_from_iter(param_refs.iter()))?;
     }
     Ok(())
@@ -119,40 +126,49 @@ pub fn find_array_rows(
         vec![Box::new(parent_id.to_string())]
     };
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    let rows = stmt.query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
-        let mut map = serde_json::Map::new();
-        let id: String = row.get(0)?;
-        map.insert("id".to_string(), serde_json::Value::String(id));
-        for (i, sf) in flat_subs.iter().enumerate() {
-            let val: rusqlite::types::Value = row.get(i + 1)?;
-            let json_val = match val {
-                rusqlite::types::Value::Null => serde_json::Value::Null,
-                rusqlite::types::Value::Integer(n) => serde_json::json!(n),
-                rusqlite::types::Value::Real(f) => serde_json::json!(f),
-                rusqlite::types::Value::Text(s) => {
-                    // Composite sub-fields store JSON in TEXT columns —
-                    // attempt to parse so nested data comes back structured.
-                    match sf.field_type {
-                        FieldType::Array | FieldType::Blocks | FieldType::Group | FieldType::Row | FieldType::Collapsible | FieldType::Tabs | FieldType::Json => {
-                            serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
+            let mut map = serde_json::Map::new();
+            let id: String = row.get(0)?;
+            map.insert("id".to_string(), serde_json::Value::String(id));
+            for (i, sf) in flat_subs.iter().enumerate() {
+                let val: rusqlite::types::Value = row.get(i + 1)?;
+                let json_val = match val {
+                    rusqlite::types::Value::Null => serde_json::Value::Null,
+                    rusqlite::types::Value::Integer(n) => serde_json::json!(n),
+                    rusqlite::types::Value::Real(f) => serde_json::json!(f),
+                    rusqlite::types::Value::Text(s) => {
+                        // Composite sub-fields store JSON in TEXT columns —
+                        // attempt to parse so nested data comes back structured.
+                        match sf.field_type {
+                            FieldType::Array
+                            | FieldType::Blocks
+                            | FieldType::Group
+                            | FieldType::Row
+                            | FieldType::Collapsible
+                            | FieldType::Tabs
+                            | FieldType::Json => {
+                                serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+                            }
+                            _ => serde_json::Value::String(s),
                         }
-                        _ => serde_json::Value::String(s),
                     }
-                }
-                rusqlite::types::Value::Blob(_) => serde_json::Value::Null,
-            };
-            map.insert(sf.name.clone(), json_val);
-        }
-        Ok(serde_json::Value::Object(map))
-    })?.filter_map(|r| r.ok()).collect();
+                    rusqlite::types::Value::Blob(_) => serde_json::Value::Null,
+                };
+                map.insert(sf.name.clone(), json_val);
+            }
+            Ok(serde_json::Value::Object(map))
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(rows)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
     use crate::core::field::FieldTab;
+    use rusqlite::Connection;
 
     fn setup_array_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -166,7 +182,8 @@ mod tests {
                  value TEXT
              );
              INSERT INTO posts (id) VALUES ('p1');",
-        ).unwrap();
+        )
+        .unwrap();
         conn
     }
 
@@ -209,20 +226,16 @@ mod tests {
     fn replace_array_rows() {
         let conn = setup_array_db();
         let sub = array_sub_fields();
-        let rows_old = vec![
-            HashMap::from([
-                ("label".to_string(), "Old".to_string()),
-                ("value".to_string(), "Old Val".to_string()),
-            ]),
-        ];
+        let rows_old = vec![HashMap::from([
+            ("label".to_string(), "Old".to_string()),
+            ("value".to_string(), "Old Val".to_string()),
+        ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows_old, &sub, None).unwrap();
 
-        let rows_new = vec![
-            HashMap::from([
-                ("label".to_string(), "New".to_string()),
-                ("value".to_string(), "New Val".to_string()),
-            ]),
-        ];
+        let rows_new = vec![HashMap::from([
+            ("label".to_string(), "New".to_string()),
+            ("value".to_string(), "New Val".to_string()),
+        ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows_new, &sub, None).unwrap();
 
         let found = find_array_rows(&conn, "posts", "items", "p1", &sub, None).unwrap();
@@ -235,17 +248,18 @@ mod tests {
     fn empty_array_rows() {
         let conn = setup_array_db();
         let sub = array_sub_fields();
-        let rows = vec![
-            HashMap::from([
-                ("label".to_string(), "X".to_string()),
-                ("value".to_string(), "Y".to_string()),
-            ]),
-        ];
+        let rows = vec![HashMap::from([
+            ("label".to_string(), "X".to_string()),
+            ("value".to_string(), "Y".to_string()),
+        ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
         set_array_rows(&conn, "posts", "items", "p1", &[], &sub, None).unwrap();
 
         let found = find_array_rows(&conn, "posts", "items", "p1", &sub, None).unwrap();
-        assert!(found.is_empty(), "Should return empty after setting empty rows");
+        assert!(
+            found.is_empty(),
+            "Should return empty after setting empty rows"
+        );
     }
 
     #[test]
@@ -261,17 +275,22 @@ mod tests {
                  body TEXT
              );
              INSERT INTO posts (id) VALUES ('p1');",
-        ).unwrap();
+        )
+        .unwrap();
 
         // Sub-fields wrapped in Tabs
-        let sub_fields = vec![
-            FieldDefinition::builder("layout", FieldType::Tabs)
-                .tabs(vec![
-                    FieldTab::new("General", vec![FieldDefinition::builder("title", FieldType::Text).build()]),
-                    FieldTab::new("Content", vec![FieldDefinition::builder("body", FieldType::Text).build()]),
-                ])
-                .build(),
-        ];
+        let sub_fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
+            .tabs(vec![
+                FieldTab::new(
+                    "General",
+                    vec![FieldDefinition::builder("title", FieldType::Text).build()],
+                ),
+                FieldTab::new(
+                    "Content",
+                    vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                ),
+            ])
+            .build()];
 
         let mut row = HashMap::new();
         row.insert("title".to_string(), "Hello".to_string());
@@ -297,16 +316,15 @@ mod tests {
                  y TEXT
              );
              INSERT INTO posts (id) VALUES ('p1');",
-        ).unwrap();
+        )
+        .unwrap();
 
-        let sub_fields = vec![
-            FieldDefinition::builder("row_wrap", FieldType::Row)
-                .fields(vec![
-                    FieldDefinition::builder("x", FieldType::Text).build(),
-                    FieldDefinition::builder("y", FieldType::Text).build(),
-                ])
-                .build(),
-        ];
+        let sub_fields = vec![FieldDefinition::builder("row_wrap", FieldType::Row)
+            .fields(vec![
+                FieldDefinition::builder("x", FieldType::Text).build(),
+                FieldDefinition::builder("y", FieldType::Text).build(),
+            ])
+            .build()];
 
         let mut row = HashMap::new();
         row.insert("x".to_string(), "10".to_string());
@@ -333,7 +351,8 @@ mod tests {
              );
              INSERT INTO posts (id) VALUES ('p1');
              INSERT INTO posts_items (id, parent_id, _order) VALUES ('item1', 'p1', 0);",
-        ).unwrap();
+        )
+        .unwrap();
 
         let result = find_array_rows(&conn, "posts", "items", "p1", &[], None).unwrap();
         assert_eq!(result.len(), 1);

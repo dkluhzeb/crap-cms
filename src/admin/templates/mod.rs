@@ -138,7 +138,9 @@ mod tests {
 
         let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
-        let result = hbs.render("custom/deep/page", &serde_json::json!({})).unwrap();
+        let result = hbs
+            .render("custom/deep/page", &serde_json::json!({}))
+            .unwrap();
         assert_eq!(result, "DEEP_NESTED");
     }
 

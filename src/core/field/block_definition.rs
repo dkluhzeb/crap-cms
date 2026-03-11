@@ -16,7 +16,11 @@ pub struct FieldTab {
 
 impl FieldTab {
     pub fn new(label: impl Into<String>, fields: Vec<FieldDefinition>) -> Self {
-        Self { label: label.into(), description: None, fields }
+        Self {
+            label: label.into(),
+            description: None,
+            fields,
+        }
     }
 }
 
@@ -42,6 +46,10 @@ pub struct BlockDefinition {
 
 impl BlockDefinition {
     pub fn new(block_type: impl Into<String>, fields: Vec<FieldDefinition>) -> Self {
-        Self { block_type: block_type.into(), fields, ..Default::default() }
+        Self {
+            block_type: block_type.into(),
+            fields,
+            ..Default::default()
+        }
     }
 }

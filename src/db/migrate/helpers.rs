@@ -16,21 +16,27 @@ pub fn table_exists(conn: &rusqlite::Connection, name: &str) -> Result<bool> {
 
 pub fn get_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<HashSet<String>> {
     let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
-    let columns: HashSet<String> = stmt.query_map([], |row| {
-        row.get::<_, String>(1)
-    })?.filter_map(|r| r.ok()).collect();
+    let columns: HashSet<String> = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(|r| r.ok())
+        .collect();
     Ok(columns)
 }
 
 pub use crate::db::query::sanitize_locale;
 
 /// Ensure a `_locale` column exists on a junction table (for ALTER TABLE on existing tables).
-pub(super) fn ensure_locale_column(conn: &rusqlite::Connection, table_name: &str, default_locale: &str) -> Result<()> {
+pub(super) fn ensure_locale_column(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    default_locale: &str,
+) -> Result<()> {
     let existing = get_table_columns(conn, table_name)?;
     if !existing.contains("_locale") {
         let sql = format!(
             "ALTER TABLE {} ADD COLUMN _locale TEXT NOT NULL DEFAULT '{}'",
-            table_name, sanitize_locale(default_locale)
+            table_name,
+            sanitize_locale(default_locale)
         );
         tracing::info!("Adding _locale column to {}", table_name);
         conn.execute(&sql, [])
@@ -40,10 +46,18 @@ pub(super) fn ensure_locale_column(conn: &rusqlite::Connection, table_name: &str
 }
 
 /// Ensure a named column exists on a table (ALTER TABLE ADD COLUMN if missing).
-pub(super) fn ensure_column_exists(conn: &rusqlite::Connection, table_name: &str, column: &str, col_type: &str) -> Result<()> {
+pub(super) fn ensure_column_exists(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+    column: &str,
+    col_type: &str,
+) -> Result<()> {
     let existing = get_table_columns(conn, table_name)?;
     if !existing.contains(column) {
-        let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", table_name, column, col_type);
+        let sql = format!(
+            "ALTER TABLE {} ADD COLUMN {} {}",
+            table_name, column, col_type
+        );
         tracing::info!("Adding {} column to {}", column, table_name);
         conn.execute(&sql, [])
             .with_context(|| format!("Failed to add {} to {}", column, table_name))?;
@@ -91,20 +105,37 @@ fn collect_column_specs_inner<'a>(
                     format!("{}__{}", prefix, field.name)
                 };
                 collect_column_specs_inner(
-                    &field.fields, specs, locale_config,
-                    &new_prefix, inherited_localized || field.localized,
+                    &field.fields,
+                    specs,
+                    locale_config,
+                    &new_prefix,
+                    inherited_localized || field.localized,
                 );
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_column_specs_inner(&field.fields, specs, locale_config, prefix, inherited_localized);
+                collect_column_specs_inner(
+                    &field.fields,
+                    specs,
+                    locale_config,
+                    prefix,
+                    inherited_localized,
+                );
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_column_specs_inner(&tab.fields, specs, locale_config, prefix, inherited_localized);
+                    collect_column_specs_inner(
+                        &tab.fields,
+                        specs,
+                        locale_config,
+                        prefix,
+                        inherited_localized,
+                    );
                 }
             }
             _ => {
-                if !field.has_parent_column() { continue; }
+                if !field.has_parent_column() {
+                    continue;
+                }
                 let col_name = if prefix.is_empty() {
                     field.name.clone()
                 } else {
@@ -113,7 +144,8 @@ fn collect_column_specs_inner<'a>(
                 specs.push(ColumnSpec {
                     col_name,
                     field,
-                    is_localized: (inherited_localized || field.localized) && locale_config.is_enabled(),
+                    is_localized: (inherited_localized || field.localized)
+                        && locale_config.is_enabled(),
                 });
             }
         }
@@ -173,15 +205,25 @@ pub(super) fn sync_join_tables(
                                 )
                             };
                             tracing::info!("Creating junction table: {}", table_name);
-                            conn.execute(&sql, [])
-                                .with_context(|| format!("Failed to create junction table {}", table_name))?;
+                            conn.execute(&sql, []).with_context(|| {
+                                format!("Failed to create junction table {}", table_name)
+                            })?;
                         } else {
                             if has_locale_col {
-                                ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
+                                ensure_locale_column(
+                                    conn,
+                                    &table_name,
+                                    &locale_config.default_locale,
+                                )?;
                             }
                             // Ensure related_collection column for polymorphic upgrades
                             if rc.is_polymorphic() {
-                                ensure_column_exists(conn, &table_name, "related_collection", "TEXT NOT NULL DEFAULT ''")?;
+                                ensure_column_exists(
+                                    conn,
+                                    &table_name,
+                                    "related_collection",
+                                    "TEXT NOT NULL DEFAULT ''",
+                                )?;
                             }
                         }
                     }
@@ -193,20 +235,26 @@ pub(super) fn sync_join_tables(
                 if !table_exists(conn, &table_name)? {
                     let mut columns = vec![
                         "id TEXT PRIMARY KEY".to_string(),
-                        format!("parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE", collection_slug),
+                        format!(
+                            "parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE",
+                            collection_slug
+                        ),
                         "_order INTEGER NOT NULL DEFAULT 0".to_string(),
                     ];
                     if has_locale_col {
-                        columns.push(format!("_locale TEXT NOT NULL DEFAULT '{}'", sanitize_locale(&locale_config.default_locale)));
+                        columns.push(format!(
+                            "_locale TEXT NOT NULL DEFAULT '{}'",
+                            sanitize_locale(&locale_config.default_locale)
+                        ));
                     }
                     for sub_field in &flat_subs {
-                        columns.push(format!("{} {}", sub_field.name, sub_field.field_type.sqlite_type()));
+                        columns.push(format!(
+                            "{} {}",
+                            sub_field.name,
+                            sub_field.field_type.sqlite_type()
+                        ));
                     }
-                    let sql = format!(
-                        "CREATE TABLE {} ({})",
-                        table_name,
-                        columns.join(", ")
-                    );
+                    let sql = format!("CREATE TABLE {} ({})", table_name, columns.join(", "));
                     tracing::info!("Creating array table: {}", table_name);
                     conn.execute(&sql, [])
                         .with_context(|| format!("Failed to create array table {}", table_name))?;
@@ -220,11 +268,14 @@ pub(super) fn sync_join_tables(
                         if !existing.contains(&sub_field.name) {
                             let sql = format!(
                                 "ALTER TABLE {} ADD COLUMN {} {}",
-                                table_name, sub_field.name, sub_field.field_type.sqlite_type()
+                                table_name,
+                                sub_field.name,
+                                sub_field.field_type.sqlite_type()
                             );
                             tracing::info!("Adding column to {}: {}", table_name, sub_field.name);
-                            conn.execute(&sql, [])
-                                .with_context(|| format!("Failed to add column {} to {}", sub_field.name, table_name))?;
+                            conn.execute(&sql, []).with_context(|| {
+                                format!("Failed to add column {} to {}", sub_field.name, table_name)
+                            })?;
                         }
                     }
                 }
@@ -233,7 +284,10 @@ pub(super) fn sync_join_tables(
                 let table_name = format!("{}_{}", collection_slug, field.name);
                 if !table_exists(conn, &table_name)? {
                     let locale_col = if has_locale_col {
-                        format!(", _locale TEXT NOT NULL DEFAULT '{}'", sanitize_locale(&locale_config.default_locale))
+                        format!(
+                            ", _locale TEXT NOT NULL DEFAULT '{}'",
+                            sanitize_locale(&locale_config.default_locale)
+                        )
                     } else {
                         String::new()
                     };
@@ -295,7 +349,8 @@ pub(super) fn sync_versions_table(conn: &rusqlite::Connection, slug: &str) -> Re
         conn.execute(
             &format!(
                 "CREATE INDEX IF NOT EXISTS idx_{slug}_parent_latest ON {table} (_parent, _latest)",
-                slug = slug, table = table_name
+                slug = slug,
+                table = table_name
             ),
             [],
         )?;
@@ -315,15 +370,16 @@ mod tests {
     use super::*;
     use crate::config::LocaleConfig;
     use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType, FieldTab, RelationshipConfig};
+    use crate::core::field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig};
     use crate::db::DbPool;
 
     fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory()
-            .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
+        );
         r2d2::Pool::builder()
             .max_size(2)
             .build(manager)
@@ -365,7 +421,8 @@ mod tests {
     fn table_exists_true_after_create() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE test_table (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute("CREATE TABLE test_table (id TEXT PRIMARY KEY)", [])
+            .unwrap();
         assert!(table_exists(&conn, "test_table").unwrap());
     }
 
@@ -375,7 +432,8 @@ mod tests {
     fn get_table_columns_returns_column_names() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE t (id TEXT, name TEXT, age INTEGER)", []).unwrap();
+        conn.execute("CREATE TABLE t (id TEXT, name TEXT, age INTEGER)", [])
+            .unwrap();
         let cols = get_table_columns(&conn, "t").unwrap();
         assert!(cols.contains("id"));
         assert!(cols.contains("name"));
@@ -389,13 +447,15 @@ mod tests {
     fn has_many_relationship_creates_junction_table() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("tags", FieldType::Relationship)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("tags", FieldType::Relationship)
                 .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-        ]);
+                .build()],
+        );
         // Need parent table first for FK
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "posts_tags").unwrap());
@@ -409,12 +469,14 @@ mod tests {
     fn array_field_creates_join_table() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("items", FieldType::Array)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("items", FieldType::Array)
                 .fields(vec![text_field("name")])
-                .build(),
-        ]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+                .build()],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "posts_items").unwrap());
@@ -429,10 +491,12 @@ mod tests {
     fn blocks_field_creates_join_table() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("content", FieldType::Blocks).build(),
-        ]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("content", FieldType::Blocks).build()],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "posts_content").unwrap());
@@ -451,18 +515,23 @@ mod tests {
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();
         let tabs_field = FieldDefinition::builder("page_settings", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new("Content", vec![blocks_field]),
-            ])
+            .tabs(vec![FieldTab::new("Content", vec![blocks_field])])
             .build();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("title", FieldType::Text).build(),
-            tabs_field,
-        ]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("title", FieldType::Text).build(),
+                tabs_field,
+            ],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
-        assert!(table_exists(&conn, "posts_content").unwrap(), "blocks table inside Tabs must be created");
+        assert!(
+            table_exists(&conn, "posts_content").unwrap(),
+            "blocks table inside Tabs must be created"
+        );
         let cols = get_table_columns(&conn, "posts_content").unwrap();
         assert!(cols.contains("_block_type"));
         assert!(cols.contains("data"));
@@ -481,10 +550,14 @@ mod tests {
             .fields(vec![array_field])
             .build();
         let def = simple_collection("posts", vec![text_field("title"), row_field]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
-        assert!(table_exists(&conn, "posts_items").unwrap(), "array table inside Row must be created");
+        assert!(
+            table_exists(&conn, "posts_items").unwrap(),
+            "array table inside Row must be created"
+        );
         let cols = get_table_columns(&conn, "posts_items").unwrap();
         assert!(cols.contains("parent_id"));
         assert!(cols.contains("label"));
@@ -502,10 +575,14 @@ mod tests {
             .fields(vec![blocks_field])
             .build();
         let def = simple_collection("posts", vec![text_field("title"), collapsible_field]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
-        assert!(table_exists(&conn, "posts_content").unwrap(), "blocks table inside Collapsible must be created");
+        assert!(
+            table_exists(&conn, "posts_content").unwrap(),
+            "blocks table inside Collapsible must be created"
+        );
         let cols = get_table_columns(&conn, "posts_content").unwrap();
         assert!(cols.contains("_block_type"));
         assert!(cols.contains("data"));
@@ -517,18 +594,23 @@ mod tests {
     fn localized_has_many_creates_junction_with_locale() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("tags", FieldType::Relationship)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("tags", FieldType::Relationship)
                 .localized(true)
                 .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-        ]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+                .build()],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
         assert!(table_exists(&conn, "posts_tags").unwrap());
         let cols = get_table_columns(&conn, "posts_tags").unwrap();
-        assert!(cols.contains("_locale"), "Localized junction table should have _locale column");
+        assert!(
+            cols.contains("_locale"),
+            "Localized junction table should have _locale column"
+        );
     }
 
     // ── localized array table ───────────────────────────────────────────
@@ -537,13 +619,15 @@ mod tests {
     fn localized_array_creates_table_with_locale() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("items", FieldType::Array)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("items", FieldType::Array)
                 .localized(true)
                 .fields(vec![text_field("label")])
-                .build(),
-        ]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+                .build()],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
         assert!(table_exists(&conn, "posts_items").unwrap());
@@ -557,12 +641,14 @@ mod tests {
     fn localized_blocks_creates_table_with_locale() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("content", FieldType::Blocks)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("content", FieldType::Blocks)
                 .localized(true)
-                .build(),
-        ]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
+                .build()],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
         assert!(table_exists(&conn, "posts_content").unwrap());
@@ -576,7 +662,11 @@ mod tests {
     fn ensure_locale_column_adds_to_existing() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE test_join (parent_id TEXT, related_id TEXT)", []).unwrap();
+        conn.execute(
+            "CREATE TABLE test_join (parent_id TEXT, related_id TEXT)",
+            [],
+        )
+        .unwrap();
 
         ensure_locale_column(&conn, "test_join", "en").unwrap();
 
@@ -594,15 +684,21 @@ mod tests {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
         // Create parent and junction table without _locale
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
-        conn.execute("CREATE TABLE posts_tags (parent_id TEXT, related_id TEXT, _order INTEGER)", []).unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE posts_tags (parent_id TEXT, related_id TEXT, _order INTEGER)",
+            [],
+        )
+        .unwrap();
 
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("tags", FieldType::Relationship)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("tags", FieldType::Relationship)
                 .localized(true)
                 .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-        ]);
+                .build()],
+        );
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "posts_tags").unwrap();
@@ -615,18 +711,23 @@ mod tests {
     fn existing_array_adds_new_subfield_columns() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+            .unwrap();
         conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", []).unwrap();
 
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("items", FieldType::Array)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("items", FieldType::Array)
                 .fields(vec![text_field("label"), text_field("value")])
-                .build(),
-        ]);
+                .build()],
+        );
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts_items").unwrap();
-        assert!(cols.contains("value"), "New sub-field column should be added");
+        assert!(
+            cols.contains("value"),
+            "New sub-field column should be added"
+        );
     }
 
     // ── existing blocks table adds _locale ──────────────────────────────
@@ -635,17 +736,19 @@ mod tests {
     fn existing_blocks_adds_locale_column() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+            .unwrap();
         conn.execute(
             "CREATE TABLE posts_content (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, _block_type TEXT, data TEXT)",
             [],
         ).unwrap();
 
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("content", FieldType::Blocks)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("content", FieldType::Blocks)
                 .localized(true)
-                .build(),
-        ]);
+                .build()],
+        );
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "posts_content").unwrap();
@@ -658,15 +761,17 @@ mod tests {
     fn existing_array_adds_locale_column() {
         let pool = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+            .unwrap();
         conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", []).unwrap();
 
-        let def = simple_collection("posts", vec![
-            FieldDefinition::builder("items", FieldType::Array)
+        let def = simple_collection(
+            "posts",
+            vec![FieldDefinition::builder("items", FieldType::Array)
                 .localized(true)
                 .fields(vec![text_field("label")])
-                .build(),
-        ]);
+                .build()],
+        );
         sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
 
         let cols = get_table_columns(&conn, "posts_items").unwrap();
@@ -677,15 +782,11 @@ mod tests {
 
     #[test]
     fn column_specs_group_containing_row() {
-        let fields = vec![
-            FieldDefinition::builder("meta", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("r", FieldType::Row)
-                        .fields(vec![text_field("title"), text_field("slug")])
-                        .build(),
-                ])
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
+                .fields(vec![text_field("title"), text_field("slug")])
+                .build()])
+            .build()];
         let specs = collect_column_specs(&fields, &no_locale());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
         assert!(names.contains(&"meta__title"), "Group→Row: meta__title");
@@ -694,61 +795,66 @@ mod tests {
 
     #[test]
     fn column_specs_group_containing_tabs() {
-        let fields = vec![
-            FieldDefinition::builder("settings", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("t", FieldType::Tabs)
-                        .tabs(vec![
-                            FieldTab::new("General", vec![text_field("theme")]),
-                            FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
-                        ])
-                        .build(),
+        let fields = vec![FieldDefinition::builder("settings", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![
+                    FieldTab::new("General", vec![text_field("theme")]),
+                    FieldTab::new("Advanced", vec![text_field("cache_ttl")]),
                 ])
-                .build(),
-        ];
+                .build()])
+            .build()];
         let specs = collect_column_specs(&fields, &no_locale());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
-        assert!(names.contains(&"settings__theme"), "Group→Tabs: settings__theme");
-        assert!(names.contains(&"settings__cache_ttl"), "Group→Tabs: settings__cache_ttl");
+        assert!(
+            names.contains(&"settings__theme"),
+            "Group→Tabs: settings__theme"
+        );
+        assert!(
+            names.contains(&"settings__cache_ttl"),
+            "Group→Tabs: settings__cache_ttl"
+        );
     }
 
     #[test]
     fn column_specs_group_tabs_group_three_levels() {
-        let fields = vec![
-            FieldDefinition::builder("outer", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("t", FieldType::Tabs)
-                        .tabs(vec![FieldTab::new("Tab", vec![
-                            FieldDefinition::builder("inner", FieldType::Group)
-                                .fields(vec![text_field("deep")])
-                                .build(),
-                        ])])
-                        .build(),
-                ])
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("outer", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Tab",
+                    vec![FieldDefinition::builder("inner", FieldType::Group)
+                        .fields(vec![text_field("deep")])
+                        .build()],
+                )])
+                .build()])
+            .build()];
         let specs = collect_column_specs(&fields, &no_locale());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
-        assert!(names.contains(&"outer__inner__deep"), "Group→Tabs→Group: outer__inner__deep");
+        assert!(
+            names.contains(&"outer__inner__deep"),
+            "Group→Tabs→Group: outer__inner__deep"
+        );
     }
 
     #[test]
     fn column_specs_group_containing_localized_tabs() {
-        let fields = vec![
-            FieldDefinition::builder("meta", FieldType::Group)
-                .localized(true)
-                .fields(vec![
-                    FieldDefinition::builder("t", FieldType::Tabs)
-                        .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
-                        .build(),
-                ])
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("meta", FieldType::Group)
+            .localized(true)
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![FieldTab::new("Content", vec![text_field("title")])])
+                .build()])
+            .build()];
         let specs = collect_column_specs(&fields, &locale_en_de());
         let names: Vec<&str> = specs.iter().map(|s| s.col_name.as_str()).collect();
-        assert!(names.contains(&"meta__title"), "Localized Group→Tabs: meta__title");
-        assert!(specs.iter().any(|s| s.col_name == "meta__title" && s.is_localized),
-                "meta__title should be marked localized via inheritance");
+        assert!(
+            names.contains(&"meta__title"),
+            "Localized Group→Tabs: meta__title"
+        );
+        assert!(
+            specs
+                .iter()
+                .any(|s| s.col_name == "meta__title" && s.is_localized),
+            "meta__title should be marked localized via inheritance"
+        );
     }
 
     #[test]
@@ -768,7 +874,8 @@ mod tests {
             ])
             .build();
         let def = simple_collection("posts", vec![text_field("name"), array_field]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "posts_items").unwrap());
@@ -776,7 +883,10 @@ mod tests {
         assert!(cols.contains("plain"), "plain sub-field column");
         assert!(cols.contains("title"), "title from tabs should be promoted");
         assert!(cols.contains("body"), "body from tabs should be promoted");
-        assert!(!cols.contains("layout"), "layout wrapper should NOT be a column");
+        assert!(
+            !cols.contains("layout"),
+            "layout wrapper should NOT be a column"
+        );
     }
 
     #[test]
@@ -785,19 +895,21 @@ mod tests {
         let conn = pool.get().unwrap();
 
         let array_field = FieldDefinition::builder("items", FieldType::Array)
-            .fields(vec![
-                FieldDefinition::builder("row_wrap", FieldType::Row)
-                    .fields(vec![text_field("x"), text_field("y")])
-                    .build(),
-            ])
+            .fields(vec![FieldDefinition::builder("row_wrap", FieldType::Row)
+                .fields(vec![text_field("x"), text_field("y")])
+                .build()])
             .build();
         let def = simple_collection("posts", vec![array_field]);
-        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
         sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
 
         let cols = get_table_columns(&conn, "posts_items").unwrap();
         assert!(cols.contains("x"), "x from row should be promoted");
         assert!(cols.contains("y"), "y from row should be promoted");
-        assert!(!cols.contains("row_wrap"), "row wrapper should NOT be a column");
+        assert!(
+            !cols.contains("row_wrap"),
+            "row wrapper should NOT be a column"
+        );
     }
 }

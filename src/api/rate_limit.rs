@@ -179,16 +179,46 @@ mod tests {
         let ip_b = Ipv4Addr::new(10, 0, 0, 2);
 
         // First request from ip_a — OK (count for ip_a: 1/2).
-        let resp_a1 = svc.ready().await.unwrap().call(request_with_ip(ip_a)).await.unwrap();
-        assert_eq!(grpc_status(&resp_a1), GRPC_STATUS_OK, "ip_a request 1 should pass");
+        let resp_a1 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_with_ip(ip_a))
+            .await
+            .unwrap();
+        assert_eq!(
+            grpc_status(&resp_a1),
+            GRPC_STATUS_OK,
+            "ip_a request 1 should pass"
+        );
 
         // Second request from ip_a — OK (count for ip_a: 2/2).
-        let resp_a2 = svc.ready().await.unwrap().call(request_with_ip(ip_a)).await.unwrap();
-        assert_eq!(grpc_status(&resp_a2), GRPC_STATUS_OK, "ip_a request 2 should pass");
+        let resp_a2 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_with_ip(ip_a))
+            .await
+            .unwrap();
+        assert_eq!(
+            grpc_status(&resp_a2),
+            GRPC_STATUS_OK,
+            "ip_a request 2 should pass"
+        );
 
         // Third request from ip_a — rate-limited (count would be 3/2).
-        let resp_a3 = svc.ready().await.unwrap().call(request_with_ip(ip_a)).await.unwrap();
-        assert_eq!(resp_a3.status(), StatusCode::OK, "HTTP status is always 200 in gRPC");
+        let resp_a3 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_with_ip(ip_a))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp_a3.status(),
+            StatusCode::OK,
+            "HTTP status is always 200 in gRPC"
+        );
         assert_eq!(
             grpc_status(&resp_a3),
             GRPC_STATUS_RESOURCE_EXHAUSTED,
@@ -196,7 +226,13 @@ mod tests {
         );
 
         // First (and only) request from ip_b — still OK because ip_b is tracked separately.
-        let resp_b1 = svc.ready().await.unwrap().call(request_with_ip(ip_b)).await.unwrap();
+        let resp_b1 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_with_ip(ip_b))
+            .await
+            .unwrap();
         assert_eq!(
             grpc_status(&resp_b1),
             GRPC_STATUS_OK,
@@ -213,13 +249,31 @@ mod tests {
         let mut svc = make_service(limiter);
 
         // First two requests pass.
-        let r1 = svc.ready().await.unwrap().call(request_no_ip()).await.unwrap();
+        let r1 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_no_ip())
+            .await
+            .unwrap();
         assert_eq!(grpc_status(&r1), GRPC_STATUS_OK);
-        let r2 = svc.ready().await.unwrap().call(request_no_ip()).await.unwrap();
+        let r2 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_no_ip())
+            .await
+            .unwrap();
         assert_eq!(grpc_status(&r2), GRPC_STATUS_OK);
 
         // Third request exceeds the limit for the "unknown" bucket.
-        let r3 = svc.ready().await.unwrap().call(request_no_ip()).await.unwrap();
+        let r3 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_no_ip())
+            .await
+            .unwrap();
         assert_eq!(
             grpc_status(&r3),
             GRPC_STATUS_RESOURCE_EXHAUSTED,
@@ -238,7 +292,13 @@ mod tests {
         let ip = Ipv4Addr::new(1, 2, 3, 4);
 
         for i in 0..5 {
-            let resp = svc.ready().await.unwrap().call(request_with_ip(ip)).await.unwrap();
+            let resp = svc
+                .ready()
+                .await
+                .unwrap()
+                .call(request_with_ip(ip))
+                .await
+                .unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
             assert_eq!(
                 grpc_status(&resp),
@@ -261,13 +321,29 @@ mod tests {
         let ip = Ipv4Addr::new(192, 168, 1, 1);
 
         for _ in 0..max {
-            let resp = svc.ready().await.unwrap().call(request_with_ip(ip)).await.unwrap();
+            let resp = svc
+                .ready()
+                .await
+                .unwrap()
+                .call(request_with_ip(ip))
+                .await
+                .unwrap();
             assert_eq!(grpc_status(&resp), GRPC_STATUS_OK);
         }
 
         // One over the limit.
-        let resp = svc.ready().await.unwrap().call(request_with_ip(ip)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::OK, "HTTP status is always 200 in gRPC");
+        let resp = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_with_ip(ip))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::OK,
+            "HTTP status is always 200 in gRPC"
+        );
         assert_eq!(
             grpc_status(&resp),
             GRPC_STATUS_RESOURCE_EXHAUSTED,
@@ -284,11 +360,23 @@ mod tests {
         let ip = Ipv4Addr::new(10, 10, 10, 10);
 
         // Consume the single allowed request.
-        let r1 = svc.ready().await.unwrap().call(request_with_ip(ip)).await.unwrap();
+        let r1 = svc
+            .ready()
+            .await
+            .unwrap()
+            .call(request_with_ip(ip))
+            .await
+            .unwrap();
         assert_eq!(grpc_status(&r1), GRPC_STATUS_OK);
 
         for i in 0..5 {
-            let resp = svc.ready().await.unwrap().call(request_with_ip(ip)).await.unwrap();
+            let resp = svc
+                .ready()
+                .await
+                .unwrap()
+                .call(request_with_ip(ip))
+                .await
+                .unwrap();
             assert_eq!(
                 grpc_status(&resp),
                 GRPC_STATUS_RESOURCE_EXHAUSTED,
@@ -308,7 +396,13 @@ mod tests {
         let ip = Ipv4Addr::new(5, 5, 5, 5);
 
         for _ in 0..1000 {
-            let resp = svc.ready().await.unwrap().call(request_with_ip(ip)).await.unwrap();
+            let resp = svc
+                .ready()
+                .await
+                .unwrap()
+                .call(request_with_ip(ip))
+                .await
+                .unwrap();
             assert_eq!(
                 grpc_status(&resp),
                 GRPC_STATUS_OK,
@@ -324,7 +418,13 @@ mod tests {
         let mut svc = make_service(limiter);
 
         for _ in 0..100 {
-            let resp = svc.ready().await.unwrap().call(request_no_ip()).await.unwrap();
+            let resp = svc
+                .ready()
+                .await
+                .unwrap()
+                .call(request_no_ip())
+                .await
+                .unwrap();
             assert_eq!(grpc_status(&resp), GRPC_STATUS_OK);
         }
     }

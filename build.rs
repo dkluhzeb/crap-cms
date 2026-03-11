@@ -1,6 +1,6 @@
-use std::{env, io::Result, path::PathBuf};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::{env, io::Result, path::PathBuf};
 
 fn main() -> Result<()> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());

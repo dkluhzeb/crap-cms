@@ -214,7 +214,12 @@ mod tests {
     #[test]
     fn search_relevance_ranking() {
         let conn = setup_db();
-        insert_post(&conn, "1", "Rust programming", "Learn Rust today with Rust tutorials");
+        insert_post(
+            &conn,
+            "1",
+            "Rust programming",
+            "Learn Rust today with Rust tutorials",
+        );
         insert_post(&conn, "2", "Python programming", "Learn Python today");
         let def = simple_def(vec![text_field("title"), text_field("body")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();

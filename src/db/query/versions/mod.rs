@@ -1,20 +1,14 @@
 //! Version-specific database operations for the `_versions_{slug}` table.
 
 mod crud;
-mod snapshot;
 mod restore;
+mod snapshot;
 
 pub use crud::{
-    create_version,
-    find_latest_version,
-    count_versions,
-    list_versions,
-    find_version_by_id,
-    prune_versions,
-    set_document_status,
-    get_document_status,
+    count_versions, create_version, find_latest_version, find_version_by_id, get_document_status,
+    list_versions, prune_versions, set_document_status,
 };
 
 pub use snapshot::build_snapshot;
 
-pub use restore::{restore_version, restore_global_version};
+pub use restore::{restore_global_version, restore_version};

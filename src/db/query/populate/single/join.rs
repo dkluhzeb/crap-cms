@@ -3,12 +3,12 @@
 use anyhow::Result;
 use std::collections::HashSet;
 
-use crate::core::Document;
-use crate::core::field::FieldType;
-use crate::db::query::read::find;
-use crate::db::query::{FindQuery, FilterClause, Filter, FilterOp};
-use super::super::{PopulateContext, PopulateOpts, PopulateCache, document_to_json};
+use super::super::{document_to_json, PopulateCache, PopulateContext, PopulateOpts};
 use super::populate_relationships_cached;
+use crate::core::field::FieldType;
+use crate::core::Document;
+use crate::db::query::read::find;
+use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
 
 /// Populate join fields (virtual reverse lookups).
 pub(super) fn populate_join_fields(
@@ -50,21 +50,39 @@ pub(super) fn populate_join_fields(
         if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
             let mut populated = Vec::new();
             for mut matched_doc in matched_docs {
-                crate::db::query::hydrate_document(conn, &jc.collection, &target_def.fields, &mut matched_doc, None, locale_ctx)?;
+                crate::db::query::hydrate_document(
+                    conn,
+                    &jc.collection,
+                    &target_def.fields,
+                    &mut matched_doc,
+                    None,
+                    locale_ctx,
+                )?;
                 if let Some(ref uc) = target_def.upload {
                     if uc.enabled {
                         crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
                     }
                 }
                 populate_relationships_cached(
-                    &PopulateContext { conn, registry, collection_slug: &jc.collection, def: &target_def },
-                    &mut matched_doc, visited,
-                    &PopulateOpts { depth: depth - 1, select: None, locale_ctx },
+                    &PopulateContext {
+                        conn,
+                        registry,
+                        collection_slug: &jc.collection,
+                        def: &target_def,
+                    },
+                    &mut matched_doc,
+                    visited,
+                    &PopulateOpts {
+                        depth: depth - 1,
+                        select: None,
+                        locale_ctx,
+                    },
                     cache,
                 )?;
                 populated.push(document_to_json(&matched_doc, &jc.collection));
             }
-            doc.fields.insert(field.name.clone(), serde_json::Value::Array(populated));
+            doc.fields
+                .insert(field.name.clone(), serde_json::Value::Array(populated));
         }
     }
     Ok(())
@@ -72,9 +90,9 @@ pub(super) fn populate_join_fields(
 
 #[cfg(test)]
 mod tests {
-    use super::populate_relationships_cached;
     use super::super::super::test_helpers::*;
-    use super::super::super::{PopulateContext, PopulateOpts, PopulateCache};
+    use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
+    use super::populate_relationships_cached;
     use crate::core::Registry;
     use std::collections::HashSet;
 
@@ -88,21 +106,37 @@ mod tests {
         registry.register_collection(posts_def);
 
         let mut doc = crate::core::Document::new("a1".to_string());
-        doc.fields.insert("name".to_string(), serde_json::json!("Alice"));
+        doc.fields
+            .insert("name".to_string(), serde_json::json!("Alice"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
-            &mut doc, &mut visited,
-            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
-        let posts = doc.fields.get("posts").expect("posts join field should exist");
+        let posts = doc
+            .fields
+            .get("posts")
+            .expect("posts join field should exist");
         let arr = posts.as_array().expect("posts should be an array");
         assert_eq!(arr.len(), 2, "Alice has 2 posts");
 
-        let titles: Vec<&str> = arr.iter()
+        let titles: Vec<&str> = arr
+            .iter()
             .filter_map(|v| v.get("title").and_then(|t| t.as_str()))
             .collect();
         assert!(titles.contains(&"First Post"));
@@ -119,18 +153,33 @@ mod tests {
         registry.register_collection(posts_def);
 
         let mut doc = crate::core::Document::new("a1".to_string());
-        doc.fields.insert("name".to_string(), serde_json::json!("Alice"));
+        doc.fields
+            .insert("name".to_string(), serde_json::json!("Alice"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
-            &mut doc, &mut visited,
-            &PopulateOpts { depth: 0, select: None, locale_ctx: None },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 0,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // At depth=0, join field should not be populated
-        assert!(doc.fields.get("posts").is_none(), "depth=0 should not add join field");
+        assert!(
+            doc.fields.get("posts").is_none(),
+            "depth=0 should not add join field"
+        );
     }
 
     #[test]
@@ -144,19 +193,37 @@ mod tests {
 
         // Author with no posts
         let mut doc = crate::core::Document::new("a99".to_string());
-        doc.fields.insert("name".to_string(), serde_json::json!("Nobody"));
+        doc.fields
+            .insert("name".to_string(), serde_json::json!("Nobody"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
-            &mut doc, &mut visited,
-            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
-        let posts = doc.fields.get("posts").expect("posts join field should exist");
+        let posts = doc
+            .fields
+            .get("posts")
+            .expect("posts join field should exist");
         let arr = posts.as_array().expect("posts should be an array");
-        assert!(arr.is_empty(), "no matching posts should produce empty array");
+        assert!(
+            arr.is_empty(),
+            "no matching posts should produce empty array"
+        );
     }
 
     #[test]
@@ -169,19 +236,34 @@ mod tests {
         registry.register_collection(posts_def);
 
         let mut doc = crate::core::Document::new("a1".to_string());
-        doc.fields.insert("name".to_string(), serde_json::json!("Alice"));
+        doc.fields
+            .insert("name".to_string(), serde_json::json!("Alice"));
 
         let mut visited = HashSet::new();
         // Select only "name", not "posts"
         let select = vec!["name".to_string()];
         populate_relationships_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
-            &mut doc, &mut visited,
-            &PopulateOpts { depth: 1, select: Some(&select), locale_ctx: None },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
+            &mut doc,
+            &mut visited,
+            &PopulateOpts {
+                depth: 1,
+                select: Some(&select),
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Join field should be skipped because it's not in select
-        assert!(doc.fields.get("posts").is_none(), "join field not in select should be skipped");
+        assert!(
+            doc.fields.get("posts").is_none(),
+            "join field not in select should be skipped"
+        );
     }
 }

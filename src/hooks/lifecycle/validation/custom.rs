@@ -4,7 +4,7 @@ use anyhow::Result;
 use mlua::{Lua, Value};
 
 use super::super::execution::resolve_hook_function;
-use crate::hooks::lifecycle::{UserContext, UiLocaleContext};
+use crate::hooks::lifecycle::{UiLocaleContext, UserContext};
 
 /// Inner implementation of `run_validate_function` — operates on a locked `&Lua`.
 /// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
@@ -28,12 +28,20 @@ pub(super) fn run_validate_function_inner(
     ctx_table.set("data", data_table)?;
 
     // Add user document and UI locale to validation context
-    if let Some(user_doc) = lua.app_data_ref::<UserContext>().and_then(|uc| uc.0.clone()) {
-        if let Ok(user_tbl) = crate::hooks::lifecycle::converters::document_to_lua_table(lua, &user_doc) {
+    if let Some(user_doc) = lua
+        .app_data_ref::<UserContext>()
+        .and_then(|uc| uc.0.clone())
+    {
+        if let Ok(user_tbl) =
+            crate::hooks::lifecycle::converters::document_to_lua_table(lua, &user_doc)
+        {
             let _ = ctx_table.set("user", user_tbl);
         }
     }
-    if let Some(ui_locale) = lua.app_data_ref::<UiLocaleContext>().and_then(|uc| uc.0.clone()) {
+    if let Some(ui_locale) = lua
+        .app_data_ref::<UiLocaleContext>()
+        .and_then(|uc| uc.0.clone())
+    {
         let _ = ctx_table.set("ui_locale", ui_locale.as_str());
     }
 
@@ -55,34 +63,57 @@ mod tests {
     #[test]
     fn test_run_validate_function_nil_means_valid() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["validators"] = {
                 validate_nil = function(value, ctx)
                     return nil
                 end
             }
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
         let data = HashMap::new();
         let result = run_validate_function_inner(
-            &lua, "validators.validate_nil", &json!("test"), &data, "test", "name"
-        ).unwrap();
+            &lua,
+            "validators.validate_nil",
+            &json!("test"),
+            &data,
+            "test",
+            "name",
+        )
+        .unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_run_validate_function_other_return_means_valid() {
         let lua = mlua::Lua::new();
-        lua.load(r#"
+        lua.load(
+            r#"
             package.loaded["validators"] = {
                 validate_number = function(value, ctx)
                     return 42  -- a number return is treated as valid
                 end
             }
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
         let data = HashMap::new();
         let result = run_validate_function_inner(
-            &lua, "validators.validate_number", &json!("test"), &data, "test", "name"
-        ).unwrap();
-        assert!(result.is_none(), "Number return from validator should be treated as valid (None)");
+            &lua,
+            "validators.validate_number",
+            &json!("test"),
+            &data,
+            "test",
+            "name",
+        )
+        .unwrap();
+        assert!(
+            result.is_none(),
+            "Number return from validator should be treated as valid (None)"
+        );
     }
 }

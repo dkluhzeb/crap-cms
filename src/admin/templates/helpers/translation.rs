@@ -53,9 +53,7 @@ impl HelperDef for TranslationHelper {
 
 #[cfg(test)]
 mod tests {
-    fn test_hbs_with_translations(
-        config_dir: &std::path::Path,
-    ) -> handlebars::Handlebars<'static> {
+    fn test_hbs_with_translations(config_dir: &std::path::Path) -> handlebars::Handlebars<'static> {
         let translations =
             std::sync::Arc::new(crate::admin::translations::Translations::load(config_dir));
         let hbs = crate::admin::templates::create_handlebars(config_dir, false, translations)

@@ -35,7 +35,9 @@ fn make_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("status", FieldType::Select)
             .default_value(serde_json::json!("draft"))
             .build(),
@@ -51,10 +53,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -123,16 +131,14 @@ fn setup_service(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -153,7 +159,11 @@ fn setup_service(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 // ── CRUD Tests ────────────────────────────────────────────────────────────
@@ -248,7 +258,10 @@ async fn create_and_find_by_id() {
         .expect("Document not found");
 
     assert_eq!(found.id, doc.id);
-    assert_eq!(get_proto_field(&found, "title").as_deref(), Some("Test Post"));
+    assert_eq!(
+        get_proto_field(&found, "title").as_deref(),
+        Some("Test Post")
+    );
 }
 
 #[tokio::test]
@@ -286,7 +299,10 @@ async fn update_document() {
         .unwrap();
 
     assert_eq!(updated.id, doc.id);
-    assert_eq!(get_proto_field(&updated, "title").as_deref(), Some("Updated"));
+    assert_eq!(
+        get_proto_field(&updated, "title").as_deref(),
+        Some("Updated")
+    );
 }
 
 #[tokio::test]
@@ -425,9 +441,7 @@ async fn find_with_where_or() {
         .service
         .find(Request::new(content::FindRequest {
             collection: "posts".to_string(),
-            r#where: Some(
-                r#"{"or": [{"title": "Alpha"}, {"title": "Gamma"}]}"#.to_string(),
-            ),
+            r#where: Some(r#"{"or": [{"title": "Alpha"}, {"title": "Gamma"}]}"#.to_string()),
             ..Default::default()
         }))
         .await
@@ -615,7 +629,10 @@ async fn update_global_and_read_back() {
         .document
         .unwrap();
 
-    assert_eq!(get_proto_field(&doc, "site_name").as_deref(), Some("My CMS"));
+    assert_eq!(
+        get_proto_field(&doc, "site_name").as_deref(),
+        Some("My CMS")
+    );
 }
 
 #[tokio::test]
@@ -638,7 +655,10 @@ async fn get_global_nonexistent() {
 
 #[tokio::test]
 async fn list_collections_returns_all() {
-    let ts = setup_service(vec![make_posts_def(), make_users_def()], vec![make_global_def()]);
+    let ts = setup_service(
+        vec![make_posts_def(), make_users_def()],
+        vec![make_global_def()],
+    );
 
     let resp = ts
         .service

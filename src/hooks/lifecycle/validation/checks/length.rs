@@ -1,6 +1,6 @@
-use std::collections::HashMap;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::FieldError;
+use std::collections::HashMap;
 
 /// Validate min_length / max_length for text/textarea fields.
 /// Skipped for has_many fields (validated per-element in `check_has_many_elements`).
@@ -18,12 +18,28 @@ pub(crate) fn check_length_bounds(
         let len = s.len();
         if let Some(min_len) = field.min_length {
             if len < min_len {
-                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be at least {} characters", field.name, min_len), "validation.min_length", HashMap::from([("field".to_string(), field.name.clone()), ("min".to_string(), min_len.to_string())])));
+                errors.push(FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("{} must be at least {} characters", field.name, min_len),
+                    "validation.min_length",
+                    HashMap::from([
+                        ("field".to_string(), field.name.clone()),
+                        ("min".to_string(), min_len.to_string()),
+                    ]),
+                ));
             }
         }
         if let Some(max_len) = field.max_length {
             if len > max_len {
-                errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be at most {} characters", field.name, max_len), "validation.max_length", HashMap::from([("field".to_string(), field.name.clone()), ("max".to_string(), max_len.to_string())])));
+                errors.push(FieldError::with_key(
+                    data_key.to_owned(),
+                    format!("{} must be at most {} characters", field.name, max_len),
+                    "validation.max_length",
+                    HashMap::from([
+                        ("field".to_string(), field.name.clone()),
+                        ("max".to_string(), max_len.to_string()),
+                    ]),
+                ));
             }
         }
     }
@@ -40,21 +56,33 @@ mod tests {
     fn test_validate_min_length_fails() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).min_length(5).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .min_length(5)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("ab"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0].message.contains("at least 5 characters"));
+        assert!(result.unwrap_err().errors[0]
+            .message
+            .contains("at least 5 characters"));
     }
 
     #[test]
     fn test_validate_min_length_passes() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).min_length(3).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .min_length(3)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("hello"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -65,21 +93,33 @@ mod tests {
     fn test_validate_max_length_fails() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).max_length(5).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .max_length(5)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("toolongvalue"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().errors[0].message.contains("at most 5 characters"));
+        assert!(result.unwrap_err().errors[0]
+            .message
+            .contains("at most 5 characters"));
     }
 
     #[test]
     fn test_validate_max_length_passes() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).max_length(10).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .max_length(10)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("short"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -90,11 +130,19 @@ mod tests {
     fn test_validate_min_max_length_skipped_for_empty() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)").unwrap();
-        let fields = vec![FieldDefinition::builder("name", crate::core::field::FieldType::Text).min_length(5).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+                .min_length(5)
+                .build(),
+        ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_ok(), "min_length should not trigger on empty values");
+        assert!(
+            result.is_ok(),
+            "min_length should not trigger on empty values"
+        );
     }
 }

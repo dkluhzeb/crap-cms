@@ -1,12 +1,12 @@
 //! Registers `crap.richtext` — custom ProseMirror node registration and rendering.
 
 use anyhow::Result;
-use mlua::{Lua, Table, Value, Function};
+use mlua::{Function, Lua, Table, Value};
 
-use crate::core::SharedRegistry;
-use crate::core::richtext::{RichtextNodeDef, NodeAttr, NodeAttrType};
-use crate::core::field::SelectOption;
 use crate::core::field::LocalizedString;
+use crate::core::field::SelectOption;
+use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
+use crate::core::SharedRegistry;
 
 /// Register the `crap.richtext` namespace on the `crap` global table.
 ///
@@ -123,7 +123,10 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
             crate::core::richtext::render_prosemirror_to_html(content, &render_custom)
                 .map_err(|e| mlua::Error::RuntimeError(format!("Render error: {}", e)))
         } else {
-            Ok(crate::core::richtext::render_html_custom_nodes(content, &render_custom))
+            Ok(crate::core::richtext::render_html_custom_nodes(
+                content,
+                &render_custom,
+            ))
         }
     })?;
     richtext_table.set("render", render_fn)?;
@@ -138,8 +141,12 @@ fn parse_node_attrs(lua: &Lua, attrs_tbl: &Table) -> mlua::Result<Vec<NodeAttr>>
     for pair in attrs_tbl.clone().sequence_values::<Table>() {
         let attr_tbl = pair?;
         let name: String = attr_tbl.get("name")?;
-        let attr_type_str: String = attr_tbl.get::<String>("type").unwrap_or_else(|_| "text".into());
-        let label: String = attr_tbl.get::<String>("label").unwrap_or_else(|_| name.clone());
+        let attr_type_str: String = attr_tbl
+            .get::<String>("type")
+            .unwrap_or_else(|_| "text".into());
+        let label: String = attr_tbl
+            .get::<String>("label")
+            .unwrap_or_else(|_| name.clone());
         let required: bool = attr_tbl.get::<bool>("required").unwrap_or(false);
 
         let default_value = match attr_tbl.get::<Value>("default")? {
@@ -195,7 +202,8 @@ mod tests {
     #[test]
     fn register_node_basic() {
         let (lua, registry) = setup_lua();
-        lua.load(r#"
+        lua.load(
+            r#"
             crap.richtext.register_node("cta", {
                 label = "Call to Action",
                 inline = false,
@@ -205,7 +213,10 @@ mod tests {
                 },
                 searchable_attrs = { "text" },
             })
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let reg = registry.read().unwrap();
         let node = reg.get_richtext_node("cta").unwrap();
@@ -221,7 +232,8 @@ mod tests {
     #[test]
     fn register_node_with_render() {
         let (lua, registry) = setup_lua();
-        lua.load(r#"
+        lua.load(
+            r#"
             crap.richtext.register_node("badge", {
                 label = "Badge",
                 inline = true,
@@ -232,7 +244,10 @@ mod tests {
                     return "<span class='badge'>" .. attrs.text .. "</span>"
                 end,
             })
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let reg = registry.read().unwrap();
         let node = reg.get_richtext_node("badge").unwrap();
@@ -243,23 +258,31 @@ mod tests {
     #[test]
     fn register_node_invalid_name() {
         let (lua, _) = setup_lua();
-        let result = lua.load(r#"
+        let result = lua
+            .load(
+                r#"
             crap.richtext.register_node("bad name!", { label = "Bad" })
-        "#).exec();
+        "#,
+            )
+            .exec();
         assert!(result.is_err());
     }
 
     #[test]
     fn render_json_with_custom_nodes() {
         let (lua, _) = setup_lua();
-        lua.load(r#"
+        lua.load(
+            r#"
             crap.richtext.register_node("cta", {
                 label = "CTA",
                 render = function(attrs)
                     return '<a href="' .. attrs.url .. '">' .. attrs.text .. '</a>'
                 end,
             })
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let result: String = lua.load(r#"
             return crap.richtext.render('{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click","url":"/go"}}]}')
@@ -270,14 +293,18 @@ mod tests {
     #[test]
     fn render_html_with_custom_nodes() {
         let (lua, _) = setup_lua();
-        lua.load(r#"
+        lua.load(
+            r#"
             crap.richtext.register_node("cta", {
                 label = "CTA",
                 render = function(attrs)
                     return '<button>' .. attrs.text .. '</button>'
                 end,
             })
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let result: String = lua.load(r#"
             return crap.richtext.render('<p>Hi</p><crap-node data-type="cta" data-attrs=\'{"text":"Go"}\'></crap-node>')
@@ -288,16 +315,22 @@ mod tests {
     #[test]
     fn render_empty_string() {
         let (lua, _) = setup_lua();
-        let result: String = lua.load(r#"
+        let result: String = lua
+            .load(
+                r#"
             return crap.richtext.render("")
-        "#).eval().unwrap();
+        "#,
+            )
+            .eval()
+            .unwrap();
         assert_eq!(result, "");
     }
 
     #[test]
     fn register_node_with_select_options() {
         let (lua, registry) = setup_lua();
-        lua.load(r#"
+        lua.load(
+            r#"
             crap.richtext.register_node("alert", {
                 label = "Alert",
                 attrs = {
@@ -307,7 +340,10 @@ mod tests {
                     }},
                 },
             })
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         let reg = registry.read().unwrap();
         let node = reg.get_richtext_node("alert").unwrap();
@@ -317,9 +353,13 @@ mod tests {
     #[test]
     fn register_node_empty_name_invalid() {
         let (lua, _) = setup_lua();
-        let result = lua.load(r#"
+        let result = lua
+            .load(
+                r#"
             crap.richtext.register_node("", { label = "Empty" })
-        "#).exec();
+        "#,
+            )
+            .exec();
         assert!(result.is_err());
     }
 
@@ -329,19 +369,27 @@ mod tests {
     fn render_json_node_without_render_function_passthrough() {
         let (lua, _) = setup_lua();
         // Register a node without a render function.
-        lua.load(r#"
+        lua.load(
+            r#"
             crap.richtext.register_node("badge", {
                 label = "Badge",
                 attrs = { { name = "text", type = "text" } },
             })
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
         // The render closure will find the node entry but no `render` key → return None
         // → rendered as <crap-node> passthrough.
         let result: String = lua.load(r#"
             return crap.richtext.render('{"type":"doc","content":[{"type":"badge","attrs":{"text":"hi"}}]}')
         "#).eval().unwrap();
-        assert!(result.contains("crap-node"), "expected crap-node passthrough, got: {}", result);
+        assert!(
+            result.contains("crap-node"),
+            "expected crap-node passthrough, got: {}",
+            result
+        );
         assert!(result.contains("data-type=\"badge\""));
     }
 
@@ -354,7 +402,11 @@ mod tests {
         let result: String = lua.load(r#"
             return crap.richtext.render('{"type":"doc","content":[{"type":"mystery","attrs":{"x":"y"}}]}')
         "#).eval().unwrap();
-        assert!(result.contains("crap-node"), "expected crap-node passthrough, got: {}", result);
+        assert!(
+            result.contains("crap-node"),
+            "expected crap-node passthrough, got: {}",
+            result
+        );
         assert!(result.contains("data-type=\"mystery\""));
     }
 
@@ -364,20 +416,33 @@ mod tests {
     #[test]
     fn render_json_render_function_error_falls_back_to_passthrough() {
         let (lua, _) = setup_lua();
-        lua.load(r#"
+        lua.load(
+            r#"
             crap.richtext.register_node("boom", {
                 label = "Boom",
                 render = function(attrs)
                     error("intentional render error")
                 end,
             })
-        "#).exec().unwrap();
+        "#,
+        )
+        .exec()
+        .unwrap();
 
-        let result: String = lua.load(r#"
+        let result: String = lua
+            .load(
+                r#"
             return crap.richtext.render('{"type":"doc","content":[{"type":"boom","attrs":{}}]}')
-        "#).eval().unwrap();
+        "#,
+            )
+            .eval()
+            .unwrap();
         // Render function failed → None → passthrough as <crap-node>
-        assert!(result.contains("crap-node"), "expected crap-node passthrough, got: {}", result);
+        assert!(
+            result.contains("crap-node"),
+            "expected crap-node passthrough, got: {}",
+            result
+        );
         assert!(result.contains("data-type=\"boom\""));
     }
 
@@ -385,9 +450,13 @@ mod tests {
     #[test]
     fn render_invalid_json_returns_error() {
         let (lua, _) = setup_lua();
-        let result = lua.load(r#"
+        let result = lua
+            .load(
+                r#"
             return crap.richtext.render("{not valid json")
-        "#).exec();
+        "#,
+            )
+            .exec();
         assert!(result.is_err());
     }
 }

@@ -1,13 +1,8 @@
 use std::collections::HashMap;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::collection::{
-    Auth, CollectionDefinition, Labels, GlobalDefinition,
-};
-use crap_cms::core::field::{
-    FieldDefinition, FieldType,
-    LocalizedString,
-};
+use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
+use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
 use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
 
@@ -50,7 +45,8 @@ fn full_crud_cycle() {
     }
 
     // Sync schema
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Failed to sync schema");
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale)
+        .expect("Failed to sync schema");
 
     // Create
     let mut data = HashMap::new();
@@ -97,8 +93,8 @@ fn full_crud_cycle() {
     query::delete(&tx, "posts", &doc_id).expect("Failed to delete document");
     tx.commit().expect("Commit");
 
-    let deleted = ops::find_document_by_id(&pool, "posts", &def, &doc_id, None)
-        .expect("Query failed");
+    let deleted =
+        ops::find_document_by_id(&pool, "posts", &def, &doc_id, None).expect("Query failed");
     assert!(deleted.is_none());
 }
 
@@ -117,7 +113,8 @@ fn sync_schema_adds_columns() {
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("First sync failed");
 
     // Add a field
-    def.fields.push(FieldDefinition::builder("body", FieldType::Textarea).build());
+    def.fields
+        .push(FieldDefinition::builder("body", FieldType::Textarea).build());
     {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
@@ -166,7 +163,8 @@ fn sync_schema_adds_timestamp_columns_to_existing_table() {
         let mut reg = registry.write().unwrap();
         reg.register_collection(def.clone());
     }
-    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Second sync with timestamps");
+    migrate::sync_all(&pool, &registry, &CrapConfig::default().locale)
+        .expect("Second sync with timestamps");
 
     // Verify we can query (the bug: SELECT ... created_at, updated_at would fail)
     let find_query = query::FindQuery::new();
@@ -234,7 +232,10 @@ fn filter_rejects_invalid_field_name() {
 
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Invalid field 'nonexistent'"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Invalid field 'nonexistent'"));
 }
 
 #[test]
@@ -253,7 +254,10 @@ fn order_by_rejects_invalid_field_name() {
 
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
-    assert!(result.unwrap_err().to_string().contains("Invalid field 'nonexistent'"));
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Invalid field 'nonexistent'"));
 }
 
 #[test]
@@ -276,14 +280,22 @@ fn sql_injection_in_filter_field_blocked() {
     let result = ops::find_documents(&pool, "posts", &def, &find_query, None);
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("Invalid field"), "Expected invalid field error, got: {}", err_msg);
+    assert!(
+        err_msg.contains("Invalid field"),
+        "Expected invalid field error, got: {}",
+        err_msg
+    );
 }
 
 // ── Seed helper (used by type coercion and count_where_field_eq tests) ─────────
 
 /// Set up a fresh DB with 5 seeded posts for filter testing.
 /// Returns (pool, def, _tmp). Hold _tmp to keep the temp dir alive.
-fn seed_posts() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn seed_posts() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_posts_def();
@@ -341,7 +353,11 @@ fn make_users_def() -> CollectionDefinition {
     def
 }
 
-fn setup_auth_collection() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn setup_auth_collection() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_users_def();
@@ -369,8 +385,8 @@ fn setup_auth_collection() -> (tempfile::TempDir, crap_cms::db::DbPool, Collecti
 fn find_by_email_returns_user() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
-    let result = query::find_by_email(&conn, "users", &def, "alice@example.com")
-        .expect("Query failed");
+    let result =
+        query::find_by_email(&conn, "users", &def, "alice@example.com").expect("Query failed");
     assert!(result.is_some());
     let doc = result.unwrap();
     assert_eq!(doc.get_str("email"), Some("alice@example.com"));
@@ -392,20 +408,18 @@ fn update_password_and_get_hash() {
     let conn = pool.get().expect("DB connection");
 
     let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
-        .expect("Query failed").expect("User not found");
+        .expect("Query failed")
+        .expect("User not found");
 
     // Initially no password hash
-    let hash = query::get_password_hash(&conn, "users", &user.id)
-        .expect("Get hash failed");
+    let hash = query::get_password_hash(&conn, "users", &user.id).expect("Get hash failed");
     assert!(hash.is_none());
 
     // Update password
-    query::update_password(&conn, "users", &user.id, "secret123")
-        .expect("Update password failed");
+    query::update_password(&conn, "users", &user.id, "secret123").expect("Update password failed");
 
     // Verify hash is now set
-    let hash = query::get_password_hash(&conn, "users", &user.id)
-        .expect("Get hash failed");
+    let hash = query::get_password_hash(&conn, "users", &user.id).expect("Get hash failed");
     assert!(hash.is_some());
     let hash_str = hash.unwrap();
     assert!(hash_str.starts_with("$argon2"));
@@ -415,8 +429,7 @@ fn update_password_and_get_hash() {
 fn get_password_hash_missing_user() {
     let (_tmp, pool, _def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
-    let result = query::get_password_hash(&conn, "users", "nonexistent-id")
-        .expect("Query failed");
+    let result = query::get_password_hash(&conn, "users", "nonexistent-id").expect("Query failed");
     assert!(result.is_none());
 }
 
@@ -426,7 +439,8 @@ fn set_and_find_reset_token() {
     let conn = pool.get().expect("DB connection");
 
     let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
-        .expect("Query failed").expect("User not found");
+        .expect("Query failed")
+        .expect("User not found");
 
     let exp = chrono::Utc::now().timestamp() + 3600;
     query::set_reset_token(&conn, "users", &user.id, "reset-token-abc", exp)
@@ -444,8 +458,8 @@ fn set_and_find_reset_token() {
 fn find_reset_token_wrong_token() {
     let (_tmp, pool, def) = setup_auth_collection();
     let conn = pool.get().expect("DB connection");
-    let result = query::find_by_reset_token(&conn, "users", &def, "wrong-token")
-        .expect("Query failed");
+    let result =
+        query::find_by_reset_token(&conn, "users", &def, "wrong-token").expect("Query failed");
     assert!(result.is_none());
 }
 
@@ -455,17 +469,16 @@ fn clear_reset_token() {
     let conn = pool.get().expect("DB connection");
 
     let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
-        .expect("Query failed").expect("User not found");
+        .expect("Query failed")
+        .expect("User not found");
 
     let exp = chrono::Utc::now().timestamp() + 3600;
-    query::set_reset_token(&conn, "users", &user.id, "token-to-clear", exp)
-        .expect("Set failed");
+    query::set_reset_token(&conn, "users", &user.id, "token-to-clear", exp).expect("Set failed");
 
-    query::clear_reset_token(&conn, "users", &user.id)
-        .expect("Clear failed");
+    query::clear_reset_token(&conn, "users", &user.id).expect("Clear failed");
 
-    let found = query::find_by_reset_token(&conn, "users", &def, "token-to-clear")
-        .expect("Query failed");
+    let found =
+        query::find_by_reset_token(&conn, "users", &def, "token-to-clear").expect("Query failed");
     assert!(found.is_none());
 }
 
@@ -475,13 +488,14 @@ fn set_and_find_verification_token() {
     let conn = pool.get().expect("DB connection");
 
     let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
-        .expect("Query failed").expect("User not found");
+        .expect("Query failed")
+        .expect("User not found");
 
     query::set_verification_token(&conn, "users", &user.id, "verify-abc", 9999999999)
         .expect("Set verification token failed");
 
-    let found = query::find_by_verification_token(&conn, "users", &def, "verify-abc")
-        .expect("Find failed");
+    let found =
+        query::find_by_verification_token(&conn, "users", &def, "verify-abc").expect("Find failed");
     assert!(found.is_some());
     let (doc, exp) = found.unwrap();
     assert_eq!(doc.id, user.id);
@@ -503,20 +517,18 @@ fn mark_verified_and_check() {
     let conn = pool.get().expect("DB connection");
 
     let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
-        .expect("Query failed").expect("User not found");
+        .expect("Query failed")
+        .expect("User not found");
 
     // Initially not verified
-    let verified = query::is_verified(&conn, "users", &user.id)
-        .expect("Check failed");
+    let verified = query::is_verified(&conn, "users", &user.id).expect("Check failed");
     assert!(!verified);
 
     // Mark verified
-    query::mark_verified(&conn, "users", &user.id)
-        .expect("Mark verified failed");
+    query::mark_verified(&conn, "users", &user.id).expect("Mark verified failed");
 
     // Now verified
-    let verified = query::is_verified(&conn, "users", &user.id)
-        .expect("Check failed");
+    let verified = query::is_verified(&conn, "users", &user.id).expect("Check failed");
     assert!(verified);
 }
 
@@ -526,10 +538,10 @@ fn is_verified_default_false() {
     let conn = pool.get().expect("DB connection");
 
     let user = query::find_by_email(&conn, "users", &def, "alice@example.com")
-        .expect("Query failed").expect("User not found");
+        .expect("Query failed")
+        .expect("User not found");
 
-    let verified = query::is_verified(&conn, "users", &user.id)
-        .expect("Check failed");
+    let verified = query::is_verified(&conn, "users", &user.id).expect("Check failed");
     assert!(!verified);
 }
 
@@ -553,16 +565,13 @@ fn count_where_field_eq_with_exclude() {
         field: "status".to_string(),
         op: query::FilterOp::Equals("published".to_string()),
     })];
-    let docs = ops::find_documents(
-        &pool, "posts", &def,
-        &fq,
-        None,
-    ).expect("Find failed");
+    let docs = ops::find_documents(&pool, "posts", &def, &fq, None).expect("Find failed");
     assert!(!docs.is_empty());
     let exclude_id = &docs[0].id;
 
-    let count = query::count_where_field_eq(&conn, "posts", "status", "published", Some(exclude_id))
-        .expect("Count failed");
+    let count =
+        query::count_where_field_eq(&conn, "posts", "status", "published", Some(exclude_id))
+            .expect("Count failed");
     assert_eq!(count, 1);
 }
 
@@ -598,8 +607,7 @@ fn setup_global() -> (tempfile::TempDir, crap_cms::db::DbPool, GlobalDefinition)
 fn global_default_row_exists_after_sync() {
     let (_tmp, pool, def) = setup_global();
     let conn = pool.get().expect("DB connection");
-    let doc = query::get_global(&conn, "site_settings", &def, None)
-        .expect("Get global failed");
+    let doc = query::get_global(&conn, "site_settings", &def, None).expect("Get global failed");
     assert_eq!(doc.id, "default");
 }
 
@@ -607,11 +615,13 @@ fn global_default_row_exists_after_sync() {
 fn get_global_returns_default() {
     let (_tmp, pool, def) = setup_global();
     let conn = pool.get().expect("DB connection");
-    let doc = query::get_global(&conn, "site_settings", &def, None)
-        .expect("Get global failed");
+    let doc = query::get_global(&conn, "site_settings", &def, None).expect("Get global failed");
     assert_eq!(doc.id, "default");
     // Fields should be null/empty initially
-    assert!(doc.get_str("site_name").is_none() || doc.get("site_name") == Some(&serde_json::Value::Null));
+    assert!(
+        doc.get_str("site_name").is_none()
+            || doc.get("site_name") == Some(&serde_json::Value::Null)
+    );
 }
 
 #[test]
@@ -632,8 +642,7 @@ fn update_global_and_read_back() {
 
     // Read back
     let conn = pool.get().expect("DB connection");
-    let doc2 = query::get_global(&conn, "site_settings", &def, None)
-        .expect("Get global failed");
+    let doc2 = query::get_global(&conn, "site_settings", &def, None).expect("Get global failed");
     assert_eq!(doc2.get_str("site_name"), Some("My CMS"));
     assert_eq!(doc2.get_str("tagline"), Some("The best CMS"));
 }
@@ -649,8 +658,7 @@ fn update_global_preserves_unset_fields() {
         let mut data = HashMap::new();
         data.insert("site_name".to_string(), "Original Name".to_string());
         data.insert("tagline".to_string(), "Original Tagline".to_string());
-        query::update_global(&tx, "site_settings", &def, &data, None)
-            .expect("Update failed");
+        query::update_global(&tx, "site_settings", &def, &data, None).expect("Update failed");
         tx.commit().expect("Commit");
     }
 
@@ -660,15 +668,13 @@ fn update_global_preserves_unset_fields() {
         let tx = conn.transaction().expect("Start transaction");
         let mut data = HashMap::new();
         data.insert("site_name".to_string(), "New Name".to_string());
-        query::update_global(&tx, "site_settings", &def, &data, None)
-            .expect("Update failed");
+        query::update_global(&tx, "site_settings", &def, &data, None).expect("Update failed");
         tx.commit().expect("Commit");
     }
 
     // Tagline should still be the original
     let conn = pool.get().expect("DB connection");
-    let doc = query::get_global(&conn, "site_settings", &def, None)
-        .expect("Get global failed");
+    let doc = query::get_global(&conn, "site_settings", &def, None).expect("Get global failed");
     assert_eq!(doc.get_str("site_name"), Some("New Name"));
     assert_eq!(doc.get_str("tagline"), Some("Original Tagline"));
 }
@@ -734,4 +740,3 @@ fn coerce_number_valid() {
     tx.commit().expect("Commit");
     assert_eq!(doc.get("score").unwrap().as_f64(), Some(42.5));
 }
-

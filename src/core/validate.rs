@@ -17,7 +17,12 @@ pub struct FieldError {
 impl FieldError {
     /// Create an error without a translation key (used by custom Lua validators).
     pub fn new(field: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { field: field.into(), message: message.into(), key: None, params: HashMap::new() }
+        Self {
+            field: field.into(),
+            message: message.into(),
+            key: None,
+            params: HashMap::new(),
+        }
     }
 
     /// Create an error with a translation key and interpolation params.
@@ -27,7 +32,12 @@ impl FieldError {
         key: impl Into<String>,
         params: HashMap<String, String>,
     ) -> Self {
-        Self { field: field.into(), message: message.into(), key: Some(key.into()), params }
+        Self {
+            field: field.into(),
+            message: message.into(),
+            key: Some(key.into()),
+            params,
+        }
     }
 }
 
@@ -42,10 +52,10 @@ impl ValidationError {
         Self { errors }
     }
 
-
     /// Convert errors into a field-name-keyed map for template rendering.
     pub fn to_field_map(&self) -> HashMap<String, String> {
-        self.errors.iter()
+        self.errors
+            .iter()
             .map(|e| (e.field.clone(), e.message.clone()))
             .collect()
     }
@@ -53,7 +63,9 @@ impl ValidationError {
 
 impl fmt::Display for ValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let msgs: Vec<String> = self.errors.iter()
+        let msgs: Vec<String> = self
+            .errors
+            .iter()
             .map(|e| format!("{}: {}", e.field, e.message))
             .collect();
         write!(f, "Validation failed: {}", msgs.join("; "))
@@ -100,7 +112,12 @@ mod tests {
     fn with_key_stores_key_and_params() {
         let mut params = HashMap::new();
         params.insert("field".to_string(), "title".to_string());
-        let err = FieldError::with_key("title", "title is required", "validation.required", params.clone());
+        let err = FieldError::with_key(
+            "title",
+            "title is required",
+            "validation.required",
+            params.clone(),
+        );
         assert_eq!(err.key.as_deref(), Some("validation.required"));
         assert_eq!(err.params, params);
         assert_eq!(err.message, "title is required");

@@ -1,14 +1,10 @@
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse};
 
+use super::session_cookies;
 use crate::admin::AdminState;
 use crate::core::auth;
 use crate::core::auth::ClaimsBuilder;
 use crate::db::query;
-use super::session_cookies;
 
 /// POST /admin/api/session-refresh — issue a fresh JWT if the current one is still valid.
 pub async fn session_refresh(
@@ -29,7 +25,8 @@ pub async fn session_refresh(
     let locked = tokio::task::spawn_blocking(move || {
         let conn = pool.get()?;
         query::is_locked(&conn, &slug, &user_id)
-    }).await;
+    })
+    .await;
 
     match locked {
         Ok(Ok(true)) => return StatusCode::UNAUTHORIZED.into_response(),
@@ -45,7 +42,9 @@ pub async fn session_refresh(
     }
 
     // Compute fresh expiry (collection override or global config)
-    let expiry = state.registry.get_collection(&claims.collection)
+    let expiry = state
+        .registry
+        .get_collection(&claims.collection)
         .and_then(|def| def.auth.as_ref().map(|a| a.token_expiry))
         .unwrap_or(state.config.auth.token_expiry);
 

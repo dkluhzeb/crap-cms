@@ -63,9 +63,13 @@ impl CrapConfig {
             let mut value: toml::Value = toml::from_str(&contents)
                 .with_context(|| format!("Failed to parse {}", config_path.display()))?;
             substitute_in_value(&mut value)?;
-            let config: CrapConfig = value.try_into()
+            let config: CrapConfig = value
+                .try_into()
                 .with_context(|| format!("Failed to deserialize {}", config_path.display()))?;
-            config.locale.validate().context("Invalid locale configuration")?;
+            config
+                .locale
+                .validate()
+                .context("Invalid locale configuration")?;
             Ok(config)
         } else {
             tracing::info!("No crap.toml found, using defaults");
@@ -100,7 +104,9 @@ impl CrapConfig {
 
         // Warning: weak JWT signing key (when explicitly set)
         if !self.auth.secret.is_empty() && self.auth.secret.len() < 32 {
-            tracing::warn!("auth.secret is shorter than 32 characters — consider using a stronger key");
+            tracing::warn!(
+                "auth.secret is shorter than 32 characters — consider using a stronger key"
+            );
         }
 
         // Warning: max_depth = 0 means no population will ever work
@@ -222,7 +228,8 @@ path = "mydata/custom.db"
 [admin]
 dev_mode = false
 "#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.server.admin_port, 4000);
@@ -246,7 +253,8 @@ dev_mode = false
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[server]\nadmin_port = 5000\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.server.admin_port, 5000);
         assert_eq!(config.server.grpc_port, 50051);
@@ -368,10 +376,7 @@ dev_mode = false
     #[test]
     fn crap_version_from_toml() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join("crap.toml"),
-            "crap_version = \"0.1.0\"\n",
-        ).unwrap();
+        std::fs::write(tmp.path().join("crap.toml"), "crap_version = \"0.1.0\"\n").unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.crap_version, Some("0.1.0".to_string()));
     }
@@ -382,7 +387,8 @@ dev_mode = false
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[server]\nadmin_port = 3000\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.crap_version.is_none());
     }

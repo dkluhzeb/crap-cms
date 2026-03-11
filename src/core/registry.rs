@@ -1,10 +1,10 @@
 //! In-memory registry of collection and global definitions loaded from Lua.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use super::collection::{CollectionDefinition, GlobalDefinition};
 use super::job::JobDefinition;
 use super::richtext::RichtextNodeDef;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
 /// Holds all collection, global, and job definitions loaded at startup.
 #[derive(Clone)]
@@ -89,7 +89,9 @@ impl Registry {
     /// Call once after startup (after all `define()` writes) and pass the snapshot
     /// to hot-path consumers (admin UI, gRPC API) that only read the registry.
     pub fn snapshot(shared: &SharedRegistry) -> Arc<Registry> {
-        let reg = shared.read().expect("Registry lock poisoned during snapshot");
+        let reg = shared
+            .read()
+            .expect("Registry lock poisoned during snapshot");
         Arc::new(reg.clone())
     }
 }
@@ -150,19 +152,17 @@ mod tests {
 
     #[test]
     fn register_and_get_richtext_node() {
-        use crate::core::richtext::{RichtextNodeDef, NodeAttr, NodeAttrType};
+        use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
         let mut reg = Registry::new();
         assert!(reg.get_richtext_node("cta").is_none());
 
         reg.register_richtext_node(
             RichtextNodeDef::builder("cta", "Call to Action")
                 .inline(false)
-                .attrs(vec![
-                    NodeAttr::builder("text", "Button Text")
-                        .attr_type(NodeAttrType::Text)
-                        .required(true)
-                        .build(),
-                ])
+                .attrs(vec![NodeAttr::builder("text", "Button Text")
+                    .attr_type(NodeAttrType::Text)
+                    .required(true)
+                    .build()])
                 .searchable_attrs(vec!["text".to_string()])
                 .has_render(false)
                 .build(),

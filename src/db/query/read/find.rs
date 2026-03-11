@@ -1,16 +1,15 @@
 //! `find()` — query multiple documents with filters, sorting, and cursor pagination.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{bail, Context as _, Result};
 use rusqlite::params_from_iter;
 
+use super::super::filter::{build_where_clause, resolve_filter_column, resolve_filters};
+use super::super::{
+    get_column_names, get_locale_select_columns, group_locale_fields, validate_query_fields,
+    FindQuery, LocaleContext, LocaleMode,
+};
 use crate::core::{CollectionDefinition, Document};
 use crate::db::document::row_to_document;
-use super::super::{
-    LocaleMode, LocaleContext, FindQuery,
-    get_column_names, get_locale_select_columns,
-    validate_query_fields, group_locale_fields,
-};
-use super::super::filter::{build_where_clause, resolve_filters, resolve_filter_column};
 
 /// Convert ISO 8601 timestamp back to SQLite storage format for cursor comparison.
 /// "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
@@ -24,20 +23,27 @@ pub(super) fn denormalize_timestamp(s: &str) -> String {
 }
 
 /// Find documents matching a query.
-pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition, query: &FindQuery, locale_ctx: Option<&LocaleContext>) -> Result<Vec<Document>> {
+pub fn find(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    query: &FindQuery,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Vec<Document>> {
     validate_query_fields(def, query, locale_ctx)?;
 
     let (select_exprs, result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => get_locale_select_columns(&def.fields, def.timestamps, ctx),
+        Some(ctx) if ctx.config.is_enabled() => {
+            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+        }
         _ => {
             let names = get_column_names(def);
             (names.clone(), names)
         }
     };
 
-    let (select_exprs, result_names) = super::select::apply_select_filter(
-        select_exprs, result_names, query.select.as_ref(), def,
-    );
+    let (select_exprs, result_names) =
+        super::select::apply_select_filter(select_exprs, result_names, query.select.as_ref(), def);
 
     let mut sql = format!("SELECT {} FROM {}", select_exprs.join(", "), slug);
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
@@ -51,7 +57,9 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
 
     // FTS5 full-text search filter
     if let Some(ref search_term) = query.search {
-        if let Some((fts_clause, sanitized)) = super::super::fts::fts_where_clause(conn, slug, search_term) {
+        if let Some((fts_clause, sanitized)) =
+            super::super::fts::fts_where_clause(conn, slug, search_term)
+        {
             if where_clause.is_empty() {
                 sql.push_str(&format!(" WHERE {}", fts_clause));
             } else {
@@ -93,7 +101,8 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
         if cursor.sort_col != sort_col {
             bail!(
                 "Cursor sort_col '{}' does not match query order_by '{}'",
-                cursor.sort_col, sort_col
+                cursor.sort_col,
+                sort_col
             );
         }
         // Forward (after_cursor): ASC → >, DESC → <
@@ -134,7 +143,11 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
     // ORDER BY — for before_cursor, reverse the sort direction so the DB returns
     // rows in the opposite order, then we reverse them after fetching.
     let effective_dir: &str = if using_before {
-        if sort_dir == "DESC" { "ASC" } else { "DESC" }
+        if sort_dir == "DESC" {
+            "ASC"
+        } else {
+            "DESC"
+        }
     } else if sort_dir == "DESC" {
         "DESC"
     } else {
@@ -144,7 +157,10 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
     let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
     if sort_col != "id" {
         // Stable ordering: primary sort + id tiebreaker
-        sql.push_str(&format!(" ORDER BY {} {}, id {}", resolved_col, effective_dir, effective_dir));
+        sql.push_str(&format!(
+            " ORDER BY {} {}, id {}",
+            resolved_col, effective_dir, effective_dir
+        ));
     } else {
         sql.push_str(&format!(" ORDER BY id {}", effective_dir));
     }
@@ -158,14 +174,17 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
         sql.push_str(&format!(" OFFSET ?{}", params.len()));
     }
 
-    let mut stmt = conn.prepare(&sql)
+    let mut stmt = conn
+        .prepare(&sql)
         .with_context(|| format!("Failed to prepare query: {}", sql))?;
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
 
-    let rows = stmt.query_map(params_from_iter(param_refs.iter()), |row| {
-        row_to_document(row, &result_names)
-    }).with_context(|| format!("Failed to execute query on '{}'", slug))?;
+    let rows = stmt
+        .query_map(params_from_iter(param_refs.iter()), |row| {
+            row_to_document(row, &result_names)
+        })
+        .with_context(|| format!("Failed to execute query on '{}'", slug))?;
 
     let mut documents = Vec::new();
     for row in rows {
@@ -190,13 +209,13 @@ pub fn find(conn: &rusqlite::Connection, slug: &str, def: &CollectionDefinition,
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::write::create;
+    use super::super::super::{Filter, FilterClause, FilterOp, FindQuery};
     use super::*;
-    use rusqlite::Connection;
-    use std::collections::HashMap;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use super::super::super::{FilterClause, Filter, FilterOp, FindQuery};
-    use super::super::super::write::create;
+    use rusqlite::Connection;
+    use std::collections::HashMap;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -216,8 +235,9 @@ mod tests {
                 status TEXT,
                 created_at TEXT,
                 updated_at TEXT
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 
@@ -326,7 +346,10 @@ mod tests {
         query.offset = Some(10);
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("mutually exclusive"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
     }
 
     #[test]
@@ -561,7 +584,10 @@ mod tests {
         query.before_cursor = Some(cursor);
         let result = find(&conn, "posts", &def, &query, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("mutually exclusive"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("mutually exclusive"));
     }
 
     #[test]
@@ -588,7 +614,7 @@ mod tests {
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!(99i64),  // Number variant
+            sort_val: serde_json::json!(99i64), // Number variant
             id: page1[0].id.clone(),
         };
         let mut q2 = FindQuery::new();
@@ -651,25 +677,26 @@ mod tests {
         q.after_cursor = Some(cursor);
         let result = find(&conn, "posts", &def, &q, None).unwrap();
         // All posts have status=active, but cursor anchors after "Post 01"
-        assert!(result.iter().all(|d| d.get_str("title").unwrap_or("") > "Post 01"));
+        assert!(result
+            .iter()
+            .all(|d| d.get_str("title").unwrap_or("") > "Post 01"));
     }
 
     #[test]
     fn find_default_sort_without_timestamps() {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT)"
-        ).unwrap();
+        conn.execute_batch("CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT)")
+            .unwrap();
 
         let mut def = CollectionDefinition::new("items");
         def.timestamps = false; // No timestamps
-        def.fields = vec![
-            FieldDefinition::builder("name", FieldType::Text).build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
         let def = def;
 
-        conn.execute("INSERT INTO items (id, name) VALUES ('b', 'Banana')", []).unwrap();
-        conn.execute("INSERT INTO items (id, name) VALUES ('a', 'Apple')", []).unwrap();
+        conn.execute("INSERT INTO items (id, name) VALUES ('b', 'Banana')", [])
+            .unwrap();
+        conn.execute("INSERT INTO items (id, name) VALUES ('a', 'Apple')", [])
+            .unwrap();
 
         // Default sort for no-timestamp collection is id ASC
         let q = FindQuery::default();

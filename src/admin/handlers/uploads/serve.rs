@@ -2,14 +2,14 @@
 
 use axum::{
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{header, StatusCode},
     response::{IntoResponse, Response},
 };
 use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
-use crate::admin::AdminState;
 use crate::admin::server::{extract_cookie, load_auth_user};
+use crate::admin::AdminState;
 use crate::core::auth;
 use crate::db::query::AccessResult;
 
@@ -24,16 +24,19 @@ pub async fn serve_upload(
     request: axum::http::Request<axum::body::Body>,
 ) -> Response {
     // Reject path traversal
-    if collection_slug.contains("..") || collection_slug.contains('/')
+    if collection_slug.contains("..")
+        || collection_slug.contains('/')
         || collection_slug.contains('\\')
-        || filename.contains("..") || filename.contains('/')
+        || filename.contains("..")
+        || filename.contains('/')
         || filename.contains('\\')
     {
         return StatusCode::NOT_FOUND.into_response();
     }
 
     // Parse Accept header for content negotiation
-    let accept = request.headers()
+    let accept = request
+        .headers()
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -41,7 +44,9 @@ pub async fn serve_upload(
     let accepts_webp = accept.contains("image/webp");
 
     // Look up collection access.read
-    let access_read = state.registry.get_collection(&collection_slug)
+    let access_read = state
+        .registry
+        .get_collection(&collection_slug)
         .map(|def| def.access.read.clone());
 
     // Determine access ref: None means public (collection not found or no access.read)
@@ -60,16 +65,14 @@ pub async fn serve_upload(
 
         let access = tokio::task::spawn_blocking(move || {
             let conn = pool.get()?;
-            hook_runner.check_access(
-                Some(&func_ref),
-                user_doc.as_ref(),
-                None,
-                None,
-                &conn,
-            )
-        }).await;
+            hook_runner.check_access(Some(&func_ref), user_doc.as_ref(), None, None, &conn)
+        })
+        .await;
 
-        let allowed = matches!(access, Ok(Ok(AccessResult::Allowed)) | Ok(Ok(AccessResult::Constrained(_))));
+        let allowed = matches!(
+            access,
+            Ok(Ok(AccessResult::Allowed)) | Ok(Ok(AccessResult::Constrained(_)))
+        );
 
         if !allowed {
             return StatusCode::NOT_FOUND.into_response();
@@ -77,18 +80,28 @@ pub async fn serve_upload(
 
         // Serve with private cache headers
         return serve_file(
-            &state, &collection_slug, &filename,
-            "private, no-store", accepts_avif, accepts_webp,
+            &state,
+            &collection_slug,
+            &filename,
+            "private, no-store",
+            accepts_avif,
+            accepts_webp,
             request,
-        ).await;
+        )
+        .await;
     }
 
     // Public: no access.read set
     serve_file(
-        &state, &collection_slug, &filename,
-        "public, max-age=31536000, immutable", accepts_avif, accepts_webp,
+        &state,
+        &collection_slug,
+        &filename,
+        "public, max-age=31536000, immutable",
+        accepts_avif,
+        accepts_webp,
         request,
-    ).await
+    )
+    .await
 }
 
 fn extract_auth_user(
@@ -96,28 +109,34 @@ fn extract_auth_user(
     state: &AdminState,
 ) -> Option<auth::AuthUser> {
     // Try cookie first
-    let cookie_header = request.headers()
+    let cookie_header = request
+        .headers()
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
     if let Some(token) = extract_cookie(cookie_header, "crap_session") {
         if let Ok(claims) = auth::validate_token(token, &state.jwt_secret) {
-            if let Some(auth_user) = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale) {
+            if let Some(auth_user) =
+                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+            {
                 return Some(auth_user);
             }
         }
     }
 
     // Try Bearer token
-    let auth_header = request.headers()
+    let auth_header = request
+        .headers()
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
     if let Some(token) = auth_header.strip_prefix("Bearer ") {
         if let Ok(claims) = auth::validate_token(token, &state.jwt_secret) {
-            if let Some(auth_user) = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale) {
+            if let Some(auth_user) =
+                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+            {
                 return Some(auth_user);
             }
         }
@@ -166,7 +185,11 @@ async fn serve_file(
 /// Given a filename and accepted formats, return candidate variant filenames to try.
 /// Returns `(variant_filename, mime_type)` pairs in preference order (AVIF first, then WebP).
 /// Only returns candidates for image files.
-fn negotiate_variants(filename: &str, accepts_avif: bool, accepts_webp: bool) -> Vec<(String, &'static str)> {
+fn negotiate_variants(
+    filename: &str,
+    accepts_avif: bool,
+    accepts_webp: bool,
+) -> Vec<(String, &'static str)> {
     let mime = mime_guess::from_path(filename)
         .first_or_octet_stream()
         .to_string();
@@ -216,7 +239,9 @@ fn build_serve_request(headers: &ConditionalHeaders) -> axum::http::Request<axum
     if let Some(ref v) = headers.if_modified_since {
         builder = builder.header(header::IF_MODIFIED_SINCE, v);
     }
-    builder.body(axum::body::Body::empty()).expect("static request builder")
+    builder
+        .body(axum::body::Body::empty())
+        .expect("static request builder")
 }
 
 /// Serve a file via `tower_http::services::ServeFile` with custom headers.
@@ -234,14 +259,20 @@ async fn serve_with_headers(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     // Override Cache-Control for our needs
-    response.headers_mut().insert(header::CACHE_CONTROL, cache_control.parse().expect("valid cache-control"));
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        cache_control.parse().expect("valid cache-control"),
+    );
     // SVGs get attachment + CSP sandbox to prevent stored XSS
     let disposition = if mime.starts_with("image/") && mime != "image/svg+xml" {
         "inline"
     } else {
         "attachment"
     };
-    response.headers_mut().insert(header::CONTENT_DISPOSITION, disposition.parse().expect("valid disposition"));
+    response.headers_mut().insert(
+        header::CONTENT_DISPOSITION,
+        disposition.parse().expect("valid disposition"),
+    );
     if mime == "image/svg+xml" {
         response.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
@@ -249,7 +280,9 @@ async fn serve_with_headers(
         );
     }
     if varied {
-        response.headers_mut().insert(header::VARY, "Accept".parse().expect("valid vary"));
+        response
+            .headers_mut()
+            .insert(header::VARY, "Accept".parse().expect("valid vary"));
     }
     response
 }
@@ -317,9 +350,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.png");
         std::fs::write(&path, b"fake png").unwrap();
-        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
         let resp = serve_with_headers(&path, req, "public", false, "image/png").await;
-        let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
+        let disposition = resp
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(disposition, "inline");
     }
 
@@ -328,9 +369,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.pdf");
         std::fs::write(&path, b"fake pdf").unwrap();
-        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
         let resp = serve_with_headers(&path, req, "public", false, "application/pdf").await;
-        let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
+        let disposition = resp
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(disposition, "attachment");
     }
 
@@ -339,7 +388,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.jpg");
         std::fs::write(&path, b"fake jpg").unwrap();
-        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
         let resp = serve_with_headers(&path, req, "public", true, "image/jpeg").await;
         assert_eq!(resp.headers().get(header::VARY).unwrap(), "Accept");
     }
@@ -349,10 +401,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.txt");
         std::fs::write(&path, b"hello").unwrap();
-        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
         let resp = serve_with_headers(&path, req, "no-cache", false, "text/plain").await;
         // ServeFile may set Vary internally, but we don't set it
-        assert!(!resp.headers().get_all(header::VARY).iter().any(|v| v == "Accept"));
+        assert!(!resp
+            .headers()
+            .get_all(header::VARY)
+            .iter()
+            .any(|v| v == "Accept"));
     }
 
     #[tokio::test]
@@ -360,11 +419,24 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("test.svg");
         std::fs::write(&path, b"<svg></svg>").unwrap();
-        let req = axum::http::Request::builder().uri("/").body(axum::body::Body::empty()).unwrap();
+        let req = axum::http::Request::builder()
+            .uri("/")
+            .body(axum::body::Body::empty())
+            .unwrap();
         let resp = serve_with_headers(&path, req, "public", false, "image/svg+xml").await;
-        let disposition = resp.headers().get(header::CONTENT_DISPOSITION).unwrap().to_str().unwrap();
+        let disposition = resp
+            .headers()
+            .get(header::CONTENT_DISPOSITION)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(disposition, "attachment");
-        let csp = resp.headers().get(header::CONTENT_SECURITY_POLICY).unwrap().to_str().unwrap();
+        let csp = resp
+            .headers()
+            .get(header::CONTENT_SECURITY_POLICY)
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert_eq!(csp, "sandbox");
     }
 

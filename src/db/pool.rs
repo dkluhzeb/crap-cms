@@ -17,8 +17,9 @@ pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
 
     // Ensure parent directory exists
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create database directory: {}", parent.display()))?;
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!("Failed to create database directory: {}", parent.display())
+        })?;
     }
 
     tracing::info!("Database path: {}", db_path.display());

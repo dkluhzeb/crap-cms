@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::db::DbPool;
 use crap_cms::core::SharedRegistry;
+use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -30,7 +30,9 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── Helper: setup with real DB tables ────────────────────────────────────────
@@ -63,7 +65,9 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 #[allow(dead_code)]
 fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── Lua CRUD Functions ───────────────────────────────────────────────────────
@@ -71,7 +75,10 @@ fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
 #[test]
 fn lua_crud_create_and_find() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Test Article",
             body = "Some content here",
@@ -88,14 +95,18 @@ fn lua_crud_create_and_find() {
             return "WRONG_TITLE:" .. tostring(found.title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crud_find_by_id() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Find Me By ID",
             body = "Body text",
@@ -115,14 +126,18 @@ fn lua_crud_find_by_id() {
             return "WRONG_ID:" .. tostring(found.id)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crud_update() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Original Title",
             body = "Original body",
@@ -143,14 +158,18 @@ fn lua_crud_update() {
             return "FIND_AFTER_UPDATE_FAILED:" .. tostring(found.title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crud_delete() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "To Be Deleted",
             body = "Goodbye",
@@ -164,14 +183,18 @@ fn lua_crud_delete() {
             return "NOT_DELETED:total=" .. tostring(result.pagination.totalDocs)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_crud_find_with_where() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", {
             title = "Alpha Article",
             body = "First",
@@ -208,14 +231,18 @@ fn lua_crud_find_with_where() {
             return "WRONG_DRAFT_TITLE:" .. tostring(drafts.documents[1].title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_globals_config_get_and_update() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         -- Get the default global (should exist with empty/default values)
         local settings = crap.globals.get("settings")
         if settings == nil then return "GET_NIL" end
@@ -233,7 +260,8 @@ fn lua_globals_config_get_and_update() {
             return "WRONG_SITE_NAME:" .. tostring(reread.site_name)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -242,7 +270,10 @@ fn lua_globals_config_get_and_update() {
 #[test]
 fn lua_find_with_where_clause() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", {
             title = "Where Test Alpha",
             status = "published",
@@ -263,14 +294,18 @@ fn lua_find_with_where_clause() {
             return "WRONG_TITLE:" .. tostring(result.documents[1].title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_find_with_limit_offset() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         for i = 1, 5 do
             crap.collections.create("articles", {
                 title = "Item " .. i,
@@ -288,14 +323,18 @@ fn lua_find_with_limit_offset() {
             return "WRONG_TOTAL:" .. tostring(result.pagination.totalDocs)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_find_by_id_with_depth() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Depth Test",
             body = "Content",
@@ -309,13 +348,19 @@ fn lua_find_by_id_with_depth() {
             return "WRONG_TITLE:" .. tostring(found.title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 // ── 5B. Lua CRUD with Draft Option ──────────────────────────────────────────
 
-fn setup_versioned_db() -> (tempfile::TempDir, crap_cms::db::DbPool, SharedRegistry, HookRunner) {
+fn setup_versioned_db() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    SharedRegistry,
+    HookRunner,
+) {
     let tmp = tempfile::tempdir().expect("tempdir");
     let collections_dir = tmp.path().join("collections");
     std::fs::create_dir_all(&collections_dir).unwrap();
@@ -335,7 +380,8 @@ crap.collections.define("articles", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
@@ -357,13 +403,18 @@ crap.collections.define("articles", {
 
 fn eval_versioned(runner: &HookRunner, pool: &crap_cms::db::DbPool, code: &str) -> String {
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 #[test]
 fn lua_create_with_draft_option() {
     let (_tmp, pool, _reg, runner) = setup_versioned_db();
-    let result = eval_versioned(&runner, &pool, r#"
+    let result = eval_versioned(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Draft Article",
             body = "Some content",
@@ -372,14 +423,18 @@ fn lua_create_with_draft_option() {
         if doc == nil then return "CREATE_NIL" end
         if doc.id == nil then return "NO_ID" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_create_draft_skips_required_validation() {
     let (_tmp, pool, _reg, runner) = setup_versioned_db();
-    let result = eval_versioned(&runner, &pool, r#"
+    let result = eval_versioned(
+        &runner,
+        &pool,
+        r#"
         -- title is required, but draft=true should skip validation
         local ok, err = pcall(function()
             crap.collections.create("articles", {
@@ -388,14 +443,21 @@ fn lua_create_draft_skips_required_validation() {
         end)
         if ok then return "ok" end
         return "FAILED:" .. tostring(err)
-    "#);
-    assert_eq!(result, "ok", "Draft create should skip required field validation");
+    "#,
+    );
+    assert_eq!(
+        result, "ok",
+        "Draft create should skip required field validation"
+    );
 }
 
 #[test]
 fn lua_create_publish_enforces_required_validation() {
     let (_tmp, pool, _reg, runner) = setup_versioned_db();
-    let result = eval_versioned(&runner, &pool, r#"
+    let result = eval_versioned(
+        &runner,
+        &pool,
+        r#"
         -- title is required, draft=false (publish) should enforce validation
         local ok, err = pcall(function()
             crap.collections.create("articles", {
@@ -408,14 +470,21 @@ fn lua_create_publish_enforces_required_validation() {
             return "ok"
         end
         return "UNEXPECTED_ERROR:" .. err_str
-    "#);
-    assert_eq!(result, "ok", "Publish create should enforce required validation");
+    "#,
+    );
+    assert_eq!(
+        result, "ok",
+        "Publish create should enforce required validation"
+    );
 }
 
 #[test]
 fn lua_update_with_draft_option() {
     let (_tmp, pool, _reg, runner) = setup_versioned_db();
-    let result = eval_versioned(&runner, &pool, r#"
+    let result = eval_versioned(
+        &runner,
+        &pool,
+        r#"
         -- Create a published document first
         local doc = crap.collections.create("articles", {
             title = "Published Article",
@@ -435,14 +504,18 @@ fn lua_update_with_draft_option() {
             return "MAIN_TABLE_CHANGED:" .. tostring(current.title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_update_publish_modifies_main_table() {
     let (_tmp, pool, _reg, runner) = setup_versioned_db();
-    let result = eval_versioned(&runner, &pool, r#"
+    let result = eval_versioned(
+        &runner,
+        &pool,
+        r#"
         local doc = crap.collections.create("articles", {
             title = "Original",
             body = "Content",
@@ -459,7 +532,8 @@ fn lua_update_publish_modifies_main_table() {
             return "NOT_UPDATED:" .. tostring(current.title)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -470,29 +544,40 @@ fn lua_update_publish_modifies_main_table() {
 #[test]
 fn lua_count_empty_collection() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         local count = crap.collections.count("articles")
         return tostring(count)
-    "#);
+    "#,
+    );
     assert_eq!(result, "0");
 }
 
 #[test]
 fn lua_count_with_documents() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", { title = "A", body = "1" })
         crap.collections.create("articles", { title = "B", body = "2" })
         crap.collections.create("articles", { title = "C", body = "3" })
         return tostring(crap.collections.count("articles"))
-    "#);
+    "#,
+    );
     assert_eq!(result, "3");
 }
 
 #[test]
 fn lua_count_with_where() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", { title = "A", status = "published" })
         crap.collections.create("articles", { title = "B", status = "draft" })
         crap.collections.create("articles", { title = "C", status = "published" })
@@ -500,7 +585,8 @@ fn lua_count_with_where() {
             where = { status = "published" },
         })
         return tostring(count)
-    "#);
+    "#,
+    );
     assert_eq!(result, "2");
 }
 
@@ -508,21 +594,30 @@ fn lua_count_with_where() {
 fn lua_count_nonexistent_collection() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local ok, err = pcall(function()
             crap.collections.count("nonexistent")
         end)
         if ok then return "SHOULD_HAVE_FAILED" end
         if tostring(err):find("not found") then return "ok" end
         return "UNEXPECTED:" .. tostring(err)
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_update_many_basic() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", { title = "A", status = "draft" })
         crap.collections.create("articles", { title = "B", status = "draft" })
         crap.collections.create("articles", { title = "C", status = "published" })
@@ -543,14 +638,18 @@ fn lua_update_many_basic() {
             return "WRONG_COUNT:" .. tostring(count)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_update_many_no_matches() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", { title = "A", status = "published" })
 
         local result = crap.collections.update_many("articles",
@@ -561,14 +660,18 @@ fn lua_update_many_no_matches() {
             return "WRONG_MODIFIED:" .. tostring(result.modified)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_delete_many_basic() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", { title = "A", status = "draft" })
         crap.collections.create("articles", { title = "B", status = "draft" })
         crap.collections.create("articles", { title = "C", status = "published" })
@@ -586,14 +689,18 @@ fn lua_delete_many_basic() {
             return "WRONG_REMAINING:" .. tostring(count)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_delete_many_no_matches() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", { title = "A", status = "published" })
 
         local result = crap.collections.delete_many("articles",
@@ -608,14 +715,18 @@ fn lua_delete_many_no_matches() {
             return "WRONG_REMAINING:" .. tostring(count)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn lua_delete_many_all() {
     let (_tmp, pool, _reg, runner) = setup_with_db();
-    let result = eval_lua_db(&runner, &pool, r#"
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
         crap.collections.create("articles", { title = "A" })
         crap.collections.create("articles", { title = "B" })
         crap.collections.create("articles", { title = "C" })
@@ -626,7 +737,8 @@ fn lua_delete_many_all() {
             return "WRONG_DELETED:" .. tostring(result.deleted)
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -637,7 +749,9 @@ fn lua_delete_many_all() {
 #[test]
 fn util_deep_merge() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local a = { x = 1, nested = { a = 1, b = 2 } }
         local b = { y = 2, nested = { b = 3, c = 4 } }
         local merged = crap.util.deep_merge(a, b)
@@ -649,14 +763,17 @@ fn util_deep_merge() {
         -- Original tables should not be modified
         if a.y ~= nil then return "A_MODIFIED" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_pick() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local t = { a = 1, b = 2, c = 3, d = 4 }
         local picked = crap.util.pick(t, { "a", "c" })
         if picked.a ~= 1 then return "A" end
@@ -664,14 +781,17 @@ fn util_pick() {
         if picked.b ~= nil then return "B_PRESENT" end
         if picked.d ~= nil then return "D_PRESENT" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_omit() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local t = { a = 1, b = 2, c = 3, d = 4 }
         local result = crap.util.omit(t, { "b", "d" })
         if result.a ~= 1 then return "A" end
@@ -679,14 +799,17 @@ fn util_omit() {
         if result.b ~= nil then return "B_PRESENT" end
         if result.d ~= nil then return "D_PRESENT" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_keys_and_values() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local t = { x = 10, y = 20 }
         local k = crap.util.keys(t)
         local v = crap.util.values(t)
@@ -700,73 +823,88 @@ fn util_keys_and_values() {
         end
         if not has_x or not has_y then return "MISSING_KEY" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_map() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local arr = { 1, 2, 3, 4 }
         local doubled = crap.util.map(arr, function(v) return v * 2 end)
         if #doubled ~= 4 then return "LEN:" .. #doubled end
         if doubled[1] ~= 2 then return "V1:" .. doubled[1] end
         if doubled[4] ~= 8 then return "V4:" .. doubled[4] end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_filter() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local arr = { 1, 2, 3, 4, 5 }
         local evens = crap.util.filter(arr, function(v) return v % 2 == 0 end)
         if #evens ~= 2 then return "LEN:" .. #evens end
         if evens[1] ~= 2 then return "V1:" .. evens[1] end
         if evens[2] ~= 4 then return "V2:" .. evens[2] end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_find() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local arr = { 10, 20, 30, 40 }
         local found = crap.util.find(arr, function(v) return v > 25 end)
         if found ~= 30 then return "FOUND:" .. tostring(found) end
         local not_found = crap.util.find(arr, function(v) return v > 100 end)
         if not_found ~= nil then return "SHOULD_BE_NIL" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_includes() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local arr = { "a", "b", "c" }
         if not crap.util.includes(arr, "b") then return "MISSING_B" end
         if crap.util.includes(arr, "z") then return "HAS_Z" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn util_is_empty() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         if not crap.util.is_empty({}) then return "EMPTY_NOT_EMPTY" end
         if crap.util.is_empty({ 1 }) then return "NON_EMPTY_IS_EMPTY" end
         if crap.util.is_empty({ x = 1 }) then return "MAP_IS_EMPTY" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
-

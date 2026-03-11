@@ -12,6 +12,9 @@ pub struct SelectOption {
 
 impl SelectOption {
     pub fn new(label: LocalizedString, value: impl Into<String>) -> Self {
-        Self { label, value: value.into() }
+        Self {
+            label,
+            value: value.into(),
+        }
     }
 }

@@ -119,9 +119,7 @@ mod tests {
 
     #[test]
     fn builder_partial() {
-        let ctx = HookContext::builder("pages", "delete")
-            .draft(false)
-            .build();
+        let ctx = HookContext::builder("pages", "delete").draft(false).build();
 
         assert_eq!(ctx.collection, "pages");
         assert_eq!(ctx.draft, Some(false));

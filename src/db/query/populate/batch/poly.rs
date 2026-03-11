@@ -203,11 +203,11 @@ pub(super) fn batch_fetch_with_cache(
 
 #[cfg(test)]
 mod tests {
-    use crate::db::query::{PopulateCache, PopulateContext, PopulateOpts};
     use crate::core::field::*;
     use crate::core::{Document, Registry};
     use crate::db::query::populate::populate_relationships_batch_cached;
     use crate::db::query::populate::test_helpers::*;
+    use crate::db::query::{PopulateCache, PopulateContext, PopulateOpts};
 
     // ── Polymorphic has-one (batch) ────────────────────────────────────────────
 

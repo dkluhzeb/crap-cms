@@ -5,27 +5,28 @@ use axum::{
 };
 use std::collections::HashMap;
 
-use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
+use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
+use crate::core::event::{EventOperation, EventTarget};
 use crate::core::upload;
 use crate::core::validate::ValidationError;
 use crate::db::query::{AccessResult, LocaleContext, LocaleMode};
-use crate::core::event::{EventTarget, EventOperation};
 use crate::service;
 
 use crate::admin::handlers::shared::{
-    get_user_doc, get_event_user, check_access_or_forbid,
-    build_field_contexts, enrich_field_contexts,
-    apply_display_conditions, split_sidebar_fields,
-    translate_validation_errors,
-    redirect_response, htmx_redirect, html_with_toast,
-    server_error, forbidden,
+    apply_display_conditions, build_field_contexts, check_access_or_forbid, enrich_field_contexts,
+    forbidden, get_event_user, get_user_doc, html_with_toast, htmx_redirect, redirect_response,
+    server_error, split_sidebar_fields, translate_validation_errors,
 };
 
+use crate::admin::handlers::collections::forms::{
+    extract_join_data_from_form, parse_multipart_form, transform_select_has_many,
+};
+use crate::admin::handlers::collections::shared::{
+    cleanup_created_files, collect_upload_hidden_fields, render_upload_error,
+};
 use crate::core::upload::inject_upload_metadata;
-use crate::admin::handlers::collections::forms::{extract_join_data_from_form, parse_multipart_form, transform_select_has_many};
-use crate::admin::handlers::collections::shared::{cleanup_created_files, render_upload_error, collect_upload_hidden_fields};
 
 /// POST /admin/collections/{slug} — create a new item
 pub async fn create_action(
@@ -40,10 +41,14 @@ pub async fn create_action(
     };
 
     // Check create access
-    match check_access_or_forbid(
-        &state, def.access.create.as_deref(), &auth_user, None, None,
-    ) {
-        Ok(AccessResult::Denied) => return forbidden(&state, "You don't have permission to create items in this collection").into_response(),
+    match check_access_or_forbid(&state, def.access.create.as_deref(), &auth_user, None, None) {
+        Ok(AccessResult::Denied) => {
+            return forbidden(
+                &state,
+                "You don't have permission to create items in this collection",
+            )
+            .into_response()
+        }
         Err(resp) => return resp,
         _ => {}
     }
@@ -58,7 +63,8 @@ pub async fn create_action(
             }
         }
     } else {
-        let Form(data) = match Form::<HashMap<String, String>>::from_request(request, &state).await {
+        let Form(data) = match Form::<HashMap<String, String>>::from_request(request, &state).await
+        {
             Ok(f) => f,
             Err(e) => {
                 tracing::error!("Form parse error: {}", e);
@@ -78,7 +84,8 @@ pub async fn create_action(
             let global_max = state.config.upload.max_file_size;
             let upload_result = tokio::task::spawn_blocking(move || {
                 upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
-            }).await;
+            })
+            .await;
             match upload_result {
                 Ok(Ok(processed)) => {
                     queued_conversions = processed.queued_conversions.clone();
@@ -87,11 +94,23 @@ pub async fn create_action(
                 }
                 Ok(Err(e)) => {
                     tracing::error!("Upload processing error: {}", e);
-                    return render_upload_error(&state, &def, &form_data, &auth_user, &e.to_string());
+                    return render_upload_error(
+                        &state,
+                        &def,
+                        &form_data,
+                        &auth_user,
+                        &e.to_string(),
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Upload task error: {}", e);
-                    return render_upload_error(&state, &def, &form_data, &auth_user, &e.to_string());
+                    return render_upload_error(
+                        &state,
+                        &def,
+                        &form_data,
+                        &auth_user,
+                        &e.to_string(),
+                    );
                 }
             }
         }
@@ -102,13 +121,22 @@ pub async fn create_action(
         let user_doc = get_user_doc(&auth_user);
         let mut conn = match state.pool.get() {
             Ok(c) => c,
-            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check pool error: {}", e);
+                return server_error(&state, "Database error").into_response();
+            }
         };
         let tx = match conn.transaction() {
             Ok(t) => t,
-            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check tx error: {}", e);
+                return server_error(&state, "Database error").into_response();
+            }
         };
-        let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "create", &tx);
+        let denied =
+            state
+                .hook_runner
+                .check_field_write_access(&def.fields, user_doc, "create", &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         for name in &denied {
@@ -127,7 +155,13 @@ pub async fn create_action(
     if let Some(ref pw) = password {
         if !pw.is_empty() {
             if let Err(e) = state.config.auth.password_policy.validate(pw) {
-                return html_with_toast(&state, "collections/edit_form", &serde_json::json!({}), &e.to_string()).into_response();
+                return html_with_toast(
+                    &state,
+                    "collections/edit_form",
+                    &serde_json::json!({}),
+                    &e.to_string(),
+                )
+                .into_response();
             }
         }
     }
@@ -143,9 +177,8 @@ pub async fn create_action(
     let draft = action == "save_draft";
 
     let form_locale = form_data.remove("_locale");
-    let locale_ctx = LocaleContext::from_locale_string(
-        form_locale.as_deref(), &state.config.locale,
-    );
+    let locale_ctx =
+        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
 
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
@@ -161,7 +194,10 @@ pub async fn create_action(
     let ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
     let result = tokio::task::spawn_blocking(move || {
         service::create_document(
-            &pool, &runner, &slug_owned, &def_owned,
+            &pool,
+            &runner,
+            &slug_owned,
+            &def_owned,
             service::WriteInput {
                 data: form_data,
                 join_data: &join_data,
@@ -173,24 +209,31 @@ pub async fn create_action(
             },
             user_doc.as_ref(),
         )
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok((doc, _req_context))) => {
             // Enqueue deferred image conversions if any
             if !queued_conversions.is_empty() {
                 if let Ok(conn) = state.pool.get() {
-                    if let Err(e) = upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions) {
+                    if let Err(e) =
+                        upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions)
+                    {
                         tracing::warn!("Failed to enqueue image conversions: {}", e);
                     }
                 }
             }
 
             state.hook_runner.publish_event(
-                &state.event_bus, &def.hooks, def.live.as_ref(),
+                &state.event_bus,
+                &def.hooks,
+                def.live.as_ref(),
                 EventTarget::Collection,
                 EventOperation::Create,
-                slug.clone(), doc.id.clone(), doc.fields.clone(),
+                slug.clone(),
+                doc.id.clone(),
+                doc.fields.clone(),
                 get_event_user(&auth_user),
             );
 
@@ -214,20 +257,46 @@ pub async fn create_action(
         Ok(Err(e)) => {
             cleanup_created_files(&created_files);
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user.as_ref()
+                let locale = auth_user
+                    .as_ref()
                     .map(|Extension(au)| au.ui_locale.as_str())
                     .unwrap_or("en");
                 let error_map = translate_validation_errors(ve, &state.translations, locale);
                 let toast_msg = state.translations.get(locale, "validation.error_summary");
-                let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
-                enrich_field_contexts(&mut fields, &def.fields, &join_data_clone, &state, true, false, &error_map, None);
-                let form_json = serde_json::json!(form_data_clone.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect::<serde_json::Map<String, serde_json::Value>>());
-                apply_display_conditions(&mut fields, &def.fields, &form_json, &state.hook_runner, true);
+                let mut fields =
+                    build_field_contexts(&def.fields, &form_data_clone, &error_map, true, false);
+                enrich_field_contexts(
+                    &mut fields,
+                    &def.fields,
+                    &join_data_clone,
+                    &state,
+                    true,
+                    false,
+                    &error_map,
+                    None,
+                );
+                let form_json = serde_json::json!(form_data_clone
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect::<serde_json::Map<String, serde_json::Value>>());
+                apply_display_conditions(
+                    &mut fields,
+                    &def.fields,
+                    &form_json,
+                    &state.hook_runner,
+                    true,
+                );
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
                 let mut data = ContextBuilder::new(&state, None)
                     .locale_from_auth(&auth_user)
-                    .page(PageType::CollectionCreate, format!("Create {}", def.singular_name()))
-                    .set("page_title", serde_json::json!(format!("Create {}", def.singular_name())))
+                    .page(
+                        PageType::CollectionCreate,
+                        format!("Create {}", def.singular_name()),
+                    )
+                    .set(
+                        "page_title",
+                        serde_json::json!(format!("Create {}", def.singular_name())),
+                    )
                     .collection_def(&def)
                     .fields(main_fields)
                     .set("sidebar_fields", serde_json::json!(sidebar_fields))
@@ -236,7 +305,8 @@ pub async fn create_action(
                     .build();
                 // Preserve upload metadata as hidden inputs so they survive form re-submission
                 if def.is_upload_collection() {
-                    data["upload_hidden_fields"] = collect_upload_hidden_fields(&def.fields, &form_data_clone);
+                    data["upload_hidden_fields"] =
+                        collect_upload_hidden_fields(&def.fields, &form_data_clone);
                 }
                 html_with_toast(&state, "collections/edit", &data, toast_msg)
             } else {

@@ -1,28 +1,30 @@
 //! Axum router setup, auth middleware, and admin server startup.
 
 use anyhow::Result;
+use axum::http::{Method, StatusCode};
+use axum::routing::MethodRouter;
 use axum::{
-    Router,
     extract::{DefaultBodyLimit, State},
     middleware::{self, Next},
     response::{IntoResponse, Redirect},
     routing::{get, post},
+    Router,
 };
-use axum::routing::MethodRouter;
-use axum::http::{Method, StatusCode};
 use std::path::PathBuf;
 
-use crate::config::{CrapConfig, CompressionMode};
-use crate::core::Registry;
-use crate::core::auth::{self, AuthUser};
-use crate::core::auth::ClaimsBuilder;
-use crate::core::event::EventBus;
-use crate::db::DbPool;
-use crate::db::query;
-use crate::hooks::lifecycle::HookRunner;
-use super::AdminState;
 use super::context::ContextBuilder;
-use super::handlers::{auth as auth_handlers, dashboard, collections, globals, static_assets, uploads, events};
+use super::handlers::{
+    auth as auth_handlers, collections, dashboard, events, globals, static_assets, uploads,
+};
+use super::AdminState;
+use crate::config::{CompressionMode, CrapConfig};
+use crate::core::auth::ClaimsBuilder;
+use crate::core::auth::{self, AuthUser};
+use crate::core::event::EventBus;
+use crate::core::Registry;
+use crate::db::query;
+use crate::db::DbPool;
+use crate::hooks::lifecycle::HookRunner;
 
 /// Start the admin HTTP server (Axum) with all routes, middleware, and static file serving.
 // Excluded from coverage: async server startup orchestration (binds TCP listener, runs Axum server).
@@ -39,29 +41,29 @@ pub async fn start(
     event_bus: Option<EventBus>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
-    let translations = std::sync::Arc::new(
-        super::translations::Translations::load(&config_dir)
-    );
-    let handlebars = super::templates::create_handlebars(&config_dir, config.admin.dev_mode, translations.clone())?;
-    let email_renderer = std::sync::Arc::new(
-        crate::core::email::EmailRenderer::new(&config_dir)?
-    );
+    let translations = std::sync::Arc::new(super::translations::Translations::load(&config_dir));
+    let handlebars = super::templates::create_handlebars(
+        &config_dir,
+        config.admin.dev_mode,
+        translations.clone(),
+    )?;
+    let email_renderer = std::sync::Arc::new(crate::core::email::EmailRenderer::new(&config_dir)?);
 
     // Check if any auth collections exist
-    let has_auth = registry.collections.values().any(|d| d.is_auth_collection());
+    let has_auth = registry
+        .collections
+        .values()
+        .any(|d| d.is_auth_collection());
 
-    let login_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::LoginRateLimiter::new(
-            config.auth.max_login_attempts,
-            config.auth.login_lockout_seconds,
-        )
-    );
-    let forgot_password_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::LoginRateLimiter::new(
+    let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(
+        config.auth.max_login_attempts,
+        config.auth.login_lockout_seconds,
+    ));
+    let forgot_password_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(
             config.auth.max_forgot_password_attempts,
             config.auth.forgot_password_window_seconds,
-        )
-    );
+        ));
 
     let state = AdminState {
         config,
@@ -84,8 +86,7 @@ pub async fn start(
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let shutdown_timeout = shutdown.clone();
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown.cancelled_owned());
+    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown.cancelled_owned());
 
     // Hard deadline: force-stop after 10s if graceful drain doesn't complete
     // (SSE streams and other long-lived connections may not close promptly)
@@ -131,25 +132,58 @@ pub fn build_router(state: AdminState) -> Router {
         .route("/admin", get(dashboard::index))
         .route("/admin/collections", get(collections::list_collections))
         .route("/admin/collections/{slug}", slug_methods)
-        .route("/admin/collections/{slug}/create", get(collections::create_form))
+        .route(
+            "/admin/collections/{slug}/create",
+            get(collections::create_form),
+        )
         .route("/admin/collections/{slug}/{id}", item_methods)
-        .route("/admin/collections/{slug}/{id}/delete", get(collections::delete_confirm))
-        .route("/admin/collections/{slug}/{id}/versions", get(collections::list_versions_page))
-        .route("/admin/collections/{slug}/{id}/versions/{version_id}/restore", get(collections::restore_confirm).post(collections::restore_version))
-        .route("/admin/collections/{slug}/evaluate-conditions", post(collections::evaluate_conditions))
-        .route("/admin/api/search/{slug}", get(collections::search_collection))
-        .route("/admin/api/user-settings/{slug}", post(collections::save_user_settings))
+        .route(
+            "/admin/collections/{slug}/{id}/delete",
+            get(collections::delete_confirm),
+        )
+        .route(
+            "/admin/collections/{slug}/{id}/versions",
+            get(collections::list_versions_page),
+        )
+        .route(
+            "/admin/collections/{slug}/{id}/versions/{version_id}/restore",
+            get(collections::restore_confirm).post(collections::restore_version),
+        )
+        .route(
+            "/admin/collections/{slug}/evaluate-conditions",
+            post(collections::evaluate_conditions),
+        )
+        .route(
+            "/admin/api/search/{slug}",
+            get(collections::search_collection),
+        )
+        .route(
+            "/admin/api/user-settings/{slug}",
+            post(collections::save_user_settings),
+        )
         .route("/admin/globals/{slug}", globals_methods)
-        .route("/admin/globals/{slug}/versions", get(globals::list_versions_page))
-        .route("/admin/globals/{slug}/versions/{version_id}/restore", get(globals::restore_confirm).post(globals::restore_version))
+        .route(
+            "/admin/globals/{slug}/versions",
+            get(globals::list_versions_page),
+        )
+        .route(
+            "/admin/globals/{slug}/versions/{version_id}/restore",
+            get(globals::restore_confirm).post(globals::restore_version),
+        )
         .route("/admin/events", get(events::sse_handler))
-        .route("/admin/api/session-refresh", post(auth_handlers::session_refresh))
+        .route(
+            "/admin/api/session-refresh",
+            post(auth_handlers::session_refresh),
+        )
         .route("/admin/api/locale", post(auth_handlers::save_locale));
 
     // Apply auth middleware if auth collections exist OR require_auth is set
     let needs_auth_layer = has_auth || state.config.admin.require_auth;
     let protected = if needs_auth_layer {
-        protected.layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        protected.layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ))
     } else {
         protected
     };
@@ -168,10 +202,22 @@ pub fn build_router(state: AdminState) -> Router {
     let router = Router::new()
         .route("/health", get(health_liveness))
         .route("/ready", get(health_readiness))
-        .route("/admin/login", get(auth_handlers::login_page).post(auth_handlers::login_action))
-        .route("/admin/logout", get(auth_handlers::logout_action).post(auth_handlers::logout_action))
-        .route("/admin/forgot-password", get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action))
-        .route("/admin/reset-password", get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action))
+        .route(
+            "/admin/login",
+            get(auth_handlers::login_page).post(auth_handlers::login_action),
+        )
+        .route(
+            "/admin/logout",
+            get(auth_handlers::logout_action).post(auth_handlers::logout_action),
+        )
+        .route(
+            "/admin/forgot-password",
+            get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action),
+        )
+        .route(
+            "/admin/reset-password",
+            get(auth_handlers::reset_password_page).post(auth_handlers::reset_password_action),
+        )
         .route("/admin/verify-email", get(auth_handlers::verify_email))
         .merge(protected)
         .merge(if let Some(mcp) = mcp_route {
@@ -181,9 +227,17 @@ pub fn build_router(state: AdminState) -> Router {
         })
         .nest("/api", upload_api)
         .nest_service("/static", static_assets::overlay_service(config_dir))
-        .route("/uploads/{collection_slug}/{filename}", get(uploads::serve_upload))
-        .layer(DefaultBodyLimit::max((state.config.upload.max_file_size + 1024 * 1024) as usize))
-        .layer(middleware::from_fn_with_state(state.clone(), csrf_middleware))
+        .route(
+            "/uploads/{collection_slug}/{filename}",
+            get(uploads::serve_upload),
+        )
+        .layer(DefaultBodyLimit::max(
+            (state.config.upload.max_file_size + 1024 * 1024) as usize,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            csrf_middleware,
+        ))
         .layer(middleware::from_fn(html_cache_control))
         .layer(middleware::from_fn(security_headers));
 
@@ -199,15 +253,17 @@ pub fn build_router(state: AdminState) -> Router {
         CompressionMode::Off => router,
         CompressionMode::Gzip => router.layer(
             tower_http::compression::CompressionLayer::new()
-                .no_br().no_deflate().no_zstd()
+                .no_br()
+                .no_deflate()
+                .no_zstd(),
         ),
         CompressionMode::Br => router.layer(
             tower_http::compression::CompressionLayer::new()
-                .no_gzip().no_deflate().no_zstd()
+                .no_gzip()
+                .no_deflate()
+                .no_zstd(),
         ),
-        CompressionMode::All => router.layer(
-            tower_http::compression::CompressionLayer::new()
-        ),
+        CompressionMode::All => router.layer(tower_http::compression::CompressionLayer::new()),
     };
 
     // Request tracing: per-request spans with method, path, status, latency
@@ -223,8 +279,14 @@ pub fn build_router(state: AdminState) -> Router {
                 )
             })
             .on_response(
-                |resp: &axum::http::Response<_>, latency: std::time::Duration, _span: &tracing::Span| {
-                    tracing::info!(status = resp.status().as_u16(), latency_ms = latency.as_millis(), "response");
+                |resp: &axum::http::Response<_>,
+                 latency: std::time::Duration,
+                 _span: &tracing::Span| {
+                    tracing::info!(
+                        status = resp.status().as_u16(),
+                        latency_ms = latency.as_millis(),
+                        "response"
+                    );
                 },
             ),
     );
@@ -240,12 +302,10 @@ async fn health_liveness() -> StatusCode {
 /// Readiness probe — returns 200 if DB pool is healthy, 503 otherwise.
 async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
     match state.pool.get() {
-        Ok(conn) => {
-            match conn.query_row("SELECT 1", [], |_| Ok(())) {
-                Ok(()) => StatusCode::OK,
-                Err(_) => StatusCode::SERVICE_UNAVAILABLE,
-            }
-        }
+        Ok(conn) => match conn.query_row("SELECT 1", [], |_| Ok(())) {
+            Ok(()) => StatusCode::OK,
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+        },
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,
     }
 }
@@ -316,7 +376,8 @@ async fn csrf_middleware(
     // Bearer-authenticated API clients can't use double-submit cookies.
     // CSRF protects browser sessions (cookies); Bearer tokens aren't auto-attached
     // by browsers, so CSRF is irrelevant for them.
-    let has_bearer = request.headers()
+    let has_bearer = request
+        .headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.starts_with("Bearer "));
@@ -324,25 +385,33 @@ async fn csrf_middleware(
         return next.run(request).await;
     }
 
-    let cookie_header = request.headers()
+    let cookie_header = request
+        .headers()
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let csrf_cookie = extract_cookie(&cookie_header, "crap_csrf")
-        .map(|s| s.to_string());
+    let csrf_cookie = extract_cookie(&cookie_header, "crap_csrf").map(|s| s.to_string());
 
     // On mutating methods, validate CSRF token
-    if matches!(method, Method::POST | Method::PUT | Method::DELETE | Method::PATCH) {
+    if matches!(
+        method,
+        Method::POST | Method::PUT | Method::DELETE | Method::PATCH
+    ) {
         let cookie_value = match &csrf_cookie {
             Some(v) if !v.is_empty() => v.as_str(),
             _ => {
-                return (StatusCode::FORBIDDEN, "CSRF validation failed: no token cookie").into_response();
+                return (
+                    StatusCode::FORBIDDEN,
+                    "CSRF validation failed: no token cookie",
+                )
+                    .into_response();
             }
         };
 
         // Check X-CSRF-Token header first (set by HTMX / JS)
-        let header_token = request.headers()
+        let header_token = request
+            .headers()
             .get("X-CSRF-Token")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
@@ -357,7 +426,8 @@ async fn csrf_middleware(
         }
 
         // Fall back: check _csrf in URL-encoded form body
-        let content_type = request.headers()
+        let content_type = request
+            .headers()
             .get(axum::http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("")
@@ -368,7 +438,11 @@ async fn csrf_middleware(
             let bytes = match axum::body::to_bytes(body, 2 * 1024 * 1024).await {
                 Ok(b) => b,
                 Err(_) => {
-                    return (StatusCode::FORBIDDEN, "CSRF validation failed: body read error").into_response();
+                    return (
+                        StatusCode::FORBIDDEN,
+                        "CSRF validation failed: body read error",
+                    )
+                        .into_response();
                 }
             };
 
@@ -379,7 +453,8 @@ async fn csrf_middleware(
             if let Some(ref ft) = form_token {
                 if ft == cookie_value {
                     // Form field matches — reconstruct request and proceed
-                    let request = axum::http::Request::from_parts(parts, axum::body::Body::from(bytes));
+                    let request =
+                        axum::http::Request::from_parts(parts, axum::body::Body::from(bytes));
                     let mut response = next.run(request).await;
                     ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
                     return response;
@@ -408,9 +483,14 @@ fn ensure_csrf_cookie(
     }
     let token = nanoid::nanoid!(32);
     let secure = if dev_mode { "" } else { "; Secure" };
-    let cookie = format!("crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400{}", token, secure);
+    let cookie = format!(
+        "crap_csrf={}; Path=/; SameSite=Strict; Max-Age=86400{}",
+        token, secure
+    );
     if let Ok(value) = cookie.parse() {
-        response.headers_mut().append(axum::http::header::SET_COOKIE, value);
+        response
+            .headers_mut()
+            .append(axum::http::header::SET_COOKIE, value);
     }
 }
 
@@ -438,7 +518,8 @@ async fn auth_middleware(
     // wouldn't be applied (needs_auth_layer is false), so we're safe to
     // proceed assuming auth collections exist from here.
 
-    let cookie_header = request.headers()
+    let cookie_header = request
+        .headers()
         .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
@@ -448,7 +529,9 @@ async fn auth_middleware(
     if let Some(t) = token {
         if let Ok(claims) = auth::validate_token(t, &state.jwt_secret) {
             // Try to load full user document for access control
-            if let Some(auth_user) = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale) {
+            if let Some(auth_user) =
+                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+            {
                 // Gate 2: Check admin.access Lua function
                 if let Some(response) = check_admin_gate(&state, &auth_user).await {
                     return response;
@@ -461,10 +544,14 @@ async fn auth_middleware(
     }
 
     // Collect custom strategies from all auth collections
-    let auth_defs: Vec<_> = state.registry.collections.values()
+    let auth_defs: Vec<_> = state
+        .registry
+        .collections
+        .values()
         .filter(|d| d.is_auth_collection())
         .filter(|d| {
-            d.auth.as_ref()
+            d.auth
+                .as_ref()
                 .map(|a| !a.strategies.is_empty())
                 .unwrap_or(false)
         })
@@ -473,10 +560,14 @@ async fn auth_middleware(
 
     if !auth_defs.is_empty() {
         // Build headers map from request (lowercase keys)
-        let headers: std::collections::HashMap<String, String> = request.headers()
+        let headers: std::collections::HashMap<String, String> = request
+            .headers()
             .iter()
             .filter_map(|(name, value)| {
-                value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string()))
+                value
+                    .to_str()
+                    .ok()
+                    .map(|v| (name.as_str().to_string(), v.to_string()))
             })
             .collect();
 
@@ -490,16 +581,16 @@ async fn auth_middleware(
             let tx = conn.transaction().ok()?;
             let mut result = None;
             for (slug, auth_config) in &auth_defs {
-                if result.is_some() { break; }
+                if result.is_some() {
+                    break;
+                }
                 for strategy in &auth_config.strategies {
-                    match hook_runner.run_auth_strategy(
-                        &strategy.authenticate,
-                        slug,
-                        &headers,
-                        &tx,
-                    ) {
+                    match hook_runner.run_auth_strategy(&strategy.authenticate, slug, &headers, &tx)
+                    {
                         Ok(Some(user)) => {
-                            let user_email = user.fields.get("email")
+                            let user_email = user
+                                .fields
+                                .get("email")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("")
                                 .to_string();
@@ -515,7 +606,9 @@ async fn auth_middleware(
                         Err(e) => {
                             tracing::warn!(
                                 "Auth strategy '{}' error for {}: {}",
-                                strategy.name, slug, e
+                                strategy.name,
+                                slug,
+                                e
                             );
                             continue;
                         }
@@ -525,10 +618,13 @@ async fn auth_middleware(
             // Read-only access check — commit result is irrelevant, rollback on drop is safe
             let _ = tx.commit();
             result
-        }).await;
+        })
+        .await;
 
         if let Ok(Some((claims, _secret))) = strategy_result {
-            if let Some(auth_user) = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale) {
+            if let Some(auth_user) =
+                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+            {
                 // Gate 2: Check admin.access Lua function
                 if let Some(response) = check_admin_gate(&state, &auth_user).await {
                     return response;
@@ -543,9 +639,7 @@ async fn auth_middleware(
     // HTMX follows 302 redirects and swaps the response into the target,
     // which breaks standalone pages like login. Use HX-Redirect to force a
     // full page navigation instead.
-    let is_htmx = request.headers()
-        .get("HX-Request")
-        .is_some();
+    let is_htmx = request.headers().get("HX-Request").is_some();
 
     if is_htmx {
         axum::response::Response::builder()
@@ -562,7 +656,10 @@ async fn auth_middleware(
 /// is denied, or None if access is allowed (or no access function is configured).
 // Excluded from coverage: requires HookRunner + DB pool for Lua access check.
 #[cfg(not(tarpaulin_include))]
-async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<axum::response::Response> {
+async fn check_admin_gate(
+    state: &AdminState,
+    auth_user: &AuthUser,
+) -> Option<axum::response::Response> {
     let access_ref = state.config.admin.access.as_deref()?;
 
     let pool = state.pool.clone();
@@ -573,12 +670,11 @@ async fn check_admin_gate(state: &AdminState, auth_user: &AuthUser) -> Option<ax
     let result = tokio::task::spawn_blocking(move || {
         let conn = pool.get().ok()?;
         Some(hook_runner.check_access(Some(&access_ref), Some(&user_doc), None, None, &conn))
-    }).await;
+    })
+    .await;
 
     match result {
-        Ok(Some(Ok(crate::db::query::AccessResult::Denied))) => {
-            Some(admin_denied_response(state))
-        }
+        Ok(Some(Ok(crate::db::query::AccessResult::Denied))) => Some(admin_denied_response(state)),
         Ok(Some(Err(e))) => {
             tracing::error!("admin.access check failed: {}", e);
             Some(admin_denied_response(state))
@@ -592,7 +688,11 @@ fn auth_required_response(state: &AdminState) -> axum::response::Response {
     let data = ContextBuilder::auth(state).build();
     match state.render("errors/auth_required", &data) {
         Ok(html) => (StatusCode::SERVICE_UNAVAILABLE, axum::response::Html(html)).into_response(),
-        Err(_) => (StatusCode::SERVICE_UNAVAILABLE, "Setup required: no auth collection configured").into_response(),
+        Err(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Setup required: no auth collection configured",
+        )
+            .into_response(),
     }
 }
 
@@ -620,14 +720,25 @@ pub(crate) fn load_auth_user(
     let def = registry.get_collection(&claims.collection)?.clone();
     let locale_ctx = query::LocaleContext::from_locale_string(None, locale_config);
     let conn = pool.get().ok()?;
-    let doc = query::find_by_id(&conn, &claims.collection, &def, &claims.sub, locale_ctx.as_ref()).ok()??;
+    let doc = query::find_by_id(
+        &conn,
+        &claims.collection,
+        &def,
+        &claims.sub,
+        locale_ctx.as_ref(),
+    )
+    .ok()??;
 
     // Load ui_locale from _crap_user_settings
     let ui_locale = query::get_user_settings(&conn, &claims.sub)
         .ok()
         .flatten()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("ui_locale").and_then(|l| l.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("ui_locale")
+                .and_then(|l| l.as_str())
+                .map(|s| s.to_string())
+        })
         .unwrap_or_else(|| locale_config.default_locale.clone());
 
     let mut auth = AuthUser::new(claims.clone(), doc);
@@ -658,7 +769,8 @@ async fn mcp_http_handler(
 ) -> axum::response::Response {
     // API key auth — constant-time comparison to prevent timing attacks
     if !state.config.mcp.api_key.is_empty() {
-        let auth_header = request.headers()
+        let auth_header = request
+            .headers()
             .get(axum::http::header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
@@ -675,22 +787,23 @@ async fn mcp_http_handler(
         Err(_) => return (StatusCode::BAD_REQUEST, "Request body too large").into_response(),
     };
 
-    let rpc_request: crate::mcp::protocol::JsonRpcRequest = match serde_json::from_slice(&body_bytes) {
-        Ok(r) => r,
-        Err(e) => {
-            let error_resp = crate::mcp::protocol::JsonRpcResponse {
-                jsonrpc: "2.0".to_string(),
-                id: None,
-                result: None,
-                error: Some(crate::mcp::protocol::JsonRpcError {
-                    code: crate::mcp::protocol::PARSE_ERROR,
-                    message: format!("Parse error: {}", e),
-                    data: None,
-                }),
-            };
-            return axum::Json(error_resp).into_response();
-        }
-    };
+    let rpc_request: crate::mcp::protocol::JsonRpcRequest =
+        match serde_json::from_slice(&body_bytes) {
+            Ok(r) => r,
+            Err(e) => {
+                let error_resp = crate::mcp::protocol::JsonRpcResponse {
+                    jsonrpc: "2.0".to_string(),
+                    id: None,
+                    result: None,
+                    error: Some(crate::mcp::protocol::JsonRpcError {
+                        code: crate::mcp::protocol::PARSE_ERROR,
+                        message: format!("Parse error: {}", e),
+                        data: None,
+                    }),
+                };
+                return axum::Json(error_resp).into_response();
+            }
+        };
 
     let server = crate::mcp::McpServer {
         pool: state.pool.clone(),
@@ -701,16 +814,15 @@ async fn mcp_http_handler(
     };
 
     // Run handle_message in spawn_blocking — it does DB queries, Lua hooks, and filesystem I/O
-    let response = match tokio::task::spawn_blocking(move || {
-        server.handle_message(rpc_request)
-    }).await {
-        Ok(resp) => resp,
-        Err(_) => crate::mcp::protocol::JsonRpcResponse::error(
-            None,
-            crate::mcp::protocol::INTERNAL_ERROR,
-            "Internal error",
-        ),
-    };
+    let response =
+        match tokio::task::spawn_blocking(move || server.handle_message(rpc_request)).await {
+            Ok(resp) => resp,
+            Err(_) => crate::mcp::protocol::JsonRpcResponse::error(
+                None,
+                crate::mcp::protocol::INTERNAL_ERROR,
+                "Internal error",
+            ),
+        };
 
     // Notifications must not receive a response per JSON-RPC spec
     if response.id.is_none() && response.result.is_none() && response.error.is_none() {
@@ -726,13 +838,19 @@ mod tests {
 
     #[test]
     fn extract_cookie_single() {
-        assert_eq!(extract_cookie("crap_session=abc123", "crap_session"), Some("abc123"));
+        assert_eq!(
+            extract_cookie("crap_session=abc123", "crap_session"),
+            Some("abc123")
+        );
     }
 
     #[test]
     fn extract_cookie_multiple() {
         assert_eq!(
-            extract_cookie("other=val; crap_session=token123; another=x", "crap_session"),
+            extract_cookie(
+                "other=val; crap_session=token123; another=x",
+                "crap_session"
+            ),
             Some("token123")
         );
     }

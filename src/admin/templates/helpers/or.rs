@@ -31,7 +31,8 @@ impl HelperDef for OrHelper {
 mod tests {
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
+        let translations =
+            std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
         let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
             .expect("create_handlebars");
         (*hbs).clone()
@@ -42,9 +43,21 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (or a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({"a": true, "b": false})).unwrap(), "YES");
-        assert_eq!(hbs.render("t", &serde_json::json!({"a": false, "b": true})).unwrap(), "YES");
-        assert_eq!(hbs.render("t", &serde_json::json!({"a": false, "b": false})).unwrap(), "NO");
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"a": true, "b": false}))
+                .unwrap(),
+            "YES"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"a": false, "b": true}))
+                .unwrap(),
+            "YES"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"a": false, "b": false}))
+                .unwrap(),
+            "NO"
+        );
     }
 
     #[test]
@@ -52,8 +65,16 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (or a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({"a": "", "b": ""})).unwrap(), "NO");
-        assert_eq!(hbs.render("t", &serde_json::json!({"a": "", "b": "x"})).unwrap(), "YES");
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"a": "", "b": ""}))
+                .unwrap(),
+            "NO"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"a": "", "b": "x"}))
+                .unwrap(),
+            "YES"
+        );
     }
 
     #[test]
@@ -61,7 +82,15 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (or a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({"a": null, "b": null})).unwrap(), "NO");
-        assert_eq!(hbs.render("t", &serde_json::json!({"a": null, "b": 1})).unwrap(), "YES");
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"a": null, "b": null}))
+                .unwrap(),
+            "NO"
+        );
+        assert_eq!(
+            hbs.render("t", &serde_json::json!({"a": null, "b": 1}))
+                .unwrap(),
+            "YES"
+        );
     }
 }

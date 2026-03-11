@@ -29,8 +29,17 @@ pub(crate) fn validate_fields_inner(
 ) -> Result<(), ValidationError> {
     let mut errors = Vec::new();
     recursive::validate_fields_recursive(
-        lua, fields, data, conn, table, exclude_id, is_draft, "",
-        locale_ctx, false, &mut errors,
+        lua,
+        fields,
+        data,
+        conn,
+        table,
+        exclude_id,
+        is_draft,
+        "",
+        locale_ctx,
+        false,
+        &mut errors,
     );
     if errors.is_empty() {
         Ok(())

@@ -26,7 +26,7 @@ impl ContentService {
         // Check rate limit before doing any work
         if self.login_limiter.is_blocked(&req.email) {
             return Err(Status::resource_exhausted(
-                "Too many login attempts. Please try again later."
+                "Too many login attempts. Please try again later.",
             ));
         }
 
@@ -34,7 +34,8 @@ impl ContentService {
 
         if !def.is_auth_collection() {
             return Err(Status::invalid_argument(format!(
-                "Collection '{}' is not an auth collection", req.collection
+                "Collection '{}' is not an auth collection",
+                req.collection
             )));
         }
 
@@ -49,20 +50,33 @@ impl ContentService {
             let doc = query::find_by_email(&conn, &slug, &def_owned, &email)?;
             let doc = match doc {
                 Some(d) => d,
-                None => { auth::dummy_verify(); return Ok(None); }
+                None => {
+                    auth::dummy_verify();
+                    return Ok(None);
+                }
             };
             let hash = query::get_password_hash(&conn, &slug, &doc.id)?;
             let hash = match hash {
                 Some(h) => h,
-                None => { auth::dummy_verify(); return Ok(None); }
+                None => {
+                    auth::dummy_verify();
+                    return Ok(None);
+                }
             };
             if !auth::verify_password(&password, &hash)? {
                 return Ok(None);
             }
             Ok::<_, anyhow::Error>(Some(doc))
-        }).await
-            .map_err(|e| { tracing::error!("Login task error: {}", e); Status::internal("Internal error") })?
-            .map_err(|e| { tracing::error!("Login error: {}", e); Status::internal("Internal error") })?;
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("Login task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            tracing::error!("Login error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         let user = match user {
             Some(u) => u,
@@ -80,9 +94,16 @@ impl ContentService {
             let locked = tokio::task::spawn_blocking(move || {
                 let conn = pool.get().context("DB connection")?;
                 query::is_locked(&conn, &slug, &uid)
-            }).await
-                .map_err(|e| { tracing::error!("Lock check task error: {}", e); Status::internal("Internal error") })?
-                .map_err(|e| { tracing::error!("Lock check error: {}", e); Status::internal("Internal error") })?;
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("Lock check task error: {}", e);
+                Status::internal("Internal error")
+            })?
+            .map_err(|e| {
+                tracing::error!("Lock check error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
             if locked {
                 return Err(Status::permission_denied("This account has been locked"));
@@ -97,33 +118,42 @@ impl ContentService {
             let verified = tokio::task::spawn_blocking(move || {
                 let conn = pool.get().context("DB connection")?;
                 query::is_verified(&conn, &slug, &uid)
-            }).await
-                .map_err(|e| { tracing::error!("Verification check task error: {}", e); Status::internal("Internal error") })?
-                .map_err(|e| { tracing::error!("Verification check error: {}", e); Status::internal("Internal error") })?;
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("Verification check task error: {}", e);
+                Status::internal("Internal error")
+            })?
+            .map_err(|e| {
+                tracing::error!("Verification check error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
             if !verified {
                 return Err(Status::permission_denied(
-                    "Please verify your email before logging in"
+                    "Please verify your email before logging in",
                 ));
             }
         }
 
-        let user_email = user.fields.get("email")
+        let user_email = user
+            .fields
+            .get("email")
             .and_then(|v| v.as_str())
             .unwrap_or(&req.email)
             .to_string();
 
-        let expiry = def.auth.as_ref()
-            .map(|a| a.token_expiry)
-            .unwrap_or(7200);
+        let expiry = def.auth.as_ref().map(|a| a.token_expiry).unwrap_or(7200);
 
         let claims = ClaimsBuilder::new(&user.id, &req.collection)
             .email(user_email)
             .exp((chrono::Utc::now().timestamp() as u64) + expiry)
             .build();
 
-        let token = auth::create_token(&claims, &self.jwt_secret)
-            .map_err(|e| { tracing::error!("Token creation error: {}", e); Status::internal("Internal error") })?;
+        let token = auth::create_token(&claims, &self.jwt_secret).map_err(|e| {
+            tracing::error!("Token creation error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         // Successful login — clear rate limit state
         self.login_limiter.clear(&req.email);
@@ -152,9 +182,16 @@ impl ContentService {
         let doc = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             query::find_by_id(&conn, &collection, &def, &id, None)
-        }).await
-            .map_err(|e| { tracing::error!("Me task error: {}", e); Status::internal("Internal error") })?
-            .map_err(|e| { tracing::error!("Me query error: {}", e); Status::internal("Internal error") })?;
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("Me task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            tracing::error!("Me query error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         let doc = doc.ok_or_else(|| Status::not_found("User not found"))?;
 
@@ -173,7 +210,9 @@ impl ContentService {
 
         // Rate limit: prevent email flooding (always count, always return success)
         if self.forgot_password_limiter.is_blocked(&req.email) {
-            return Ok(Response::new(content::ForgotPasswordResponse { success: true }));
+            return Ok(Response::new(content::ForgotPasswordResponse {
+                success: true,
+            }));
         }
         self.forgot_password_limiter.record_failure(&req.email);
 
@@ -181,12 +220,15 @@ impl ContentService {
 
         if !def.is_auth_collection() {
             return Err(Status::invalid_argument(format!(
-                "Collection '{}' is not an auth collection", req.collection
+                "Collection '{}' is not an auth collection",
+                req.collection
             )));
         }
 
         if !def.auth.as_ref().is_some_and(|a| a.forgot_password) {
-            return Err(Status::permission_denied("Password reset is not enabled for this collection"));
+            return Err(Status::permission_denied(
+                "Password reset is not enabled for this collection",
+            ));
         }
 
         let pool = self.pool.clone();
@@ -202,13 +244,19 @@ impl ContentService {
         tokio::task::spawn_blocking(move || {
             let conn = match pool.get() {
                 Ok(c) => c,
-                Err(e) => { tracing::error!("DB connection for forgot password: {}", e); return; }
+                Err(e) => {
+                    tracing::error!("DB connection for forgot password: {}", e);
+                    return;
+                }
             };
 
             let user = match query::find_by_email(&conn, &slug, &def_owned, &user_email) {
                 Ok(Some(u)) => u,
                 Ok(None) => return,
-                Err(e) => { tracing::error!("Forgot password lookup: {}", e); return; }
+                Err(e) => {
+                    tracing::error!("Forgot password lookup: {}", e);
+                    return;
+                }
             };
 
             let token = nanoid::nanoid!();
@@ -226,21 +274,35 @@ impl ContentService {
             };
             let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
 
-            let html = match email_renderer.render("password_reset", &serde_json::json!({
-                "reset_url": reset_url,
-                "expiry_minutes": reset_expiry / 60,
-                "from_name": email_config.from_name,
-            })) {
+            let html = match email_renderer.render(
+                "password_reset",
+                &serde_json::json!({
+                    "reset_url": reset_url,
+                    "expiry_minutes": reset_expiry / 60,
+                    "from_name": email_config.from_name,
+                }),
+            ) {
                 Ok(h) => h,
-                Err(e) => { tracing::error!("Failed to render reset email: {}", e); return; }
+                Err(e) => {
+                    tracing::error!("Failed to render reset email: {}", e);
+                    return;
+                }
             };
 
-            if let Err(e) = email::send_email(&email_config, &user_email, "Reset your password", &html, None) {
+            if let Err(e) = email::send_email(
+                &email_config,
+                &user_email,
+                "Reset your password",
+                &html,
+                None,
+            ) {
                 tracing::error!("Failed to send reset email: {}", e);
             }
         });
 
-        Ok(Response::new(content::ForgotPasswordResponse { success: true }))
+        Ok(Response::new(content::ForgotPasswordResponse {
+            success: true,
+        }))
     }
 
     /// Reset a password using a valid reset token.
@@ -253,7 +315,8 @@ impl ContentService {
 
         if !def.is_auth_collection() {
             return Err(Status::invalid_argument(format!(
-                "Collection '{}' is not an auth collection", req.collection
+                "Collection '{}' is not an auth collection",
+                req.collection
             )));
         }
 
@@ -280,19 +343,25 @@ impl ContentService {
             query::update_password(&conn, &slug, &user.id, &password)?;
             query::clear_reset_token(&conn, &slug, &user.id)?;
             Ok(())
-        }).await
-            .map_err(|e| { tracing::error!("Reset password task error: {}", e); Status::internal("Internal error") })?
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("Invalid reset token") || msg.contains("expired") {
-                    Status::invalid_argument(msg)
-                } else {
-                    tracing::error!("Reset password error: {}", e);
-                    Status::internal("Internal error")
-                }
-            })?;
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("Reset password task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("Invalid reset token") || msg.contains("expired") {
+                Status::invalid_argument(msg)
+            } else {
+                tracing::error!("Reset password error: {}", e);
+                Status::internal("Internal error")
+            }
+        })?;
 
-        Ok(Response::new(content::ResetPasswordResponse { success: true }))
+        Ok(Response::new(content::ResetPasswordResponse {
+            success: true,
+        }))
     }
 
     /// Verify an email address using a verification token.
@@ -305,12 +374,15 @@ impl ContentService {
 
         if !def.is_auth_collection() {
             return Err(Status::invalid_argument(format!(
-                "Collection '{}' is not an auth collection", req.collection
+                "Collection '{}' is not an auth collection",
+                req.collection
             )));
         }
 
         if !def.auth.as_ref().is_some_and(|a| a.verify_email) {
-            return Err(Status::invalid_argument("Email verification is not enabled for this collection"));
+            return Err(Status::invalid_argument(
+                "Email verification is not enabled for this collection",
+            ));
         }
 
         let pool = self.pool.clone();
@@ -330,14 +402,23 @@ impl ContentService {
                 }
                 None => Ok(false),
             }
-        }).await
-            .map_err(|e| { tracing::error!("Verify email task error: {}", e); Status::internal("Internal error") })?
-            .map_err(|e: anyhow::Error| { tracing::error!("Verify email error: {}", e); Status::internal("Internal error") })?;
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("Verify email task error: {}", e);
+            Status::internal("Internal error")
+        })?
+        .map_err(|e: anyhow::Error| {
+            tracing::error!("Verify email error: {}", e);
+            Status::internal("Internal error")
+        })?;
 
         if !found {
             return Err(Status::not_found("Invalid verification token"));
         }
 
-        Ok(Response::new(content::VerifyEmailResponse { success: true }))
+        Ok(Response::new(content::VerifyEmailResponse {
+            success: true,
+        }))
     }
 }

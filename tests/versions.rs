@@ -19,8 +19,8 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::Registry;
 use crap_cms::db::{migrate, pool, query};
-use crap_cms::service;
 use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::service;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -32,7 +32,9 @@ fn make_versioned_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.versions = Some(VersionsConfig::new(true, 0));
@@ -54,7 +56,13 @@ fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
     (tmp, db_pool)
 }
 
-fn setup_db(defs: Vec<CollectionDefinition>) -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry) {
+fn setup_db(
+    defs: Vec<CollectionDefinition>,
+) -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+) {
     let (tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     {
@@ -117,7 +125,13 @@ fn setup_service(defs: Vec<CollectionDefinition>) -> TestSetup {
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool, _registry: registry, runner: hook_runner }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+        _registry: registry,
+        runner: hook_runner,
+    }
 }
 
 fn make_struct(fields: &[(&str, &str)]) -> Struct {
@@ -151,9 +165,7 @@ fn migration_creates_versions_table_and_status_column() {
     assert_eq!(count, 1, "versions table should exist");
 
     // _status column should exist on articles
-    let status_exists: bool = conn
-        .prepare("SELECT _status FROM articles LIMIT 0")
-        .is_ok();
+    let status_exists: bool = conn.prepare("SELECT _status FROM articles LIMIT 0").is_ok();
     assert!(status_exists, "_status column should exist");
 }
 
@@ -182,7 +194,8 @@ fn create_version_and_find_latest() {
     let data: HashMap<String, String> = [
         ("title".into(), "Version Test".into()),
         ("body".into(), "Initial content".into()),
-    ].into();
+    ]
+    .into();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
 
     // Build snapshot and create version
@@ -328,7 +341,12 @@ fn prune_versions_keeps_newest() {
     for _ in 0..10 {
         query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     }
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 10);
+    assert_eq!(
+        query::list_versions(&conn, "articles", &doc.id, None, None)
+            .unwrap()
+            .len(),
+        10
+    );
 
     // Prune to 3
     query::prune_versions(&conn, "articles", &doc.id, 3).unwrap();
@@ -356,7 +374,12 @@ fn prune_versions_zero_means_unlimited() {
 
     // max_versions=0 should not prune
     query::prune_versions(&conn, "articles", &doc.id, 0).unwrap();
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 5);
+    assert_eq!(
+        query::list_versions(&conn, "articles", &doc.id, None, None)
+            .unwrap()
+            .len(),
+        5
+    );
 }
 
 #[test]
@@ -368,12 +391,16 @@ fn build_snapshot_includes_all_fields() {
     let data: HashMap<String, String> = [
         ("title".into(), "Snap Title".into()),
         ("body".into(), "Snap Body".into()),
-    ].into();
+    ]
+    .into();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
 
     let snapshot = query::build_snapshot(&conn, "articles", &def.fields, &doc).unwrap();
     let obj = snapshot.as_object().unwrap();
-    assert_eq!(obj.get("title").and_then(|v| v.as_str()), Some("Snap Title"));
+    assert_eq!(
+        obj.get("title").and_then(|v| v.as_str()),
+        Some("Snap Title")
+    );
     assert_eq!(obj.get("body").and_then(|v| v.as_str()), Some("Snap Body"));
     // Should include timestamps
     assert!(obj.contains_key("created_at"));
@@ -389,7 +416,8 @@ fn restore_version_updates_main_table() {
     let data: HashMap<String, String> = [
         ("title".into(), "Original".into()),
         ("body".into(), "Original body".into()),
-    ].into();
+    ]
+    .into();
     let doc = query::create(&conn, "articles", &def, &data, None).unwrap();
 
     // Create v1 snapshot
@@ -400,24 +428,40 @@ fn restore_version_updates_main_table() {
     let update_data: HashMap<String, String> = [
         ("title".into(), "Updated".into()),
         ("body".into(), "Updated body".into()),
-    ].into();
+    ]
+    .into();
     query::update(&conn, "articles", &def, &doc.id, &update_data, None).unwrap();
 
     // Create v2 snapshot
-    let doc_updated = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    let doc_updated = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     let snap_v2 = query::build_snapshot(&conn, "articles", &def.fields, &doc_updated).unwrap();
     query::create_version(&conn, "articles", &doc.id, "published", &snap_v2).unwrap();
 
     // Verify current state is updated
-    let current = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    let current = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     assert_eq!(current.get_str("title"), Some("Updated"));
 
     // Restore v1
-    let restored = query::restore_version(&conn, "articles", &def, &doc.id, &snap_v1, "published", &Default::default()).unwrap();
+    let restored = query::restore_version(
+        &conn,
+        "articles",
+        &def,
+        &doc.id,
+        &snap_v1,
+        "published",
+        &Default::default(),
+    )
+    .unwrap();
     assert_eq!(restored.get_str("title"), Some("Original"));
 
     // Verify DB has restored data
-    let after_restore = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    let after_restore = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     assert_eq!(after_restore.get_str("title"), Some("Original"));
     assert_eq!(after_restore.get_str("body"), Some("Original body"));
 
@@ -463,7 +507,8 @@ fn restore_version_clears_locale_columns() {
     let data: HashMap<String, String> = [
         ("title".into(), "English Title".into()),
         ("body".into(), "Body".into()),
-    ].into();
+    ]
+    .into();
     let doc = query::create(&conn, "articles", &def, &data, Some(&en_ctx)).unwrap();
 
     // Create v1 snapshot (only English)
@@ -475,30 +520,46 @@ fn restore_version_clears_locale_columns() {
         mode: crap_cms::db::query::LocaleMode::Single("de".to_string()),
         config: locale_config.clone(),
     };
-    let de_data: HashMap<String, String> = [
-        ("title".into(), "Deutscher Titel".into()),
-    ].into();
+    let de_data: HashMap<String, String> = [("title".into(), "Deutscher Titel".into())].into();
     query::update(&conn, "articles", &def, &doc.id, &de_data, Some(&de_ctx)).unwrap();
 
     // Verify German translation exists
-    let de_doc = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&de_ctx)).unwrap().unwrap();
+    let de_doc = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&de_ctx))
+        .unwrap()
+        .unwrap();
     assert_eq!(de_doc.get_str("title"), Some("Deutscher Titel"));
 
     // Restore v1 — should clear the German translation
-    query::restore_version(&conn, "articles", &def, &doc.id, &snap_v1, "published", &locale_config).unwrap();
+    query::restore_version(
+        &conn,
+        "articles",
+        &def,
+        &doc.id,
+        &snap_v1,
+        "published",
+        &locale_config,
+    )
+    .unwrap();
 
     // English should be restored
-    let en_after = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&en_ctx)).unwrap().unwrap();
+    let en_after = query::find_by_id(&conn, "articles", &def, &doc.id, Some(&en_ctx))
+        .unwrap()
+        .unwrap();
     assert_eq!(en_after.get_str("title"), Some("English Title"));
 
     // German should be cleared (NULL → fallback to English if fallback enabled, or NULL)
     // Read the raw column to verify it's NULL
-    let de_raw: Option<String> = conn.query_row(
-        "SELECT title__de FROM articles WHERE id = ?1",
-        [&doc.id],
-        |row| row.get(0),
-    ).unwrap();
-    assert!(de_raw.is_none(), "German locale column should be NULL after restoring pre-translation version");
+    let de_raw: Option<String> = conn
+        .query_row(
+            "SELECT title__de FROM articles WHERE id = ?1",
+            [&doc.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        de_raw.is_none(),
+        "German locale column should be NULL after restoring pre-translation version"
+    );
 
     let _ = tmp; // keep tempdir alive
 }
@@ -515,13 +576,23 @@ fn delete_document_cascades_to_versions() {
     query::create_version(&conn, "articles", &doc.id, "published", &snap).unwrap();
     query::create_version(&conn, "articles", &doc.id, "draft", &snap).unwrap();
 
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 2);
+    assert_eq!(
+        query::list_versions(&conn, "articles", &doc.id, None, None)
+            .unwrap()
+            .len(),
+        2
+    );
 
     // Delete the document
     query::delete(&conn, "articles", &doc.id).unwrap();
 
     // Versions should be cascade-deleted
-    assert_eq!(query::list_versions(&conn, "articles", &doc.id, None, None).unwrap().len(), 0);
+    assert_eq!(
+        query::list_versions(&conn, "articles", &doc.id, None, None)
+            .unwrap()
+            .len(),
+        0
+    );
 }
 
 #[test]
@@ -543,7 +614,9 @@ fn make_versioned_group_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("pages_ver");
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("seo", FieldType::Group)
             .fields(vec![
                 FieldDefinition::builder("meta_title", FieldType::Text).build(),
@@ -582,7 +655,8 @@ fn restore_version_with_group_fields() {
         ("title".into(), "Page One".into()),
         ("seo__meta_title".into(), "Original SEO".into()),
         ("seo__meta_description".into(), "Original desc".into()),
-    ].into();
+    ]
+    .into();
     let doc = query::create(&conn, "pages_ver", &def, &data, None).unwrap();
 
     // Snapshot v1
@@ -593,22 +667,45 @@ fn restore_version_with_group_fields() {
     let update_data: HashMap<String, String> = [
         ("seo__meta_title".into(), "Updated SEO".into()),
         ("seo__meta_description".into(), "Updated desc".into()),
-    ].into();
+    ]
+    .into();
     query::update(&conn, "pages_ver", &def, &doc.id, &update_data, None).unwrap();
 
     // Verify updated
-    let current = query::find_by_id(&conn, "pages_ver", &def, &doc.id, None).unwrap().unwrap();
+    let current = query::find_by_id(&conn, "pages_ver", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     let cur_seo = current.fields.get("seo").expect("seo should exist");
-    assert_eq!(cur_seo.get("meta_title").and_then(|v| v.as_str()), Some("Updated SEO"));
+    assert_eq!(
+        cur_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("Updated SEO")
+    );
 
     // Restore v1
-    query::restore_version(&conn, "pages_ver", &def, &doc.id, &snap_v1, "published", &Default::default()).unwrap();
+    query::restore_version(
+        &conn,
+        "pages_ver",
+        &def,
+        &doc.id,
+        &snap_v1,
+        "published",
+        &Default::default(),
+    )
+    .unwrap();
 
     // Group sub-fields should be back to original
-    let restored = query::find_by_id(&conn, "pages_ver", &def, &doc.id, None).unwrap().unwrap();
+    let restored = query::find_by_id(&conn, "pages_ver", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     let seo = restored.fields.get("seo").expect("seo should exist");
-    assert_eq!(seo.get("meta_title").and_then(|v| v.as_str()), Some("Original SEO"));
-    assert_eq!(seo.get("meta_description").and_then(|v| v.as_str()), Some("Original desc"));
+    assert_eq!(
+        seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("Original SEO")
+    );
+    assert_eq!(
+        seo.get("meta_description").and_then(|v| v.as_str()),
+        Some("Original desc")
+    );
     assert_eq!(restored.get_str("title"), Some("Page One"));
 }
 
@@ -630,7 +727,8 @@ fn restore_global_version_with_group_fields() {
         ("site_name".into(), "My Site".into()),
         ("seo__meta_title".into(), "Original SEO".into()),
         ("seo__og_image".into(), "/original.png".into()),
-    ].into();
+    ]
+    .into();
     query::update_global(&conn, "site_ver", &gdef, &data, None).unwrap();
 
     // Snapshot v1
@@ -642,22 +740,40 @@ fn restore_global_version_with_group_fields() {
     let update_data: HashMap<String, String> = [
         ("seo__meta_title".into(), "Updated SEO".into()),
         ("seo__og_image".into(), "/updated.png".into()),
-    ].into();
+    ]
+    .into();
     query::update_global(&conn, "site_ver", &gdef, &update_data, None).unwrap();
 
     // Verify updated
     let current = query::get_global(&conn, "site_ver", &gdef, None).unwrap();
     let cur_seo = current.fields.get("seo").expect("seo should exist");
-    assert_eq!(cur_seo.get("meta_title").and_then(|v| v.as_str()), Some("Updated SEO"));
+    assert_eq!(
+        cur_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("Updated SEO")
+    );
 
     // Restore v1
-    query::restore_global_version(&conn, "site_ver", &gdef, &snap_v1, "published", &Default::default()).unwrap();
+    query::restore_global_version(
+        &conn,
+        "site_ver",
+        &gdef,
+        &snap_v1,
+        "published",
+        &Default::default(),
+    )
+    .unwrap();
 
     // Group sub-fields should be back to original
     let restored = query::get_global(&conn, "site_ver", &gdef, None).unwrap();
     let seo = restored.fields.get("seo").expect("seo should exist");
-    assert_eq!(seo.get("meta_title").and_then(|v| v.as_str()), Some("Original SEO"));
-    assert_eq!(seo.get("og_image").and_then(|v| v.as_str()), Some("/original.png"));
+    assert_eq!(
+        seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("Original SEO")
+    );
+    assert_eq!(
+        seo.get("og_image").and_then(|v| v.as_str()),
+        Some("/original.png")
+    );
     assert_eq!(restored.get_str("site_name"), Some("My Site"));
 }
 
@@ -703,13 +819,13 @@ fn restore_version_with_localized_group_fields() {
         ("title".into(), "Page".into()),
         ("seo__meta_title".into(), "EN Original".into()),
         ("seo__meta_description".into(), "EN Desc".into()),
-    ].into();
+    ]
+    .into();
     let doc = query::create(&conn, "pages_ver", &def, &data, Some(&en_ctx)).unwrap();
 
     // Add German translation
-    let de_data: HashMap<String, String> = [
-        ("seo__meta_title".into(), "DE Original".into()),
-    ].into();
+    let de_data: HashMap<String, String> =
+        [("seo__meta_title".into(), "DE Original".into())].into();
     query::update(&conn, "pages_ver", &def, &doc.id, &de_data, Some(&de_ctx)).unwrap();
 
     // Snapshot v1 — use Default locale so find_by_id resolves locale columns
@@ -717,27 +833,56 @@ fn restore_version_with_localized_group_fields() {
         mode: query::LocaleMode::Default,
         config: locale_config.clone(),
     };
-    let doc_snap = query::find_by_id(&conn, "pages_ver", &def, &doc.id, Some(&default_ctx)).unwrap().unwrap();
+    let doc_snap = query::find_by_id(&conn, "pages_ver", &def, &doc.id, Some(&default_ctx))
+        .unwrap()
+        .unwrap();
     let snap_v1 = query::build_snapshot(&conn, "pages_ver", &def.fields, &doc_snap).unwrap();
     query::create_version(&conn, "pages_ver", &doc.id, "published", &snap_v1).unwrap();
 
     // Update English
-    let update_data: HashMap<String, String> = [
-        ("seo__meta_title".into(), "EN Updated".into()),
-    ].into();
-    query::update(&conn, "pages_ver", &def, &doc.id, &update_data, Some(&en_ctx)).unwrap();
+    let update_data: HashMap<String, String> =
+        [("seo__meta_title".into(), "EN Updated".into())].into();
+    query::update(
+        &conn,
+        "pages_ver",
+        &def,
+        &doc.id,
+        &update_data,
+        Some(&en_ctx),
+    )
+    .unwrap();
 
     // Verify updated
-    let current = query::find_by_id(&conn, "pages_ver", &def, &doc.id, Some(&en_ctx)).unwrap().unwrap();
+    let current = query::find_by_id(&conn, "pages_ver", &def, &doc.id, Some(&en_ctx))
+        .unwrap()
+        .unwrap();
     let cur_seo = current.fields.get("seo").expect("seo should exist");
-    assert_eq!(cur_seo.get("meta_title").and_then(|v| v.as_str()), Some("EN Updated"));
+    assert_eq!(
+        cur_seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("EN Updated")
+    );
 
     // Restore v1 — should restore EN to original and clear DE (restore writes to default locale only)
-    query::restore_version(&conn, "pages_ver", &def, &doc.id, &snap_v1, "published", &locale_config).unwrap();
+    query::restore_version(
+        &conn,
+        "pages_ver",
+        &def,
+        &doc.id,
+        &snap_v1,
+        "published",
+        &locale_config,
+    )
+    .unwrap();
 
-    let restored_en = query::find_by_id(&conn, "pages_ver", &def, &doc.id, Some(&en_ctx)).unwrap().unwrap();
+    let restored_en = query::find_by_id(&conn, "pages_ver", &def, &doc.id, Some(&en_ctx))
+        .unwrap()
+        .unwrap();
     let seo = restored_en.fields.get("seo").expect("seo should exist");
-    assert_eq!(seo.get("meta_title").and_then(|v| v.as_str()), Some("EN Original"), "EN should be restored");
+    assert_eq!(
+        seo.get("meta_title").and_then(|v| v.as_str()),
+        Some("EN Original"),
+        "EN should be restored"
+    );
 }
 
 // ── Service-Level Version Tests ────────────────────────────────────────
@@ -752,15 +897,25 @@ fn service_create_published_creates_version() {
     let data: HashMap<String, String> = [
         ("title".into(), "Published".into()),
         ("body".into(), "Content".into()),
-    ].into();
+    ]
+    .into();
     let (doc, _) = service::create_document(
-        pool, runner, "articles", &def,
+        pool,
+        runner,
+        "articles",
+        &def,
         service::WriteInput {
-            data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     let conn = pool.get().unwrap();
     // Should have created a version
@@ -780,17 +935,24 @@ fn service_create_draft_creates_draft_version() {
     let pool = &ts.pool;
     let runner = &ts.runner;
 
-    let data: HashMap<String, String> = [
-        ("title".into(), "Draft Post".into()),
-    ].into();
+    let data: HashMap<String, String> = [("title".into(), "Draft Post".into())].into();
     let (doc, _) = service::create_document(
-        pool, runner, "articles", &def,
+        pool,
+        runner,
+        "articles",
+        &def,
         service::WriteInput {
-            data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: true, ui_locale: None,
+            data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: true,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     let conn = pool.get().unwrap();
     let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
@@ -812,35 +974,55 @@ fn service_update_draft_is_version_only() {
     let data: HashMap<String, String> = [
         ("title".into(), "Original Title".into()),
         ("body".into(), "Original Body".into()),
-    ].into();
+    ]
+    .into();
     let (doc, _) = service::create_document(
-        pool, runner, "articles", &def,
+        pool,
+        runner,
+        "articles",
+        &def,
         service::WriteInput {
-            data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Draft update — should NOT change the main table
-    let update_data: HashMap<String, String> = [
-        ("title".into(), "Draft Title".into()),
-    ].into();
+    let update_data: HashMap<String, String> = [("title".into(), "Draft Title".into())].into();
     let (result, _) = service::update_document(
-        pool, runner, "articles", &doc.id, &def,
+        pool,
+        runner,
+        "articles",
+        &doc.id,
+        &def,
         service::WriteInput {
-            data: update_data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: true, ui_locale: None,
+            data: update_data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: true,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Result should be the EXISTING doc (unchanged main table)
     assert_eq!(result.get_str("title"), Some("Original Title"));
 
     // Main table should still have original data
     let conn = pool.get().unwrap();
-    let current = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
+    let current = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
     assert_eq!(current.get_str("title"), Some("Original Title"));
 
     // But there should be 2 versions now (create + draft update)
@@ -851,7 +1033,10 @@ fn service_update_draft_is_version_only() {
 
     // The draft version snapshot should have the updated title
     let draft_snap = &versions[0].snapshot;
-    assert_eq!(draft_snap.get("title").and_then(|v| v.as_str()), Some("Draft Title"));
+    assert_eq!(
+        draft_snap.get("title").and_then(|v| v.as_str()),
+        Some("Draft Title")
+    );
 }
 
 #[test]
@@ -861,30 +1046,45 @@ fn service_update_publish_updates_main_table() {
     let pool = &ts.pool;
     let runner = &ts.runner;
 
-    let data: HashMap<String, String> = [
-        ("title".into(), "Before Publish".into()),
-    ].into();
+    let data: HashMap<String, String> = [("title".into(), "Before Publish".into())].into();
     let (doc, _) = service::create_document(
-        pool, runner, "articles", &def,
+        pool,
+        runner,
+        "articles",
+        &def,
         service::WriteInput {
-            data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: true, ui_locale: None, // create as draft
+            data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: true,
+            ui_locale: None, // create as draft
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Publish update (draft=false)
-    let update_data: HashMap<String, String> = [
-        ("title".into(), "Published Title".into()),
-    ].into();
+    let update_data: HashMap<String, String> = [("title".into(), "Published Title".into())].into();
     let (published, _) = service::update_document(
-        pool, runner, "articles", &doc.id, &def,
+        pool,
+        runner,
+        "articles",
+        &doc.id,
+        &def,
         service::WriteInput {
-            data: update_data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data: update_data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_eq!(published.get_str("title"), Some("Published Title"));
 
@@ -902,13 +1102,22 @@ fn service_nonversioned_create_no_version_created() {
 
     let data: HashMap<String, String> = [("title".into(), "Note".into())].into();
     let (_doc, _) = service::create_document(
-        pool, runner, "notes", &def,
+        pool,
+        runner,
+        "notes",
+        &def,
         service::WriteInput {
-            data, join_data: &HashMap::new(), password: None,
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data,
+            join_data: &HashMap::new(),
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // No versions table for non-versioned, so nothing to check there
     // Just verify it doesn't crash
@@ -923,12 +1132,11 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
     let mut def = make_versioned_def();
     def.fields.push(
         FieldDefinition::builder("content", FieldType::Blocks)
-            .blocks(vec![
-                crap_cms::core::field::BlockDefinition::new("text", vec![
-                    FieldDefinition::builder("body", FieldType::Textarea).build(),
-                ]),
-            ])
-            .build()
+            .blocks(vec![crap_cms::core::field::BlockDefinition::new(
+                "text",
+                vec![FieldDefinition::builder("body", FieldType::Textarea).build()],
+            )])
+            .build(),
     );
 
     let ts = setup_service(vec![def.clone()]);
@@ -938,53 +1146,91 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
     // Create a published document
     let data: HashMap<String, String> = [("title".into(), "With Blocks".into())].into();
     let mut join_data = HashMap::new();
-    join_data.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "text", "body": "Initial block"}
-    ]));
+    join_data.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "text", "body": "Initial block"}
+        ]),
+    );
     let (doc, _) = service::create_document(
-        pool, runner, "articles", &def,
+        pool,
+        runner,
+        "articles",
+        &def,
         service::WriteInput {
-            data, join_data: &join_data, password: None,
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data,
+            join_data: &join_data,
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Draft update with different block data
-    let update_data: HashMap<String, String> = [("title".into(), "Draft With Blocks".into())].into();
+    let update_data: HashMap<String, String> =
+        [("title".into(), "Draft With Blocks".into())].into();
     let mut draft_join_data = HashMap::new();
-    draft_join_data.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "text", "body": "Draft block 1"},
-        {"_block_type": "text", "body": "Draft block 2"}
-    ]));
+    draft_join_data.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "text", "body": "Draft block 1"},
+            {"_block_type": "text", "body": "Draft block 2"}
+        ]),
+    );
     service::update_document(
-        pool, runner, "articles", &doc.id, &def,
+        pool,
+        runner,
+        "articles",
+        &doc.id,
+        &def,
         service::WriteInput {
-            data: update_data, join_data: &draft_join_data, password: None,
-            locale_ctx: None, locale: None, draft: true, ui_locale: None,
+            data: update_data,
+            join_data: &draft_join_data,
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: true,
+            ui_locale: None,
         },
         None,
-    ).unwrap();
+    )
+    .unwrap();
 
     // The draft version snapshot must contain the draft block data
     let conn = pool.get().unwrap();
     let versions = query::list_versions(&conn, "articles", &doc.id, None, None).unwrap();
     assert_eq!(versions.len(), 2); // create + draft update
     let draft_snap = &versions[0].snapshot;
-    let blocks = draft_snap.get("content").expect("snapshot must contain 'content' blocks field");
+    let blocks = draft_snap
+        .get("content")
+        .expect("snapshot must contain 'content' blocks field");
     let blocks_arr = blocks.as_array().expect("content should be an array");
     assert_eq!(blocks_arr.len(), 2, "draft snapshot should have 2 blocks");
-    assert_eq!(blocks_arr[0].get("body").and_then(|v| v.as_str()), Some("Draft block 1"));
-    assert_eq!(blocks_arr[1].get("body").and_then(|v| v.as_str()), Some("Draft block 2"));
+    assert_eq!(
+        blocks_arr[0].get("body").and_then(|v| v.as_str()),
+        Some("Draft block 1")
+    );
+    assert_eq!(
+        blocks_arr[1].get("body").and_then(|v| v.as_str()),
+        Some("Draft block 2")
+    );
 
     // Main table blocks should still be the original (not changed by draft)
-    let main_doc = query::find_by_id(&conn, "articles", &def, &doc.id, None).unwrap().unwrap();
-    let main_blocks = main_doc.fields.get("content")
-        .and_then(|v| v.as_array());
+    let main_doc = query::find_by_id(&conn, "articles", &def, &doc.id, None)
+        .unwrap()
+        .unwrap();
+    let main_blocks = main_doc.fields.get("content").and_then(|v| v.as_array());
     match main_blocks {
         Some(arr) => {
             assert_eq!(arr.len(), 1, "main table should still have 1 block");
-            assert_eq!(arr[0].get("body").and_then(|v| v.as_str()), Some("Initial block"));
+            assert_eq!(
+                arr[0].get("body").and_then(|v| v.as_str()),
+                Some("Initial block")
+            );
         }
         None => {} // no blocks hydrated means join table was empty for main doc, which is acceptable
     }
@@ -996,7 +1242,8 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
 async fn grpc_create_draft_sets_status() {
     let ts = setup_service(vec![make_versioned_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Draft Article")])),
@@ -1019,7 +1266,8 @@ async fn grpc_create_draft_sets_status() {
 async fn grpc_create_published_sets_status() {
     let ts = setup_service(vec![make_versioned_def()]);
 
-    let doc = ts.service
+    let doc = ts
+        .service
         .create(Request::new(content::CreateRequest {
             collection: "articles".to_string(),
             data: Some(make_struct(&[("title", "Published Article")])),
@@ -1036,4 +1284,3 @@ async fn grpc_create_published_sets_status() {
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();
     assert_eq!(status.as_deref(), Some("published"));
 }
-

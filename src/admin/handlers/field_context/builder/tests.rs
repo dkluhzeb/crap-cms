@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::core::field::{FieldDefinition, SelectOption, LocalizedString, BlockDefinition};
+use crate::core::field::{BlockDefinition, FieldDefinition, LocalizedString, SelectOption};
 
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, ft).build()
@@ -52,10 +52,13 @@ fn build_field_contexts_array_select_sub_field_includes_options() {
 fn build_field_contexts_blocks_sub_fields_include_type_and_label() {
     let mut blocks_field = make_field("content", FieldType::Blocks);
     blocks_field.blocks = vec![{
-        let mut bd = BlockDefinition::new("rich", vec![
-            make_field("heading", FieldType::Text),
-            make_field("body", FieldType::Richtext),
-        ]);
+        let mut bd = BlockDefinition::new(
+            "rich",
+            vec![
+                make_field("heading", FieldType::Text),
+                make_field("body", FieldType::Richtext),
+            ],
+        );
         bd.label = Some(LocalizedString::Plain("Rich Text".to_string()));
         bd
     }];
@@ -101,7 +104,10 @@ fn build_field_contexts_date_default_day_only() {
     let date_field = make_field("published_at", FieldType::Date);
     let fields = vec![date_field];
     let mut values = HashMap::new();
-    values.insert("published_at".to_string(), "2026-01-15T12:00:00.000Z".to_string());
+    values.insert(
+        "published_at".to_string(),
+        "2026-01-15T12:00:00.000Z".to_string(),
+    );
     let errors = HashMap::new();
     let result = build_field_contexts(&fields, &values, &errors, false, false);
     assert_eq!(result[0]["picker_appearance"], "dayOnly");
@@ -114,7 +120,10 @@ fn build_field_contexts_date_day_and_time() {
     date_field.picker_appearance = Some("dayAndTime".to_string());
     let fields = vec![date_field];
     let mut values = HashMap::new();
-    values.insert("event_at".to_string(), "2026-01-15T09:30:00.000Z".to_string());
+    values.insert(
+        "event_at".to_string(),
+        "2026-01-15T09:30:00.000Z".to_string(),
+    );
     let errors = HashMap::new();
     let result = build_field_contexts(&fields, &values, &errors, false, false);
     assert_eq!(result[0]["picker_appearance"], "dayAndTime");
@@ -161,7 +170,10 @@ fn safe_template_id_with_brackets() {
 
 #[test]
 fn safe_template_id_nested_index_placeholder() {
-    assert_eq!(safe_template_id("content[__INDEX__][items]"), "content-__INDEX__-items");
+    assert_eq!(
+        safe_template_id("content[__INDEX__][items]"),
+        "content-__INDEX__-items"
+    );
 }
 
 // --- Recursive build_field_contexts tests (nested composites) ---
@@ -178,7 +190,10 @@ fn build_field_contexts_array_has_template_id() {
 #[test]
 fn build_field_contexts_blocks_has_template_id() {
     let mut blocks_field = make_field("content", FieldType::Blocks);
-    blocks_field.blocks = vec![BlockDefinition::new("text", vec![make_field("body", FieldType::Text)])];
+    blocks_field.blocks = vec![BlockDefinition::new(
+        "text",
+        vec![make_field("body", FieldType::Text)],
+    )];
     let fields = vec![blocks_field];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
     assert_eq!(result[0]["template_id"], "content");
@@ -209,10 +224,10 @@ fn build_field_contexts_nested_array_in_blocks() {
     ];
     let mut blocks_field = make_field("content", FieldType::Blocks);
     blocks_field.blocks = vec![{
-        let mut bd = BlockDefinition::new("gallery", vec![
-            make_field("title", FieldType::Text),
-            inner_array,
-        ]);
+        let mut bd = BlockDefinition::new(
+            "gallery",
+            vec![make_field("title", FieldType::Text), inner_array],
+        );
         bd.label = Some(LocalizedString::Plain("Gallery".to_string()));
         bd
     }];
@@ -235,8 +250,14 @@ fn build_field_contexts_nested_array_in_blocks() {
     // The nested array should have its own sub_fields with double __INDEX__
     let nested_sub_fields = block_fields[1]["sub_fields"].as_array().unwrap();
     assert_eq!(nested_sub_fields.len(), 2);
-    assert_eq!(nested_sub_fields[0]["name"], "content[__INDEX__][images][__INDEX__][url]");
-    assert_eq!(nested_sub_fields[1]["name"], "content[__INDEX__][images][__INDEX__][caption]");
+    assert_eq!(
+        nested_sub_fields[0]["name"],
+        "content[__INDEX__][images][__INDEX__][url]"
+    );
+    assert_eq!(
+        nested_sub_fields[1]["name"],
+        "content[__INDEX__][images][__INDEX__][caption]"
+    );
 
     // Nested array should have template_id
     assert!(block_fields[1]["template_id"].as_str().is_some());
@@ -246,12 +267,12 @@ fn build_field_contexts_nested_array_in_blocks() {
 fn build_field_contexts_nested_blocks_in_array() {
     // array field with a blocks sub-field
     let mut inner_blocks = make_field("sections", FieldType::Blocks);
-    inner_blocks.blocks = vec![BlockDefinition::new("text", vec![make_field("body", FieldType::Richtext)])];
+    inner_blocks.blocks = vec![BlockDefinition::new(
+        "text",
+        vec![make_field("body", FieldType::Richtext)],
+    )];
     let mut arr_field = make_field("pages", FieldType::Array);
-    arr_field.fields = vec![
-        make_field("title", FieldType::Text),
-        inner_blocks,
-    ];
+    arr_field.fields = vec![make_field("title", FieldType::Text), inner_blocks];
     let fields = vec![arr_field];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
 
@@ -268,7 +289,10 @@ fn build_field_contexts_nested_blocks_in_array() {
     // The nested block's fields should have proper names
     let nested_block_fields = nested_block_defs[0]["fields"].as_array().unwrap();
     assert_eq!(nested_block_fields[0]["field_type"], "richtext");
-    assert_eq!(nested_block_fields[0]["name"], "pages[__INDEX__][sections][__INDEX__][body]");
+    assert_eq!(
+        nested_block_fields[0]["name"],
+        "pages[__INDEX__][sections][__INDEX__][body]"
+    );
 }
 
 #[test]
@@ -291,8 +315,14 @@ fn build_field_contexts_nested_group_in_array() {
     // Group sub-fields inside array use bracketed naming
     let group_sub_fields = sub_fields[0]["sub_fields"].as_array().unwrap();
     assert_eq!(group_sub_fields.len(), 2);
-    assert_eq!(group_sub_fields[0]["name"], "entries[__INDEX__][meta][author]");
-    assert_eq!(group_sub_fields[1]["name"], "entries[__INDEX__][meta][date]");
+    assert_eq!(
+        group_sub_fields[0]["name"],
+        "entries[__INDEX__][meta][author]"
+    );
+    assert_eq!(
+        group_sub_fields[1]["name"],
+        "entries[__INDEX__][meta][date]"
+    );
 }
 
 #[test]
@@ -301,10 +331,7 @@ fn build_field_contexts_nested_array_in_array() {
     let mut inner_array = make_field("tags", FieldType::Array);
     inner_array.fields = vec![make_field("name", FieldType::Text)];
     let mut outer_array = make_field("items", FieldType::Array);
-    outer_array.fields = vec![
-        make_field("title", FieldType::Text),
-        inner_array,
-    ];
+    outer_array.fields = vec![make_field("title", FieldType::Text), inner_array];
     let fields = vec![outer_array];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
 
@@ -313,7 +340,10 @@ fn build_field_contexts_nested_array_in_array() {
 
     // Nested array sub_fields have double __INDEX__
     let nested_sub = sub_fields[1]["sub_fields"].as_array().unwrap();
-    assert_eq!(nested_sub[0]["name"], "items[__INDEX__][tags][__INDEX__][name]");
+    assert_eq!(
+        nested_sub[0]["name"],
+        "items[__INDEX__][tags][__INDEX__][name]"
+    );
 }
 
 // --- split_sidebar_fields tests ---
@@ -385,10 +415,7 @@ fn build_field_contexts_filter_hidden_removes_hidden_fields() {
 fn build_field_contexts_no_filter_includes_hidden_fields() {
     let mut hidden_field = make_field("secret", FieldType::Text);
     hidden_field.admin.hidden = true;
-    let fields = vec![
-        make_field("title", FieldType::Text),
-        hidden_field,
-    ];
+    let fields = vec![make_field("title", FieldType::Text), hidden_field];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
     assert_eq!(result.len(), 2);
 }
@@ -426,7 +453,11 @@ fn build_field_contexts_checkbox_checked_values() {
         values.insert("active".to_string(), val.to_string());
         let fields = vec![make_field("active", FieldType::Checkbox)];
         let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
-        assert_eq!(result[0]["checked"], true, "Checkbox should be checked for value '{}'", val);
+        assert_eq!(
+            result[0]["checked"], true,
+            "Checkbox should be checked for value '{}'",
+            val
+        );
     }
 }
 
@@ -437,7 +468,11 @@ fn build_field_contexts_checkbox_unchecked_values() {
         values.insert("active".to_string(), val.to_string());
         let fields = vec![make_field("active", FieldType::Checkbox)];
         let result = build_field_contexts(&fields, &values, &HashMap::new(), false, false);
-        assert_eq!(result[0]["checked"], false, "Checkbox should be unchecked for value '{}'", val);
+        assert_eq!(
+            result[0]["checked"], false,
+            "Checkbox should be unchecked for value '{}'",
+            val
+        );
     }
 }
 
@@ -451,7 +486,10 @@ fn build_field_contexts_upload_has_collection() {
     let fields = vec![upload_field];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
     assert_eq!(result[0]["relationship_collection"], "media");
-    assert_eq!(result[0]["picker"], "drawer", "upload fields default to drawer picker");
+    assert_eq!(
+        result[0]["picker"], "drawer",
+        "upload fields default to drawer picker"
+    );
 }
 
 // --- build_field_contexts: select tests ---
@@ -605,7 +643,10 @@ fn build_field_contexts_array_label_field() {
 #[test]
 fn build_field_contexts_blocks_with_min_max_rows() {
     let mut blocks = make_field("content", FieldType::Blocks);
-    blocks.blocks = vec![BlockDefinition::new("text", vec![make_field("body", FieldType::Text)])];
+    blocks.blocks = vec![BlockDefinition::new(
+        "text",
+        vec![make_field("body", FieldType::Text)],
+    )];
     blocks.min_rows = Some(1);
     blocks.max_rows = Some(10);
     let fields = vec![blocks];
@@ -617,7 +658,10 @@ fn build_field_contexts_blocks_with_min_max_rows() {
 #[test]
 fn build_field_contexts_blocks_collapsed() {
     let mut blocks = make_field("content", FieldType::Blocks);
-    blocks.blocks = vec![BlockDefinition::new("text", vec![make_field("body", FieldType::Text)])];
+    blocks.blocks = vec![BlockDefinition::new(
+        "text",
+        vec![make_field("body", FieldType::Text)],
+    )];
     // collapsed defaults to true
     let fields = vec![blocks];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
@@ -627,7 +671,10 @@ fn build_field_contexts_blocks_collapsed() {
 #[test]
 fn build_field_contexts_blocks_labels_singular() {
     let mut blocks = make_field("content", FieldType::Blocks);
-    blocks.blocks = vec![BlockDefinition::new("text", vec![make_field("body", FieldType::Text)])];
+    blocks.blocks = vec![BlockDefinition::new(
+        "text",
+        vec![make_field("body", FieldType::Text)],
+    )];
     blocks.admin.labels_singular = Some(LocalizedString::Plain("Block".to_string()));
     let fields = vec![blocks];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
@@ -689,7 +736,10 @@ fn build_field_contexts_blocks_group_and_image_url() {
 fn build_field_contexts_blocks_picker_card() {
     let mut blocks = make_field("content", FieldType::Blocks);
     blocks.admin.picker = Some("card".to_string());
-    blocks.blocks = vec![BlockDefinition::new("text", vec![make_field("body", FieldType::Text)])];
+    blocks.blocks = vec![BlockDefinition::new(
+        "text",
+        vec![make_field("body", FieldType::Text)],
+    )];
     let fields = vec![blocks];
     let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
     assert_eq!(result[0]["picker"], "card");
@@ -784,7 +834,16 @@ fn build_field_contexts_date_short_value_day_and_time() {
 fn apply_extras_checkbox_checked() {
     let sf = make_field("active", FieldType::Checkbox);
     let mut ctx = serde_json::json!({"name": "group__active"});
-    apply_field_type_extras(&sf, "true", &mut ctx, &HashMap::new(), &HashMap::new(), "group__active", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "true",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__active",
+        false,
+        0,
+    );
     assert_eq!(ctx["checked"], true);
 }
 
@@ -792,7 +851,16 @@ fn apply_extras_checkbox_checked() {
 fn apply_extras_checkbox_unchecked() {
     let sf = make_field("active", FieldType::Checkbox);
     let mut ctx = serde_json::json!({"name": "group__active"});
-    apply_field_type_extras(&sf, "0", &mut ctx, &HashMap::new(), &HashMap::new(), "group__active", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "0",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__active",
+        false,
+        0,
+    );
     assert_eq!(ctx["checked"], false);
 }
 
@@ -804,7 +872,16 @@ fn apply_extras_select() {
         SelectOption::new(LocalizedString::Plain("Green".to_string()), "green"),
     ];
     let mut ctx = serde_json::json!({"name": "group__color"});
-    apply_field_type_extras(&sf, "green", &mut ctx, &HashMap::new(), &HashMap::new(), "group__color", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "green",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__color",
+        false,
+        0,
+    );
     let opts = ctx["options"].as_array().unwrap();
     assert_eq!(opts[0]["selected"], false);
     assert_eq!(opts[1]["selected"], true);
@@ -814,7 +891,16 @@ fn apply_extras_select() {
 fn apply_extras_date_day_only() {
     let sf = make_field("d", FieldType::Date);
     let mut ctx = serde_json::json!({"name": "group__d"});
-    apply_field_type_extras(&sf, "2026-01-15T12:00:00Z", &mut ctx, &HashMap::new(), &HashMap::new(), "group__d", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "2026-01-15T12:00:00Z",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__d",
+        false,
+        0,
+    );
     assert_eq!(ctx["picker_appearance"], "dayOnly");
     assert_eq!(ctx["date_only_value"], "2026-01-15");
 }
@@ -824,7 +910,16 @@ fn apply_extras_date_day_and_time() {
     let mut sf = make_field("d", FieldType::Date);
     sf.picker_appearance = Some("dayAndTime".to_string());
     let mut ctx = serde_json::json!({"name": "group__d"});
-    apply_field_type_extras(&sf, "2026-01-15T09:30:00Z", &mut ctx, &HashMap::new(), &HashMap::new(), "group__d", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "2026-01-15T09:30:00Z",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__d",
+        false,
+        0,
+    );
     assert_eq!(ctx["picker_appearance"], "dayAndTime");
     assert_eq!(ctx["datetime_local_value"], "2026-01-15T09:30");
 }
@@ -833,13 +928,31 @@ fn apply_extras_date_day_and_time() {
 fn apply_extras_date_short_values() {
     let sf = make_field("d", FieldType::Date);
     let mut ctx = serde_json::json!({"name": "g__d"});
-    apply_field_type_extras(&sf, "short", &mut ctx, &HashMap::new(), &HashMap::new(), "g__d", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "short",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "g__d",
+        false,
+        0,
+    );
     assert_eq!(ctx["date_only_value"], "short");
 
     let mut sf2 = make_field("d2", FieldType::Date);
     sf2.picker_appearance = Some("dayAndTime".to_string());
     let mut ctx2 = serde_json::json!({"name": "g__d2"});
-    apply_field_type_extras(&sf2, "short", &mut ctx2, &HashMap::new(), &HashMap::new(), "g__d2", false, 0);
+    apply_field_type_extras(
+        &sf2,
+        "short",
+        &mut ctx2,
+        &HashMap::new(),
+        &HashMap::new(),
+        "g__d2",
+        false,
+        0,
+    );
     assert_eq!(ctx2["datetime_local_value"], "short");
 }
 
@@ -849,7 +962,16 @@ fn apply_extras_relationship() {
     let mut sf = make_field("author", FieldType::Relationship);
     sf.relationship = Some(RelationshipConfig::new("users", true));
     let mut ctx = serde_json::json!({"name": "group__author"});
-    apply_field_type_extras(&sf, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__author", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__author",
+        false,
+        0,
+    );
     assert_eq!(ctx["relationship_collection"], "users");
     assert_eq!(ctx["has_many"], true);
 }
@@ -860,7 +982,16 @@ fn apply_extras_upload() {
     let mut sf = make_field("image", FieldType::Upload);
     sf.relationship = Some(RelationshipConfig::new("media", false));
     let mut ctx = serde_json::json!({"name": "group__image"});
-    apply_field_type_extras(&sf, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__image", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__image",
+        false,
+        0,
+    );
     assert_eq!(ctx["relationship_collection"], "media");
     assert_eq!(ctx["picker"], "drawer");
 }
@@ -875,7 +1006,16 @@ fn apply_extras_array_in_group() {
     arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
     arr.admin.label_field = Some("name".to_string());
     let mut ctx = serde_json::json!({"name": "group__tags"});
-    apply_field_type_extras(&arr, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__tags", false, 0);
+    apply_field_type_extras(
+        &arr,
+        "",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__tags",
+        false,
+        0,
+    );
     assert!(ctx["sub_fields"].as_array().is_some());
     assert_eq!(ctx["row_count"], 0);
     assert_eq!(ctx["min_rows"], 1);
@@ -891,7 +1031,16 @@ fn apply_extras_group_in_group() {
     inner.fields = vec![make_field("author", FieldType::Text)];
     inner.admin.collapsed = true;
     let mut ctx = serde_json::json!({"name": "outer__meta"});
-    apply_field_type_extras(&inner, "", &mut ctx, &HashMap::new(), &HashMap::new(), "outer__meta", false, 0);
+    apply_field_type_extras(
+        &inner,
+        "",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "outer__meta",
+        false,
+        0,
+    );
     assert!(ctx["sub_fields"].as_array().is_some());
     assert_eq!(ctx["collapsed"], true);
 }
@@ -909,7 +1058,16 @@ fn apply_extras_blocks_in_group() {
     blk.admin.collapsed = true;
     blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
     let mut ctx = serde_json::json!({"name": "group__sections"});
-    apply_field_type_extras(&blk, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__sections", false, 0);
+    apply_field_type_extras(
+        &blk,
+        "",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__sections",
+        false,
+        0,
+    );
     assert!(ctx["block_definitions"].as_array().is_some());
     assert_eq!(ctx["row_count"], 0);
     assert_eq!(ctx["min_rows"], 0);
@@ -925,7 +1083,16 @@ fn apply_extras_max_depth_stops_recursion() {
     let mut arr = make_field("deep", FieldType::Array);
     arr.fields = vec![make_field("leaf", FieldType::Text)];
     let mut ctx = serde_json::json!({"name": "group__deep"});
-    apply_field_type_extras(&arr, "", &mut ctx, &HashMap::new(), &HashMap::new(), "group__deep", false, MAX_FIELD_DEPTH);
+    apply_field_type_extras(
+        &arr,
+        "",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__deep",
+        false,
+        MAX_FIELD_DEPTH,
+    );
     // At max depth, no sub_fields should be added
     assert!(ctx.get("sub_fields").is_none());
 }
@@ -934,7 +1101,16 @@ fn apply_extras_max_depth_stops_recursion() {
 fn apply_extras_unknown_type_is_noop() {
     let sf = make_field("body", FieldType::Richtext);
     let mut ctx = serde_json::json!({"name": "group__body", "field_type": "richtext"});
-    apply_field_type_extras(&sf, "hello", &mut ctx, &HashMap::new(), &HashMap::new(), "group__body", false, 0);
+    apply_field_type_extras(
+        &sf,
+        "hello",
+        &mut ctx,
+        &HashMap::new(),
+        &HashMap::new(),
+        "group__body",
+        false,
+        0,
+    );
     // Should not add any extra fields
     assert!(ctx.get("options").is_none());
     assert!(ctx.get("checked").is_none());
@@ -968,72 +1144,64 @@ fn count_errors_direct_errors() {
 
 #[test]
 fn count_errors_nested_in_sub_fields() {
-    let fields = vec![
-        serde_json::json!({
-            "name": "group1",
-            "sub_fields": [
-                {"name": "nested1", "error": "Too short"},
-                {"name": "nested2", "value": "ok"},
-            ]
-        }),
-    ];
+    let fields = vec![serde_json::json!({
+        "name": "group1",
+        "sub_fields": [
+            {"name": "nested1", "error": "Too short"},
+            {"name": "nested2", "value": "ok"},
+        ]
+    })];
     assert_eq!(super::super::count_errors_in_fields(&fields), 1);
 }
 
 #[test]
 fn count_errors_nested_in_tabs() {
-    let fields = vec![
-        serde_json::json!({
-            "name": "settings",
-            "tabs": [
-                {
-                    "label": "General",
-                    "sub_fields": [
-                        {"name": "f1", "error": "Required"},
-                        {"name": "f2", "error": "Too long"},
-                    ]
-                },
-                {
-                    "label": "Advanced",
-                    "sub_fields": [
-                        {"name": "f3", "value": "ok"},
-                    ]
-                }
-            ]
-        }),
-    ];
+    let fields = vec![serde_json::json!({
+        "name": "settings",
+        "tabs": [
+            {
+                "label": "General",
+                "sub_fields": [
+                    {"name": "f1", "error": "Required"},
+                    {"name": "f2", "error": "Too long"},
+                ]
+            },
+            {
+                "label": "Advanced",
+                "sub_fields": [
+                    {"name": "f3", "value": "ok"},
+                ]
+            }
+        ]
+    })];
     assert_eq!(super::super::count_errors_in_fields(&fields), 2);
 }
 
 #[test]
 fn count_errors_nested_in_array_rows() {
-    let fields = vec![
-        serde_json::json!({
-            "name": "items",
-            "rows": [
-                {
-                    "index": 0,
-                    "sub_fields": [
-                        {"name": "items[0][title]", "error": "Required"},
-                    ]
-                },
-                {
-                    "index": 1,
-                    "sub_fields": [
-                        {"name": "items[1][title]", "value": "ok"},
-                    ]
-                }
-            ]
-        }),
-    ];
+    let fields = vec![serde_json::json!({
+        "name": "items",
+        "rows": [
+            {
+                "index": 0,
+                "sub_fields": [
+                    {"name": "items[0][title]", "error": "Required"},
+                ]
+            },
+            {
+                "index": 1,
+                "sub_fields": [
+                    {"name": "items[1][title]", "value": "ok"},
+                ]
+            }
+        ]
+    })];
     assert_eq!(super::super::count_errors_in_fields(&fields), 1);
 }
 
 #[test]
 fn count_errors_null_error_not_counted() {
-    let fields = vec![
-        serde_json::json!({"name": "title", "error": null}),
-    ];
+    let fields = vec![serde_json::json!({"name": "title", "error": null})];
     assert_eq!(super::super::count_errors_in_fields(&fields), 0);
 }
 
@@ -1043,17 +1211,18 @@ fn tabs_field_context_includes_error_count() {
 
     let mut tabs_field = make_field("settings", FieldType::Tabs);
     tabs_field.tabs = vec![
-        FieldTab::new("General", vec![
-            {
-                let mut f = make_field("title", FieldType::Text);
-                f.required = true;
-                f
-            },
-            make_field("slug", FieldType::Text),
-        ]),
-        FieldTab::new("Advanced", vec![
-            make_field("meta", FieldType::Text),
-        ]),
+        FieldTab::new(
+            "General",
+            vec![
+                {
+                    let mut f = make_field("title", FieldType::Text);
+                    f.required = true;
+                    f
+                },
+                make_field("slug", FieldType::Text),
+            ],
+        ),
+        FieldTab::new("Advanced", vec![make_field("meta", FieldType::Text)]),
     ];
 
     let values = HashMap::new(); // empty values -> required field "title" has no value
@@ -1061,7 +1230,9 @@ fn tabs_field_context_includes_error_count() {
     errors.insert("title".to_string(), "Title is required".to_string());
 
     let result = build_field_contexts(&[tabs_field], &values, &errors, false, false);
-    let tabs = result[0]["tabs"].as_array().expect("tabs should be an array");
+    let tabs = result[0]["tabs"]
+        .as_array()
+        .expect("tabs should be an array");
 
     // First tab has 1 error (title is required)
     assert_eq!(tabs[0]["error_count"], 1);
@@ -1092,7 +1263,8 @@ fn richtext_format_json() {
 fn max_depth_prevents_infinite_recursion() {
     // Build a deeply nested array structure
     fn make_nested_array(depth: usize) -> FieldDefinition {
-        let mut field = FieldDefinition::builder(format!("level{}", depth), FieldType::Array).build();
+        let mut field =
+            FieldDefinition::builder(format!("level{}", depth), FieldType::Array).build();
         if depth < 10 {
             field.fields = vec![make_nested_array(depth + 1)];
         } else {
@@ -1107,4 +1279,3 @@ fn max_depth_prevents_infinite_recursion() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0]["field_type"], "array");
 }
-

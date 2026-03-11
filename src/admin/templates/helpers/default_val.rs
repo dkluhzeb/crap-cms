@@ -33,7 +33,8 @@ impl HelperDef for DefaultHelper {
 mod tests {
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
+        let translations =
+            std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
         let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
             .expect("create_handlebars");
         (*hbs).clone()
@@ -45,15 +46,18 @@ mod tests {
         hbs.register_template_string("t", "{{default val fallback}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": "hello", "fallback": "bye"})).unwrap(),
+            hbs.render("t", &serde_json::json!({"val": "hello", "fallback": "bye"}))
+                .unwrap(),
             "hello"
         );
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": null, "fallback": "bye"})).unwrap(),
+            hbs.render("t", &serde_json::json!({"val": null, "fallback": "bye"}))
+                .unwrap(),
             "bye"
         );
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": "", "fallback": "bye"})).unwrap(),
+            hbs.render("t", &serde_json::json!({"val": "", "fallback": "bye"}))
+                .unwrap(),
             "bye"
         );
     }
@@ -64,7 +68,11 @@ mod tests {
         hbs.register_template_string("t", "{{default val fallback}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": false, "fallback": "fallback_val"})).unwrap(),
+            hbs.render(
+                "t",
+                &serde_json::json!({"val": false, "fallback": "fallback_val"})
+            )
+            .unwrap(),
             "fallback_val"
         );
     }
@@ -75,7 +83,11 @@ mod tests {
         hbs.register_template_string("t", "{{default val fallback}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": 0, "fallback": "fallback_val"})).unwrap(),
+            hbs.render(
+                "t",
+                &serde_json::json!({"val": 0, "fallback": "fallback_val"})
+            )
+            .unwrap(),
             "fallback_val"
         );
     }
@@ -86,7 +98,8 @@ mod tests {
         hbs.register_template_string("t", "{{default val fallback}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": [], "fallback": "none"})).unwrap(),
+            hbs.render("t", &serde_json::json!({"val": [], "fallback": "none"}))
+                .unwrap(),
             "none"
         );
     }
@@ -97,7 +110,8 @@ mod tests {
         hbs.register_template_string("t", "{{default val fallback}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": 42, "fallback": "nope"})).unwrap(),
+            hbs.render("t", &serde_json::json!({"val": 42, "fallback": "nope"}))
+                .unwrap(),
             "42"
         );
     }

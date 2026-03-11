@@ -30,7 +30,9 @@ fn make_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("status", FieldType::Select)
             .default_value(serde_json::json!("draft"))
             .build(),
@@ -46,10 +48,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -108,16 +116,14 @@ fn setup_service(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -138,7 +144,11 @@ fn setup_service(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 fn make_versioned_posts_def() -> CollectionDefinition {
@@ -149,7 +159,9 @@ fn make_versioned_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.versions = Some(VersionsConfig::new(true, 10));
@@ -157,7 +169,6 @@ fn make_versioned_posts_def() -> CollectionDefinition {
 }
 
 // ── Group 6: Localization (gRPC) ──────────────────────────────────────────
-
 
 #[tokio::test]
 async fn list_and_restore_versions() {
@@ -257,10 +268,7 @@ async fn list_and_restore_versions() {
 
     // The restored document should have an earlier version's title
     let restored_title = get_proto_field(&restored, "title");
-    assert!(
-        restored_title.is_some(),
-        "Restored doc should have a title"
-    );
+    assert!(restored_title.is_some(), "Restored doc should have a title");
     assert_ne!(
         restored_title.as_deref(),
         Some("Version 3"),
@@ -279,7 +287,10 @@ async fn create_returns_document_with_fields() {
         .service
         .create(Request::new(content::CreateRequest {
             collection: "posts".to_string(),
-            data: Some(make_struct(&[("title", "Field Check"), ("status", "draft")])),
+            data: Some(make_struct(&[
+                ("title", "Field Check"),
+                ("status", "draft"),
+            ])),
             locale: None,
             draft: None,
         }))
@@ -292,7 +303,10 @@ async fn create_returns_document_with_fields() {
     // Verify the create response has all fields
     assert!(!doc.id.is_empty(), "Document should have an ID");
     assert_eq!(doc.collection, "posts");
-    assert_eq!(get_proto_field(&doc, "title").as_deref(), Some("Field Check"));
+    assert_eq!(
+        get_proto_field(&doc, "title").as_deref(),
+        Some("Field Check")
+    );
     assert_eq!(get_proto_field(&doc, "status").as_deref(), Some("draft"));
 
     // Also fetch via FindByID with depth=0 to verify persistence
@@ -313,7 +327,10 @@ async fn create_returns_document_with_fields() {
         .expect("Document should be found");
 
     assert_eq!(found.id, doc.id);
-    assert_eq!(get_proto_field(&found, "title").as_deref(), Some("Field Check"));
+    assert_eq!(
+        get_proto_field(&found, "title").as_deref(),
+        Some("Field Check")
+    );
     assert_eq!(get_proto_field(&found, "status").as_deref(), Some("draft"));
 }
 
@@ -348,7 +365,11 @@ async fn find_with_pagination() {
         .into_inner();
 
     assert_eq!(resp.documents.len(), 2, "Should return exactly 2 documents");
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 5, "Total count should still be 5 regardless of pagination");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        5,
+        "Total count should still be 5 regardless of pagination"
+    );
 
     // Verify we can get the remaining page (page 3)
     let resp2 = ts
@@ -364,7 +385,11 @@ async fn find_with_pagination() {
         .into_inner();
 
     assert_eq!(resp2.documents.len(), 1, "Last page should have 1 document");
-    assert_eq!(resp2.pagination.as_ref().unwrap().total_docs, 5, "Total count should still be 5");
+    assert_eq!(
+        resp2.pagination.as_ref().unwrap().total_docs,
+        5,
+        "Total count should still be 5"
+    );
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -797,7 +822,10 @@ async fn find_by_id_with_select() {
         .service
         .create(Request::new(content::CreateRequest {
             collection: "posts".to_string(),
-            data: Some(make_struct(&[("title", "Select Me"), ("status", "published")])),
+            data: Some(make_struct(&[
+                ("title", "Select Me"),
+                ("status", "published"),
+            ])),
             locale: None,
             draft: None,
         }))
@@ -946,7 +974,11 @@ async fn find_with_search() {
     let ts = setup_service(vec![make_posts_def()], vec![]);
 
     // Create posts with distinct titles
-    for title in &["Rust Programming Guide", "Python Tutorial", "Advanced Rust Patterns"] {
+    for title in &[
+        "Rust Programming Guide",
+        "Python Tutorial",
+        "Advanced Rust Patterns",
+    ] {
         ts.service
             .create(Request::new(content::CreateRequest {
                 collection: "posts".to_string(),
@@ -976,7 +1008,11 @@ async fn find_with_search() {
     // All results should contain "Rust" in the title
     for doc in &resp.documents {
         let title = get_proto_field(doc, "title").unwrap();
-        assert!(title.contains("Rust"), "Expected Rust in title, got: {}", title);
+        assert!(
+            title.contains("Rust"),
+            "Expected Rust in title, got: {}",
+            title
+        );
     }
 }
 

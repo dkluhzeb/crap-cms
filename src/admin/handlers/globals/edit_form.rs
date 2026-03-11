@@ -5,21 +5,19 @@ use axum::{
 };
 use std::collections::HashMap;
 
+use crate::admin::context::{Breadcrumb, ContextBuilder, PageType};
 use crate::admin::AdminState;
-use crate::admin::context::{ContextBuilder, PageType, Breadcrumb};
 use crate::core::auth::{AuthUser, Claims};
 use crate::db::ops;
 use crate::db::query::AccessResult;
 
-use crate::core::field::FieldType;
 use crate::admin::handlers::shared::{
-    get_user_doc, check_access_or_forbid, extract_editor_locale, build_locale_template_data,
-    is_non_default_locale,
-    build_field_contexts, enrich_field_contexts,
-    apply_display_conditions, split_sidebar_fields,
-    fetch_version_sidebar_data,
-    render_or_error, not_found, server_error, forbidden,
+    apply_display_conditions, build_field_contexts, build_locale_template_data,
+    check_access_or_forbid, enrich_field_contexts, extract_editor_locale,
+    fetch_version_sidebar_data, forbidden, get_user_doc, is_non_default_locale, not_found,
+    render_or_error, server_error, split_sidebar_fields,
 };
+use crate::core::field::FieldType;
 
 /// GET /admin/globals/{slug} — show edit form for a global
 pub async fn edit_form(
@@ -36,7 +34,10 @@ pub async fn edit_form(
 
     // Check read access
     match check_access_or_forbid(&state, def.access.read.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => return forbidden(&state, "You don't have permission to view this global").into_response(),
+        Ok(AccessResult::Denied) => {
+            return forbidden(&state, "You don't have permission to view this global")
+                .into_response()
+        }
         Err(resp) => return resp,
         _ => {}
     }
@@ -53,14 +54,22 @@ pub async fn edit_form(
     let read_result = tokio::task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "get_global", HashMap::new())?;
         let doc = ops::get_global(&pool, &slug_owned, &def_owned, locale_ctx.as_ref())?;
-        let doc = runner.apply_after_read(&hooks, &fields, &slug_owned, "get_global", doc, None, None);
+        let doc =
+            runner.apply_after_read(&hooks, &fields, &slug_owned, "get_global", doc, None, None);
         Ok::<_, anyhow::Error>(doc)
-    }).await;
+    })
+    .await;
 
     let document = match read_result {
         Ok(Ok(doc)) => doc,
-        Ok(Err(e)) => { tracing::error!("Global read query error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
-        Err(e) => { tracing::error!("Global read task error: {}", e); return server_error(&state, "An internal error occurred.").into_response(); }
+        Ok(Err(e)) => {
+            tracing::error!("Global read query error: {}", e);
+            return server_error(&state, "An internal error occurred.").into_response();
+        }
+        Err(e) => {
+            tracing::error!("Global read task error: {}", e);
+            return server_error(&state, "An internal error occurred.").into_response();
+        }
     };
 
     // Strip field-level read-denied fields
@@ -69,34 +78,50 @@ pub async fn edit_form(
         let user_doc = get_user_doc(&auth_user);
         let mut conn = match state.pool.get() {
             Ok(c) => c,
-            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check pool error: {}", e);
+                return server_error(&state, "Database error").into_response();
+            }
         };
         let tx = match conn.transaction() {
             Ok(t) => t,
-            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check tx error: {}", e);
+                return server_error(&state, "Database error").into_response();
+            }
         };
-        let denied = state.hook_runner.check_field_read_access(&def.fields, user_doc, &tx);
+        let denied = state
+            .hook_runner
+            .check_field_read_access(&def.fields, user_doc, &tx);
         let _ = tx.commit();
         for name in &denied {
             doc_fields.remove(name);
         }
     }
 
-    let values: HashMap<String, String> = doc_fields.iter()
+    let values: HashMap<String, String> = doc_fields
+        .iter()
         .flat_map(|(k, v)| {
             if let serde_json::Value::Object(obj) = v {
-                if def.fields.iter().any(|f| f.name == *k && f.field_type == FieldType::Group) {
-                    return obj.iter().map(|(sub_k, sub_v)| {
-                        let col = format!("{}__{}", k, sub_k);
-                        let s = match sub_v {
-                            serde_json::Value::String(s) => s.clone(),
-                            serde_json::Value::Number(n) => n.to_string(),
-                            serde_json::Value::Bool(b) => b.to_string(),
-                            serde_json::Value::Null => String::new(),
-                            other => other.to_string(),
-                        };
-                        (col, s)
-                    }).collect::<Vec<_>>();
+                if def
+                    .fields
+                    .iter()
+                    .any(|f| f.name == *k && f.field_type == FieldType::Group)
+                {
+                    return obj
+                        .iter()
+                        .map(|(sub_k, sub_v)| {
+                            let col = format!("{}__{}", k, sub_k);
+                            let s = match sub_v {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::Bool(b) => b.to_string(),
+                                serde_json::Value::Null => String::new(),
+                                other => other.to_string(),
+                            };
+                            (col, s)
+                        })
+                        .collect::<Vec<_>>();
                 }
             }
             let s = match v {
@@ -111,19 +136,42 @@ pub async fn edit_form(
         .collect();
 
     let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
-    let mut fields = build_field_contexts(&def.fields, &values, &HashMap::new(), false, non_default_locale);
+    let mut fields = build_field_contexts(
+        &def.fields,
+        &values,
+        &HashMap::new(),
+        false,
+        non_default_locale,
+    );
 
-    enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, non_default_locale, &HashMap::new(), None);
+    enrich_field_contexts(
+        &mut fields,
+        &def.fields,
+        &doc_fields,
+        &state,
+        false,
+        non_default_locale,
+        &HashMap::new(),
+        None,
+    );
 
     let form_data_json = serde_json::json!(doc_fields);
-    apply_display_conditions(&mut fields, &def.fields, &form_data_json, &state.hook_runner, false);
+    apply_display_conditions(
+        &mut fields,
+        &def.fields,
+        &form_data_json,
+        &state.hook_runner,
+        false,
+    );
 
     let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
 
     let has_versions = def.has_versions();
     let has_drafts = def.has_drafts();
     let doc_status = if has_drafts {
-        document.fields.get("_status")
+        document
+            .fields
+            .get("_status")
             .and_then(|v| v.as_str())
             .unwrap_or("published")
             .to_string()
@@ -153,8 +201,14 @@ pub async fn edit_form(
         .set("has_versions", serde_json::json!(has_versions))
         .set("versions", serde_json::json!(versions))
         .set("has_more_versions", serde_json::json!(total_versions > 3))
-        .set("restore_url_prefix", serde_json::json!(format!("/admin/globals/{}", slug)))
-        .set("versions_url", serde_json::json!(format!("/admin/globals/{}/versions", slug)))
+        .set(
+            "restore_url_prefix",
+            serde_json::json!(format!("/admin/globals/{}", slug)),
+        )
+        .set(
+            "versions_url",
+            serde_json::json!(format!("/admin/globals/{}/versions", slug)),
+        )
         .set("doc_status", serde_json::json!(doc_status))
         .merge(locale_data)
         .build();

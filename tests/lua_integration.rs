@@ -35,7 +35,10 @@ fn init_lua_loads_example_config() {
     assert!(pages.fields.iter().any(|f| f.name == "title"));
     assert!(pages.fields.iter().any(|f| f.name == "slug"));
     // content is nested inside the page_settings tabs field
-    let page_tabs = pages.fields.iter().find(|f| f.name == "page_settings")
+    let page_tabs = pages
+        .fields
+        .iter()
+        .find(|f| f.name == "page_settings")
         .expect("page_settings tabs field not found");
     assert!(!page_tabs.tabs.is_empty(), "page_settings should have tabs");
     assert!(page_tabs.tabs[0].fields.iter().any(|f| f.name == "content"));
@@ -60,5 +63,8 @@ fn init_lua_loads_example_config() {
 
     // Check posts collection has versioning config
     assert!(posts.has_versions(), "posts should have versions enabled");
-    assert!(posts.has_drafts(), "posts should have drafts enabled (live = true)");
+    assert!(
+        posts.has_drafts(),
+        "posts should have drafts enabled (live = true)"
+    );
 }

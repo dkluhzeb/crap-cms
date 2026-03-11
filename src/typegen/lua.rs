@@ -40,7 +40,10 @@ fn collect_array_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinition> {
             result.push(f);
             // Also recurse into the array's own sub-fields (nested arrays)
             result.extend(collect_array_fields(&f.fields));
-        } else if matches!(f.field_type, FieldType::Row | FieldType::Collapsible | FieldType::Group) {
+        } else if matches!(
+            f.field_type,
+            FieldType::Row | FieldType::Collapsible | FieldType::Group
+        ) {
             result.extend(collect_array_fields(&f.fields));
         } else if f.field_type == FieldType::Tabs {
             for tab in &f.tabs {
@@ -86,7 +89,11 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // crap.hook.* — typed HookContext
     writeln!(out, "---@class crap.hook.{pascal}").expect("write to String");
     writeln!(out, "---@field collection \"{}\"", col.slug).expect("write to String");
-    writeln!(out, "---@field operation \"create\" | \"update\" | \"find\" | \"find_by_id\"").expect("write to String");
+    writeln!(
+        out,
+        "---@field operation \"create\" | \"update\" | \"find\" | \"find_by_id\""
+    )
+    .expect("write to String");
     writeln!(out, "---@field data crap.data.{pascal}").expect("write to String");
     writeln!(out, "---@field context table<string, any>").expect("write to String");
     writeln!(out, "---@field hook_depth integer").expect("write to String");
@@ -208,7 +215,8 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
     writeln!(out, "---@param collection string").expect("write to String");
     writeln!(out, "---@param query? crap.FindQuery").expect("write to String");
     writeln!(out, "---@return crap.FindResult").expect("write to String");
-    writeln!(out, "function crap.collections.find(collection, query) end").expect("write to String");
+    writeln!(out, "function crap.collections.find(collection, query) end")
+        .expect("write to String");
     out.push('\n');
 
     // find_by_id() overloads
@@ -224,7 +232,11 @@ fn render_find_overloads(out: &mut String, registry: &Registry) {
     writeln!(out, "---@param id string").expect("write to String");
     writeln!(out, "---@param opts? crap.FindByIdOptions").expect("write to String");
     writeln!(out, "---@return crap.Document?").expect("write to String");
-    writeln!(out, "function crap.collections.find_by_id(collection, id, opts) end").expect("write to String");
+    writeln!(
+        out,
+        "function crap.collections.find_by_id(collection, id, opts) end"
+    )
+    .expect("write to String");
     out.push('\n');
 }
 
@@ -257,7 +269,8 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         if let Some(rc) = &field.relationship {
             if rc.is_polymorphic() {
                 let targets = rc.all_collections().join(", ");
-                writeln!(out, "--- Polymorphic relationship — targets: {}", targets).expect("write to String");
+                writeln!(out, "--- Polymorphic relationship — targets: {}", targets)
+                    .expect("write to String");
             }
         }
     }
@@ -269,14 +282,23 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
 fn field_to_lua_type(field: &FieldDefinition) -> String {
     match &field.field_type {
         FieldType::Text => {
-            if field.has_many { "string[]".to_string() } else { "string".to_string() }
+            if field.has_many {
+                "string[]".to_string()
+            } else {
+                "string".to_string()
+            }
         }
-        FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext | FieldType::Code => {
-            "string".to_string()
-        }
+        FieldType::Textarea
+        | FieldType::Email
+        | FieldType::Date
+        | FieldType::Richtext
+        | FieldType::Code => "string".to_string(),
         FieldType::Number => {
-            if field.has_many { "number[]".to_string() } else { "number".to_string() }
+            if field.has_many {
+                "number[]".to_string()
+            } else {
+                "number".to_string()
+            }
         }
         FieldType::Checkbox => "boolean".to_string(),
         FieldType::Json => "any".to_string(),
@@ -301,14 +323,12 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
                 base
             }
         }
-        FieldType::Relationship => {
-            match &field.relationship {
-                Some(rc) if rc.is_polymorphic() && rc.has_many => "string[]".to_string(),
-                Some(rc) if rc.is_polymorphic() => "string".to_string(),
-                Some(rc) if rc.has_many => "string[]".to_string(),
-                _ => "string".to_string(),
-            }
-        }
+        FieldType::Relationship => match &field.relationship {
+            Some(rc) if rc.is_polymorphic() && rc.has_many => "string[]".to_string(),
+            Some(rc) if rc.is_polymorphic() => "string".to_string(),
+            Some(rc) if rc.has_many => "string[]".to_string(),
+            _ => "string".to_string(),
+        },
         FieldType::Array => {
             let pascal = to_pascal_case(&field.name);
             format!("crap.array_row.{}[]", pascal)
@@ -335,7 +355,9 @@ mod tests {
     use crate::core::field::{LocalizedString, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).required(required).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .required(required)
+            .build()
     }
 
     fn select_field(name: &str, required: bool, opts: &[&str]) -> FieldDefinition {
@@ -424,9 +446,18 @@ mod tests {
         assert!(out.contains("---@class crap.hook.Posts"));
         assert!(out.contains("---@field collection \"posts\""));
         assert!(out.contains("---@field data crap.data.Posts"));
-        assert!(out.contains("---@field hook_depth integer"), "hook context should have hook_depth");
-        assert!(out.contains("---@field draft? boolean"), "hook context should have draft");
-        assert!(out.contains("---@field context table<string, any>"), "hook context should have context");
+        assert!(
+            out.contains("---@field hook_depth integer"),
+            "hook context should have hook_depth"
+        );
+        assert!(
+            out.contains("---@field draft? boolean"),
+            "hook context should have draft"
+        );
+        assert!(
+            out.contains("---@field context table<string, any>"),
+            "hook context should have context"
+        );
         assert!(out.contains("---@class crap.find_result.Posts"));
         assert!(out.contains("---@field documents crap.doc.Posts[]"));
         assert!(out.contains("---@alias crap.hook_fn.Posts"));
@@ -453,10 +484,7 @@ mod tests {
     #[test]
     fn render_global_output() {
         let mut global = GlobalDefinition::new("site_settings");
-        global.fields = vec![
-            text_field("site_name", true),
-            text_field("tagline", false),
-        ];
+        global.fields = vec![text_field("site_name", true), text_field("tagline", false)];
 
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -472,19 +500,17 @@ mod tests {
     #[test]
     fn render_global_array_row() {
         let mut global = GlobalDefinition::new("navigation");
-        global.fields = vec![
-            FieldDefinition::builder("main_nav", FieldType::Array)
-                .fields(vec![
-                    text_field("label", true),
-                    text_field("url", true),
-                ])
-                .build(),
-        ];
+        global.fields = vec![FieldDefinition::builder("main_nav", FieldType::Array)
+            .fields(vec![text_field("label", true), text_field("url", true)])
+            .build()];
 
         let mut out = String::new();
         render_global(&mut out, &global);
 
-        assert!(out.contains("---@class crap.array_row.MainNav"), "global array should emit sub-type class, got:\n{out}");
+        assert!(
+            out.contains("---@class crap.array_row.MainNav"),
+            "global array should emit sub-type class, got:\n{out}"
+        );
         assert!(out.contains("---@field label string"));
     }
 
@@ -496,9 +522,18 @@ mod tests {
         let mut out = String::new();
         render_global(&mut out, &global);
 
-        assert!(out.contains("---@field hook_depth integer"), "global hook context should have hook_depth");
-        assert!(out.contains("---@field draft? boolean"), "global hook context should have draft");
-        assert!(out.contains("---@field context table<string, any>"), "global hook context should have context");
+        assert!(
+            out.contains("---@field hook_depth integer"),
+            "global hook context should have hook_depth"
+        );
+        assert!(
+            out.contains("---@field draft? boolean"),
+            "global hook context should have draft"
+        );
+        assert!(
+            out.contains("---@field context table<string, any>"),
+            "global hook context should have context"
+        );
     }
 
     #[test]
@@ -534,7 +569,9 @@ mod tests {
         assert!(output.contains("---@overload fun(collection: \"posts\""));
         assert!(output.contains("function crap.collections.find(collection, query) end"));
         // find_by_id overloads
-        assert!(output.contains("fun(collection: \"posts\", id: string, opts?: crap.FindByIdOptions): crap.doc.Posts?"));
+        assert!(output.contains(
+            "fun(collection: \"posts\", id: string, opts?: crap.FindByIdOptions): crap.doc.Posts?"
+        ));
         assert!(output.contains("function crap.collections.find_by_id(collection, id, opts) end"));
     }
 
@@ -581,17 +618,27 @@ mod tests {
         let mut rc = crate::core::field::RelationshipConfig::new("posts", false);
         rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let mut col = CollectionDefinition::new("comments");
-        col.fields = vec![
-            FieldDefinition::builder("subject", FieldType::Relationship)
-                .required(true)
-                .relationship(rc)
-                .build(),
-        ];
+        col.fields = vec![FieldDefinition::builder("subject", FieldType::Relationship)
+            .required(true)
+            .relationship(rc)
+            .build()];
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
-        assert!(out.contains("posts"), "comment should list target collections: {}", out);
-        assert!(out.contains("pages"), "comment should list target collections: {}", out);
+        assert!(
+            out.contains("Polymorphic relationship"),
+            "should have polymorphic comment: {}",
+            out
+        );
+        assert!(
+            out.contains("posts"),
+            "comment should list target collections: {}",
+            out
+        );
+        assert!(
+            out.contains("pages"),
+            "comment should list target collections: {}",
+            out
+        );
     }
 
     #[test]
@@ -639,13 +686,17 @@ mod tests {
 
     #[test]
     fn lua_text_has_many() {
-        let f = FieldDefinition::builder("tags", FieldType::Text).has_many(true).build();
+        let f = FieldDefinition::builder("tags", FieldType::Text)
+            .has_many(true)
+            .build();
         assert_eq!(field_to_lua_type(&f), "string[]");
     }
 
     #[test]
     fn lua_number_has_many() {
-        let f = FieldDefinition::builder("scores", FieldType::Number).has_many(true).build();
+        let f = FieldDefinition::builder("scores", FieldType::Number)
+            .has_many(true)
+            .build();
         assert_eq!(field_to_lua_type(&f), "number[]");
     }
 
@@ -676,14 +727,9 @@ mod tests {
     #[test]
     fn render_collection_with_array_subtype() {
         let mut col = CollectionDefinition::new("posts");
-        col.fields = vec![
-            FieldDefinition::builder("items", FieldType::Array)
-                .fields(vec![
-                    text_field("label", true),
-                    text_field("desc", false),
-                ])
-                .build(),
-        ];
+        col.fields = vec![FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![text_field("label", true), text_field("desc", false)])
+            .build()];
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("---@class crap.array_row.Items"));
@@ -714,12 +760,26 @@ mod tests {
             ])
             .build();
         let result = field_to_lua_type(&f_with_opts);
-        assert!(result.contains("\"a\""), "should include option 'a': {}", result);
-        assert!(result.contains("\"b\""), "should include option 'b': {}", result);
-        assert!(result.ends_with("[]"), "should be an array type: {}", result);
+        assert!(
+            result.contains("\"a\""),
+            "should include option 'a': {}",
+            result
+        );
+        assert!(
+            result.contains("\"b\""),
+            "should include option 'b': {}",
+            result
+        );
+        assert!(
+            result.ends_with("[]"),
+            "should be an array type: {}",
+            result
+        );
 
         // has_many without options → string[]
-        let f_no_opts = FieldDefinition::builder("cats", FieldType::Select).has_many(true).build();
+        let f_no_opts = FieldDefinition::builder("cats", FieldType::Select)
+            .has_many(true)
+            .build();
         assert_eq!(field_to_lua_type(&f_no_opts), "string[]");
     }
 
@@ -729,27 +789,61 @@ mod tests {
         let mut col = CollectionDefinition::new("items");
         col.fields = vec![
             FieldDefinition::builder("layout_row", FieldType::Row)
-                .fields(vec![text_field("first_name", true), text_field("last_name", false)])
+                .fields(vec![
+                    text_field("first_name", true),
+                    text_field("last_name", false),
+                ])
                 .build(),
             FieldDefinition::builder("details", FieldType::Collapsible)
                 .fields(vec![text_field("bio", false)])
                 .build(),
             FieldDefinition::builder("sections", FieldType::Tabs)
-                .tabs(vec![FieldTab::new("Tab1", vec![text_field("tab_field", true)])])
+                .tabs(vec![FieldTab::new(
+                    "Tab1",
+                    vec![text_field("tab_field", true)],
+                )])
                 .build(),
         ];
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Row sub-fields promoted — "layout_row" should not appear as a @field
-        assert!(!out.contains("@field layout_row"), "row field name should not appear: {}", out);
-        assert!(out.contains("---@field first_name string"), "row required sub-field promoted: {}", out);
-        assert!(out.contains("---@field last_name? string"), "row optional sub-field promoted: {}", out);
+        assert!(
+            !out.contains("@field layout_row"),
+            "row field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("---@field first_name string"),
+            "row required sub-field promoted: {}",
+            out
+        );
+        assert!(
+            out.contains("---@field last_name? string"),
+            "row optional sub-field promoted: {}",
+            out
+        );
         // Collapsible sub-fields promoted
-        assert!(!out.contains("@field details"), "collapsible field name should not appear: {}", out);
-        assert!(out.contains("---@field bio? string"), "collapsible sub-field promoted: {}", out);
+        assert!(
+            !out.contains("@field details"),
+            "collapsible field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("---@field bio? string"),
+            "collapsible sub-field promoted: {}",
+            out
+        );
         // Tabs sub-fields promoted
-        assert!(!out.contains("@field sections"), "tabs field name should not appear: {}", out);
-        assert!(out.contains("---@field tab_field string"), "tabs sub-field promoted: {}", out);
+        assert!(
+            !out.contains("@field sections"),
+            "tabs field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("---@field tab_field string"),
+            "tabs sub-field promoted: {}",
+            out
+        );
     }
 
     #[test]
@@ -758,33 +852,49 @@ mod tests {
         // Arrays nested inside Row, Group, and Tabs containers should be discovered
         let fields = vec![
             FieldDefinition::builder("row_container", FieldType::Row)
-                .fields(vec![
-                    FieldDefinition::builder("row_items", FieldType::Array)
-                        .fields(vec![text_field("val", true)])
-                        .build(),
-                ])
+                .fields(vec![FieldDefinition::builder(
+                    "row_items",
+                    FieldType::Array,
+                )
+                .fields(vec![text_field("val", true)])
+                .build()])
                 .build(),
             FieldDefinition::builder("tab_container", FieldType::Tabs)
-                .tabs(vec![FieldTab::new("T", vec![
-                    FieldDefinition::builder("tab_items", FieldType::Array)
+                .tabs(vec![FieldTab::new(
+                    "T",
+                    vec![FieldDefinition::builder("tab_items", FieldType::Array)
                         .fields(vec![text_field("name", true)])
-                        .build(),
-                ])])
+                        .build()],
+                )])
                 .build(),
             // Nested array inside an array (recursion)
             FieldDefinition::builder("outer", FieldType::Array)
-                .fields(vec![
-                    FieldDefinition::builder("inner", FieldType::Array)
-                        .fields(vec![text_field("x", true)])
-                        .build(),
-                ])
+                .fields(vec![FieldDefinition::builder("inner", FieldType::Array)
+                    .fields(vec![text_field("x", true)])
+                    .build()])
                 .build(),
         ];
         let result = collect_array_fields(&fields);
         let names: Vec<&str> = result.iter().map(|f| f.name.as_str()).collect();
-        assert!(names.contains(&"row_items"), "array inside Row should be found: {:?}", names);
-        assert!(names.contains(&"tab_items"), "array inside Tabs should be found: {:?}", names);
-        assert!(names.contains(&"outer"), "top-level array should be found: {:?}", names);
-        assert!(names.contains(&"inner"), "nested array inside array should be found: {:?}", names);
+        assert!(
+            names.contains(&"row_items"),
+            "array inside Row should be found: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"tab_items"),
+            "array inside Tabs should be found: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"outer"),
+            "top-level array should be found: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"inner"),
+            "nested array inside array should be found: {:?}",
+            names
+        );
     }
 }

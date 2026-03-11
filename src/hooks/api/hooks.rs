@@ -71,7 +71,10 @@ mod tests {
         let remove_fn: Function = hooks.get("remove").unwrap();
         let dummy_fn = lua.create_function(|_, ()| Ok(())).unwrap();
         let result: mlua::Result<()> = remove_fn.call(("before_change", dummy_fn));
-        assert!(result.is_ok(), "remove on nonexistent event should be a noop");
+        assert!(
+            result.is_ok(),
+            "remove on nonexistent event should be a noop"
+        );
     }
 
     #[test]

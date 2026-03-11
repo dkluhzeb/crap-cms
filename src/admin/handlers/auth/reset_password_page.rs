@@ -3,10 +3,10 @@ use axum::{
     response::Html,
 };
 
-use crate::admin::AdminState;
-use crate::admin::context::{ContextBuilder, PageType};
-use crate::db::query;
 use super::ResetPasswordQuery;
+use crate::admin::context::{ContextBuilder, PageType};
+use crate::admin::AdminState;
+use crate::db::query;
 
 /// GET /admin/reset-password?token=xxx — validate token, show reset form.
 pub async fn reset_password_page(
@@ -24,7 +24,9 @@ pub async fn reset_password_page(
             Err(_) => return false,
         };
         for def in registry.collections.values() {
-            if !def.is_auth_collection() { continue; }
+            if !def.is_auth_collection() {
+                continue;
+            }
             match query::find_by_reset_token(&conn, &def.slug, def, &token) {
                 Ok(Some((_, exp))) => {
                     return chrono::Utc::now().timestamp() < exp;
@@ -33,10 +35,11 @@ pub async fn reset_password_page(
             }
         }
         false
-    }).await.unwrap_or(false);
+    })
+    .await
+    .unwrap_or(false);
 
-    let mut builder = ContextBuilder::auth(&state)
-        .page(PageType::AuthReset, "Reset Password");
+    let mut builder = ContextBuilder::auth(&state).page(PageType::AuthReset, "Reset Password");
 
     if valid {
         builder = builder.set("token", serde_json::json!(query.token));
@@ -50,8 +53,8 @@ pub async fn reset_password_page(
     match state.render("auth/reset_password", &data) {
         Ok(html) => Html(html),
         Err(e) => {
-                tracing::error!("Template render error: {}", e);
-                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-            },
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+        }
     }
 }

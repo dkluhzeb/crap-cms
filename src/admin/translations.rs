@@ -34,7 +34,9 @@ impl Translations {
                     if path.extension().is_some_and(|ext| ext == "json") {
                         if let Some(locale) = path.file_stem().and_then(|s| s.to_str()) {
                             if let Ok(content) = std::fs::read_to_string(&path) {
-                                if let Ok(overrides) = serde_json::from_str::<HashMap<String, String>>(&content) {
+                                if let Ok(overrides) =
+                                    serde_json::from_str::<HashMap<String, String>>(&content)
+                                {
                                     let map = locales.entry(locale.to_string()).or_default();
                                     map.extend(overrides);
                                 }
@@ -70,7 +72,12 @@ impl Translations {
     }
 
     /// Get a translated string and interpolate `{{var}}` placeholders with the given params.
-    pub fn get_interpolated(&self, locale: &str, key: &str, params: &HashMap<String, String>) -> String {
+    pub fn get_interpolated(
+        &self,
+        locale: &str,
+        key: &str,
+        params: &HashMap<String, String>,
+    ) -> String {
         let template = self.get(locale, key);
         if params.is_empty() {
             return template.to_string();
@@ -124,14 +131,20 @@ mod tests {
     #[test]
     fn get_missing_key_returns_key() {
         let t = Translations::load(Path::new("/nonexistent"));
-        assert_eq!(t.get("en", "nonexistent_key_12345"), "nonexistent_key_12345");
+        assert_eq!(
+            t.get("en", "nonexistent_key_12345"),
+            "nonexistent_key_12345"
+        );
     }
 
     #[test]
     fn get_interpolated_replaces_vars() {
         let mut locales = HashMap::new();
         let mut en = HashMap::new();
-        en.insert("greeting".to_string(), "Hello {{name}}, welcome to {{place}}!".to_string());
+        en.insert(
+            "greeting".to_string(),
+            "Hello {{name}}, welcome to {{place}}!".to_string(),
+        );
         locales.insert("en".to_string(), en);
         let t = Translations { locales };
 
@@ -155,7 +168,9 @@ mod tests {
 
     #[test]
     fn get_interpolated_missing_key_returns_key() {
-        let t = Translations { locales: HashMap::new() };
+        let t = Translations {
+            locales: HashMap::new(),
+        };
         let result = t.get_interpolated("en", "missing", &HashMap::new());
         assert_eq!(result, "missing");
     }
@@ -182,7 +197,8 @@ mod tests {
         std::fs::write(
             trans_dir.join("en.json"),
             r#"{"custom_key": "custom_value"}"#,
-        ).unwrap();
+        )
+        .unwrap();
         let t = Translations::load(tmp.path());
         assert_eq!(t.get("en", "custom_key"), "custom_value");
         // Built-in keys should still be present
@@ -194,10 +210,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let trans_dir = tmp.path().join("translations");
         std::fs::create_dir_all(&trans_dir).unwrap();
-        std::fs::write(
-            trans_dir.join("fr.json"),
-            r#"{"save": "Enregistrer"}"#,
-        ).unwrap();
+        std::fs::write(trans_dir.join("fr.json"), r#"{"save": "Enregistrer"}"#).unwrap();
         let t = Translations::load(tmp.path());
         assert_eq!(t.get("fr", "save"), "Enregistrer");
         // Unknown key in fr should fallback to en

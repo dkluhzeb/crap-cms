@@ -102,7 +102,8 @@ fn roundtrip_data_preserved() {
     let conn = pool.get().unwrap();
     let exported = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(exported.len(), 3);
-    let exported_json: Vec<serde_json::Value> = exported.iter()
+    let exported_json: Vec<serde_json::Value> = exported
+        .iter()
         .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
@@ -121,7 +122,8 @@ fn roundtrip_data_preserved() {
 
     // Verify empty
     let conn = pool.get().unwrap();
-    let after_delete = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
+    let after_delete =
+        query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(after_delete.len(), 0);
     drop(conn);
 
@@ -137,7 +139,8 @@ fn roundtrip_data_preserved() {
             tx.execute(
                 "INSERT OR REPLACE INTO posts (id, title, status) VALUES (?1, ?2, ?3)",
                 rusqlite::params![id, title, status],
-            ).unwrap();
+            )
+            .unwrap();
         }
         tx.commit().unwrap();
     }
@@ -147,7 +150,10 @@ fn roundtrip_data_preserved() {
     let reimported = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
     assert_eq!(reimported.len(), 3);
     for doc in &reimported {
-        assert!(ids.contains(&doc.id), "re-imported doc should have original ID");
+        assert!(
+            ids.contains(&doc.id),
+            "re-imported doc should have original ID"
+        );
         assert_eq!(doc.get_str("status"), Some("published"));
     }
 }
@@ -182,7 +188,8 @@ fn roundtrip_multiple_collections() {
     let mut collections_data = serde_json::Map::new();
     for (slug, def) in &reg.collections {
         let docs = query::find(&conn, slug, def, &query::FindQuery::default(), None).unwrap();
-        let docs_json: Vec<serde_json::Value> = docs.into_iter()
+        let docs_json: Vec<serde_json::Value> = docs
+            .into_iter()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
@@ -231,8 +238,12 @@ fn typegen_all_languages() {
         let path = typegen::generate_lang(&config_dir, &reg, *lang, None).unwrap();
         assert!(path.exists(), "file should exist for {:?}", lang);
         let expected_ext = format!("generated.{}", lang.file_extension());
-        assert!(path.to_string_lossy().ends_with(&expected_ext),
-            "expected ext {}, got {}", expected_ext, path.display());
+        assert!(
+            path.to_string_lossy().ends_with(&expected_ext),
+            "expected ext {}, got {}",
+            expected_ext,
+            path.display()
+        );
     }
 }
 
@@ -272,7 +283,9 @@ fn migrate_up() {
     // Create a migration file with actual M.up/M.down
     let migrations_dir = config_dir.join("migrations");
     std::fs::create_dir_all(&migrations_dir).unwrap();
-    std::fs::write(migrations_dir.join("20240101000000_test.lua"), r#"
+    std::fs::write(
+        migrations_dir.join("20240101000000_test.lua"),
+        r#"
 local M = {}
 function M.up()
     -- no-op for test
@@ -281,7 +294,9 @@ function M.down()
     -- no-op for test
 end
 return M
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
@@ -323,14 +338,18 @@ fn migrate_down() {
 
     let migrations_dir = config_dir.join("migrations");
     std::fs::create_dir_all(&migrations_dir).unwrap();
-    std::fs::write(migrations_dir.join("20240101000000_rollback.lua"), r#"
+    std::fs::write(
+        migrations_dir.join("20240101000000_rollback.lua"),
+        r#"
 local M = {}
 function M.up()
 end
 function M.down()
 end
 return M
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
@@ -348,21 +367,29 @@ return M
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        hook_runner.run_migration(&migrations_dir.join(filename), "up", &tx).unwrap();
+        hook_runner
+            .run_migration(&migrations_dir.join(filename), "up", &tx)
+            .unwrap();
         migrate::record_migration(&tx, filename).unwrap();
         tx.commit().unwrap();
     }
-    assert!(migrate::get_applied_migrations(&db_pool).unwrap().contains(filename));
+    assert!(migrate::get_applied_migrations(&db_pool)
+        .unwrap()
+        .contains(filename));
 
     // Rollback
     {
         let mut conn = db_pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        hook_runner.run_migration(&migrations_dir.join(filename), "down", &tx).unwrap();
+        hook_runner
+            .run_migration(&migrations_dir.join(filename), "down", &tx)
+            .unwrap();
         migrate::remove_migration(&tx, filename).unwrap();
         tx.commit().unwrap();
     }
-    assert!(!migrate::get_applied_migrations(&db_pool).unwrap().contains(filename));
+    assert!(!migrate::get_applied_migrations(&db_pool)
+        .unwrap()
+        .contains(filename));
 }
 
 #[test]
@@ -435,7 +462,11 @@ fn backup_snapshot() {
     let backup_db_path = backup_dir.join("crap.db");
     {
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute("VACUUM INTO ?1", [backup_db_path.to_string_lossy().as_ref()]).unwrap();
+        conn.execute(
+            "VACUUM INTO ?1",
+            [backup_db_path.to_string_lossy().as_ref()],
+        )
+        .unwrap();
     }
     assert!(backup_db_path.exists());
     assert!(std::fs::metadata(&backup_db_path).unwrap().len() > 0);
@@ -449,7 +480,11 @@ fn backup_snapshot() {
         "source_config": config_dir.to_string_lossy(),
     });
     let manifest_path = backup_dir.join("manifest.json");
-    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
 
     assert!(backup_dir.join("crap.db").exists());
     assert!(backup_dir.join("manifest.json").exists());
@@ -471,7 +506,11 @@ fn backup_manifest_valid() {
     });
 
     let manifest_path = backup_dir.join("manifest.json");
-    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    std::fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
 
     let content = std::fs::read_to_string(&manifest_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
@@ -586,13 +625,25 @@ fn blueprint_save_writes_manifest() {
     let result = scaffold::blueprint_save(&config_dir, bp_name, true);
     if result.is_ok() {
         // Read the manifest from the blueprint directory
-        let bp_dir = dirs::config_dir().unwrap().join("crap-cms/blueprints").join(bp_name);
+        let bp_dir = dirs::config_dir()
+            .unwrap()
+            .join("crap-cms/blueprints")
+            .join(bp_name);
         let manifest_path = bp_dir.join(".crap-blueprint.toml");
-        assert!(manifest_path.exists(), "manifest should be created on blueprint save");
+        assert!(
+            manifest_path.exists(),
+            "manifest should be created on blueprint save"
+        );
 
         let contents = std::fs::read_to_string(&manifest_path).unwrap();
-        assert!(contents.contains("crap_version"), "manifest should contain crap_version");
-        assert!(contents.contains(env!("CARGO_PKG_VERSION")), "manifest should contain current version");
+        assert!(
+            contents.contains("crap_version"),
+            "manifest should contain crap_version"
+        );
+        assert!(
+            contents.contains(env!("CARGO_PKG_VERSION")),
+            "manifest should contain current version"
+        );
 
         // Clean up
         let _ = scaffold::blueprint_remove(bp_name);
@@ -619,7 +670,16 @@ fn make_job_creates_lua_file() {
 #[test]
 fn make_job_with_schedule() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "nightly", Some("0 3 * * *"), None, None, None, false).unwrap();
+    scaffold::make_job(
+        tmp.path(),
+        "nightly",
+        Some("0 3 * * *"),
+        None,
+        None,
+        None,
+        false,
+    )
+    .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/nightly.lua")).unwrap();
     assert!(content.contains("schedule = \"0 3 * * *\""));
@@ -628,7 +688,16 @@ fn make_job_with_schedule() {
 #[test]
 fn make_job_with_options() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "heavy", None, Some("background"), Some(3), Some(300), false).unwrap();
+    scaffold::make_job(
+        tmp.path(),
+        "heavy",
+        None,
+        Some("background"),
+        Some(3),
+        Some(300),
+        false,
+    )
+    .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/heavy.lua")).unwrap();
     assert!(content.contains("queue = \"background\""));
@@ -655,7 +724,16 @@ fn make_job_force_overwrites() {
 #[test]
 fn make_job_default_queue_omitted() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_job(tmp.path(), "simple", None, Some("default"), None, None, false).unwrap();
+    scaffold::make_job(
+        tmp.path(),
+        "simple",
+        None,
+        Some("default"),
+        None,
+        None,
+        false,
+    )
+    .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("jobs/simple.lua")).unwrap();
     // "default" queue should not generate an explicit config line
@@ -778,17 +856,22 @@ fn make_collection_via_binary_no_input() {
 
     let output = std::process::Command::new(crap_bin())
         .args([
-            "make", "collection",
+            "make",
+            "collection",
             config_dir.to_str().unwrap(),
             "articles",
-            "--fields", "title:text:required,body:textarea",
+            "--fields",
+            "title:text:required,body:textarea",
             "--no-input",
         ])
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "make collection should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "make collection should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let lua_path = config_dir.join("collections/articles.lua");
     assert!(lua_path.exists(), "collection file should be created");
@@ -806,7 +889,8 @@ fn make_collection_via_binary_auth() {
 
     let output = std::process::Command::new(crap_bin())
         .args([
-            "make", "collection",
+            "make",
+            "collection",
             config_dir.to_str().unwrap(),
             "members",
             "--auth",
@@ -815,8 +899,11 @@ fn make_collection_via_binary_auth() {
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "make collection with auth should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "make collection with auth should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = std::fs::read_to_string(config_dir.join("collections/members.lua")).unwrap();
     assert!(content.contains("auth = true"));
@@ -830,7 +917,8 @@ fn make_collection_via_binary_upload() {
 
     let output = std::process::Command::new(crap_bin())
         .args([
-            "make", "collection",
+            "make",
+            "collection",
             config_dir.to_str().unwrap(),
             "media",
             "--upload",
@@ -839,8 +927,11 @@ fn make_collection_via_binary_upload() {
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "make collection with upload should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "make collection with upload should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = std::fs::read_to_string(config_dir.join("collections/media.lua")).unwrap();
     assert!(content.contains("upload = true"));
@@ -854,7 +945,8 @@ fn make_collection_via_binary_versions() {
 
     let output = std::process::Command::new(crap_bin())
         .args([
-            "make", "collection",
+            "make",
+            "collection",
             config_dir.to_str().unwrap(),
             "articles",
             "--versions",
@@ -863,8 +955,11 @@ fn make_collection_via_binary_versions() {
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "make collection with versions should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "make collection with versions should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = std::fs::read_to_string(config_dir.join("collections/articles.lua")).unwrap();
     assert!(content.contains("versions"));
@@ -878,7 +973,8 @@ fn make_collection_via_binary_no_timestamps() {
 
     let output = std::process::Command::new(crap_bin())
         .args([
-            "make", "collection",
+            "make",
+            "collection",
             config_dir.to_str().unwrap(),
             "logs",
             "--no-timestamps",
@@ -887,8 +983,11 @@ fn make_collection_via_binary_no_timestamps() {
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "make collection --no-timestamps should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "make collection --no-timestamps should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = std::fs::read_to_string(config_dir.join("collections/logs.lua")).unwrap();
     assert!(content.contains("timestamps = false"));
@@ -902,17 +1001,24 @@ fn make_collection_via_binary_no_slug_no_input_fails() {
 
     let output = std::process::Command::new(crap_bin())
         .args([
-            "make", "collection",
+            "make",
+            "collection",
             config_dir.to_str().unwrap(),
             "--no-input",
         ])
         .output()
         .expect("failed to run binary");
 
-    assert!(!output.status.success(), "make collection without slug in --no-input should fail");
+    assert!(
+        !output.status.success(),
+        "make collection without slug in --no-input should fail"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("required") || stderr.contains("slug"),
-        "error should mention slug is required, got: {}", stderr);
+    assert!(
+        stderr.contains("required") || stderr.contains("slug"),
+        "error should mention slug is required, got: {}",
+        stderr
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -930,11 +1036,20 @@ fn status_via_binary() {
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "status should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "status should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Collections"), "status output should mention collections");
-    assert!(stdout.contains("posts"), "status output should show posts collection");
+    assert!(
+        stdout.contains("Collections"),
+        "status output should mention collections"
+    );
+    assert!(
+        stdout.contains("posts"),
+        "status output should show posts collection"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -952,8 +1067,11 @@ fn jobs_list_via_binary() {
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "jobs list should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "jobs list should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -967,8 +1085,11 @@ fn templates_list_via_binary() {
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "templates list should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "templates list should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Templates"), "should list templates");
     assert!(stdout.contains("Static files"), "should list static files");
@@ -979,11 +1100,19 @@ fn templates_extract_via_binary() {
     let tmp = tempfile::tempdir().expect("tempdir");
 
     let output = std::process::Command::new(crap_bin())
-        .args(["templates", "extract", tmp.path().to_str().unwrap(), "layout/base.hbs"])
+        .args([
+            "templates",
+            "extract",
+            tmp.path().to_str().unwrap(),
+            "layout/base.hbs",
+        ])
         .output()
         .expect("failed to run binary");
 
-    assert!(output.status.success(), "templates extract should succeed: {}",
-        String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "templates extract should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(tmp.path().join("templates/layout/base.hbs").exists());
 }

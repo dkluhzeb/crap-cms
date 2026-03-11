@@ -5,16 +5,15 @@ use std::collections::HashMap;
 use anyhow::Result;
 
 use crate::core::collection::Hooks;
-use crate::core::Document;
 use crate::core::field::FieldDefinition;
+use crate::core::Document;
 use crate::hooks::lifecycle::context::HookContext;
 use crate::hooks::lifecycle::execution::{
-    get_hook_refs, has_field_hooks_for_event,
-    call_registered_hooks, run_field_hooks_inner,
-    call_hook_ref,
+    call_hook_ref, call_registered_hooks, get_hook_refs, has_field_hooks_for_event,
+    run_field_hooks_inner,
 };
 use crate::hooks::lifecycle::types::{
-    TxContext, UserContext, UiLocaleContext, HookEvent, FieldHookEvent,
+    FieldHookEvent, HookEvent, TxContext, UiLocaleContext, UserContext,
 };
 
 use super::HookRunner;

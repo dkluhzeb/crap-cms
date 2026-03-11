@@ -8,7 +8,10 @@ use super::helpers::*;
 
 /// Parse the relationship config for a field, handling both `Relationship` and `Upload` field types.
 /// Returns `None` for field types that don't have a relationship config.
-pub(super) fn parse_field_relationship(field_tbl: &Table, field_type: &FieldType) -> mlua::Result<Option<RelationshipConfig>> {
+pub(super) fn parse_field_relationship(
+    field_tbl: &Table,
+    field_type: &FieldType,
+) -> mlua::Result<Option<RelationshipConfig>> {
     if *field_type == FieldType::Relationship {
         if let Ok(rel_tbl) = get_table(field_tbl, "relationship") {
             let (collection, polymorphic) = parse_relationship_collection(&rel_tbl);
@@ -37,9 +40,7 @@ pub(super) fn parse_field_relationship(field_tbl: &Table, field_type: &FieldType
         } else {
             let collection = get_string(field_tbl, "relation_to");
             let has_many = get_bool(field_tbl, "has_many", false);
-            Ok(collection.map(|collection| {
-                RelationshipConfig::new(collection, has_many)
-            }))
+            Ok(collection.map(|collection| RelationshipConfig::new(collection, has_many)))
         }
     } else {
         Ok(None)
@@ -48,8 +49,8 @@ pub(super) fn parse_field_relationship(field_tbl: &Table, field_type: &FieldType
 
 #[cfg(test)]
 mod tests {
-    use mlua::Lua;
     use super::super::fields::parse_fields;
+    use mlua::Lua;
 
     #[test]
     fn test_parse_fields_relationship_table_syntax() {

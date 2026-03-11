@@ -6,7 +6,9 @@ use crate::core::collection::{CollectionDefinition, GlobalDefinition};
 use crate::core::field::{FieldDefinition, FieldType};
 use crate::core::Registry;
 
-use super::{is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case};
+use super::{
+    is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
+};
 
 pub(super) fn render(registry: &Registry) -> String {
     let mut out = String::new();
@@ -38,8 +40,8 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
             let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
             writeln!(out, "@dataclass").expect("write to String");
             writeln!(out, "class {}:", sub_pascal).expect("write to String");
-            let (required, optional): (Vec<_>, Vec<_>) = f.fields.iter()
-                .partition(|sf| !is_optional(sf));
+            let (required, optional): (Vec<_>, Vec<_>) =
+                f.fields.iter().partition(|sf| !is_optional(sf));
             for sf in &required {
                 write_field(out, sf);
             }
@@ -133,7 +135,8 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         if let Some(rc) = &field.relationship {
             if rc.is_polymorphic() {
                 let targets = rc.all_collections().join(", ");
-                writeln!(out, "    # Polymorphic relationship — targets: {}", targets).expect("write to String");
+                writeln!(out, "    # Polymorphic relationship — targets: {}", targets)
+                    .expect("write to String");
             }
         }
     }
@@ -149,10 +152,17 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
 fn field_to_py(field: &FieldDefinition) -> String {
     match &field.field_type {
         FieldType::Text => {
-            if field.has_many { "list[str]".to_string() } else { "str".to_string() }
+            if field.has_many {
+                "list[str]".to_string()
+            } else {
+                "str".to_string()
+            }
         }
-        FieldType::Textarea | FieldType::Email | FieldType::Date
-        | FieldType::Richtext | FieldType::Code => "str".to_string(),
+        FieldType::Textarea
+        | FieldType::Email
+        | FieldType::Date
+        | FieldType::Richtext
+        | FieldType::Code => "str".to_string(),
         FieldType::Upload => {
             if rel_has_many(field) {
                 "list[str]".to_string()
@@ -168,18 +178,20 @@ fn field_to_py(field: &FieldDefinition) -> String {
             }
         }
         FieldType::Number => {
-            if field.has_many { "list[float]".to_string() } else { "float".to_string() }
+            if field.has_many {
+                "list[float]".to_string()
+            } else {
+                "float".to_string()
+            }
         }
         FieldType::Checkbox => "bool".to_string(),
         FieldType::Json => "Any".to_string(),
-        FieldType::Relationship => {
-            match &field.relationship {
-                Some(rc) if rc.is_polymorphic() && rc.has_many => "list[str]".to_string(),
-                Some(rc) if rc.is_polymorphic() => "str".to_string(),
-                Some(rc) if rc.has_many => "list[str]".to_string(),
-                _ => "str".to_string(),
-            }
-        }
+        FieldType::Relationship => match &field.relationship {
+            Some(rc) if rc.is_polymorphic() && rc.has_many => "list[str]".to_string(),
+            Some(rc) if rc.is_polymorphic() => "str".to_string(),
+            Some(rc) if rc.has_many => "list[str]".to_string(),
+            _ => "str".to_string(),
+        },
         FieldType::Array => "list[dict]".to_string(),
         FieldType::Group => "dict".to_string(),
         FieldType::Row => "dict".to_string(), // layout-only; sub-fields are promoted
@@ -202,10 +214,17 @@ fn default_for_type(field: &FieldDefinition) -> &'static str {
 
 /// Generate a docstring comment listing select field options.
 fn field_options_comment(col: &CollectionDefinition) -> String {
-    let selects: Vec<String> = col.fields.iter()
+    let selects: Vec<String> = col
+        .fields
+        .iter()
         .filter(|f| f.field_type == FieldType::Select && !f.options.is_empty())
         .map(|f| {
-            let opts = f.options.iter().map(|o| format!("\"{}\"", o.value)).collect::<Vec<_>>().join(", ");
+            let opts = f
+                .options
+                .iter()
+                .map(|o| format!("\"{}\"", o.value))
+                .collect::<Vec<_>>()
+                .join(", ");
             format!("{}: {}", f.name, opts)
         })
         .collect();
@@ -222,7 +241,9 @@ mod tests {
     use crate::core::field::{BlockDefinition, LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).required(required).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .required(required)
+            .build()
     }
 
     fn make_col(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
@@ -234,7 +255,10 @@ mod tests {
 
     #[test]
     fn python_collection_output() {
-        let col = make_col("posts", vec![text_field("title", true), text_field("content", false)]);
+        let col = make_col(
+            "posts",
+            vec![text_field("title", true), text_field("content", false)],
+        );
 
         let mut out = String::new();
         render_collection(&mut out, &col);
@@ -249,11 +273,12 @@ mod tests {
 
     #[test]
     fn python_relationship_has_many() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("tags", FieldType::Relationship)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("tags", FieldType::Relationship)
                 .relationship(RelationshipConfig::new("tags", true))
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Optional[list[str]]"));
@@ -263,47 +288,82 @@ mod tests {
     fn python_polymorphic_has_one() {
         let mut rc = RelationshipConfig::new("posts", false);
         rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
-        let col = make_col("comments", vec![
-            FieldDefinition::builder("subject", FieldType::Relationship)
+        let col = make_col(
+            "comments",
+            vec![FieldDefinition::builder("subject", FieldType::Relationship)
                 .required(true)
                 .relationship(rc)
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Polymorphic has-one = str (stores "collection/id" composite)
-        assert!(out.contains("subject: str = \"\""), "polymorphic has-one should be str: {}", out);
-        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
-        assert!(out.contains("posts"), "comment should list target collections: {}", out);
-        assert!(out.contains("pages"), "comment should list target collections: {}", out);
+        assert!(
+            out.contains("subject: str = \"\""),
+            "polymorphic has-one should be str: {}",
+            out
+        );
+        assert!(
+            out.contains("Polymorphic relationship"),
+            "should have polymorphic comment: {}",
+            out
+        );
+        assert!(
+            out.contains("posts"),
+            "comment should list target collections: {}",
+            out
+        );
+        assert!(
+            out.contains("pages"),
+            "comment should list target collections: {}",
+            out
+        );
     }
 
     #[test]
     fn python_polymorphic_has_many() {
         let mut rc = RelationshipConfig::new("articles", true);
         rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("related", FieldType::Relationship)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("related", FieldType::Relationship)
                 .relationship(rc)
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Polymorphic has-many = list[str] (array of "collection/id" composites)
-        assert!(out.contains("list[str]"), "polymorphic has-many should be list[str]: {}", out);
-        assert!(out.contains("Polymorphic relationship"), "should have polymorphic comment: {}", out);
-        assert!(out.contains("articles"), "comment should list target collections: {}", out);
-        assert!(out.contains("videos"), "comment should list target collections: {}", out);
+        assert!(
+            out.contains("list[str]"),
+            "polymorphic has-many should be list[str]: {}",
+            out
+        );
+        assert!(
+            out.contains("Polymorphic relationship"),
+            "should have polymorphic comment: {}",
+            out
+        );
+        assert!(
+            out.contains("articles"),
+            "comment should list target collections: {}",
+            out
+        );
+        assert!(
+            out.contains("videos"),
+            "comment should list target collections: {}",
+            out
+        );
     }
 
     #[test]
     fn python_relationship_has_one() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("author", FieldType::Relationship)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("author", FieldType::Relationship)
                 .required(true)
                 .relationship(RelationshipConfig::new("users", false))
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("author: str = \"\""));
@@ -311,10 +371,15 @@ mod tests {
 
     #[test]
     fn python_number_and_checkbox_fields() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("price", FieldType::Number).required(true).build(),
-            FieldDefinition::builder("active", FieldType::Checkbox).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("price", FieldType::Number)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("active", FieldType::Checkbox).build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("price: float = 0.0"));
@@ -323,9 +388,10 @@ mod tests {
 
     #[test]
     fn python_json_field() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("data", FieldType::Json).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![FieldDefinition::builder("data", FieldType::Json).build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Optional[Any]"));
@@ -333,9 +399,10 @@ mod tests {
 
     #[test]
     fn python_array_field() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("rows", FieldType::Array).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![FieldDefinition::builder("rows", FieldType::Array).build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Optional[list[dict]]"));
@@ -343,11 +410,12 @@ mod tests {
 
     #[test]
     fn python_array_field_with_subfields() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("items", FieldType::Array)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("items", FieldType::Array)
                 .fields(vec![text_field("label", true), text_field("value", false)])
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Sub-type should be generated
@@ -358,9 +426,10 @@ mod tests {
 
     #[test]
     fn python_group_field() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("seo", FieldType::Group).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![FieldDefinition::builder("seo", FieldType::Group).build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Optional[dict]"));
@@ -370,11 +439,12 @@ mod tests {
     fn python_blocks_field() {
         let mut bd = BlockDefinition::new("text", vec![text_field("body", true)]);
         bd.label = Some(LocalizedString::Plain("Text".to_string()));
-        let col = make_col("pages", vec![
-            FieldDefinition::builder("content", FieldType::Blocks)
+        let col = make_col(
+            "pages",
+            vec![FieldDefinition::builder("content", FieldType::Blocks)
                 .blocks(vec![bd])
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Optional[list[dict]]"));
@@ -382,9 +452,12 @@ mod tests {
 
     #[test]
     fn python_upload_field() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("image", FieldType::Upload).required(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![FieldDefinition::builder("image", FieldType::Upload)
+                .required(true)
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("image: str = \"\""));
@@ -392,28 +465,34 @@ mod tests {
 
     #[test]
     fn upload_has_many_generates_array_type() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("images", FieldType::Upload)
+        let col = make_col(
+            "items",
+            vec![FieldDefinition::builder("images", FieldType::Upload)
                 .required(true)
                 .relationship(RelationshipConfig::new("", true))
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("images: list[str]"), "has-many upload should be list[str]: {}", out);
+        assert!(
+            out.contains("images: list[str]"),
+            "has-many upload should be list[str]: {}",
+            out
+        );
     }
 
     #[test]
     fn python_select_with_options_docstring() {
-        let col = make_col("posts", vec![
-            FieldDefinition::builder("status", FieldType::Select)
+        let col = make_col(
+            "posts",
+            vec![FieldDefinition::builder("status", FieldType::Select)
                 .required(true)
                 .options(vec![
                     SelectOption::new(LocalizedString::Plain("Draft".into()), "draft"),
                     SelectOption::new(LocalizedString::Plain("Published".into()), "published"),
                 ])
-                .build(),
-        ]);
+                .build()],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Should have a docstring with select options
@@ -425,10 +504,7 @@ mod tests {
     #[test]
     fn python_global_output() {
         let mut global = crate::core::collection::GlobalDefinition::new("site_settings");
-        global.fields = vec![
-            text_field("site_name", true),
-            text_field("tagline", false),
-        ];
+        global.fields = vec![text_field("site_name", true), text_field("tagline", false)];
         let mut out = String::new();
         render_global(&mut out, &global);
         assert!(out.contains("class SiteSettings:"));
@@ -463,40 +539,79 @@ mod tests {
 
     #[test]
     fn python_text_has_many() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("tags", FieldType::Text).has_many(true).required(true).build(),
-            FieldDefinition::builder("labels", FieldType::Text).has_many(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("tags", FieldType::Text)
+                    .has_many(true)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("labels", FieldType::Text)
+                    .has_many(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("tags: list[str] = field(default_factory=list)"),
-            "required has-many text should use list default: {}", out);
-        assert!(out.contains("labels: Optional[list[str]] = None"),
-            "optional has-many text should be Optional[list[str]]: {}", out);
+        assert!(
+            out.contains("tags: list[str] = field(default_factory=list)"),
+            "required has-many text should use list default: {}",
+            out
+        );
+        assert!(
+            out.contains("labels: Optional[list[str]] = None"),
+            "optional has-many text should be Optional[list[str]]: {}",
+            out
+        );
     }
 
     #[test]
     fn python_number_has_many() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("scores", FieldType::Number).has_many(true).required(true).build(),
-            FieldDefinition::builder("weights", FieldType::Number).has_many(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("scores", FieldType::Number)
+                    .has_many(true)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("weights", FieldType::Number)
+                    .has_many(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("scores: list[float] = field(default_factory=list)"),
-            "required has-many number should use list default: {}", out);
-        assert!(out.contains("weights: Optional[list[float]] = None"),
-            "optional has-many number should be Optional[list[float]]: {}", out);
+        assert!(
+            out.contains("scores: list[float] = field(default_factory=list)"),
+            "required has-many number should use list default: {}",
+            out
+        );
+        assert!(
+            out.contains("weights: Optional[list[float]] = None"),
+            "optional has-many number should be Optional[list[float]]: {}",
+            out
+        );
     }
 
     #[test]
     fn python_email_date_richtext_textarea() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("contact", FieldType::Email).required(true).build(),
-            FieldDefinition::builder("at", FieldType::Date).required(true).build(),
-            FieldDefinition::builder("body", FieldType::Richtext).required(true).build(),
-            FieldDefinition::builder("notes", FieldType::Textarea).required(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("contact", FieldType::Email)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("at", FieldType::Date)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("body", FieldType::Richtext)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("notes", FieldType::Textarea)
+                    .required(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("contact: str = \"\""));
@@ -507,55 +622,127 @@ mod tests {
 
     #[test]
     fn python_code_join_radio_fields() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("snippet", FieldType::Code).required(true).build(),
-            FieldDefinition::builder("refs", FieldType::Join).build(),
-            FieldDefinition::builder("color", FieldType::Radio).required(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("snippet", FieldType::Code)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("refs", FieldType::Join).build(),
+                FieldDefinition::builder("color", FieldType::Radio)
+                    .required(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("snippet: str = \"\""), "code field should map to str: {}", out);
-        assert!(out.contains("Optional[list[dict]]"), "join field should map to list[dict]: {}", out);
-        assert!(out.contains("color: str = \"\""), "radio without options should be str: {}", out);
+        assert!(
+            out.contains("snippet: str = \"\""),
+            "code field should map to str: {}",
+            out
+        );
+        assert!(
+            out.contains("Optional[list[dict]]"),
+            "join field should map to list[dict]: {}",
+            out
+        );
+        assert!(
+            out.contains("color: str = \"\""),
+            "radio without options should be str: {}",
+            out
+        );
     }
 
     #[test]
     fn python_select_has_many() {
-        let col = make_col("items", vec![
-            FieldDefinition::builder("tags", FieldType::Select).has_many(true).required(true).build(),
-            FieldDefinition::builder("sizes", FieldType::Radio).has_many(true).build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("tags", FieldType::Select)
+                    .has_many(true)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("sizes", FieldType::Radio)
+                    .has_many(true)
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("tags: list[str]"), "required select has-many should be list[str]: {}", out);
-        assert!(out.contains("Optional[list[str]]"), "optional radio has-many should be Optional[list[str]]: {}", out);
+        assert!(
+            out.contains("tags: list[str]"),
+            "required select has-many should be list[str]: {}",
+            out
+        );
+        assert!(
+            out.contains("Optional[list[str]]"),
+            "optional radio has-many should be Optional[list[str]]: {}",
+            out
+        );
     }
 
     #[test]
     fn python_row_collapsible_tabs_promote_subfields() {
         use crate::core::field::FieldTab;
-        let col = make_col("items", vec![
-            FieldDefinition::builder("layout_row", FieldType::Row)
-                .fields(vec![text_field("first_name", true), text_field("last_name", false)])
-                .build(),
-            FieldDefinition::builder("details", FieldType::Collapsible)
-                .fields(vec![text_field("bio", false)])
-                .build(),
-            FieldDefinition::builder("sections", FieldType::Tabs)
-                .tabs(vec![FieldTab::new("Tab1", vec![text_field("tab_field", true)])])
-                .build(),
-        ]);
+        let col = make_col(
+            "items",
+            vec![
+                FieldDefinition::builder("layout_row", FieldType::Row)
+                    .fields(vec![
+                        text_field("first_name", true),
+                        text_field("last_name", false),
+                    ])
+                    .build(),
+                FieldDefinition::builder("details", FieldType::Collapsible)
+                    .fields(vec![text_field("bio", false)])
+                    .build(),
+                FieldDefinition::builder("sections", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Tab1",
+                        vec![text_field("tab_field", true)],
+                    )])
+                    .build(),
+            ],
+        );
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Row sub-fields promoted — no "layout_row" key
-        assert!(!out.contains("layout_row"), "row field name should not appear: {}", out);
-        assert!(out.contains("first_name: str = \"\""), "row required sub-field promoted: {}", out);
-        assert!(out.contains("last_name: Optional[str] = None"), "row optional sub-field promoted: {}", out);
+        assert!(
+            !out.contains("layout_row"),
+            "row field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("first_name: str = \"\""),
+            "row required sub-field promoted: {}",
+            out
+        );
+        assert!(
+            out.contains("last_name: Optional[str] = None"),
+            "row optional sub-field promoted: {}",
+            out
+        );
         // Collapsible sub-fields promoted
-        assert!(!out.contains("details"), "collapsible field name should not appear: {}", out);
-        assert!(out.contains("bio: Optional[str] = None"), "collapsible sub-field promoted: {}", out);
+        assert!(
+            !out.contains("details"),
+            "collapsible field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("bio: Optional[str] = None"),
+            "collapsible sub-field promoted: {}",
+            out
+        );
         // Tabs sub-fields promoted
-        assert!(!out.contains("sections"), "tabs field name should not appear: {}", out);
-        assert!(out.contains("tab_field: str = \"\""), "tabs sub-field promoted: {}", out);
+        assert!(
+            !out.contains("sections"),
+            "tabs field name should not appear: {}",
+            out
+        );
+        assert!(
+            out.contains("tab_field: str = \"\""),
+            "tabs sub-field promoted: {}",
+            out
+        );
     }
 }

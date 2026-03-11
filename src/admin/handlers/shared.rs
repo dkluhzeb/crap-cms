@@ -8,9 +8,9 @@ use axum::{
 use serde::Deserialize;
 use std::collections::HashMap;
 
-use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
 use crate::admin::translations::Translations;
+use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
 use crate::core::collection::{CollectionDefinition, VersionsConfig};
 use crate::core::document::VersionSnapshot;
@@ -21,7 +21,7 @@ use crate::db::DbPool;
 
 // Re-export field context functions from the dedicated module.
 pub(super) use super::field_context::{
-    build_field_contexts, apply_display_conditions, split_sidebar_fields, enrich_field_contexts,
+    apply_display_conditions, build_field_contexts, enrich_field_contexts, split_sidebar_fields,
 };
 
 /// Query parameters for paginated collection list views.
@@ -36,11 +36,15 @@ pub struct PaginationParams {
 /// Extract the editor locale from the `crap_editor_locale` cookie.
 /// Falls back to the config's default locale if the cookie is absent or invalid.
 /// Returns `None` if locales are not enabled.
-pub(crate) fn extract_editor_locale(headers: &axum::http::HeaderMap, config: &crate::config::LocaleConfig) -> Option<String> {
+pub(crate) fn extract_editor_locale(
+    headers: &axum::http::HeaderMap,
+    config: &crate::config::LocaleConfig,
+) -> Option<String> {
     if !config.is_enabled() {
         return None;
     }
-    let cookie_str = headers.get(axum::http::header::COOKIE)
+    let cookie_str = headers
+        .get(axum::http::header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     let raw = crate::admin::server::extract_cookie(cookie_str, "crap_editor_locale");
@@ -54,14 +58,19 @@ pub(crate) fn extract_editor_locale(headers: &axum::http::HeaderMap, config: &cr
 }
 
 /// Extract the user document from AuthUser extension (for access checks).
-pub(crate) fn get_user_doc(auth_user: &Option<Extension<AuthUser>>) -> Option<&crate::core::Document> {
+pub(crate) fn get_user_doc(
+    auth_user: &Option<Extension<AuthUser>>,
+) -> Option<&crate::core::Document> {
     auth_user.as_ref().map(|Extension(au)| &au.user_doc)
 }
 
-
 /// Extract an EventUser from the AuthUser extension (for SSE event attribution).
-pub(crate) fn get_event_user(auth_user: &Option<Extension<AuthUser>>) -> Option<crate::core::event::EventUser> {
-    auth_user.as_ref().map(|Extension(au)| crate::core::event::EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
+pub(crate) fn get_event_user(
+    auth_user: &Option<Extension<AuthUser>>,
+) -> Option<crate::core::event::EventUser> {
+    auth_user.as_ref().map(|Extension(au)| {
+        crate::core::event::EventUser::new(au.claims.sub.clone(), au.claims.email.clone())
+    })
 }
 
 /// Strip denied fields from a document's fields map.
@@ -88,11 +97,16 @@ pub(crate) fn check_access_or_forbid(
         return Ok(AccessResult::Allowed);
     }
     let user_doc = get_user_doc(auth_user);
-    let mut conn = state.pool.get()
+    let mut conn = state
+        .pool
+        .get()
         .map_err(|_| forbidden(state, "Database error").into_response())?;
-    let tx = conn.transaction()
+    let tx = conn
+        .transaction()
         .map_err(|_| forbidden(state, "Database error").into_response())?;
-    let result = state.hook_runner.check_access(access_ref, user_doc, id, data, &tx)
+    let result = state
+        .hook_runner
+        .check_access(access_ref, user_doc, id, data, &tx)
         .map_err(|e| {
             tracing::error!("Access check error: {}", e);
             forbidden(state, "Access check failed").into_response()
@@ -115,13 +129,17 @@ pub(crate) fn build_locale_template_data(
     }
     let current = requested_locale.unwrap_or(&config.default_locale);
     let locale_ctx = LocaleContext::from_locale_string(Some(current), config);
-    let locales: Vec<serde_json::Value> = config.locales.iter().map(|l| {
-        serde_json::json!({
-            "value": l,
-            "label": l.to_uppercase(),
-            "selected": l == current,
+    let locales: Vec<serde_json::Value> = config
+        .locales
+        .iter()
+        .map(|l| {
+            serde_json::json!({
+                "value": l,
+                "label": l.to_uppercase(),
+                "selected": l == current,
+            })
         })
-    }).collect();
+        .collect();
     let data = serde_json::json!({
         "has_locales": true,
         "current_locale": current,
@@ -137,26 +155,31 @@ pub(crate) fn auto_label_from_name(name: &str) -> String {
 
 /// Parse `where[field][op]=value` parameters from a raw query string.
 /// Returns empty vec for malformed/invalid params. Best-effort parsing.
-pub(crate) fn parse_where_params(
-    raw_query: &str,
-    def: &CollectionDefinition,
-) -> Vec<FilterClause> {
+pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) -> Vec<FilterClause> {
     let mut filters = Vec::new();
     let system_cols = ["id", "created_at", "updated_at", "_status"];
 
     for part in raw_query.split('&') {
-        let Some((key, value)) = part.split_once('=') else { continue };
+        let Some((key, value)) = part.split_once('=') else {
+            continue;
+        };
         let value = url_decode(value);
 
         // Match where[field][op]
         let key = url_decode(key);
-        let Some(rest) = key.strip_prefix("where[") else { continue };
-        let Some((field, rest)) = rest.split_once("][") else { continue };
-        let Some(op_str) = rest.strip_suffix(']') else { continue };
+        let Some(rest) = key.strip_prefix("where[") else {
+            continue;
+        };
+        let Some((field, rest)) = rest.split_once("][") else {
+            continue;
+        };
+        let Some(op_str) = rest.strip_suffix(']') else {
+            continue;
+        };
 
         // Validate field exists
-        let field_valid = system_cols.contains(&field)
-            || def.fields.iter().any(|f| f.name == field);
+        let field_valid =
+            system_cols.contains(&field) || def.fields.iter().any(|f| f.name == field);
         if !field_valid {
             continue;
         }
@@ -211,7 +234,10 @@ pub(crate) fn validate_sort(sort: &str, def: &CollectionDefinition) -> Option<St
     let field_name = sort.strip_prefix('-').unwrap_or(sort);
     let system_cols = ["id", "created_at", "updated_at", "_status"];
     let valid = system_cols.contains(&field_name)
-        || def.fields.iter().any(|f| f.name == field_name && is_column_eligible(&f.field_type));
+        || def
+            .fields
+            .iter()
+            .any(|f| f.name == field_name && is_column_eligible(&f.field_type));
     if valid {
         Some(sort.to_string())
     } else {
@@ -391,7 +417,8 @@ pub(crate) fn translate_validation_errors(
     translations: &Translations,
     locale: &str,
 ) -> HashMap<String, String> {
-    ve.errors.iter()
+    ve.errors
+        .iter()
         .map(|e| {
             let msg = if let Some(ref key) = e.key {
                 translations.get_interpolated(locale, key, &e.params)
@@ -435,7 +462,12 @@ pub(crate) fn htmx_redirect(url: &str) -> axum::response::Response {
 }
 
 /// Render a template and set the X-Crap-Toast header for client-side notifications.
-pub(crate) fn html_with_toast(state: &AdminState, template: &str, data: &serde_json::Value, toast: &str) -> axum::response::Response {
+pub(crate) fn html_with_toast(
+    state: &AdminState,
+    template: &str,
+    data: &serde_json::Value,
+    toast: &str,
+) -> axum::response::Response {
     match state.render(template, data) {
         Ok(html) => {
             let mut resp = Html(html).into_response();
@@ -447,13 +479,18 @@ pub(crate) fn html_with_toast(state: &AdminState, template: &str, data: &serde_j
         }
         Err(e) => {
             tracing::error!("Template render error: {}", e);
-            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string()).into_response()
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+                .into_response()
         }
     }
 }
 
 /// Render a template, falling back to a plain error page on failure.
-pub(crate) fn render_or_error(state: &AdminState, template: &str, data: &serde_json::Value) -> Html<String> {
+pub(crate) fn render_or_error(
+    state: &AdminState,
+    template: &str,
+    data: &serde_json::Value,
+) -> Html<String> {
     match state.render(template, data) {
         Ok(html) => Html(html),
         Err(e) => {
@@ -600,7 +637,10 @@ mod tests {
     #[test]
     fn validate_sort_system_col() {
         let def = test_def();
-        assert_eq!(validate_sort("-created_at", &def), Some("-created_at".to_string()));
+        assert_eq!(
+            validate_sort("-created_at", &def),
+            Some("-created_at".to_string())
+        );
     }
 
     #[test]
@@ -626,7 +666,14 @@ mod tests {
 
     #[test]
     fn build_list_url_with_search_sort() {
-        let url = build_list_url("/admin/collections/posts", 1, None, Some("hello"), Some("-title"), "");
+        let url = build_list_url(
+            "/admin/collections/posts",
+            1,
+            None,
+            Some("hello"),
+            Some("-title"),
+            "",
+        );
         assert!(url.contains("search=hello"));
         assert!(url.contains("sort=-title"));
     }
@@ -634,7 +681,11 @@ mod tests {
     #[test]
     fn build_list_url_preserves_where() {
         let url = build_list_url(
-            "/admin/collections/posts", 1, None, None, None,
+            "/admin/collections/posts",
+            1,
+            None,
+            None,
+            None,
             "where[title][equals]=foo&page=1",
         );
         assert!(url.contains("where[title][equals]=foo"));
@@ -845,7 +896,10 @@ mod tests {
     #[test]
     fn extract_editor_locale_from_cookie() {
         let mut headers = axum::http::HeaderMap::new();
-        headers.insert(axum::http::header::COOKIE, "crap_editor_locale=de".parse().unwrap());
+        headers.insert(
+            axum::http::header::COOKIE,
+            "crap_editor_locale=de".parse().unwrap(),
+        );
         let result = extract_editor_locale(&headers, &locale_config_enabled());
         assert_eq!(result, Some("de".to_string()));
     }
@@ -860,7 +914,10 @@ mod tests {
     #[test]
     fn extract_editor_locale_invalid_locale_falls_back() {
         let mut headers = axum::http::HeaderMap::new();
-        headers.insert(axum::http::header::COOKIE, "crap_editor_locale=zz".parse().unwrap());
+        headers.insert(
+            axum::http::header::COOKIE,
+            "crap_editor_locale=zz".parse().unwrap(),
+        );
         let result = extract_editor_locale(&headers, &locale_config_enabled());
         assert_eq!(result, Some("en".to_string()));
     }
@@ -868,7 +925,10 @@ mod tests {
     #[test]
     fn extract_editor_locale_disabled_returns_none() {
         let mut headers = axum::http::HeaderMap::new();
-        headers.insert(axum::http::header::COOKIE, "crap_editor_locale=de".parse().unwrap());
+        headers.insert(
+            axum::http::header::COOKIE,
+            "crap_editor_locale=de".parse().unwrap(),
+        );
         let config = crate::config::LocaleConfig::default(); // empty locales = disabled
         let result = extract_editor_locale(&headers, &config);
         assert_eq!(result, None);
@@ -877,7 +937,12 @@ mod tests {
     #[test]
     fn extract_editor_locale_with_multiple_cookies() {
         let mut headers = axum::http::HeaderMap::new();
-        headers.insert(axum::http::header::COOKIE, "crap_session=abc; crap_editor_locale=fr; other=xyz".parse().unwrap());
+        headers.insert(
+            axum::http::header::COOKIE,
+            "crap_session=abc; crap_editor_locale=fr; other=xyz"
+                .parse()
+                .unwrap(),
+        );
         let result = extract_editor_locale(&headers, &locale_config_enabled());
         assert_eq!(result, Some("fr".to_string()));
     }
@@ -895,9 +960,12 @@ mod tests {
         let translations = test_translations();
         let mut params = HashMap::new();
         params.insert("field".to_string(), "Title".to_string());
-        let ve = ValidationError::new(vec![
-            FieldError::with_key("title", "title is required", "validation.required", params),
-        ]);
+        let ve = ValidationError::new(vec![FieldError::with_key(
+            "title",
+            "title is required",
+            "validation.required",
+            params,
+        )]);
         let map = translate_validation_errors(&ve, &translations, "en");
         assert_eq!(map.get("title").unwrap(), "Title is required");
     }
@@ -905,9 +973,7 @@ mod tests {
     #[test]
     fn translate_without_key_uses_raw_message() {
         let translations = test_translations();
-        let ve = ValidationError::new(vec![
-            FieldError::new("title", "custom lua error"),
-        ]);
+        let ve = ValidationError::new(vec![FieldError::new("title", "custom lua error")]);
         let map = translate_validation_errors(&ve, &translations, "en");
         assert_eq!(map.get("title").unwrap(), "custom lua error");
     }
@@ -917,9 +983,12 @@ mod tests {
         let translations = test_translations();
         let mut params = HashMap::new();
         params.insert("field".to_string(), "Titel".to_string());
-        let ve = ValidationError::new(vec![
-            FieldError::with_key("title", "title is required", "validation.required", params),
-        ]);
+        let ve = ValidationError::new(vec![FieldError::with_key(
+            "title",
+            "title is required",
+            "validation.required",
+            params,
+        )]);
         let map = translate_validation_errors(&ve, &translations, "de");
         assert_eq!(map.get("title").unwrap(), "Titel ist erforderlich");
     }

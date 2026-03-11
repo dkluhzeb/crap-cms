@@ -1,13 +1,9 @@
-use axum::{
-    extract::State,
-    response::IntoResponse,
-    Extension,
-};
+use axum::{extract::State, response::IntoResponse, Extension};
 
-use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
+use crate::admin::handlers::shared::{extract_editor_locale, render_or_error};
+use crate::admin::AdminState;
 use crate::core::auth::Claims;
-use crate::admin::handlers::shared::{render_or_error, extract_editor_locale};
 
 /// GET /admin/collections — list all registered collections
 pub async fn list_collections(

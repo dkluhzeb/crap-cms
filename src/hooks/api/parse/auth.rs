@@ -2,7 +2,7 @@
 
 use mlua::{Table, Value};
 
-use crate::core::collection::{AuthStrategy, Auth};
+use crate::core::collection::{Auth, AuthStrategy};
 
 use super::helpers::*;
 

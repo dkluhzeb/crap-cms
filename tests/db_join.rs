@@ -2,10 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::collection::CollectionDefinition;
-use crap_cms::core::field::{
-    BlockDefinition, FieldDefinition, FieldType,
-    RelationshipConfig,
-};
+use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
 use crap_cms::core::Registry;
 use crap_cms::db::{migrate, pool, query};
 
@@ -50,7 +47,11 @@ fn make_articles_with_join_tables() -> CollectionDefinition {
     def
 }
 
-fn setup_articles() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn setup_articles() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_articles_with_join_tables();
@@ -77,7 +78,11 @@ fn set_and_find_related_ids() {
     data.insert("title".to_string(), "Test Article".to_string());
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
-    let ids = vec!["tag-1".to_string(), "tag-2".to_string(), "tag-3".to_string()];
+    let ids = vec![
+        "tag-1".to_string(),
+        "tag-2".to_string(),
+        "tag-3".to_string(),
+    ];
     query::set_related_ids(&tx, "articles", "tags", &doc.id, &ids, None)
         .expect("Set related ids failed");
     tx.commit().expect("Commit");
@@ -98,17 +103,31 @@ fn set_related_ids_replaces_existing() {
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     // First set
-    query::set_related_ids(&tx, "articles", "tags", &doc.id, &["a".to_string(), "b".to_string()], None)
-        .expect("Set failed");
+    query::set_related_ids(
+        &tx,
+        "articles",
+        "tags",
+        &doc.id,
+        &["a".to_string(), "b".to_string()],
+        None,
+    )
+    .expect("Set failed");
 
     // Replace
-    query::set_related_ids(&tx, "articles", "tags", &doc.id, &["c".to_string(), "d".to_string()], None)
-        .expect("Set failed");
+    query::set_related_ids(
+        &tx,
+        "articles",
+        "tags",
+        &doc.id,
+        &["c".to_string(), "d".to_string()],
+        None,
+    )
+    .expect("Set failed");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
-    let found = query::find_related_ids(&conn, "articles", "tags", &doc.id, None)
-        .expect("Find failed");
+    let found =
+        query::find_related_ids(&conn, "articles", "tags", &doc.id, None).expect("Find failed");
     assert_eq!(found, vec!["c".to_string(), "d".to_string()]);
 }
 
@@ -123,8 +142,8 @@ fn find_related_ids_empty() {
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
-    let found = query::find_related_ids(&conn, "articles", "tags", &doc.id, None)
-        .expect("Find failed");
+    let found =
+        query::find_related_ids(&conn, "articles", "tags", &doc.id, None).expect("Find failed");
     assert!(found.is_empty());
 }
 
@@ -162,9 +181,15 @@ fn set_and_find_array_rows() {
     let found = query::find_array_rows(&conn, "articles", "links", &doc.id, sub_fields, None)
         .expect("Find array rows failed");
     assert_eq!(found.len(), 2);
-    assert_eq!(found[0].get("url").unwrap().as_str().unwrap(), "https://example.com");
+    assert_eq!(
+        found[0].get("url").unwrap().as_str().unwrap(),
+        "https://example.com"
+    );
     assert_eq!(found[0].get("label").unwrap().as_str().unwrap(), "Example");
-    assert_eq!(found[1].get("url").unwrap().as_str().unwrap(), "https://rust-lang.org");
+    assert_eq!(
+        found[1].get("url").unwrap().as_str().unwrap(),
+        "https://rust-lang.org"
+    );
     // Each row should have an id
     assert!(found[0].get("id").is_some());
 }
@@ -204,7 +229,10 @@ fn set_array_rows_replaces_existing() {
     let found = query::find_array_rows(&conn, "articles", "links", &doc.id, sub_fields, None)
         .expect("Find failed");
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].get("url").unwrap().as_str().unwrap(), "https://new.com");
+    assert_eq!(
+        found[0].get("url").unwrap().as_str().unwrap(),
+        "https://new.com"
+    );
 }
 
 #[test]
@@ -247,10 +275,22 @@ fn set_and_find_block_rows() {
     let found = query::find_block_rows(&conn, "articles", "content", &doc.id, None)
         .expect("Find block rows failed");
     assert_eq!(found.len(), 2);
-    assert_eq!(found[0].get("_block_type").unwrap().as_str().unwrap(), "paragraph");
-    assert_eq!(found[0].get("text").unwrap().as_str().unwrap(), "Hello world");
-    assert_eq!(found[1].get("_block_type").unwrap().as_str().unwrap(), "image");
-    assert_eq!(found[1].get("url").unwrap().as_str().unwrap(), "/img/test.png");
+    assert_eq!(
+        found[0].get("_block_type").unwrap().as_str().unwrap(),
+        "paragraph"
+    );
+    assert_eq!(
+        found[0].get("text").unwrap().as_str().unwrap(),
+        "Hello world"
+    );
+    assert_eq!(
+        found[1].get("_block_type").unwrap().as_str().unwrap(),
+        "image"
+    );
+    assert_eq!(
+        found[1].get("url").unwrap().as_str().unwrap(),
+        "/img/test.png"
+    );
     // Each block should have an id
     assert!(found[0].get("id").is_some());
 }
@@ -265,19 +305,20 @@ fn set_block_rows_replaces_existing() {
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     let blocks1 = vec![serde_json::json!({"_block_type": "paragraph", "text": "Old"})];
-    query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks1, None)
-        .expect("Set failed");
+    query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks1, None).expect("Set failed");
 
     let blocks2 = vec![serde_json::json!({"_block_type": "image", "url": "/new.png"})];
-    query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks2, None)
-        .expect("Set failed");
+    query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks2, None).expect("Set failed");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
-    let found = query::find_block_rows(&conn, "articles", "content", &doc.id, None)
-        .expect("Find failed");
+    let found =
+        query::find_block_rows(&conn, "articles", "content", &doc.id, None).expect("Find failed");
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].get("_block_type").unwrap().as_str().unwrap(), "image");
+    assert_eq!(
+        found[0].get("_block_type").unwrap().as_str().unwrap(),
+        "image"
+    );
 }
 
 #[test]
@@ -291,8 +332,8 @@ fn find_block_rows_empty() {
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
-    let found = query::find_block_rows(&conn, "articles", "content", &doc.id, None)
-        .expect("Find failed");
+    let found =
+        query::find_block_rows(&conn, "articles", "content", &doc.id, None).expect("Find failed");
     assert!(found.is_empty());
 }
 
@@ -308,16 +349,31 @@ fn hydrate_document_populates_join_data() {
     let doc = query::create(&tx, "articles", &def, &data, None).expect("Create failed");
 
     // Set up join table data
-    query::set_related_ids(&tx, "articles", "tags", &doc.id, &["t1".to_string(), "t2".to_string()], None)
-        .expect("Set related failed");
+    query::set_related_ids(
+        &tx,
+        "articles",
+        "tags",
+        &doc.id,
+        &["t1".to_string(), "t2".to_string()],
+        None,
+    )
+    .expect("Set related failed");
     let rows = vec![{
         let mut m = HashMap::new();
         m.insert("url".to_string(), "https://example.com".to_string());
         m.insert("label".to_string(), "Ex".to_string());
         m
     }];
-    query::set_array_rows(&tx, "articles", "links", &doc.id, &rows, &links_field.fields, None)
-        .expect("Set array failed");
+    query::set_array_rows(
+        &tx,
+        "articles",
+        "links",
+        &doc.id,
+        &rows,
+        &links_field.fields,
+        None,
+    )
+    .expect("Set array failed");
     let blocks = vec![serde_json::json!({"_block_type": "paragraph", "text": "Hi"})];
     query::set_block_rows(&tx, "articles", "content", &doc.id, &blocks, None)
         .expect("Set blocks failed");
@@ -326,7 +382,8 @@ fn hydrate_document_populates_join_data() {
     // Hydrate
     let conn = pool.get().expect("DB connection");
     let mut doc = query::find_by_id(&conn, "articles", &def, &doc.id, None)
-        .expect("Find failed").expect("Not found");
+        .expect("Find failed")
+        .expect("Not found");
     query::hydrate_document(&conn, "articles", &def.fields, &mut doc, None, None)
         .expect("Hydrate failed");
 
@@ -342,14 +399,20 @@ fn hydrate_document_populates_join_data() {
     assert!(links.is_array());
     let links_arr = links.as_array().unwrap();
     assert_eq!(links_arr.len(), 1);
-    assert_eq!(links_arr[0].get("url").unwrap().as_str().unwrap(), "https://example.com");
+    assert_eq!(
+        links_arr[0].get("url").unwrap().as_str().unwrap(),
+        "https://example.com"
+    );
 
     // Verify content (blocks)
     let content = doc.get("content").expect("content should exist");
     assert!(content.is_array());
     let blocks_arr = content.as_array().unwrap();
     assert_eq!(blocks_arr.len(), 1);
-    assert_eq!(blocks_arr[0].get("_block_type").unwrap().as_str().unwrap(), "paragraph");
+    assert_eq!(
+        blocks_arr[0].get("_block_type").unwrap().as_str().unwrap(),
+        "paragraph"
+    );
 }
 
 #[test]
@@ -364,13 +427,19 @@ fn save_join_table_data_from_hashmap() {
     // Prepare join table data as JSON values
     let mut jt_data: HashMap<String, serde_json::Value> = HashMap::new();
     jt_data.insert("tags".to_string(), serde_json::json!(["tag-a", "tag-b"]));
-    jt_data.insert("links".to_string(), serde_json::json!([
-        {"url": "https://a.com", "label": "A"},
-        {"url": "https://b.com", "label": "B"},
-    ]));
-    jt_data.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "paragraph", "text": "Content block"},
-    ]));
+    jt_data.insert(
+        "links".to_string(),
+        serde_json::json!([
+            {"url": "https://a.com", "label": "A"},
+            {"url": "https://b.com", "label": "B"},
+        ]),
+    );
+    jt_data.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "paragraph", "text": "Content block"},
+        ]),
+    );
 
     query::save_join_table_data(&tx, "articles", &def.fields, &doc.id, &jt_data, None)
         .expect("Save join table data failed");
@@ -383,8 +452,15 @@ fn save_join_table_data_from_hashmap() {
     assert_eq!(tags, vec!["tag-a", "tag-b"]);
 
     let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
-    let links = query::find_array_rows(&conn, "articles", "links", &doc.id, &links_field.fields, None)
-        .expect("Find links failed");
+    let links = query::find_array_rows(
+        &conn,
+        "articles",
+        "links",
+        &doc.id,
+        &links_field.fields,
+        None,
+    )
+    .expect("Find links failed");
     assert_eq!(links.len(), 2);
 
     let blocks = query::find_block_rows(&conn, "articles", "content", &doc.id, None)
@@ -404,7 +480,10 @@ fn save_join_table_data_partial_update() {
     // First: set tags and links
     let mut jt_data: HashMap<String, serde_json::Value> = HashMap::new();
     jt_data.insert("tags".to_string(), serde_json::json!(["tag-1", "tag-2"]));
-    jt_data.insert("links".to_string(), serde_json::json!([{"url": "https://a.com", "label": "A"}]));
+    jt_data.insert(
+        "links".to_string(),
+        serde_json::json!([{"url": "https://a.com", "label": "A"}]),
+    );
     query::save_join_table_data(&tx, "articles", &def.fields, &doc.id, &jt_data, None)
         .expect("Save failed");
 
@@ -421,8 +500,15 @@ fn save_join_table_data_partial_update() {
     assert_eq!(tags, vec!["tag-3"]);
 
     let links_field = def.fields.iter().find(|f| f.name == "links").unwrap();
-    let links = query::find_array_rows(&conn, "articles", "links", &doc.id, &links_field.fields, None)
-        .expect("Find links failed");
+    let links = query::find_array_rows(
+        &conn,
+        "articles",
+        "links",
+        &doc.id,
+        &links_field.fields,
+        None,
+    )
+    .expect("Find links failed");
     // Links should be unchanged (not in the second update)
     assert_eq!(links.len(), 1);
 }
@@ -497,22 +583,35 @@ fn populate_depth_0_leaves_ids() {
     let tx = conn.transaction().expect("Start transaction");
     let mut cat_data = HashMap::new();
     cat_data.insert("name".to_string(), "Tech".to_string());
-    let cat = query::create(&tx, "categories", &cats_def, &cat_data, None).expect("Create cat failed");
+    let cat =
+        query::create(&tx, "categories", &cats_def, &cat_data, None).expect("Create cat failed");
 
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "My Post".to_string());
     post_data.insert("category".to_string(), cat.id.clone());
-    let mut post = query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post failed");
+    let mut post =
+        query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post failed");
     tx.commit().expect("Commit");
 
     // Populate at depth 0 — should be a no-op
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
-        &mut post, &mut visited,
-        &query::PopulateOpts { depth: 0, select: None, locale_ctx: None },
-    ).expect("Populate failed");
+        &query::PopulateContext {
+            conn: &conn,
+            registry: &registry.read().unwrap(),
+            collection_slug: "posts_v2",
+            def: &posts_def,
+        },
+        &mut post,
+        &mut visited,
+        &query::PopulateOpts {
+            depth: 0,
+            select: None,
+            locale_ctx: None,
+        },
+    )
+    .expect("Populate failed");
 
     // category should still be an ID string
     assert_eq!(post.get_str("category"), Some(cat.id.as_str()));
@@ -531,20 +630,36 @@ fn populate_depth_1_hydrates_has_one() {
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "My Post".to_string());
     post_data.insert("category".to_string(), cat.id.clone());
-    let mut post = query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
+    let mut post =
+        query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
-        &mut post, &mut visited,
-        &query::PopulateOpts { depth: 1, select: None, locale_ctx: None },
-    ).expect("Populate failed");
+        &query::PopulateContext {
+            conn: &conn,
+            registry: &registry.read().unwrap(),
+            collection_slug: "posts_v2",
+            def: &posts_def,
+        },
+        &mut post,
+        &mut visited,
+        &query::PopulateOpts {
+            depth: 1,
+            select: None,
+            locale_ctx: None,
+        },
+    )
+    .expect("Populate failed");
 
     // category should be a full document object
     let cat_val = post.get("category").expect("category should exist");
-    assert!(cat_val.is_object(), "category should be an object, got: {:?}", cat_val);
+    assert!(
+        cat_val.is_object(),
+        "category should be an object, got: {:?}",
+        cat_val
+    );
     assert_eq!(cat_val.get("name").unwrap().as_str().unwrap(), "Tech");
     assert_eq!(cat_val.get("id").unwrap().as_str().unwrap(), cat.id);
 }
@@ -566,10 +681,18 @@ fn populate_depth_1_hydrates_has_many() {
 
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "Multi-cat Post".to_string());
-    let mut post = query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
+    let mut post =
+        query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
 
-    query::set_related_ids(&tx, "posts_v2", "secondary_categories", &post.id, &[cat1.id.clone(), cat2.id.clone()], None)
-        .expect("Set related failed");
+    query::set_related_ids(
+        &tx,
+        "posts_v2",
+        "secondary_categories",
+        &post.id,
+        &[cat1.id.clone(), cat2.id.clone()],
+        None,
+    )
+    .expect("Set related failed");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
@@ -578,10 +701,21 @@ fn populate_depth_1_hydrates_has_many() {
 
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
-        &mut post, &mut visited,
-        &query::PopulateOpts { depth: 1, select: None, locale_ctx: None },
-    ).expect("Populate failed");
+        &query::PopulateContext {
+            conn: &conn,
+            registry: &registry.read().unwrap(),
+            collection_slug: "posts_v2",
+            def: &posts_def,
+        },
+        &mut post,
+        &mut visited,
+        &query::PopulateOpts {
+            depth: 1,
+            select: None,
+            locale_ctx: None,
+        },
+    )
+    .expect("Populate failed");
 
     let sec_cats = post.get("secondary_categories").expect("should exist");
     assert!(sec_cats.is_array());
@@ -612,17 +746,29 @@ fn populate_circular_ref_stops() {
     // Update A to point to B
     let mut update = HashMap::new();
     update.insert("parent".to_string(), cat_b.id.clone());
-    let mut cat_a = query::update(&tx, "categories", &cats_def, &cat_a.id, &update, None).expect("Update A");
+    let mut cat_a =
+        query::update(&tx, "categories", &cats_def, &cat_a.id, &update, None).expect("Update A");
     tx.commit().expect("Commit");
 
     // Populate at depth 10 — should not infinite loop
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "categories", def: &cats_def },
-        &mut cat_a, &mut visited,
-        &query::PopulateOpts { depth: 10, select: None, locale_ctx: None },
-    ).expect("Populate should not loop");
+        &query::PopulateContext {
+            conn: &conn,
+            registry: &registry.read().unwrap(),
+            collection_slug: "categories",
+            def: &cats_def,
+        },
+        &mut cat_a,
+        &mut visited,
+        &query::PopulateOpts {
+            depth: 10,
+            select: None,
+            locale_ctx: None,
+        },
+    )
+    .expect("Populate should not loop");
     // Should complete without panic
 }
 
@@ -635,16 +781,28 @@ fn populate_missing_related_doc() {
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "Orphaned".to_string());
     post_data.insert("category".to_string(), "nonexistent-cat-id".to_string());
-    let mut post = query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
+    let mut post =
+        query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
-        &mut post, &mut visited,
-        &query::PopulateOpts { depth: 1, select: None, locale_ctx: None },
-    ).expect("Populate should handle missing");
+        &query::PopulateContext {
+            conn: &conn,
+            registry: &registry.read().unwrap(),
+            collection_slug: "posts_v2",
+            def: &posts_def,
+        },
+        &mut post,
+        &mut visited,
+        &query::PopulateOpts {
+            depth: 1,
+            select: None,
+            locale_ctx: None,
+        },
+    )
+    .expect("Populate should handle missing");
 
     // Category should remain as a string ID (not populated)
     assert_eq!(post.get_str("category"), Some("nonexistent-cat-id"));
@@ -664,17 +822,29 @@ fn populate_respects_field_max_depth() {
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "Post".to_string());
     post_data.insert("limited_cat".to_string(), cat.id.clone());
-    let mut post = query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
+    let mut post =
+        query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
 
     let conn = pool.get().expect("DB connection");
     let mut visited = HashSet::new();
     // Even with depth=5, the limited_cat field has max_depth=0, so it shouldn't populate
     query::populate_relationships(
-        &query::PopulateContext { conn: &conn, registry: &registry.read().unwrap(), collection_slug: "posts_v2", def: &posts_def },
-        &mut post, &mut visited,
-        &query::PopulateOpts { depth: 5, select: None, locale_ctx: None },
-    ).expect("Populate failed");
+        &query::PopulateContext {
+            conn: &conn,
+            registry: &registry.read().unwrap(),
+            collection_slug: "posts_v2",
+            def: &posts_def,
+        },
+        &mut post,
+        &mut visited,
+        &query::PopulateOpts {
+            depth: 5,
+            select: None,
+            locale_ctx: None,
+        },
+    )
+    .expect("Populate failed");
 
     // limited_cat should remain as string ID (max_depth=0 prevents population)
     assert_eq!(post.get_str("limited_cat"), Some(cat.id.as_str()));
@@ -693,7 +863,9 @@ fn populate_with_localized_related_collection() {
     media_def.timestamps = true;
     media_def.fields = vec![
         make_field("url", FieldType::Text),
-        FieldDefinition::builder("caption", FieldType::Text).localized(true).build(),
+        FieldDefinition::builder("caption", FieldType::Text)
+            .localized(true)
+            .build(),
     ];
 
     // "articles" collection with a relationship to media
@@ -737,8 +909,8 @@ fn populate_with_localized_related_collection() {
     let mut article_data = HashMap::new();
     article_data.insert("title".to_string(), "My Article".to_string());
     article_data.insert("image".to_string(), media_doc.id.clone());
-    let mut article = query::create(&tx, "articles", &articles_def, &article_data, None)
-        .expect("Create article");
+    let mut article =
+        query::create(&tx, "articles", &articles_def, &article_data, None).expect("Create article");
     tx.commit().expect("Commit");
 
     // Populate at depth 1 WITH locale_ctx — this used to fail with
@@ -747,16 +919,29 @@ fn populate_with_localized_related_collection() {
     let conn = pool.get().expect("conn");
     let mut visited = HashSet::new();
     query::populate_relationships(
-        &query::PopulateContext { conn: &conn, registry: &shared_registry.read().unwrap(), collection_slug: "articles", def: &articles_def },
-        &mut article, &mut visited,
-        &query::PopulateOpts { depth: 1, select: None, locale_ctx: Some(&locale_ctx) },
-    ).expect("Populate with localized related collection should succeed");
+        &query::PopulateContext {
+            conn: &conn,
+            registry: &shared_registry.read().unwrap(),
+            collection_slug: "articles",
+            def: &articles_def,
+        },
+        &mut article,
+        &mut visited,
+        &query::PopulateOpts {
+            depth: 1,
+            select: None,
+            locale_ctx: Some(&locale_ctx),
+        },
+    )
+    .expect("Populate with localized related collection should succeed");
 
     // image should be populated as a full object
     let img = article.get("image").expect("image field should exist");
-    assert!(img.is_object(), "image should be populated object, got: {:?}", img);
+    assert!(
+        img.is_object(),
+        "image should be populated object, got: {:?}",
+        img
+    );
     assert_eq!(img.get("url").unwrap().as_str().unwrap(), "/img/test.png");
     assert_eq!(img.get("caption").unwrap().as_str().unwrap(), "Test image");
 }
-
-

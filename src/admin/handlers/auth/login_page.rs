@@ -3,9 +3,9 @@ use axum::{
     response::Html,
 };
 
-use crate::admin::AdminState;
+use super::{all_disable_local, get_auth_collections, show_forgot_password, LoginPageQuery};
 use crate::admin::context::{ContextBuilder, PageType};
-use super::{LoginPageQuery, get_auth_collections, all_disable_local, show_forgot_password};
+use crate::admin::AdminState;
 
 /// GET /admin/login — render the login page.
 pub async fn login_page(
@@ -19,9 +19,15 @@ pub async fn login_page(
     let data = ContextBuilder::auth(&state)
         .page(PageType::AuthLogin, "Login")
         .set("collections", serde_json::json!(auth_collections))
-        .set("show_collection_picker", serde_json::json!(auth_collections.len() > 1))
+        .set(
+            "show_collection_picker",
+            serde_json::json!(auth_collections.len() > 1),
+        )
         .set("disable_local", serde_json::json!(all_disable_local))
-        .set("show_forgot_password", serde_json::json!(show_forgot_password))
+        .set(
+            "show_forgot_password",
+            serde_json::json!(show_forgot_password),
+        )
         .set("success", serde_json::json!(query.success.as_deref()))
         .build();
 
@@ -30,8 +36,8 @@ pub async fn login_page(
     match state.render("auth/login", &data) {
         Ok(html) => Html(html),
         Err(e) => {
-                tracing::error!("Template render error: {}", e);
-                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-            },
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+        }
     }
 }

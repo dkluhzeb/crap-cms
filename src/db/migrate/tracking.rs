@@ -51,7 +51,8 @@ pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
     if !exists {
         return Ok(Vec::new());
     }
-    let mut stmt = conn.prepare("SELECT filename FROM _crap_migrations ORDER BY applied_at DESC, filename DESC")?;
+    let mut stmt = conn
+        .prepare("SELECT filename FROM _crap_migrations ORDER BY applied_at DESC, filename DESC")?;
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     let mut list = Vec::new();
     for r in rows {
@@ -61,7 +62,10 @@ pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
 }
 
 /// Get pending migration filenames (files on disk minus already applied), sorted ascending.
-pub fn get_pending_migrations(pool: &DbPool, migrations_dir: &std::path::Path) -> Result<Vec<String>> {
+pub fn get_pending_migrations(
+    pool: &DbPool,
+    migrations_dir: &std::path::Path,
+) -> Result<Vec<String>> {
     let all = list_migration_files(migrations_dir)?;
     let applied = get_applied_migrations(pool)?;
     Ok(all.into_iter().filter(|f| !applied.contains(f)).collect())
@@ -72,7 +76,8 @@ pub fn record_migration(conn: &rusqlite::Connection, filename: &str) -> Result<(
     conn.execute(
         "INSERT INTO _crap_migrations (filename) VALUES (?1)",
         [filename],
-    ).with_context(|| format!("Failed to record migration {}", filename))?;
+    )
+    .with_context(|| format!("Failed to record migration {}", filename))?;
     Ok(())
 }
 
@@ -81,7 +86,8 @@ pub fn remove_migration(conn: &rusqlite::Connection, filename: &str) -> Result<(
     conn.execute(
         "DELETE FROM _crap_migrations WHERE filename = ?1",
         [filename],
-    ).with_context(|| format!("Failed to remove migration record {}", filename))?;
+    )
+    .with_context(|| format!("Failed to remove migration record {}", filename))?;
     Ok(())
 }
 
@@ -89,9 +95,10 @@ pub fn remove_migration(conn: &rusqlite::Connection, filename: &str) -> Result<(
 pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
     let mut stmt = conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     )?;
-    let tables: Vec<String> = stmt.query_map([], |row| row.get::<_, String>(0))?
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get::<_, String>(0))?
         .filter_map(|r| r.ok())
         .collect();
     drop(stmt);
@@ -110,11 +117,12 @@ mod tests {
     use crate::db::DbPool;
 
     fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory()
-            .with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE);
+                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
+        );
         r2d2::Pool::builder()
             .max_size(2)
             .build(manager)
@@ -204,8 +212,10 @@ mod tests {
         let pool = in_memory_pool();
         {
             let conn = pool.get().unwrap();
-            conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", []).unwrap();
-            conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY)", []).unwrap();
+            conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+                .unwrap();
+            conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY)", [])
+                .unwrap();
         }
         drop_all_tables(&pool).unwrap();
         let conn = pool.get().unwrap();

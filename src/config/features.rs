@@ -215,7 +215,10 @@ impl LocaleConfig {
         if code.is_empty() {
             anyhow::bail!("Locale code must not be empty");
         }
-        if !code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        if !code
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        {
             anyhow::bail!("Invalid locale code '{}': only ASCII alphanumeric, hyphens, and underscores allowed", code);
         }
         Ok(())
@@ -322,7 +325,10 @@ mod tests {
     #[test]
     fn email_config_defaults() {
         let email = EmailConfig::default();
-        assert!(email.smtp_host.is_empty(), "smtp_host should be empty by default");
+        assert!(
+            email.smtp_host.is_empty(),
+            "smtp_host should be empty by default"
+        );
         assert_eq!(email.smtp_port, 587);
         assert!(email.smtp_user.is_empty());
         assert!(email.smtp_pass.is_empty());
@@ -361,7 +367,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[jobs]\nimage_queue_batch_size = 50\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.jobs.image_queue_batch_size, 50);
     }
@@ -397,14 +404,22 @@ mod tests {
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: true,
         };
-        assert!(with_locales.is_enabled(), "non-empty locales should be enabled");
+        assert!(
+            with_locales.is_enabled(),
+            "non-empty locales should be enabled"
+        );
     }
 
     #[test]
     fn locale_validation_valid_codes() {
         let config = LocaleConfig {
             default_locale: "en".to_string(),
-            locales: vec!["en".to_string(), "de".to_string(), "pt-BR".to_string(), "zh_CN".to_string()],
+            locales: vec![
+                "en".to_string(),
+                "de".to_string(),
+                "pt-BR".to_string(),
+                "zh_CN".to_string(),
+            ],
             fallback: true,
         };
         assert!(config.validate().is_ok());
@@ -452,7 +467,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[access]\ndefault_deny = true\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert!(config.access.default_deny);
     }

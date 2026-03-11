@@ -49,19 +49,18 @@ pub async fn run_stdio(server: McpServer) {
 
         // Run handle_message in spawn_blocking — it does DB queries, Lua hooks, and filesystem I/O
         let server_clone = Arc::clone(&server);
-        let response = match tokio::task::spawn_blocking(move || {
-            server_clone.handle_message(request)
-        }).await {
-            Ok(resp) => resp,
-            Err(_) => {
-                error!("MCP spawn_blocking task panicked");
-                super::protocol::JsonRpcResponse::error(
-                    None,
-                    super::protocol::INTERNAL_ERROR,
-                    "Internal error",
-                )
-            }
-        };
+        let response =
+            match tokio::task::spawn_blocking(move || server_clone.handle_message(request)).await {
+                Ok(resp) => resp,
+                Err(_) => {
+                    error!("MCP spawn_blocking task panicked");
+                    super::protocol::JsonRpcResponse::error(
+                        None,
+                        super::protocol::INTERNAL_ERROR,
+                        "Internal error",
+                    )
+                }
+            };
 
         // Notifications (no id) get no response per JSON-RPC spec
         if response.id.is_none() && response.result.is_none() && response.error.is_none() {

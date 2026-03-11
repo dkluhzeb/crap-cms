@@ -6,9 +6,26 @@ use std::path::Path;
 
 /// Valid field types for collection definitions.
 pub const VALID_FIELD_TYPES: &[&str] = &[
-    "text", "number", "textarea", "select", "radio", "checkbox", "date",
-    "email", "json", "richtext", "code", "relationship", "array", "group",
-    "upload", "blocks", "row", "collapsible", "tabs", "join",
+    "text",
+    "number",
+    "textarea",
+    "select",
+    "radio",
+    "checkbox",
+    "date",
+    "email",
+    "json",
+    "richtext",
+    "code",
+    "relationship",
+    "array",
+    "group",
+    "upload",
+    "blocks",
+    "row",
+    "collapsible",
+    "tabs",
+    "join",
 ];
 
 pub(crate) struct FieldStub {
@@ -34,8 +51,7 @@ pub fn make_collection(
     super::validate_slug(slug)?;
 
     let collections_dir = config_dir.join("collections");
-    fs::create_dir_all(&collections_dir)
-        .context("Failed to create collections/ directory")?;
+    fs::create_dir_all(&collections_dir).context("Failed to create collections/ directory")?;
 
     let file_path = collections_dir.join(format!("{}.lua", slug));
     if file_path.exists() && !force {
@@ -103,7 +119,10 @@ pub fn make_collection(
     if !no_timestamps {
         lua.push_str("        default_sort = \"-created_at\",\n");
     }
-    lua.push_str(&format!("        list_searchable_fields = {{ \"{}\" }},\n", use_as_title));
+    lua.push_str(&format!(
+        "        list_searchable_fields = {{ \"{}\" }},\n",
+        use_as_title
+    ));
     lua.push_str("    },\n");
     lua.push_str("    fields = {\n");
 
@@ -148,8 +167,11 @@ fn singularize(s: &str) -> String {
     let lower = s.to_lowercase();
     if lower.ends_with("ies") && lower.len() > 3 {
         format!("{}y", &s[..s.len() - 3])
-    } else if lower.ends_with("ses") || lower.ends_with("xes") || lower.ends_with("zes")
-        || lower.ends_with("shes") || lower.ends_with("ches")
+    } else if lower.ends_with("ses")
+        || lower.ends_with("xes")
+        || lower.ends_with("zes")
+        || lower.ends_with("shes")
+        || lower.ends_with("ches")
     {
         s[..s.len() - 2].to_string()
     } else if lower.ends_with('s') && !lower.ends_with("ss") && lower.len() > 1 {
@@ -168,8 +190,11 @@ fn pluralize(s: &str) -> String {
     if lower.ends_with("z") && !lower.ends_with("zz") {
         // Single trailing z doubles before -es: Quiz → Quizzes
         format!("{}zes", s)
-    } else if lower.ends_with("s") || lower.ends_with("x") || lower.ends_with("zz")
-        || lower.ends_with("sh") || lower.ends_with("ch")
+    } else if lower.ends_with("s")
+        || lower.ends_with("x")
+        || lower.ends_with("zz")
+        || lower.ends_with("sh")
+        || lower.ends_with("ch")
     {
         format!("{}es", s)
     } else if lower.ends_with("y")
@@ -223,7 +248,6 @@ pub(crate) fn type_specific_stub(field_type: &str) -> Option<&'static str> {
 /// Modifiers after the type are order-independent flags: `required`, `localized`.
 /// E.g., `"title:text:required:localized"` or `"title:text:localized:required"`.
 pub(crate) fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
-
     let mut fields = Vec::new();
     for part in s.split(',') {
         let part = part.trim();
@@ -255,11 +279,17 @@ pub(crate) fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
                 "index" => {} // accepted but not stored in FieldStub (handled at Lua level)
                 other => anyhow::bail!(
                     "Unknown modifier '{}' in field '{}' — valid: required, localized, index",
-                    other, name
+                    other,
+                    name
                 ),
             }
         }
-        fields.push(FieldStub { name, field_type, required, localized });
+        fields.push(FieldStub {
+            name,
+            field_type,
+            required,
+            localized,
+        });
     }
 
     if fields.is_empty() {
@@ -286,7 +316,8 @@ mod tests {
 
     #[test]
     fn test_parse_fields_shorthand() {
-        let fields = parse_fields_shorthand("title:text:required,body:textarea,published:checkbox").unwrap();
+        let fields =
+            parse_fields_shorthand("title:text:required,body:textarea,published:checkbox").unwrap();
         assert_eq!(fields.len(), 3);
         assert_eq!(fields[0].name, "title");
         assert_eq!(fields[0].field_type, "text");
@@ -318,7 +349,8 @@ mod tests {
         assert!(fields[0].localized);
 
         // mixed fields: one localized, one not
-        let fields = parse_fields_shorthand("title:text:required:localized,slug:text:required").unwrap();
+        let fields =
+            parse_fields_shorthand("title:text:required:localized,slug:text:required").unwrap();
         assert_eq!(fields.len(), 2);
         assert!(fields[0].localized);
         assert!(!fields[1].localized);
@@ -352,10 +384,16 @@ mod tests {
     fn test_make_collection_with_fields() {
         let tmp = tempfile::tempdir().expect("tempdir");
         make_collection(
-            tmp.path(), "articles",
+            tmp.path(),
+            "articles",
             Some("headline:text:required,body:richtext,draft:checkbox"),
-            true, false, false, false, false,
-        ).unwrap();
+            true,
+            false,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/articles.lua")).unwrap();
         assert!(content.contains("timestamps = false"));
@@ -434,10 +472,16 @@ mod tests {
     fn test_make_collection_with_localized_fields() {
         let tmp = tempfile::tempdir().expect("tempdir");
         make_collection(
-            tmp.path(), "posts",
+            tmp.path(),
+            "posts",
             Some("title:text:required:localized,body:textarea:localized"),
-            false, false, false, false, false,
-        ).unwrap();
+            false,
+            false,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
         assert!(content.contains("localized = true"));
@@ -447,8 +491,9 @@ mod tests {
     fn test_parse_fields_shorthand_new_types() {
         // Verify all newer field types are accepted
         let fields = parse_fields_shorthand(
-            "buttons:radio,section:collapsible,panels:tabs,snippet:code,related:join"
-        ).unwrap();
+            "buttons:radio,section:collapsible,panels:tabs,snippet:code,related:join",
+        )
+        .unwrap();
         assert_eq!(fields.len(), 5);
         assert_eq!(fields[0].field_type, "radio");
         assert_eq!(fields[1].field_type, "collapsible");
@@ -460,7 +505,16 @@ mod tests {
     #[test]
     fn test_make_collection_invalid_slug() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let result = make_collection(tmp.path(), "Bad Slug", None, false, false, false, false, false);
+        let result = make_collection(
+            tmp.path(),
+            "Bad Slug",
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         assert!(result.is_err());
     }
 
@@ -477,7 +531,9 @@ mod tests {
     fn test_make_collection_force_overwrite() {
         let tmp = tempfile::tempdir().expect("tempdir");
         make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
-        assert!(make_collection(tmp.path(), "posts", None, false, false, false, false, true).is_ok());
+        assert!(
+            make_collection(tmp.path(), "posts", None, false, false, false, false, true).is_ok()
+        );
     }
 
     #[test]
@@ -490,18 +546,39 @@ mod tests {
         ).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
-        assert!(content.contains("crap.fields.relationship({"), "relationship factory");
-        assert!(content.contains("relationship = { collection = \"TODO\" }"), "relationship stub");
+        assert!(
+            content.contains("crap.fields.relationship({"),
+            "relationship factory"
+        );
+        assert!(
+            content.contains("relationship = { collection = \"TODO\" }"),
+            "relationship stub"
+        );
         assert!(content.contains("crap.fields.select({"), "select factory");
-        assert!(content.contains("options = { { label = \"Option 1\", value = \"option_1\" } }"), "select stub");
-        assert!(content.contains("fields = { crap.fields.text({ name = \"item\" }) }"), "array sub-field stub");
+        assert!(
+            content.contains("options = { { label = \"Option 1\", value = \"option_1\" } }"),
+            "select stub"
+        );
+        assert!(
+            content.contains("fields = { crap.fields.text({ name = \"item\" }) }"),
+            "array sub-field stub"
+        );
         assert!(content.contains("crap.fields.blocks({"), "blocks factory");
         assert!(content.contains("crap.fields.tabs({"), "tabs factory");
-        assert!(content.contains("admin = { language = \"javascript\" }"), "code stub");
-        assert!(content.contains("collection = \"TODO\","), "join collection stub");
+        assert!(
+            content.contains("admin = { language = \"javascript\" }"),
+            "code stub"
+        );
+        assert!(
+            content.contains("collection = \"TODO\","),
+            "join collection stub"
+        );
         assert!(content.contains("on = \"TODO\","), "join on stub");
         assert!(content.contains("crap.fields.upload({"), "upload factory");
-        assert!(content.contains("relationship = { collection = \"media\" }"), "upload relationship stub");
+        assert!(
+            content.contains("relationship = { collection = \"media\" }"),
+            "upload relationship stub"
+        );
     }
 
     #[test]
@@ -532,7 +609,10 @@ mod tests {
         make_collection(tmp.path(), "posts", None, true, false, false, false, false).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
-        assert!(!content.contains("default_sort"), "no default_sort when timestamps disabled");
+        assert!(
+            !content.contains("default_sort"),
+            "no default_sort when timestamps disabled"
+        );
         assert!(content.contains("list_searchable_fields"));
     }
 

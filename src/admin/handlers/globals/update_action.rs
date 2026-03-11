@@ -5,24 +5,21 @@ use axum::{
 };
 use std::collections::HashMap;
 
-use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
-use crate::admin::handlers::collections::forms::{extract_join_data_from_form, transform_select_has_many};
+use crate::admin::handlers::collections::forms::{
+    extract_join_data_from_form, transform_select_has_many,
+};
+use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
+use crate::core::event::{EventOperation, EventTarget};
 use crate::core::validate::ValidationError;
 use crate::db::query::{self, AccessResult, LocaleContext, LocaleMode};
-use crate::core::event::{EventTarget, EventOperation};
 use crate::service;
 
 use crate::admin::handlers::shared::{
-    get_user_doc, get_event_user,
-    check_access_or_forbid, 
-    build_field_contexts, enrich_field_contexts,
-    apply_display_conditions, split_sidebar_fields,
-    translate_validation_errors,
-    do_unpublish,
-    htmx_redirect, html_with_toast,
-    redirect_response, server_error, forbidden,
+    apply_display_conditions, build_field_contexts, check_access_or_forbid, do_unpublish,
+    enrich_field_contexts, forbidden, get_event_user, get_user_doc, html_with_toast, htmx_redirect,
+    redirect_response, server_error, split_sidebar_fields, translate_validation_errors,
 };
 
 /// POST /admin/globals/{slug} — update a global
@@ -39,7 +36,10 @@ pub async fn update_action(
 
     // Check update access
     match check_access_or_forbid(&state, def.access.update.as_deref(), &auth_user, None, None) {
-        Ok(AccessResult::Denied) => return forbidden(&state, "You don't have permission to update this global").into_response(),
+        Ok(AccessResult::Denied) => {
+            return forbidden(&state, "You don't have permission to update this global")
+                .into_response()
+        }
         Err(resp) => return resp,
         _ => {}
     }
@@ -49,22 +49,30 @@ pub async fn update_action(
     let draft = action == "save_draft";
 
     let form_locale = form_data.remove("_locale");
-    let locale_ctx = LocaleContext::from_locale_string(
-        form_locale.as_deref(), &state.config.locale,
-    );
+    let locale_ctx =
+        LocaleContext::from_locale_string(form_locale.as_deref(), &state.config.locale);
 
     // Strip field-level update-denied fields (fail closed on pool exhaustion)
     if def.fields.iter().any(|f| f.access.update.is_some()) {
         let user_doc = get_user_doc(&auth_user);
         let mut conn = match state.pool.get() {
             Ok(c) => c,
-            Err(e) => { tracing::error!("Field access check pool error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check pool error: {}", e);
+                return server_error(&state, "Database error").into_response();
+            }
         };
         let tx = match conn.transaction() {
             Ok(t) => t,
-            Err(e) => { tracing::error!("Field access check tx error: {}", e); return server_error(&state, "Database error").into_response(); }
+            Err(e) => {
+                tracing::error!("Field access check tx error: {}", e);
+                return server_error(&state, "Database error").into_response();
+            }
         };
-        let denied = state.hook_runner.check_field_write_access(&def.fields, user_doc, "update", &tx);
+        let denied =
+            state
+                .hook_runner
+                .check_field_write_access(&def.fields, user_doc, "update", &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
         let _ = tx.commit();
         for name in &denied {
@@ -95,53 +103,95 @@ pub async fn update_action(
         // Handle unpublish: set _status to 'draft' and create a version
         if action_owned == "unpublish" && def_owned.has_versions() {
             let global_table = format!("_global_{}", slug_owned);
-            let mut conn = pool.get().map_err(|e| anyhow::anyhow!("DB connection: {}", e))?;
-            let tx = conn.transaction().map_err(|e| anyhow::anyhow!("Start transaction: {}", e))?;
+            let mut conn = pool
+                .get()
+                .map_err(|e| anyhow::anyhow!("DB connection: {}", e))?;
+            let tx = conn
+                .transaction()
+                .map_err(|e| anyhow::anyhow!("Start transaction: {}", e))?;
             let doc = query::get_global(&tx, &slug_owned, &def_owned, locale_ctx.as_ref())?;
-            do_unpublish(&tx, &global_table, "default", &def_owned.fields, def_owned.versions.as_ref(), &doc)?;
+            do_unpublish(
+                &tx,
+                &global_table,
+                "default",
+                &def_owned.fields,
+                def_owned.versions.as_ref(),
+                &doc,
+            )?;
             tx.commit().map_err(|e| anyhow::anyhow!("Commit: {}", e))?;
             Ok((doc, HashMap::new()))
         } else {
             service::update_global_document(
-                &pool, &runner, &slug_owned, &def_owned,
+                &pool,
+                &runner,
+                &slug_owned,
+                &def_owned,
                 service::WriteInput {
-                    data: form_data, join_data: &join_data, password: None,
-                    locale_ctx: locale_ctx.as_ref(), locale, draft, ui_locale,
+                    data: form_data,
+                    join_data: &join_data,
+                    password: None,
+                    locale_ctx: locale_ctx.as_ref(),
+                    locale,
+                    draft,
+                    ui_locale,
                 },
                 user_doc.as_ref(),
             )
         }
-    }).await;
+    })
+    .await;
 
     match result {
         Ok(Ok((doc, _req_context))) => {
             state.hook_runner.publish_event(
-                &state.event_bus, &def.hooks, def.live.as_ref(),
+                &state.event_bus,
+                &def.hooks,
+                def.live.as_ref(),
                 EventTarget::Global,
                 EventOperation::Update,
-                slug.clone(), doc.id.clone(), doc.fields.clone(),
+                slug.clone(),
+                doc.id.clone(),
+                doc.fields.clone(),
                 get_event_user(&auth_user),
             );
             htmx_redirect(&format!("/admin/globals/{}", slug))
         }
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
-                let locale = auth_user.as_ref()
+                let locale = auth_user
+                    .as_ref()
                     .map(|Extension(au)| au.ui_locale.as_str())
                     .unwrap_or("en");
                 let error_map = translate_validation_errors(ve, &state.translations, locale);
                 let toast_msg = state.translations.get(locale, "validation.error_summary");
-                let mut fields = build_field_contexts(&def.fields, &form_data_clone, &error_map, false, false);
+                let mut fields =
+                    build_field_contexts(&def.fields, &form_data_clone, &error_map, false, false);
 
                 // Enrich relationship/array/blocks fields with options and join data
-                let doc_fields: HashMap<String, serde_json::Value> = form_data_clone.iter()
+                let doc_fields: HashMap<String, serde_json::Value> = form_data_clone
+                    .iter()
                     .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
                     .chain(join_data_clone.iter().map(|(k, v)| (k.clone(), v.clone())))
                     .collect();
-                enrich_field_contexts(&mut fields, &def.fields, &doc_fields, &state, false, false, &error_map, None);
+                enrich_field_contexts(
+                    &mut fields,
+                    &def.fields,
+                    &doc_fields,
+                    &state,
+                    false,
+                    false,
+                    &error_map,
+                    None,
+                );
 
                 let form_data_json = serde_json::json!(doc_fields);
-                apply_display_conditions(&mut fields, &def.fields, &form_data_json, &state.hook_runner, false);
+                apply_display_conditions(
+                    &mut fields,
+                    &def.fields,
+                    &form_data_json,
+                    &state.hook_runner,
+                    false,
+                );
 
                 let (main_fields, sidebar_fields) = split_sidebar_fields(fields);
 

@@ -32,7 +32,9 @@ fn make_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("status", FieldType::Select)
             .default_value(serde_json::json!("draft"))
             .build(),
@@ -95,16 +97,14 @@ fn setup_service(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -125,14 +125,15 @@ fn setup_service(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 /// Helper to build a setup with a custom init.lua for hook tests.
-fn setup_service_with_hook(
-    collections: Vec<CollectionDefinition>,
-    init_lua: &str,
-) -> TestSetup {
+fn setup_service_with_hook(collections: Vec<CollectionDefinition>, init_lua: &str) -> TestSetup {
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
@@ -153,16 +154,14 @@ fn setup_service_with_hook(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -183,13 +182,19 @@ fn setup_service_with_hook(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 // ── Dot-notation helpers ──────────────────────────────────────────────────
 
 fn str_val(s: &str) -> Value {
-    Value { kind: Some(Kind::StringValue(s.to_string())) }
+    Value {
+        kind: Some(Kind::StringValue(s.to_string())),
+    }
 }
 
 fn struct_val(pairs: &[(&str, Value)]) -> Value {
@@ -244,11 +249,15 @@ fn make_products_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("name", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("name", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("seo", FieldType::Group)
-            .fields(vec![
-                FieldDefinition::builder("meta_title", FieldType::Text).build(),
-            ])
+            .fields(vec![FieldDefinition::builder(
+                "meta_title",
+                FieldType::Text,
+            )
+            .build()])
             .build(),
         FieldDefinition::builder("variants", FieldType::Array)
             .fields(vec![
@@ -263,17 +272,21 @@ fn make_products_def() -> CollectionDefinition {
             .build(),
         FieldDefinition::builder("content", FieldType::Blocks)
             .blocks(vec![
-                BlockDefinition::new("text", vec![
-                    FieldDefinition::builder("body", FieldType::Text).build(),
-                ]),
-                BlockDefinition::new("section", vec![
-                    FieldDefinition::builder("heading", FieldType::Text).build(),
-                    FieldDefinition::builder("meta", FieldType::Group)
-                        .fields(vec![
-                            FieldDefinition::builder("author", FieldType::Text).build(),
-                        ])
-                        .build(),
-                ]),
+                BlockDefinition::new(
+                    "text",
+                    vec![FieldDefinition::builder("body", FieldType::Text).build()],
+                ),
+                BlockDefinition::new(
+                    "section",
+                    vec![
+                        FieldDefinition::builder("heading", FieldType::Text).build(),
+                        FieldDefinition::builder("meta", FieldType::Group)
+                            .fields(vec![
+                                FieldDefinition::builder("author", FieldType::Text).build()
+                            ])
+                            .build(),
+                    ],
+                ),
             ])
             .build(),
     ];
@@ -287,7 +300,9 @@ fn make_categories_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Categories".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![FieldDefinition::builder("name", FieldType::Text).required(true).build()];
+    def.fields = vec![FieldDefinition::builder("name", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -299,7 +314,9 @@ fn make_posts_with_relationship() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("category", FieldType::Relationship)
             .relationship(RelationshipConfig::new("categories", false))
             .build(),
@@ -518,7 +535,11 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "group sub-field filter");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "group sub-field filter"
+    );
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -535,7 +556,11 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "array sub-field filter");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "array sub-field filter"
+    );
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -552,7 +577,11 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "group-in-array filter");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "group-in-array filter"
+    );
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -569,7 +598,11 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "block sub-field filter");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "block sub-field filter"
+    );
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Widget")
@@ -586,7 +619,11 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "block type filter");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "block type filter"
+    );
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Gadget")
@@ -603,7 +640,11 @@ async fn find_with_where_dot_notation() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "group-in-block filter");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "group-in-block filter"
+    );
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("Gadget")
@@ -662,7 +703,11 @@ async fn before_change_hook_modifies_array_data() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "hook-injected variant should be findable");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "hook-injected variant should be findable"
+    );
     assert_eq!(
         get_proto_field(&resp.documents[0], "name").as_deref(),
         Some("HookTest")
@@ -679,8 +724,11 @@ async fn before_change_hook_modifies_array_data() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "original variant should still exist");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "original variant should still exist"
+    );
 }
 
 // ── Group 1: Filter Operators (gRPC) ──────────────────────────────────────
-

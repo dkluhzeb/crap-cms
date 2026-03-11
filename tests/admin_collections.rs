@@ -9,10 +9,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
+use crap_cms::admin::AdminState;
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
@@ -31,9 +31,9 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -45,10 +45,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -60,10 +66,7 @@ struct TestApp {
     jwt_secret: String,
 }
 
-fn setup_app(
-    collections: Vec<CollectionDefinition>,
-    globals: Vec<GlobalDefinition>,
-) -> TestApp {
+fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".to_string();
@@ -94,19 +97,17 @@ fn setup_app_with_config(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = {
         let reg = registry.read().unwrap();
@@ -123,8 +124,12 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".to_string(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            5, 300,
+        )),
+        forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -194,8 +199,13 @@ fn make_localized_pages_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).localized(true).build(),
-        FieldDefinition::builder("body", FieldType::Textarea).localized(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .localized(true)
+            .build(),
+        FieldDefinition::builder("body", FieldType::Textarea)
+            .localized(true)
+            .build(),
     ];
     def.admin = AdminConfig {
         use_as_title: Some("title".to_string()),
@@ -224,7 +234,9 @@ fn make_versioned_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.admin = AdminConfig {
@@ -243,7 +255,9 @@ fn make_posts_with_required_title() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("body", FieldType::Textarea).build(),
     ];
     def.admin = AdminConfig {
@@ -261,7 +275,8 @@ async fn dashboard_returns_200() {
     let user_id = create_test_user(&app, "dash@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "dash@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin")
                 .header("cookie", &cookie)
@@ -281,7 +296,8 @@ async fn list_collections_returns_200() {
     let user_id = create_test_user(&app, "list@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "list@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections")
                 .header("cookie", &cookie)
@@ -299,7 +315,8 @@ async fn list_items_returns_200() {
     let user_id = create_test_user(&app, "items@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "items@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/posts")
                 .header("cookie", &cookie)
@@ -317,7 +334,8 @@ async fn create_form_returns_200() {
     let user_id = create_test_user(&app, "create@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "create@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/posts/create")
                 .header("cookie", &cookie)
@@ -335,7 +353,8 @@ async fn create_action_creates_document() {
     let user_id = create_test_user(&app, "create_action@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "create_action@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/collections/posts")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -370,7 +389,8 @@ async fn edit_form_returns_200() {
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get(format!("/admin/collections/posts/{}", doc.id))
                 .header("cookie", &cookie)
@@ -398,7 +418,8 @@ async fn update_action_updates_document() {
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post(format!("/admin/collections/posts/{}", doc.id))
                 .header("cookie", auth_and_csrf(&cookie))
@@ -433,7 +454,8 @@ async fn delete_action_removes_document() {
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::delete(format!("/admin/collections/posts/{}", doc.id))
                 .header("cookie", auth_and_csrf(&cookie))
@@ -457,7 +479,8 @@ async fn nonexistent_collection_returns_404() {
     let user_id = create_test_user(&app, "notfound@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "notfound@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/nope")
                 .header("cookie", &cookie)
@@ -520,7 +543,9 @@ async fn create_action_with_locale() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("title=Locale+Test+Page&body=Content+here&_locale=de"))
+                .body(Body::from(
+                    "title=Locale+Test+Page&body=Content+here&_locale=de",
+                ))
                 .unwrap(),
         )
         .await
@@ -546,7 +571,8 @@ async fn delete_action_returns_redirect() {
     };
     let mut conn = app.pool.get().unwrap();
     let tx = conn.transaction().unwrap();
-    let data = std::collections::HashMap::from([("title".to_string(), "To Delete Redir".to_string())]);
+    let data =
+        std::collections::HashMap::from([("title".to_string(), "To Delete Redir".to_string())]);
     let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
     tx.commit().unwrap();
 
@@ -569,7 +595,9 @@ async fn delete_action_returns_redirect() {
     );
 
     if status == StatusCode::SEE_OTHER || status == StatusCode::FOUND {
-        let location = resp.headers().get("location")
+        let location = resp
+            .headers()
+            .get("location")
             .map(|v| v.to_str().unwrap_or(""));
         if let Some(loc) = location {
             assert!(
@@ -589,7 +617,8 @@ async fn edit_nonexistent_document_returns_404() {
     let user_id = create_test_user(&app, "editnf@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "editnf@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/collections/posts/nonexistent-id-12345")
                 .header("cookie", &cookie)
@@ -609,7 +638,8 @@ async fn delete_nonexistent_document() {
     let user_id = create_test_user(&app, "delnf@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "delnf@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::delete("/admin/collections/posts/nonexistent-id-12345")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -621,8 +651,10 @@ async fn delete_nonexistent_document() {
         .unwrap();
     let status = resp.status();
     assert!(
-        status == StatusCode::SEE_OTHER || status == StatusCode::OK
-            || status == StatusCode::FOUND || status == StatusCode::NOT_FOUND,
+        status == StatusCode::SEE_OTHER
+            || status == StatusCode::OK
+            || status == StatusCode::FOUND
+            || status == StatusCode::NOT_FOUND,
         "Delete nonexistent should return redirect or not found, got {}",
         status
     );
@@ -636,7 +668,8 @@ async fn update_nonexistent_document() {
     let user_id = create_test_user(&app, "updnf@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "updnf@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/collections/posts/nonexistent-id-12345")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -649,8 +682,10 @@ async fn update_nonexistent_document() {
         .unwrap();
     let status = resp.status();
     assert!(
-        status == StatusCode::SEE_OTHER || status == StatusCode::OK
-            || status == StatusCode::FOUND || status == StatusCode::NOT_FOUND
+        status == StatusCode::SEE_OTHER
+            || status == StatusCode::OK
+            || status == StatusCode::FOUND
+            || status == StatusCode::NOT_FOUND
             || status == StatusCode::INTERNAL_SERVER_ERROR,
         "Update nonexistent should return redirect or error, got {}",
         status
@@ -672,9 +707,7 @@ async fn collection_list_with_pagination() {
     for i in 0..5 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([
-            ("title".to_string(), format!("Post {}", i)),
-        ]);
+        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -749,7 +782,10 @@ async fn localized_collection_list_shows_documents() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("Hello World"), "list should contain the document title");
+    assert!(
+        body.contains("Hello World"),
+        "list should contain the document title"
+    );
 }
 
 #[tokio::test]
@@ -765,7 +801,9 @@ async fn localized_collection_create_via_form() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("title=Created+Page&body=Some+content&_locale=en"))
+                .body(Body::from(
+                    "title=Created+Page&body=Some+content&_locale=en",
+                ))
                 .unwrap(),
         )
         .await
@@ -815,7 +853,10 @@ async fn localized_collection_edit_page_returns_200() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("Editable Page"), "edit page should contain the document title");
+    assert!(
+        body.contains("Editable Page"),
+        "edit page should contain the document title"
+    );
 }
 
 #[tokio::test]
@@ -945,7 +986,9 @@ async fn collection_create_with_draft() {
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("title=Draft+Article&body=WIP&_action=save_draft"))
+                .body(Body::from(
+                    "title=Draft+Article&body=WIP&_action=save_draft",
+                ))
                 .unwrap(),
         )
         .await
@@ -1024,7 +1067,10 @@ async fn list_items_with_search_and_pagination() {
     for i in 0..5 {
         let mut conn = app.pool.get().unwrap();
         let tx = conn.transaction().unwrap();
-        let data = std::collections::HashMap::from([("title".to_string(), format!("Searchable Item {}", i))]);
+        let data = std::collections::HashMap::from([(
+            "title".to_string(),
+            format!("Searchable Item {}", i),
+        )]);
         query::create(&tx, "posts", &def, &data, None).unwrap();
         tx.commit().unwrap();
     }
@@ -1041,14 +1087,20 @@ async fn list_items_with_search_and_pagination() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("Searchable"), "Search results should contain matching items");
+    assert!(
+        body.contains("Searchable"),
+        "Search results should contain matching items"
+    );
 }
 
 // ── Collections: Create with validation error ─────────────────────────────
 
 #[tokio::test]
 async fn create_action_validation_error_missing_required_field() {
-    let app = setup_app(vec![make_posts_with_required_title(), make_users_def()], vec![]);
+    let app = setup_app(
+        vec![make_posts_with_required_title(), make_users_def()],
+        vec![],
+    );
     let user_id = create_test_user(&app, "validate@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "validate@test.com");
 
@@ -1087,7 +1139,9 @@ async fn create_action_auth_collection_with_password() {
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("email=newuser@test.com&name=New+User&password=secret456"))
+                .body(Body::from(
+                    "email=newuser@test.com&name=New+User&password=secret456",
+                ))
                 .unwrap(),
         )
         .await
@@ -1101,4 +1155,3 @@ async fn create_action_auth_collection_with_password() {
 }
 
 // ── Collections: Create form for auth collection shows password ───────────
-

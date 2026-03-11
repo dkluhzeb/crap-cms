@@ -1,7 +1,7 @@
-use std::collections::HashMap;
 use crate::core::field::FieldDefinition;
 use crate::core::validate::FieldError;
 use crate::db::query;
+use std::collections::HashMap;
 
 /// Check unique constraint (only if value is non-empty and field has a parent column).
 /// `col_name` is the actual DB column to query (may differ from `data_key` for localized fields).
@@ -26,7 +26,12 @@ pub(crate) fn check_unique(
     };
     match query::count_where_field_eq(conn, table, col_name, &value_str, exclude_id) {
         Ok(count) if count > 0 => {
-            errors.push(FieldError::with_key(data_key.to_owned(), format!("{} must be unique", field.name), "validation.unique", HashMap::from([("field".to_string(), field.name.clone())])));
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must be unique", field.name),
+                "validation.unique",
+                HashMap::from([("field".to_string(), field.name.clone())]),
+            ));
         }
         Ok(_) => {}
         Err(e) => {
@@ -48,9 +53,12 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT);
-             INSERT INTO test (id, email) VALUES ('existing', 'taken@test.com');"
-        ).unwrap();
-        let fields = vec![FieldDefinition::builder("email", FieldType::Text).unique(true).build()];
+             INSERT INTO test (id, email) VALUES ('existing', 'taken@test.com');",
+        )
+        .unwrap();
+        let fields = vec![FieldDefinition::builder("email", FieldType::Text)
+            .unique(true)
+            .build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("taken@test.com"));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
@@ -64,12 +72,24 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, email TEXT);
-             INSERT INTO test (id, email) VALUES ('self', 'me@test.com');"
-        ).unwrap();
-        let fields = vec![FieldDefinition::builder("email", FieldType::Text).unique(true).build()];
+             INSERT INTO test (id, email) VALUES ('self', 'me@test.com');",
+        )
+        .unwrap();
+        let fields = vec![FieldDefinition::builder("email", FieldType::Text)
+            .unique(true)
+            .build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("me@test.com"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", Some("self"), false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &conn,
+            "test",
+            Some("self"),
+            false,
+            None,
+        );
         assert!(result.is_ok());
     }
 
@@ -79,13 +99,19 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT);
-             INSERT INTO test (id, slug) VALUES ('a', '');"
-        ).unwrap();
-        let fields = vec![FieldDefinition::builder("slug", FieldType::Text).unique(true).build()];
+             INSERT INTO test (id, slug) VALUES ('a', '');",
+        )
+        .unwrap();
+        let fields = vec![FieldDefinition::builder("slug", FieldType::Text)
+            .unique(true)
+            .build()];
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!(""));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_ok(), "Unique check should not fire on empty value");
+        assert!(
+            result.is_ok(),
+            "Unique check should not fire on empty value"
+        );
     }
 
     #[test]
@@ -94,13 +120,19 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, rank REAL);
-             INSERT INTO test (id, rank) VALUES ('existing', 42);"
-        ).unwrap();
-        let fields = vec![FieldDefinition::builder("rank", FieldType::Number).unique(true).build()];
+             INSERT INTO test (id, rank) VALUES ('existing', 42);",
+        )
+        .unwrap();
+        let fields = vec![FieldDefinition::builder("rank", FieldType::Number)
+            .unique(true)
+            .build()];
         let mut data = HashMap::new();
         data.insert("rank".to_string(), json!(42));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Duplicate number value should fail unique check");
+        assert!(
+            result.is_err(),
+            "Duplicate number value should fail unique check"
+        );
         assert!(result.unwrap_err().errors[0].message.contains("unique"));
     }
 
@@ -108,12 +140,18 @@ mod tests {
     fn test_validate_unique_skips_field_without_parent_column() {
         let lua = mlua::Lua::new();
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)").unwrap();
-        let fields = vec![FieldDefinition::builder("items", FieldType::Array).unique(true).build()];
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+            .unwrap();
+        let fields = vec![FieldDefinition::builder("items", FieldType::Array)
+            .unique(true)
+            .build()];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!(["a", "b"]));
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_ok(), "Array field with unique=true should not run unique check");
+        assert!(
+            result.is_ok(),
+            "Array field with unique=true should not run unique check"
+        );
     }
 
     #[test]
@@ -134,20 +172,45 @@ mod tests {
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: true,
         };
-        let locale_ctx = crate::db::query::LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
+        let locale_ctx =
+            crate::db::query::LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
 
         // Duplicate value in the en column should fail
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!("taken-en"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, Some(&locale_ctx));
-        assert!(result.is_err(), "Localized unique field should detect duplicate in suffixed column");
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &conn,
+            "test",
+            None,
+            false,
+            Some(&locale_ctx),
+        );
+        assert!(
+            result.is_err(),
+            "Localized unique field should detect duplicate in suffixed column"
+        );
         assert!(result.unwrap_err().errors[0].message.contains("unique"));
 
         // Non-duplicate value should pass
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!("fresh"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, Some(&locale_ctx));
-        assert!(result.is_ok(), "Localized unique field with fresh value should pass");
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &conn,
+            "test",
+            None,
+            false,
+            Some(&locale_ctx),
+        );
+        assert!(
+            result.is_ok(),
+            "Localized unique field with fresh value should pass"
+        );
     }
 
     #[test]
@@ -157,30 +220,53 @@ mod tests {
         // Group is localized, child field inherits localization
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, seo__slug__en TEXT, seo__slug__de TEXT);
-             INSERT INTO test (id, seo__slug__en) VALUES ('existing', 'taken');"
-        ).unwrap();
+             INSERT INTO test (id, seo__slug__en) VALUES ('existing', 'taken');",
+        )
+        .unwrap();
         let fields = vec![FieldDefinition::builder("seo", FieldType::Group)
             .localized(true)
-            .fields(vec![
-                FieldDefinition::builder("slug", FieldType::Text).unique(true).build(),
-            ])
+            .fields(vec![FieldDefinition::builder("slug", FieldType::Text)
+                .unique(true)
+                .build()])
             .build()];
         let locale_cfg = crate::config::LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: true,
         };
-        let locale_ctx = crate::db::query::LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
+        let locale_ctx =
+            crate::db::query::LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
 
         let mut data = HashMap::new();
         data.insert("seo__slug".to_string(), json!("taken"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, Some(&locale_ctx));
-        assert!(result.is_err(), "Inherited localized unique field should detect duplicate");
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &conn,
+            "test",
+            None,
+            false,
+            Some(&locale_ctx),
+        );
+        assert!(
+            result.is_err(),
+            "Inherited localized unique field should detect duplicate"
+        );
         assert!(result.unwrap_err().errors[0].message.contains("unique"));
         // Error field should use the data key, not the DB column
         let mut data = HashMap::new();
         data.insert("seo__slug".to_string(), json!("taken"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, Some(&locale_ctx));
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &conn,
+            "test",
+            None,
+            false,
+            Some(&locale_ctx),
+        );
         assert_eq!(result.unwrap_err().errors[0].field, "seo__slug");
     }
 
@@ -191,8 +277,9 @@ mod tests {
         // No locale context = bare column name (backward compat)
         conn.execute_batch(
             "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT);
-             INSERT INTO test (id, slug) VALUES ('existing', 'taken');"
-        ).unwrap();
+             INSERT INTO test (id, slug) VALUES ('existing', 'taken');",
+        )
+        .unwrap();
         let fields = vec![FieldDefinition::builder("slug", FieldType::Text)
             .unique(true)
             .localized(true)
@@ -201,6 +288,9 @@ mod tests {
         data.insert("slug".to_string(), json!("taken"));
         // No locale_ctx → falls back to bare column
         let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
-        assert!(result.is_err(), "Without locale context, should check bare column");
+        assert!(
+            result.is_err(),
+            "Without locale context, should check bare column"
+        );
     }
 }

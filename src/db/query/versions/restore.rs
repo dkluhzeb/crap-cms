@@ -27,7 +27,8 @@ pub fn restore_version(
     status: &str,
     locale_config: &LocaleConfig,
 ) -> Result<crate::core::Document> {
-    let obj = snapshot.as_object()
+    let obj = snapshot
+        .as_object()
         .ok_or_else(|| anyhow::anyhow!("Snapshot is not a JSON object"))?;
 
     let locales_enabled = locale_config.is_enabled();
@@ -64,7 +65,8 @@ pub fn restore_global_version(
     status: &str,
     locale_config: &LocaleConfig,
 ) -> Result<crate::core::Document> {
-    let obj = snapshot.as_object()
+    let obj = snapshot
+        .as_object()
         .ok_or_else(|| anyhow::anyhow!("Snapshot is not a JSON object"))?;
 
     let global_table = format!("_global_{}", slug);
@@ -81,7 +83,14 @@ pub fn restore_global_version(
     };
     let doc = super::super::update_global(conn, slug, def, &data, locale_ctx.as_ref())?;
 
-    restore_locale_and_join_data(conn, &global_table, "default", &def.fields, obj, locale_config)?;
+    restore_locale_and_join_data(
+        conn,
+        &global_table,
+        "default",
+        &def.fields,
+        obj,
+        locale_config,
+    )?;
 
     // Update status and create a new version for the restore
     set_document_status(conn, &global_table, "default", status)?;
@@ -113,14 +122,21 @@ fn restore_locale_and_join_data(
                 let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
                 for sub in &field.fields {
                     let is_localized = field.localized || sub.localized;
-                    if !is_localized { continue; }
+                    if !is_localized {
+                        continue;
+                    }
                     let base = format!("{}__{}", field.name, sub.name);
                     // Resolve value from flat key or nested path
-                    let val = obj.get(&base)
+                    let val = obj
+                        .get(&base)
                         .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
                     restore_locale_columns(
-                        val, &base, locale_config,
-                        &mut set_clauses, &mut params, &mut idx,
+                        val,
+                        &base,
+                        locale_config,
+                        &mut set_clauses,
+                        &mut params,
+                        &mut idx,
                     );
                 }
                 continue;
@@ -131,8 +147,12 @@ fn restore_locale_and_join_data(
                 || field.field_type == crate::core::field::FieldType::Collapsible
             {
                 collect_locale_restore_fields(
-                    &field.fields, obj, locale_config,
-                    &mut set_clauses, &mut params, &mut idx,
+                    &field.fields,
+                    obj,
+                    locale_config,
+                    &mut set_clauses,
+                    &mut params,
+                    &mut idx,
                 );
                 continue;
             }
@@ -141,33 +161,47 @@ fn restore_locale_and_join_data(
             if field.field_type == crate::core::field::FieldType::Tabs {
                 for tab in &field.tabs {
                     collect_locale_restore_fields(
-                        &tab.fields, obj, locale_config,
-                        &mut set_clauses, &mut params, &mut idx,
+                        &tab.fields,
+                        obj,
+                        locale_config,
+                        &mut set_clauses,
+                        &mut params,
+                        &mut idx,
                     );
                 }
                 continue;
             }
-            if !field.localized || !field.has_parent_column() { continue; }
+            if !field.localized || !field.has_parent_column() {
+                continue;
+            }
             restore_locale_columns(
-                obj.get(&field.name), &field.name, locale_config,
-                &mut set_clauses, &mut params, &mut idx,
+                obj.get(&field.name),
+                &field.name,
+                locale_config,
+                &mut set_clauses,
+                &mut params,
+                &mut idx,
             );
         }
 
         if !set_clauses.is_empty() {
             let sql = format!(
                 "UPDATE {} SET {} WHERE id = ?{}",
-                table, set_clauses.join(", "), idx
+                table,
+                set_clauses.join(", "),
+                idx
             );
             params.push(Box::new(parent_id.to_string()));
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params.iter().map(|p| p.as_ref()).collect();
             conn.execute(&sql, params_from_iter(param_refs.iter()))
                 .context("Failed to restore locale columns")?;
         }
     }
 
     // Restore join table data from snapshot
-    let mut join_data: std::collections::HashMap<String, serde_json::Value> = std::collections::HashMap::new();
+    let mut join_data: std::collections::HashMap<String, serde_json::Value> =
+        std::collections::HashMap::new();
     collect_join_data_from_snapshot(fields, obj, &mut join_data);
     if !join_data.is_empty() {
         super::super::save_join_table_data(conn, table, fields, parent_id, &join_data, None)?;
@@ -190,33 +224,45 @@ fn collect_locale_restore_fields(
             let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
             for sub in &field.fields {
                 let is_localized = field.localized || sub.localized;
-                if !is_localized { continue; }
+                if !is_localized {
+                    continue;
+                }
                 let base = format!("{}__{}", field.name, sub.name);
-                let val = obj.get(&base)
+                let val = obj
+                    .get(&base)
                     .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
-                restore_locale_columns(
-                    val, &base, locale_config,
-                    set_clauses, params, idx,
-                );
+                restore_locale_columns(val, &base, locale_config, set_clauses, params, idx);
             }
         } else if field.field_type == crate::core::field::FieldType::Row
             || field.field_type == crate::core::field::FieldType::Collapsible
         {
             collect_locale_restore_fields(
-                &field.fields, obj, locale_config,
-                set_clauses, params, idx,
+                &field.fields,
+                obj,
+                locale_config,
+                set_clauses,
+                params,
+                idx,
             );
         } else if field.field_type == crate::core::field::FieldType::Tabs {
             for tab in &field.tabs {
                 collect_locale_restore_fields(
-                    &tab.fields, obj, locale_config,
-                    set_clauses, params, idx,
+                    &tab.fields,
+                    obj,
+                    locale_config,
+                    set_clauses,
+                    params,
+                    idx,
                 );
             }
         } else if field.localized && field.has_parent_column() {
             restore_locale_columns(
-                obj.get(&field.name), &field.name, locale_config,
-                set_clauses, params, idx,
+                obj.get(&field.name),
+                &field.name,
+                locale_config,
+                set_clauses,
+                params,
+                idx,
             );
         }
     }
@@ -310,16 +356,20 @@ mod tests {
             fallback: true,
         };
 
-        let blocks_field = FieldDefinition::builder("content", crate::core::field::FieldType::Blocks)
-            .localized(true)
-            .build();
+        let blocks_field =
+            FieldDefinition::builder("content", crate::core::field::FieldType::Blocks)
+                .localized(true)
+                .build();
         let mut def = crate::core::collection::CollectionDefinition::new("posts");
         def.fields = vec![
             FieldDefinition::builder("title", crate::core::field::FieldType::Text)
                 .localized(true)
                 .build(),
             FieldDefinition::builder("page_settings", crate::core::field::FieldType::Tabs)
-                .tabs(vec![crate::core::field::FieldTab::new("Content", vec![blocks_field])])
+                .tabs(vec![crate::core::field::FieldTab::new(
+                    "Content",
+                    vec![blocks_field],
+                )])
                 .build(),
         ];
         def.versions = Some(crate::core::collection::VersionsConfig::new(true, 10));
@@ -333,19 +383,34 @@ mod tests {
         });
 
         // This should NOT fail with "Failed to restore locale columns"
-        let doc = restore_version(&conn, "posts", &def, "p1", &snapshot, "published", &locale_config).unwrap();
+        let doc = restore_version(
+            &conn,
+            "posts",
+            &def,
+            "p1",
+            &snapshot,
+            "published",
+            &locale_config,
+        )
+        .unwrap();
         assert_eq!(doc.id, "p1");
 
         // Verify title was restored to default locale
-        let title: String = conn.query_row(
-            "SELECT title__en FROM posts WHERE id = 'p1'", [], |r| r.get(0)
-        ).unwrap();
+        let title: String = conn
+            .query_row("SELECT title__en FROM posts WHERE id = 'p1'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
         assert_eq!(title, "Restored Title");
 
         // Verify blocks were restored to join table
-        let block_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM posts_content WHERE parent_id = 'p1'", [], |r| r.get(0)
-        ).unwrap();
+        let block_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM posts_content WHERE parent_id = 'p1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(block_count, 1, "blocks from snapshot should be restored");
 
         // Verify a version was created for the restore

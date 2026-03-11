@@ -122,7 +122,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[admin]\ndev_mode = true\nrequire_auth = false\naccess = \"access.admin_panel\"\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert!(config.admin.dev_mode);
         assert!(!config.admin.require_auth);
@@ -132,10 +133,7 @@ mod tests {
     #[test]
     fn admin_config_partial_toml_uses_defaults() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
-            tmp.path().join("crap.toml"),
-            "[admin]\ndev_mode = true\n",
-        ).unwrap();
+        std::fs::write(tmp.path().join("crap.toml"), "[admin]\ndev_mode = true\n").unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert!(config.admin.dev_mode);
         assert!(config.admin.require_auth); // default
@@ -148,7 +146,8 @@ mod tests {
         std::fs::write(
             tmp.path().join("crap.toml"),
             "[database]\npool_max_size = 32\nbusy_timeout = 60000\n",
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.pool_max_size, 32);
         assert_eq!(config.database.busy_timeout, 60000);

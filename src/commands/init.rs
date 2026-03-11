@@ -84,7 +84,16 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             })
             .interact_text()
             .context("Failed to read auth slug")?;
-        crate::scaffold::make_collection(&config_dir, &slug, None, false, true, false, false, false)?;
+        crate::scaffold::make_collection(
+            &config_dir,
+            &slug,
+            None,
+            false,
+            true,
+            false,
+            false,
+            false,
+        )?;
         Some(slug)
     } else {
         None
@@ -99,10 +108,18 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             .interact()
             .context("Failed to read user creation preference")?
         {
-            let cfg = crate::config::CrapConfig::load(&config_dir)
-                .context("Failed to load config")?;
+            let cfg =
+                crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config_dir)?;
-            super::user::user_create(&pool, &registry, auth_collection, None, None, vec![], &cfg.auth.password_policy)?;
+            super::user::user_create(
+                &pool,
+                &registry,
+                auth_collection,
+                None,
+                None,
+                vec![],
+                &cfg.auth.password_policy,
+            )?;
         } else {
             println!("You can create a user later with:");
             println!("  crap-cms user create {}", config_dir.display());
@@ -125,7 +142,16 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             })
             .interact_text()
             .context("Failed to read upload slug")?;
-        crate::scaffold::make_collection(&config_dir, &slug, None, false, false, true, false, false)?;
+        crate::scaffold::make_collection(
+            &config_dir,
+            &slug,
+            None,
+            false,
+            false,
+            true,
+            false,
+            false,
+        )?;
     }
 
     // 5. Additional collections
@@ -139,7 +165,17 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
         {
             break;
         }
-        super::make::make_collection_command(&config_dir, None, None, false, false, false, false, true /* interactive */, false)?;
+        super::make::make_collection_command(
+            &config_dir,
+            None,
+            None,
+            false,
+            false,
+            false,
+            false,
+            true, /* interactive */
+            false,
+        )?;
     }
 
     println!();

@@ -4,18 +4,19 @@ use anyhow::{Context as _, Result};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
-use crate::core::Document;
+use super::{coerce_value, group_locale_fields, locale_write_column, LocaleContext, LocaleMode};
 use crate::core::collection::GlobalDefinition;
 use crate::core::field::FieldType;
+use crate::core::Document;
 use crate::db::document::row_to_document;
-use super::{
-    LocaleMode, LocaleContext,
-    group_locale_fields,
-    locale_write_column, coerce_value,
-};
 
 /// Get the single global document from `_global_{slug}`.
-pub fn get_global(conn: &rusqlite::Connection, slug: &str, def: &GlobalDefinition, locale_ctx: Option<&LocaleContext>) -> Result<Document> {
+pub fn get_global(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &GlobalDefinition,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Document> {
     let table_name = format!("_global_{}", slug);
 
     let (select_exprs, result_names) = match locale_ctx {
@@ -26,11 +27,15 @@ pub fn get_global(conn: &rusqlite::Connection, slug: &str, def: &GlobalDefinitio
         }
     };
 
-    let sql = format!("SELECT {} FROM {} WHERE id = 'default'", select_exprs.join(", "), table_name);
+    let sql = format!(
+        "SELECT {} FROM {} WHERE id = 'default'",
+        select_exprs.join(", "),
+        table_name
+    );
 
-    let mut doc = conn.query_row(&sql, [], |row| {
-        row_to_document(row, &result_names)
-    }).with_context(|| format!("Failed to get global '{}'", slug))?;
+    let mut doc = conn
+        .query_row(&sql, [], |row| row_to_document(row, &result_names))
+        .with_context(|| format!("Failed to get global '{}'", slug))?;
 
     if let Some(ctx) = locale_ctx {
         if ctx.config.is_enabled() {
@@ -55,13 +60,23 @@ pub fn update_global(
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     let table_name = format!("_global_{}", slug);
-    let now = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S.000Z").to_string();
+    let now = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
 
     let mut set_clauses = Vec::new();
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
     let mut idx = 1;
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut set_clauses, &mut params, &mut idx, "");
+    collect_update_params(
+        &def.fields,
+        data,
+        &locale_ctx,
+        &mut set_clauses,
+        &mut params,
+        &mut idx,
+        "",
+    );
 
     set_clauses.push(format!("updated_at = ?{}", idx));
     params.push(Box::new(now));
@@ -103,18 +118,44 @@ fn collect_update_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                collect_update_params(&field.fields, data, locale_ctx, set_clauses, params, idx, &new_prefix);
+                collect_update_params(
+                    &field.fields,
+                    data,
+                    locale_ctx,
+                    set_clauses,
+                    params,
+                    idx,
+                    &new_prefix,
+                );
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_update_params(&field.fields, data, locale_ctx, set_clauses, params, idx, prefix);
+                collect_update_params(
+                    &field.fields,
+                    data,
+                    locale_ctx,
+                    set_clauses,
+                    params,
+                    idx,
+                    prefix,
+                );
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_update_params(&tab.fields, data, locale_ctx, set_clauses, params, idx, prefix);
+                    collect_update_params(
+                        &tab.fields,
+                        data,
+                        locale_ctx,
+                        set_clauses,
+                        params,
+                        idx,
+                        prefix,
+                    );
                 }
             }
             _ => {
-                if !field.has_parent_column() { continue; }
+                if !field.has_parent_column() {
+                    continue;
+                }
                 let data_key = if prefix.is_empty() {
                     field.name.clone()
                 } else {
@@ -148,8 +189,12 @@ fn get_global_column_names(def: &GlobalDefinition) -> Vec<String> {
 
 /// Build SELECT columns for globals with locale support.
 /// Uses the shared recursive logic from mod.rs.
-fn get_global_locale_columns(def: &GlobalDefinition, ctx: &LocaleContext) -> (Vec<String>, Vec<String>) {
-    let (mut select_exprs, mut result_names) = super::get_locale_select_columns(&def.fields, true, ctx);
+fn get_global_locale_columns(
+    def: &GlobalDefinition,
+    ctx: &LocaleContext,
+) -> (Vec<String>, Vec<String>) {
+    let (mut select_exprs, mut result_names) =
+        super::get_locale_select_columns(&def.fields, true, ctx);
 
     // Insert _status before timestamps if present
     if def.has_drafts() {
@@ -164,9 +209,9 @@ fn get_global_locale_columns(def: &GlobalDefinition, ctx: &LocaleContext) -> (Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use rusqlite::Connection;
 
     fn global_def() -> GlobalDefinition {
         let mut def = GlobalDefinition::new("settings");
@@ -188,8 +233,9 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO _global_settings (id, site_name, tagline, created_at, updated_at)
-            VALUES ('default', NULL, NULL, '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('default', NULL, NULL, '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
         conn
     }
 
@@ -208,15 +254,18 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO _global_site (id, site_name__en, social__github, created_at, updated_at)
-            VALUES ('default', 'My Site', 'https://github.com', '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('default', 'My Site', 'https://github.com', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = GlobalDefinition::new("site");
         def.fields = vec![
-            FieldDefinition::builder("site_name", FieldType::Text).localized(true).build(),
+            FieldDefinition::builder("site_name", FieldType::Text)
+                .localized(true)
+                .build(),
             FieldDefinition::builder("social", FieldType::Group)
                 .fields(vec![
-                    FieldDefinition::builder("github", FieldType::Text).build(),
+                    FieldDefinition::builder("github", FieldType::Text).build()
                 ])
                 .build(),
         ];
@@ -234,7 +283,10 @@ mod tests {
         assert_eq!(doc.get_str("site_name"), Some("My Site"));
         // Group sub-field reconstructed as nested object by hydrate_document
         let social = doc.fields.get("social").expect("social should exist");
-        assert_eq!(social.get("github").and_then(|v| v.as_str()), Some("https://github.com"));
+        assert_eq!(
+            social.get("github").and_then(|v| v.as_str()),
+            Some("https://github.com")
+        );
     }
 
     #[test]
@@ -274,8 +326,16 @@ mod tests {
         data2.insert("tagline".to_string(), "A great site".to_string());
         let doc = update_global(&conn, "settings", &def, &data2, None).unwrap();
 
-        assert_eq!(doc.get_str("site_name"), Some("My Site"), "site_name should be preserved");
-        assert_eq!(doc.get_str("tagline"), Some("A great site"), "tagline should be set");
+        assert_eq!(
+            doc.get_str("site_name"),
+            Some("My Site"),
+            "site_name should be preserved"
+        );
+        assert_eq!(
+            doc.get_str("tagline"),
+            Some("A great site"),
+            "tagline should be set"
+        );
     }
 
     #[test]
@@ -309,13 +369,12 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO _global_prefs (id, newsletter, created_at, updated_at)
-            VALUES ('default', 1, '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('default', 1, '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = GlobalDefinition::new("prefs");
-        def.fields = vec![
-            FieldDefinition::builder("newsletter", FieldType::Checkbox).build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("newsletter", FieldType::Checkbox).build()];
         let def = def;
 
         // Update without providing the checkbox field -- should default to 0
@@ -336,18 +395,17 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO _global_branding (id, created_at, updated_at)
-            VALUES ('default', '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('default', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = GlobalDefinition::new("branding");
-        def.fields = vec![
-            FieldDefinition::builder("colors", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("primary", FieldType::Text).build(),
-                    FieldDefinition::builder("secondary", FieldType::Text).build(),
-                ])
-                .build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("colors", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("primary", FieldType::Text).build(),
+                FieldDefinition::builder("secondary", FieldType::Text).build(),
+            ])
+            .build()];
         let def = def;
 
         let mut data = HashMap::new();
@@ -357,21 +415,28 @@ mod tests {
         let doc = update_global(&conn, "branding", &def, &data, None).unwrap();
         // Group fields should be reconstructed as nested object by hydrate_document
         let colors = doc.fields.get("colors").expect("colors should exist");
-        assert_eq!(colors.get("primary").and_then(|v| v.as_str()), Some("#ff0000"));
-        assert_eq!(colors.get("secondary").and_then(|v| v.as_str()), Some("#00ff00"));
+        assert_eq!(
+            colors.get("primary").and_then(|v| v.as_str()),
+            Some("#ff0000")
+        );
+        assert_eq!(
+            colors.get("secondary").and_then(|v| v.as_str()),
+            Some("#00ff00")
+        );
     }
 
     #[test]
     fn get_global_column_names_with_drafts() {
         let mut def = GlobalDefinition::new("settings");
-        def.fields = vec![
-            FieldDefinition::builder("site_name", FieldType::Text).build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
         def.versions = Some(VersionsConfig::new(true, 10));
         let def = def;
 
         let names = get_global_column_names(&def);
-        assert!(names.contains(&"_status".to_string()), "should include _status for drafts-enabled global");
+        assert!(
+            names.contains(&"_status".to_string()),
+            "should include _status for drafts-enabled global"
+        );
         assert!(names.contains(&"created_at".to_string()));
         assert!(names.contains(&"updated_at".to_string()));
     }
@@ -390,22 +455,19 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO _global_branding (id, created_at, updated_at)
-            VALUES ('default', '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('default', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = GlobalDefinition::new("branding");
-        def.fields = vec![
-            FieldDefinition::builder("colors", FieldType::Group)
+        def.fields = vec![FieldDefinition::builder("colors", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("r", FieldType::Row)
                 .fields(vec![
-                    FieldDefinition::builder("r", FieldType::Row)
-                        .fields(vec![
-                            FieldDefinition::builder("primary", FieldType::Text).build(),
-                            FieldDefinition::builder("secondary", FieldType::Text).build(),
-                        ])
-                        .build(),
+                    FieldDefinition::builder("primary", FieldType::Text).build(),
+                    FieldDefinition::builder("secondary", FieldType::Text).build(),
                 ])
-                .build(),
-        ];
+                .build()])
+            .build()];
         let def = def;
 
         let mut data = HashMap::new();
@@ -414,8 +476,14 @@ mod tests {
 
         let doc = update_global(&conn, "branding", &def, &data, None).unwrap();
         let colors = doc.fields.get("colors").expect("colors should exist");
-        assert_eq!(colors.get("primary").and_then(|v| v.as_str()), Some("#ff0000"));
-        assert_eq!(colors.get("secondary").and_then(|v| v.as_str()), Some("#00ff00"));
+        assert_eq!(
+            colors.get("primary").and_then(|v| v.as_str()),
+            Some("#ff0000")
+        );
+        assert_eq!(
+            colors.get("secondary").and_then(|v| v.as_str()),
+            Some("#00ff00")
+        );
     }
 
     #[test]
@@ -431,26 +499,25 @@ mod tests {
                 updated_at TEXT
             );
             INSERT INTO _global_settings (id, created_at, updated_at)
-            VALUES ('default', '2024-01-01', '2024-01-01');"
-        ).unwrap();
+            VALUES ('default', '2024-01-01', '2024-01-01');",
+        )
+        .unwrap();
 
         let mut def = GlobalDefinition::new("settings");
-        def.fields = vec![
-            FieldDefinition::builder("config", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("t", FieldType::Tabs)
-                        .tabs(vec![
-                            FieldTab::new("General", vec![
-                                FieldDefinition::builder("theme", FieldType::Text).build(),
-                            ]),
-                            FieldTab::new("Perf", vec![
-                                FieldDefinition::builder("cache_ttl", FieldType::Text).build(),
-                            ]),
-                        ])
-                        .build(),
+        def.fields = vec![FieldDefinition::builder("config", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![
+                    FieldTab::new(
+                        "General",
+                        vec![FieldDefinition::builder("theme", FieldType::Text).build()],
+                    ),
+                    FieldTab::new(
+                        "Perf",
+                        vec![FieldDefinition::builder("cache_ttl", FieldType::Text).build()],
+                    ),
                 ])
-                .build(),
-        ];
+                .build()])
+            .build()];
         let def = def;
 
         let mut data = HashMap::new();
@@ -460,27 +527,30 @@ mod tests {
         let doc = update_global(&conn, "settings", &def, &data, None).unwrap();
         let config = doc.fields.get("config").expect("config should exist");
         assert_eq!(config.get("theme").and_then(|v| v.as_str()), Some("dark"));
-        assert_eq!(config.get("cache_ttl").and_then(|v| v.as_str()), Some("3600"));
+        assert_eq!(
+            config.get("cache_ttl").and_then(|v| v.as_str()),
+            Some("3600")
+        );
     }
 
     #[test]
     fn get_global_column_names_group_containing_tabs() {
         use crate::core::field::FieldTab;
         let mut def = GlobalDefinition::new("settings");
-        def.fields = vec![
-            FieldDefinition::builder("config", FieldType::Group)
-                .fields(vec![
-                    FieldDefinition::builder("t", FieldType::Tabs)
-                        .tabs(vec![FieldTab::new("Tab", vec![
-                            FieldDefinition::builder("value", FieldType::Text).build(),
-                        ])])
-                        .build(),
-                ])
-                .build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("config", FieldType::Group)
+            .fields(vec![FieldDefinition::builder("t", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "Tab",
+                    vec![FieldDefinition::builder("value", FieldType::Text).build()],
+                )])
+                .build()])
+            .build()];
         let def = def;
 
         let names = get_global_column_names(&def);
-        assert!(names.contains(&"config__value".to_string()), "Group→Tabs: config__value");
+        assert!(
+            names.contains(&"config__value".to_string()),
+            "Group→Tabs: config__value"
+        );
     }
 }

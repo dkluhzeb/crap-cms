@@ -17,12 +17,11 @@ impl LocalizedString {
     pub fn resolve(&self, locale: &str, default_locale: &str) -> &str {
         match self {
             LocalizedString::Plain(s) => s,
-            LocalizedString::Localized(map) => {
-                map.get(locale)
-                    .or_else(|| map.get(default_locale))
-                    .map(|s| s.as_str())
-                    .unwrap_or("")
-            }
+            LocalizedString::Localized(map) => map
+                .get(locale)
+                .or_else(|| map.get(default_locale))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
         }
     }
 

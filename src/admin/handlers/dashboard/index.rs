@@ -1,15 +1,11 @@
 //! Dashboard handler showing collection/global cards with document counts.
 
-use axum::{
-    extract::State,
-    response::Html,
-    Extension,
-};
+use axum::{extract::State, response::Html, Extension};
 
-use crate::admin::AdminState;
 use crate::admin::context::{ContextBuilder, PageType};
-use crate::core::auth::{AuthUser, Claims};
 use crate::admin::handlers::shared::extract_editor_locale;
+use crate::admin::AdminState;
+use crate::core::auth::{AuthUser, Claims};
 use crate::db::ops::count_documents;
 
 /// Render the admin dashboard with collection and global summary cards.
@@ -24,14 +20,15 @@ pub async fn index(
     {
         let conn = state.pool.get().ok();
         for (slug, def) in &state.registry.collections {
-            let count = count_documents(&state.pool, slug, def, &[], None)
-                .unwrap_or(0);
+            let count = count_documents(&state.pool, slug, def, &[], None).unwrap_or(0);
             let last_updated = conn.as_ref().and_then(|c| {
                 c.query_row(
                     &format!("SELECT MAX(updated_at) FROM \"{}\"", slug),
                     [],
                     |row| row.get::<_, Option<String>>(0),
-                ).ok().flatten()
+                )
+                .ok()
+                .flatten()
             });
             collection_cards.push(serde_json::json!({
                 "slug": slug,
@@ -48,10 +45,15 @@ pub async fn index(
             let table_name = format!("_global_{}", slug);
             let last_updated = conn.as_ref().and_then(|c| {
                 c.query_row(
-                    &format!("SELECT updated_at FROM \"{}\" WHERE id = 'default'", table_name),
+                    &format!(
+                        "SELECT updated_at FROM \"{}\" WHERE id = 'default'",
+                        table_name
+                    ),
                     [],
                     |row| row.get::<_, Option<String>>(0),
-                ).ok().flatten()
+                )
+                .ok()
+                .flatten()
             });
             global_cards.push(serde_json::json!({
                 "slug": slug,
@@ -70,7 +72,10 @@ pub async fn index(
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::Dashboard, "Dashboard")
-        .set("collection_cards", serde_json::Value::Array(collection_cards))
+        .set(
+            "collection_cards",
+            serde_json::Value::Array(collection_cards),
+        )
         .set("global_cards", serde_json::Value::Array(global_cards))
         .build();
 

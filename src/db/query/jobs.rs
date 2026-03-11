@@ -1,7 +1,7 @@
 //! CRUD query functions for the `_crap_jobs` table.
 
-use anyhow::{Context as _, Result};
 use crate::core::job::{JobRun, JobStatus};
+use anyhow::{Context as _, Result};
 
 /// Insert a new pending job run.
 pub fn insert_job(
@@ -17,7 +17,8 @@ pub fn insert_job(
         "INSERT INTO _crap_jobs (id, slug, status, queue, data, max_attempts, scheduled_by)
          VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6)",
         rusqlite::params![id, slug, queue, data, max_attempts, scheduled_by],
-    ).context("Failed to insert job run")?;
+    )
+    .context("Failed to insert job run")?;
 
     Ok(JobRun::builder(id, slug)
         .queue(queue)
@@ -40,10 +41,19 @@ pub fn claim_pending_jobs(
          FROM _crap_jobs
          WHERE status = 'pending'
          ORDER BY created_at ASC
-         LIMIT ?1"
+         LIMIT ?1",
     )?;
 
-    let rows: Vec<(String, String, String, String, u32, u32, Option<String>, Option<String>)> = stmt
+    let rows: Vec<(
+        String,
+        String,
+        String,
+        String,
+        u32,
+        u32,
+        Option<String>,
+        Option<String>,
+    )> = stmt
         .query_map([limit as i64 * 2], |row| {
             Ok((
                 row.get(0)?,
@@ -60,7 +70,8 @@ pub fn claim_pending_jobs(
         .collect();
 
     let mut claimed = Vec::new();
-    let mut extra_running: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    let mut extra_running: std::collections::HashMap<String, i64> =
+        std::collections::HashMap::new();
 
     for (id, slug, queue, data, attempt, max_attempts, scheduled_by, created_at) in rows {
         if claimed.len() >= limit {
@@ -104,17 +115,27 @@ pub fn claim_pending_jobs(
 }
 
 /// Mark a job as completed with an optional result.
-pub fn complete_job(conn: &rusqlite::Connection, id: &str, result_json: Option<&str>) -> Result<()> {
+pub fn complete_job(
+    conn: &rusqlite::Connection,
+    id: &str,
+    result_json: Option<&str>,
+) -> Result<()> {
     conn.execute(
         "UPDATE _crap_jobs SET status = 'completed', result = ?2, completed_at = datetime('now')
          WHERE id = ?1",
         rusqlite::params![id, result_json],
-    ).context("Failed to complete job")?;
+    )
+    .context("Failed to complete job")?;
     Ok(())
 }
 
 /// Mark a job as failed. If should_retry is true and attempt < max_attempts, resets to pending.
-pub fn fail_job(conn: &rusqlite::Connection, id: &str, error: &str, should_retry: bool) -> Result<()> {
+pub fn fail_job(
+    conn: &rusqlite::Connection,
+    id: &str,
+    error: &str,
+    should_retry: bool,
+) -> Result<()> {
     if should_retry {
         conn.execute(
             "UPDATE _crap_jobs SET status = 'pending', error = ?2, started_at = NULL, completed_at = NULL
@@ -126,7 +147,8 @@ pub fn fail_job(conn: &rusqlite::Connection, id: &str, error: &str, should_retry
             "UPDATE _crap_jobs SET status = 'failed', error = ?2, completed_at = datetime('now')
              WHERE id = ?1",
             rusqlite::params![id, error],
-        ).context("Failed to fail job")?;
+        )
+        .context("Failed to fail job")?;
     }
     Ok(())
 }
@@ -136,22 +158,27 @@ pub fn update_heartbeat(conn: &rusqlite::Connection, id: &str) -> Result<()> {
     conn.execute(
         "UPDATE _crap_jobs SET heartbeat_at = datetime('now') WHERE id = ?1",
         [id],
-    ).context("Failed to update heartbeat")?;
+    )
+    .context("Failed to update heartbeat")?;
     Ok(())
 }
 
 /// Find jobs that are marked as running but have a stale heartbeat.
-pub fn find_stale_jobs(conn: &rusqlite::Connection, stale_threshold_secs: u64) -> Result<Vec<JobRun>> {
+pub fn find_stale_jobs(
+    conn: &rusqlite::Connection,
+    stale_threshold_secs: u64,
+) -> Result<Vec<JobRun>> {
     let mut stmt = conn.prepare(
         "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
                 scheduled_by, created_at, started_at, completed_at, heartbeat_at
          FROM _crap_jobs
          WHERE status = 'running'
-           AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', ?1))"
+           AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', ?1))",
     )?;
 
     let threshold = format!("-{} seconds", stale_threshold_secs);
-    let jobs = stmt.query_map([&threshold], row_to_job_run)?
+    let jobs = stmt
+        .query_map([&threshold], row_to_job_run)?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -181,10 +208,11 @@ pub fn count_running(conn: &rusqlite::Connection, slug: Option<&str>) -> Result<
 }
 
 /// Count running jobs per slug, returned as a HashMap.
-pub fn count_running_per_slug(conn: &rusqlite::Connection) -> Result<std::collections::HashMap<String, i64>> {
-    let mut stmt = conn.prepare(
-        "SELECT slug, COUNT(*) FROM _crap_jobs WHERE status = 'running' GROUP BY slug"
-    )?;
+pub fn count_running_per_slug(
+    conn: &rusqlite::Connection,
+) -> Result<std::collections::HashMap<String, i64>> {
+    let mut stmt = conn
+        .prepare("SELECT slug, COUNT(*) FROM _crap_jobs WHERE status = 'running' GROUP BY slug")?;
     let mut map = std::collections::HashMap::new();
     let rows = stmt.query_map([], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
@@ -207,7 +235,7 @@ pub fn list_job_runs(
     let mut sql = String::from(
         "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
                 scheduled_by, created_at, started_at, completed_at, heartbeat_at
-         FROM _crap_jobs WHERE 1=1"
+         FROM _crap_jobs WHERE 1=1",
     );
     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
 
@@ -221,13 +249,17 @@ pub fn list_job_runs(
     }
 
     params.push(Box::new(limit));
-    sql.push_str(&format!(" ORDER BY created_at DESC LIMIT ?{}", params.len()));
+    sql.push_str(&format!(
+        " ORDER BY created_at DESC LIMIT ?{}",
+        params.len()
+    ));
     params.push(Box::new(offset));
     sql.push_str(&format!(" OFFSET ?{}", params.len()));
 
     let mut stmt = conn.prepare(&sql)?;
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    let jobs = stmt.query_map(param_refs.as_slice(), row_to_job_run)?
+    let jobs = stmt
+        .query_map(param_refs.as_slice(), row_to_job_run)?
         .filter_map(|r| r.ok())
         .collect();
 
@@ -239,7 +271,7 @@ pub fn get_job_run(conn: &rusqlite::Connection, id: &str) -> Result<Option<JobRu
     let mut stmt = conn.prepare(
         "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
                 scheduled_by, created_at, started_at, completed_at, heartbeat_at
-         FROM _crap_jobs WHERE id = ?1"
+         FROM _crap_jobs WHERE id = ?1",
     )?;
 
     let mut rows = stmt.query_map([id], row_to_job_run)?;
@@ -297,7 +329,7 @@ pub fn last_completed_run(conn: &rusqlite::Connection, slug: &str) -> Result<Opt
          FROM _crap_jobs
          WHERE slug = ?1 AND status = 'completed'
          ORDER BY completed_at DESC
-         LIMIT 1"
+         LIMIT 1",
     )?;
     let mut rows = stmt.query_map([slug], row_to_job_run)?;
     match rows.next() {
@@ -377,8 +409,9 @@ mod tests {
             );
             CREATE INDEX idx_crap_jobs_status ON _crap_jobs(status);
             CREATE INDEX idx_crap_jobs_queue ON _crap_jobs(queue, status);
-            CREATE INDEX idx_crap_jobs_slug ON _crap_jobs(slug, status);"
-        ).unwrap();
+            CREATE INDEX idx_crap_jobs_slug ON _crap_jobs(slug, status);",
+        )
+        .unwrap();
         conn
     }
 
@@ -430,7 +463,11 @@ mod tests {
         let conn = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
         // Claim it first
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE id = ?1", [&job.id]).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            [&job.id],
+        )
+        .unwrap();
 
         complete_job(&conn, &job.id, Some("{\"ok\":true}")).unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
@@ -442,7 +479,11 @@ mod tests {
     fn test_fail_job_no_retry() {
         let conn = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE id = ?1", [&job.id]).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            [&job.id],
+        )
+        .unwrap();
 
         fail_job(&conn, &job.id, "something broke", false).unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
@@ -454,7 +495,11 @@ mod tests {
     fn test_fail_job_with_retry() {
         let conn = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 3, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1", [&job.id]).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
+            [&job.id],
+        )
+        .unwrap();
 
         fail_job(&conn, &job.id, "transient error", true).unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
@@ -466,7 +511,11 @@ mod tests {
         let conn = setup_db();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'", []).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
+            [],
+        )
+        .unwrap();
 
         assert_eq!(count_running(&conn, None).unwrap(), 1);
         assert_eq!(count_running(&conn, Some("job_a")).unwrap(), 1);
@@ -511,7 +560,11 @@ mod tests {
     fn test_mark_stale() {
         let conn = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE id = ?1", [&job.id]).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            [&job.id],
+        )
+        .unwrap();
 
         mark_stale(&conn, &job.id, "heartbeat timeout").unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
@@ -523,13 +576,20 @@ mod tests {
     fn test_update_heartbeat() {
         let conn = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE id = ?1", [&job.id]).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
+            [&job.id],
+        )
+        .unwrap();
 
         // Update heartbeat should succeed
         update_heartbeat(&conn, &job.id).unwrap();
 
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
-        assert!(fetched.heartbeat_at.is_some(), "heartbeat should be set after update");
+        assert!(
+            fetched.heartbeat_at.is_some(),
+            "heartbeat should be set after update"
+        );
     }
 
     #[test]
@@ -539,8 +599,16 @@ mod tests {
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
 
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'", []).unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_b'", []).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_b'",
+            [],
+        )
+        .unwrap();
 
         let counts = count_running_per_slug(&conn).unwrap();
         assert_eq!(counts.get("job_a").copied(), Some(2));
@@ -559,7 +627,11 @@ mod tests {
         let conn = setup_db();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'", []).unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
+            [],
+        )
+        .unwrap();
 
         let running = list_job_runs(&conn, None, Some("running"), 100, 0).unwrap();
         assert_eq!(running.len(), 1);

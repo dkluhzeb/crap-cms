@@ -10,10 +10,10 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
+use crap_cms::admin::AdminState;
 use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
@@ -32,9 +32,9 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -46,10 +46,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -59,9 +65,7 @@ fn make_global_def() -> GlobalDefinition {
         singular: Some(LocalizedString::Plain("Settings".to_string())),
         plural: None,
     };
-    def.fields = vec![
-        FieldDefinition::builder("site_name", FieldType::Text).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
     def
 }
 
@@ -73,10 +77,7 @@ struct TestApp {
     jwt_secret: String,
 }
 
-fn setup_app(
-    collections: Vec<CollectionDefinition>,
-    globals: Vec<GlobalDefinition>,
-) -> TestApp {
+fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".to_string();
@@ -107,19 +108,17 @@ fn setup_app_with_config(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
     let translations = Arc::new(Translations::load(tmp.path()));
-    let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = {
         let reg = registry.read().unwrap();
@@ -136,8 +135,12 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".to_string(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            5, 300,
+        )),
+        forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -224,7 +227,9 @@ fn make_localized_global_def() -> GlobalDefinition {
         plural: None,
     };
     def.fields = vec![
-        FieldDefinition::builder("welcome_text", FieldType::Text).localized(true).build(),
+        FieldDefinition::builder("welcome_text", FieldType::Text)
+            .localized(true)
+            .build(),
         FieldDefinition::builder("max_items", FieldType::Number).build(),
     ];
     def
@@ -241,7 +246,6 @@ fn tiny_png() -> Vec<u8> {
 }
 
 // ── 1D. Globals ───────────────────────────────────────────────────────────
-
 
 #[tokio::test]
 async fn global_update_with_locale() {
@@ -265,7 +269,9 @@ async fn global_update_with_locale() {
                 .header("cookie", auth_and_csrf(&cookie))
                 .header("X-CSRF-Token", TEST_CSRF)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("site_title=Localized+Title&description=Desc&_locale=de"))
+                .body(Body::from(
+                    "site_title=Localized+Title&description=Desc&_locale=de",
+                ))
                 .unwrap(),
         )
         .await
@@ -386,7 +392,9 @@ async fn global_non_versioned_versions_page_redirects() {
         .unwrap();
     let status = resp.status();
     assert!(
-        status == StatusCode::SEE_OTHER || status == StatusCode::FOUND || status == StatusCode::TEMPORARY_REDIRECT,
+        status == StatusCode::SEE_OTHER
+            || status == StatusCode::FOUND
+            || status == StatusCode::TEMPORARY_REDIRECT,
         "Non-versioned global versions page should redirect, got {}",
         status
     );
@@ -422,7 +430,8 @@ async fn global_restore_version_non_versioned_redirects() {
 #[tokio::test]
 async fn serve_upload_nonexistent_returns_404() {
     let app = setup_app(vec![make_posts_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/uploads/posts/nofile.jpg")
                 .body(Body::empty())
@@ -467,10 +476,26 @@ async fn serve_upload_existing_file() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp.headers().get("content-type").map(|v| v.to_str().unwrap_or("")).unwrap_or("");
-    assert!(ct.contains("text/plain"), "Should detect text/plain MIME, got {}", ct);
-    let cache = resp.headers().get("cache-control").map(|v| v.to_str().unwrap_or("")).unwrap_or("");
-    assert!(cache.contains("public"), "Public file should have public cache control, got {}", cache);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .map(|v| v.to_str().unwrap_or(""))
+        .unwrap_or("");
+    assert!(
+        ct.contains("text/plain"),
+        "Should detect text/plain MIME, got {}",
+        ct
+    );
+    let cache = resp
+        .headers()
+        .get("cache-control")
+        .map(|v| v.to_str().unwrap_or(""))
+        .unwrap_or("");
+    assert!(
+        cache.contains("public"),
+        "Public file should have public cache control, got {}",
+        cache
+    );
     let body = body_string(resp.into_body()).await;
     assert_eq!(body, "hello world");
 }
@@ -494,8 +519,16 @@ async fn serve_upload_image_file() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp.headers().get("content-type").map(|v| v.to_str().unwrap_or("")).unwrap_or("");
-    assert!(ct.contains("image/png"), "Should detect image/png MIME, got {}", ct);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .map(|v| v.to_str().unwrap_or(""))
+        .unwrap_or("");
+    assert!(
+        ct.contains("image/png"),
+        "Should detect image/png MIME, got {}",
+        ct
+    );
 }
 
 #[tokio::test]
@@ -519,7 +552,8 @@ async fn serve_upload_path_traversal_blocked() {
 async fn upload_path_traversal_returns_404() {
     let app = setup_app(vec![make_posts_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/uploads/posts/../../../etc/passwd")
                 .body(Body::empty())
@@ -534,7 +568,8 @@ async fn upload_path_traversal_returns_404() {
 async fn upload_path_traversal_in_collection_returns_404() {
     let app = setup_app(vec![make_posts_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/uploads/..%2F..%2Fetc/passwd")
                 .body(Body::empty())
@@ -557,11 +592,7 @@ async fn dashboard_no_auth_no_collections() {
     let app = setup_app(vec![], vec![]);
     let resp = app
         .router
-        .oneshot(
-            Request::get("/admin")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/admin").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -574,18 +605,16 @@ async fn dashboard_no_auth_returns_200() {
     let app = setup_app(vec![make_posts_def()], vec![make_global_def()]);
     let resp = app
         .router
-        .oneshot(
-            Request::get("/admin")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::get("/admin").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
     let body_lower = body.to_lowercase();
     assert!(
-        body_lower.contains("dashboard") || body_lower.contains("posts") || body_lower.contains("settings"),
+        body_lower.contains("dashboard")
+            || body_lower.contains("posts")
+            || body_lower.contains("settings"),
         "Dashboard should render without auth"
     );
 }
@@ -605,7 +634,9 @@ async fn static_js_returns_200() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let ct = resp.headers().get("content-type")
+    let ct = resp
+        .headers()
+        .get("content-type")
         .map(|v| v.to_str().unwrap_or(""));
     assert!(
         ct.unwrap_or("").contains("javascript"),
@@ -648,7 +679,8 @@ async fn global_edit_nonexistent_returns_404() {
     let user_id = create_test_user(&app, "globnon@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "globnon@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/globals/nonexistent")
                 .header("cookie", &cookie)
@@ -666,7 +698,8 @@ async fn versioned_global_edit_returns_200() {
     let user_id = create_test_user(&app, "verglobal@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "verglobal@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/globals/site_config")
                 .header("cookie", &cookie)
@@ -684,7 +717,8 @@ async fn versioned_global_update_as_draft() {
     let user_id = create_test_user(&app, "vergdraft@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "vergdraft@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/globals/site_config")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -709,7 +743,8 @@ async fn versioned_global_versions_page() {
     let user_id = create_test_user(&app, "vergver@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "vergver@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/globals/site_config/versions")
                 .header("cookie", &cookie)
@@ -727,7 +762,8 @@ async fn non_versioned_global_versions_page_redirects() {
     let user_id = create_test_user(&app, "nonverglob@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "nonverglob@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/globals/settings/versions")
                 .header("cookie", &cookie)
@@ -737,7 +773,11 @@ async fn non_versioned_global_versions_page_redirects() {
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::SEE_OTHER, "Non-versioned global versions page should redirect");
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "Non-versioned global versions page should redirect"
+    );
 }
 
 #[tokio::test]
@@ -746,7 +786,8 @@ async fn global_restore_nonversioned_redirects() {
     let user_id = create_test_user(&app, "grestnv@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "grestnv@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/globals/settings/versions/fake-version-id/restore")
                 .header("cookie", auth_and_csrf(&cookie))
@@ -757,7 +798,11 @@ async fn global_restore_nonversioned_redirects() {
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::SEE_OTHER, "Restore on non-versioned global should redirect");
+    assert_eq!(
+        status,
+        StatusCode::SEE_OTHER,
+        "Restore on non-versioned global should redirect"
+    );
 }
 
 // ── Global: Edit form with locale ─────────────────────────────────────────
@@ -801,7 +846,8 @@ async fn global_edit_with_locale() {
 async fn csrf_post_without_token_returns_403() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("content-type", "application/x-www-form-urlencoded")
@@ -810,14 +856,19 @@ async fn csrf_post_without_token_returns_403() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "POST without CSRF token should be 403");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "POST without CSRF token should be 403"
+    );
 }
 
 #[tokio::test]
 async fn csrf_post_with_cookie_but_no_header_returns_403() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("Cookie", csrf_cookie())
@@ -827,14 +878,19 @@ async fn csrf_post_with_cookie_but_no_header_returns_403() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "POST with cookie but no token should be 403");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "POST with cookie but no token should be 403"
+    );
 }
 
 #[tokio::test]
 async fn csrf_post_with_mismatched_header_returns_403() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("Cookie", csrf_cookie())
@@ -845,14 +901,19 @@ async fn csrf_post_with_mismatched_header_returns_403() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "POST with mismatched CSRF header should be 403");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "POST with mismatched CSRF header should be 403"
+    );
 }
 
 #[tokio::test]
 async fn csrf_post_with_matching_header_passes() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("Cookie", csrf_cookie())
@@ -863,15 +924,23 @@ async fn csrf_post_with_matching_header_passes() {
         )
         .await
         .unwrap();
-    assert_ne!(resp.status(), StatusCode::FORBIDDEN, "POST with matching CSRF header should not be 403");
+    assert_ne!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "POST with matching CSRF header should not be 403"
+    );
 }
 
 #[tokio::test]
 async fn csrf_post_with_form_field_passes() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let body = format!("collection=users&email=a@b.com&password=wrong&_csrf={}", TEST_CSRF);
-    let resp = app.router
+    let body = format!(
+        "collection=users&email=a@b.com&password=wrong&_csrf={}",
+        TEST_CSRF
+    );
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("Cookie", csrf_cookie())
@@ -881,31 +950,42 @@ async fn csrf_post_with_form_field_passes() {
         )
         .await
         .unwrap();
-    assert_ne!(resp.status(), StatusCode::FORBIDDEN, "POST with _csrf form field should not be 403");
+    assert_ne!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "POST with _csrf form field should not be 403"
+    );
 }
 
 #[tokio::test]
 async fn csrf_get_sets_cookie() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
-        .oneshot(
-            Request::get("/admin/login")
-                .body(Body::empty())
-                .unwrap(),
-        )
+    let resp = app
+        .router
+        .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let set_cookie = resp.headers()
+    let set_cookie = resp
+        .headers()
         .get_all("set-cookie")
         .iter()
         .filter_map(|v| v.to_str().ok())
         .find(|v| v.starts_with("crap_csrf="));
-    assert!(set_cookie.is_some(), "GET response should set crap_csrf cookie");
+    assert!(
+        set_cookie.is_some(),
+        "GET response should set crap_csrf cookie"
+    );
     let cookie_val = set_cookie.unwrap();
-    assert!(cookie_val.contains("SameSite=Strict"), "CSRF cookie should be SameSite=Strict");
-    assert!(!cookie_val.contains("HttpOnly"), "CSRF cookie must NOT be HttpOnly (JS needs to read it)");
+    assert!(
+        cookie_val.contains("SameSite=Strict"),
+        "CSRF cookie should be SameSite=Strict"
+    );
+    assert!(
+        !cookie_val.contains("HttpOnly"),
+        "CSRF cookie must NOT be HttpOnly (JS needs to read it)"
+    );
 }
 
 #[tokio::test]
@@ -914,7 +994,8 @@ async fn csrf_delete_without_token_returns_403() {
     let user_id = create_test_user(&app, "csrfdelete@test.com", "pass123");
     let auth_cookie = make_auth_cookie(&app, &user_id, "csrfdelete@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::delete("/admin/collections/posts/some-id")
                 .header("Cookie", &auth_cookie)
@@ -923,7 +1004,11 @@ async fn csrf_delete_without_token_returns_403() {
         )
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::FORBIDDEN, "DELETE without CSRF should be 403");
+    assert_eq!(
+        resp.status(),
+        StatusCode::FORBIDDEN,
+        "DELETE without CSRF should be 403"
+    );
 }
 
 // ── CORS tests ──────────────────────────────────────────────────────────────
@@ -932,7 +1017,8 @@ async fn csrf_delete_without_token_returns_403() {
 async fn cors_disabled_by_default() {
     let app = setup_app(vec![make_posts_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/login")
                 .header("Origin", "http://evil.com")
@@ -957,7 +1043,8 @@ async fn cors_preflight_returns_headers() {
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::builder()
                 .method("OPTIONS")
@@ -971,7 +1058,9 @@ async fn cors_preflight_returns_headers() {
         .unwrap();
 
     assert_eq!(
-        resp.headers().get("access-control-allow-origin").map(|v| v.to_str().unwrap()),
+        resp.headers()
+            .get("access-control-allow-origin")
+            .map(|v| v.to_str().unwrap()),
         Some("http://localhost:8080"),
         "Preflight should return matching origin"
     );
@@ -986,7 +1075,8 @@ async fn cors_wildcard_returns_star() {
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/login")
                 .header("Origin", "http://anything.com")
@@ -997,7 +1087,9 @@ async fn cors_wildcard_returns_star() {
         .unwrap();
 
     assert_eq!(
-        resp.headers().get("access-control-allow-origin").map(|v| v.to_str().unwrap()),
+        resp.headers()
+            .get("access-control-allow-origin")
+            .map(|v| v.to_str().unwrap()),
         Some("*"),
         "Wildcard origin should return *"
     );
@@ -1012,7 +1104,8 @@ async fn cors_non_matching_origin_not_reflected() {
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/login")
                 .header("Origin", "http://not-allowed.com")
@@ -1038,7 +1131,8 @@ async fn require_auth_blocks_when_no_auth_collection() {
     config.admin.require_auth = true;
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/admin").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -1048,8 +1142,10 @@ async fn require_auth_blocks_when_no_auth_collection() {
         "require_auth=true with no auth collection should return 503"
     );
     let body = body_string(resp.into_body()).await;
-    assert!(body.contains("Setup Required") || body.contains("setup required") || body.contains("auth"),
-        "Response should mention setup/auth requirement");
+    assert!(
+        body.contains("Setup Required") || body.contains("setup required") || body.contains("auth"),
+        "Response should mention setup/auth requirement"
+    );
 }
 
 #[tokio::test]
@@ -1060,7 +1156,8 @@ async fn require_auth_false_allows_open_admin() {
     config.admin.require_auth = false;
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/admin").body(Body::empty()).unwrap())
         .await
         .unwrap();

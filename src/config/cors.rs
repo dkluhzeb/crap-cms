@@ -32,12 +32,14 @@ impl Default for CorsConfig {
         Self {
             allowed_origins: Vec::new(),
             allowed_methods: vec![
-                "GET".into(), "POST".into(), "PUT".into(),
-                "DELETE".into(), "PATCH".into(), "OPTIONS".into(),
+                "GET".into(),
+                "POST".into(),
+                "PUT".into(),
+                "DELETE".into(),
+                "PATCH".into(),
+                "OPTIONS".into(),
             ],
-            allowed_headers: vec![
-                "Content-Type".into(), "Authorization".into(),
-            ],
+            allowed_headers: vec!["Content-Type".into(), "Authorization".into()],
             exposed_headers: Vec::new(),
             max_age_seconds: 3600,
             allow_credentials: false,
@@ -51,9 +53,9 @@ impl CorsConfig {
         if self.allowed_origins.is_empty() {
             return None;
         }
-        use tower_http::cors::CorsLayer;
         use axum::http::{HeaderName, Method};
         use std::str::FromStr;
+        use tower_http::cors::CorsLayer;
 
         let is_wildcard = self.allowed_origins.len() == 1 && self.allowed_origins[0] == "*";
 
@@ -69,19 +71,20 @@ impl CorsConfig {
             tower_http::cors::AllowOrigin::any()
         } else {
             tower_http::cors::AllowOrigin::list(
-                self.allowed_origins.iter()
-                    .filter_map(|o| o.parse().ok())
+                self.allowed_origins.iter().filter_map(|o| o.parse().ok()),
             )
         };
 
         let methods = tower_http::cors::AllowMethods::list(
-            self.allowed_methods.iter()
-                .filter_map(|m| Method::from_str(m).ok())
+            self.allowed_methods
+                .iter()
+                .filter_map(|m| Method::from_str(m).ok()),
         );
 
         let headers = tower_http::cors::AllowHeaders::list(
-            self.allowed_headers.iter()
-                .filter_map(|h| HeaderName::from_str(h).ok())
+            self.allowed_headers
+                .iter()
+                .filter_map(|h| HeaderName::from_str(h).ok()),
         );
 
         let mut layer = CorsLayer::new()
@@ -92,9 +95,10 @@ impl CorsConfig {
 
         if !self.exposed_headers.is_empty() {
             layer = layer.expose_headers(
-                self.exposed_headers.iter()
+                self.exposed_headers
+                    .iter()
                     .filter_map(|h| HeaderName::from_str(h).ok())
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>(),
             );
         }
 
@@ -115,7 +119,10 @@ mod tests {
     fn cors_config_defaults() {
         let cors = CorsConfig::default();
         assert!(cors.allowed_origins.is_empty());
-        assert_eq!(cors.allowed_methods, vec!["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]);
+        assert_eq!(
+            cors.allowed_methods,
+            vec!["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+        );
         assert_eq!(cors.allowed_headers, vec!["Content-Type", "Authorization"]);
         assert!(cors.exposed_headers.is_empty());
         assert_eq!(cors.max_age_seconds, 3600);
@@ -193,11 +200,18 @@ exposed_headers = ["X-Request-Id"]
 max_age_seconds = 7200
 allow_credentials = true
 "#,
-        ).unwrap();
+        )
+        .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
-        assert_eq!(config.cors.allowed_origins, vec!["https://example.com", "https://app.example.com"]);
+        assert_eq!(
+            config.cors.allowed_origins,
+            vec!["https://example.com", "https://app.example.com"]
+        );
         assert_eq!(config.cors.allowed_methods, vec!["GET", "POST"]);
-        assert_eq!(config.cors.allowed_headers, vec!["Content-Type", "Authorization", "X-Custom"]);
+        assert_eq!(
+            config.cors.allowed_headers,
+            vec!["Content-Type", "Authorization", "X-Custom"]
+        );
         assert_eq!(config.cors.exposed_headers, vec!["X-Request-Id"]);
         assert_eq!(config.cors.max_age_seconds, 7200);
         assert!(config.cors.allow_credentials);

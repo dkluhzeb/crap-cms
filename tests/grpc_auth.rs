@@ -30,7 +30,9 @@ fn make_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("status", FieldType::Select)
             .default_value(serde_json::json!("draft"))
             .build(),
@@ -46,10 +48,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -107,16 +115,14 @@ fn setup_service(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -137,7 +143,11 @@ fn setup_service(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 fn make_verify_users_def() -> CollectionDefinition {
@@ -147,9 +157,10 @@ fn make_verify_users_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Members".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("email", FieldType::Email)
+        .required(true)
+        .unique(true)
+        .build()];
     def.auth = Some(Auth {
         enabled: true,
         verify_email: true,
@@ -211,7 +222,10 @@ async fn login_valid_credentials() {
 
     assert!(!resp.token.is_empty());
     let user = resp.user.expect("No user in response");
-    assert_eq!(get_proto_field(&user, "email").as_deref(), Some("alice@example.com"));
+    assert_eq!(
+        get_proto_field(&user, "email").as_deref(),
+        Some("alice@example.com")
+    );
 }
 
 #[tokio::test]
@@ -300,7 +314,10 @@ async fn me_valid_token() {
         .into_inner();
 
     let user = me_resp.user.expect("No user");
-    assert_eq!(get_proto_field(&user, "email").as_deref(), Some("carol@example.com"));
+    assert_eq!(
+        get_proto_field(&user, "email").as_deref(),
+        Some("carol@example.com")
+    );
     assert_eq!(get_proto_field(&user, "name").as_deref(), Some("Carol"));
 }
 
@@ -513,14 +530,15 @@ async fn authenticated_crud_with_bearer_token() {
         format!("Bearer {}", token).parse().unwrap(),
     );
 
-    let doc = req
-        .extensions()
-        .get::<()>(); // just to consume the var
+    let doc = req.extensions().get::<()>(); // just to consume the var
     let _ = doc;
 
     let resp = ts.service.create(req).await.unwrap().into_inner();
     let doc = resp.document.unwrap();
-    assert_eq!(get_proto_field(&doc, "title").as_deref(), Some("Authenticated Post"));
+    assert_eq!(
+        get_proto_field(&doc, "title").as_deref(),
+        Some("Authenticated Post")
+    );
 }
 
 // ── Order By Tests ────────────────────────────────────────────────────────
@@ -924,8 +942,7 @@ async fn login_locked_account_grpc() {
         .unwrap_err();
 
     assert!(
-        err.code() == tonic::Code::Unauthenticated
-            || err.code() == tonic::Code::PermissionDenied,
+        err.code() == tonic::Code::Unauthenticated || err.code() == tonic::Code::PermissionDenied,
         "Locked account login should return Unauthenticated or PermissionDenied, got {:?}: {}",
         err.code(),
         err.message()

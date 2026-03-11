@@ -1,8 +1,8 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::db::DbPool;
 use crap_cms::core::SharedRegistry;
+use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -30,7 +30,9 @@ fn eval_lua(runner: &HookRunner, code: &str) -> String {
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 /// Set up a HookRunner with a real synced database (tables created from Lua definitions).
@@ -61,7 +63,9 @@ fn setup_with_db() -> (tempfile::TempDir, DbPool, SharedRegistry, HookRunner) {
 #[allow(dead_code)]
 fn eval_lua_db(runner: &HookRunner, pool: &DbPool, code: &str) -> String {
     let conn = pool.get().expect("conn");
-    runner.eval_lua_with_conn(code, &conn, None).expect("eval failed")
+    runner
+        .eval_lua_with_conn(code, &conn, None)
+        .expect("eval failed")
 }
 
 // ── 3D. Definition Parsing Edge Cases ────────────────────────────────────────
@@ -73,7 +77,9 @@ fn parse_collection_minimal() {
     let registry = hooks::init_lua(&config_dir, &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").expect("articles should be registered");
+    let def = reg
+        .get_collection("articles")
+        .expect("articles should be registered");
     assert_eq!(def.slug, "articles");
     assert!(!def.fields.is_empty());
 }
@@ -109,7 +115,8 @@ crap.collections.define("everything", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Create empty init.lua
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
@@ -118,7 +125,9 @@ crap.collections.define("everything", {
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("everything").expect("everything should be registered");
+    let def = reg
+        .get_collection("everything")
+        .expect("everything should be registered");
     assert_eq!(def.fields.len(), 10);
 
     // Verify types
@@ -151,18 +160,23 @@ crap.collections.define("users", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").expect("users should be registered");
+    let def = reg
+        .get_collection("users")
+        .expect("users should be registered");
     assert!(def.is_auth_collection(), "should be auth collection");
     // Email field should have been auto-injected
     assert!(
-        def.fields.iter().any(|f| f.name == "email" && f.field_type == crap_cms::core::field::FieldType::Email),
+        def.fields
+            .iter()
+            .any(|f| f.name == "email" && f.field_type == crap_cms::core::field::FieldType::Email),
         "email field should be auto-injected for auth collections"
     );
 }
@@ -186,14 +200,17 @@ crap.collections.define("members", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("members").expect("members should be registered");
+    let def = reg
+        .get_collection("members")
+        .expect("members should be registered");
     assert!(def.is_auth_collection());
     let auth = def.auth.as_ref().unwrap();
     assert!(auth.verify_email);
@@ -217,14 +234,17 @@ crap.globals.define("settings", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = hooks::init_lua(tmp.path(), &config).expect("init_lua failed");
 
     let reg = registry.read().unwrap();
-    let def = reg.get_global("settings").expect("settings should be registered");
+    let def = reg
+        .get_global("settings")
+        .expect("settings should be registered");
     assert_eq!(def.slug, "settings");
     assert_eq!(def.fields.len(), 2);
     assert_eq!(def.fields[0].name, "site_name");
@@ -259,13 +279,16 @@ crap.collections.define("media", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("media").expect("media should be registered");
+    let def = reg
+        .get_collection("media")
+        .expect("media should be registered");
     assert!(def.is_upload_collection());
     let upload = def.upload.as_ref().unwrap();
     assert_eq!(upload.mime_types.len(), 2);
@@ -297,13 +320,16 @@ crap.collections.define("users", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("users").expect("users should be registered");
+    let def = reg
+        .get_collection("users")
+        .expect("users should be registered");
     assert!(def.is_auth_collection());
     let auth = def.auth.as_ref().unwrap();
     assert_eq!(auth.strategies.len(), 2);
@@ -328,13 +354,16 @@ crap.collections.define("events", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("events").expect("events should be registered");
+    let def = reg
+        .get_collection("events")
+        .expect("events should be registered");
     match &def.live {
         Some(crap_cms::core::collection::LiveSetting::Function(f)) => {
             assert_eq!(f, "hooks.live.filter");
@@ -359,14 +388,20 @@ crap.collections.define("private", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("private").expect("private should be registered");
-    assert!(matches!(&def.live, Some(crap_cms::core::collection::LiveSetting::Disabled)));
+    let def = reg
+        .get_collection("private")
+        .expect("private should be registered");
+    assert!(matches!(
+        &def.live,
+        Some(crap_cms::core::collection::LiveSetting::Disabled)
+    ));
 }
 
 #[test]
@@ -393,15 +428,25 @@ crap.collections.define("pages", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("pages").expect("pages should be registered");
-    let blocks_field = def.fields.iter().find(|f| f.name == "content").expect("content field");
-    assert_eq!(blocks_field.field_type, crap_cms::core::field::FieldType::Blocks);
+    let def = reg
+        .get_collection("pages")
+        .expect("pages should be registered");
+    let blocks_field = def
+        .fields
+        .iter()
+        .find(|f| f.name == "content")
+        .expect("content field");
+    assert_eq!(
+        blocks_field.field_type,
+        crap_cms::core::field::FieldType::Blocks
+    );
     assert_eq!(blocks_field.blocks.len(), 2);
     assert_eq!(blocks_field.blocks[0].block_type, "text");
     assert_eq!(blocks_field.blocks[0].fields.len(), 1);
@@ -427,14 +472,21 @@ crap.collections.define("polls", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("polls").expect("polls should be registered");
-    let answer_field = def.fields.iter().find(|f| f.name == "answer").expect("answer field");
+    let def = reg
+        .get_collection("polls")
+        .expect("polls should be registered");
+    let answer_field = def
+        .fields
+        .iter()
+        .find(|f| f.name == "answer")
+        .expect("answer field");
     assert_eq!(answer_field.options.len(), 2);
     assert_eq!(answer_field.options[0].value, "yes");
     // The label should be a LocalizedString::Localized
@@ -469,13 +521,16 @@ crap.collections.define("articles", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("articles").expect("articles should be registered");
+    let def = reg
+        .get_collection("articles")
+        .expect("articles should be registered");
 
     // Test resolving for different locales
     assert_eq!(def.singular_name_for("en", "en"), "Article");
@@ -501,15 +556,21 @@ crap.collections.define("docs", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("docs").expect("docs should be registered");
+    let def = reg
+        .get_collection("docs")
+        .expect("docs should be registered");
     assert!(def.has_versions(), "versions=true should enable versions");
-    assert!(def.has_drafts(), "versions=true enables drafts by default (PayloadCMS convention)");
+    assert!(
+        def.has_drafts(),
+        "versions=true enables drafts by default (PayloadCMS convention)"
+    );
     let vc = def.versions.as_ref().unwrap();
     assert!(vc.drafts);
     assert_eq!(vc.max_versions, 0);
@@ -534,13 +595,16 @@ crap.collections.define("posts", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("posts").expect("posts should be registered");
+    let def = reg
+        .get_collection("posts")
+        .expect("posts should be registered");
     assert!(def.has_versions(), "should have versions");
     assert!(def.has_drafts(), "should have drafts");
     let vc = def.versions.as_ref().unwrap();
@@ -564,14 +628,20 @@ crap.collections.define("notes", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("notes").expect("notes should be registered");
-    assert!(!def.has_versions(), "versions=false should not enable versions");
+    let def = reg
+        .get_collection("notes")
+        .expect("notes should be registered");
+    assert!(
+        !def.has_versions(),
+        "versions=false should not enable versions"
+    );
     assert!(def.versions.is_none());
 }
 
@@ -590,14 +660,20 @@ crap.collections.define("plain", {
     },
 })
         "#,
-    ).unwrap();
+    )
+    .unwrap();
     std::fs::write(tmp.path().join("init.lua"), "").unwrap();
 
     let config = CrapConfig::default();
     let registry = crap_cms::hooks::init_lua(tmp.path(), &config).expect("init_lua");
     let reg = registry.read().unwrap();
-    let def = reg.get_collection("plain").expect("plain should be registered");
-    assert!(!def.has_versions(), "no versions config should mean no versions");
+    let def = reg
+        .get_collection("plain")
+        .expect("plain should be registered");
+    assert!(
+        !def.has_versions(),
+        "no versions config should mean no versions"
+    );
     assert!(def.versions.is_none());
 }
 
@@ -608,35 +684,43 @@ crap.collections.define("plain", {
 #[test]
 fn crypto_sha256() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local hash = crap.crypto.sha256("hello")
         -- Known SHA-256 of "hello"
         if hash ~= "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" then
             return "WRONG:" .. hash
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_sha256_empty() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local hash = crap.crypto.sha256("")
         -- Known SHA-256 of empty string
         if hash ~= "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" then
             return "WRONG:" .. hash
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_hmac_sha256() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local mac = crap.crypto.hmac_sha256("hello", "secret-key")
         -- Should be 64 hex characters (32 bytes)
         if #mac ~= 64 then return "LEN:" .. #mac end
@@ -647,14 +731,17 @@ fn crypto_hmac_sha256() {
         local mac3 = crap.crypto.hmac_sha256("hello", "other-key")
         if mac == mac3 then return "SAME_WITH_DIFF_KEY" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_base64_roundtrip() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local original = "Hello, World! 123 Special chars: @#$%"
         local encoded = crap.crypto.base64_encode(original)
         local decoded = crap.crypto.base64_decode(encoded)
@@ -662,27 +749,33 @@ fn crypto_base64_roundtrip() {
             return "MISMATCH:" .. decoded
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_base64_known_value() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local encoded = crap.crypto.base64_encode("hello")
         if encoded ~= "aGVsbG8=" then return "WRONG:" .. encoded end
         local decoded = crap.crypto.base64_decode("aGVsbG8=")
         if decoded ~= "hello" then return "DECODE_WRONG:" .. decoded end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_encrypt_decrypt_roundtrip() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local plaintext = "secret message 123!"
         local encrypted = crap.crypto.encrypt(plaintext)
         -- Encrypted should be different from plaintext
@@ -695,14 +788,17 @@ fn crypto_encrypt_decrypt_roundtrip() {
             return "MISMATCH:" .. decrypted
         end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_encrypt_produces_different_ciphertexts() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         -- Same plaintext should produce different ciphertexts (random nonce)
         local a = crap.crypto.encrypt("same text")
         local b = crap.crypto.encrypt("same text")
@@ -711,7 +807,8 @@ fn crypto_encrypt_produces_different_ciphertexts() {
         if crap.crypto.decrypt(a) ~= "same text" then return "A_WRONG" end
         if crap.crypto.decrypt(b) ~= "same text" then return "B_WRONG" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -723,20 +820,28 @@ fn crypto_decrypt_invalid_input() {
     config.database.path = "test.db".to_string();
     let pool = crap_cms::db::pool::create_pool(tmp.path(), &config).expect("pool");
     let conn = pool.get().expect("conn");
-    let result = runner.eval_lua_with_conn(r#"
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
         local ok, err = pcall(function()
             crap.crypto.decrypt("not-valid-base64!@#$")
         end)
         if ok then return "SHOULD_HAVE_FAILED" end
         return "ok"
-    "#, &conn, None).expect("eval");
+    "#,
+            &conn,
+            None,
+        )
+        .expect("eval");
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_random_bytes() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local hex = crap.crypto.random_bytes(16)
         -- 16 bytes = 32 hex characters
         if #hex ~= 32 then return "LEN:" .. #hex end
@@ -746,20 +851,24 @@ fn crypto_random_bytes() {
         local hex2 = crap.crypto.random_bytes(16)
         if hex == hex2 then return "SAME" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
 #[test]
 fn crypto_random_bytes_various_sizes() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local h1 = crap.crypto.random_bytes(1)
         if #h1 ~= 2 then return "1B:" .. #h1 end
         local h32 = crap.crypto.random_bytes(32)
         if #h32 ~= 64 then return "32B:" .. #h32 end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
 
@@ -770,7 +879,9 @@ fn crypto_random_bytes_various_sizes() {
 #[test]
 fn schema_get_collection() {
     let runner = setup_lua();
-    let result = eval_lua(&runner, r#"
+    let result = eval_lua(
+        &runner,
+        r#"
         local schema = crap.schema.get_collection("articles")
         if schema == nil then return "NIL" end
         if schema.slug ~= "articles" then return "SLUG:" .. tostring(schema.slug) end
@@ -787,7 +898,7 @@ fn schema_get_collection() {
         if not title_field.required then return "TITLE_NOT_REQUIRED" end
         if not title_field.unique then return "TITLE_NOT_UNIQUE" end
         return "ok"
-    "#);
+    "#,
+    );
     assert_eq!(result, "ok");
 }
-

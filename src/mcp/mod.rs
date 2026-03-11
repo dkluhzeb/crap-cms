@@ -5,10 +5,10 @@
 //! Supports stdio and HTTP transports.
 
 pub mod protocol;
-pub mod schema;
-pub mod tools;
 pub mod resources;
+pub mod schema;
 pub mod stdio;
+pub mod tools;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -21,8 +21,8 @@ use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 use protocol::{
-    JsonRpcRequest, JsonRpcResponse, InitializeParams, ToolCallParams,
-    ResourceReadParams, PROTOCOL_VERSION, METHOD_NOT_FOUND, INVALID_PARAMS, INTERNAL_ERROR,
+    InitializeParams, JsonRpcRequest, JsonRpcResponse, ResourceReadParams, ToolCallParams,
+    INTERNAL_ERROR, INVALID_PARAMS, METHOD_NOT_FOUND, PROTOCOL_VERSION,
 };
 
 /// Shared state for the MCP server.
@@ -53,7 +53,11 @@ impl McpServer {
             "resources/list" => self.handle_resources_list(req.id),
             "resources/read" => self.handle_resources_read(req.id, req.params),
             "ping" => JsonRpcResponse::success(req.id, json!({})),
-            _ => JsonRpcResponse::error(req.id, METHOD_NOT_FOUND, format!("Unknown method: {}", req.method)),
+            _ => JsonRpcResponse::error(
+                req.id,
+                METHOD_NOT_FOUND,
+                format!("Unknown method: {}", req.method),
+            ),
         }
     }
 
@@ -61,29 +65,39 @@ impl McpServer {
         let _params: InitializeParams = match params {
             Some(p) => match serde_json::from_value(p) {
                 Ok(p) => p,
-                Err(e) => return JsonRpcResponse::error(id, INVALID_PARAMS, format!("Invalid params: {}", e)),
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        INVALID_PARAMS,
+                        format!("Invalid params: {}", e),
+                    )
+                }
             },
             None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
         };
 
-        JsonRpcResponse::success(id, json!({
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {
-                "tools": { "listChanged": false },
-                "resources": { "subscribe": false, "listChanged": false },
-            },
-            "serverInfo": {
-                "name": "crap-cms",
-                "version": env!("CARGO_PKG_VERSION"),
-            }
-        }))
+        JsonRpcResponse::success(
+            id,
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "resources": { "subscribe": false, "listChanged": false },
+                },
+                "serverInfo": {
+                    "name": "crap-cms",
+                    "version": env!("CARGO_PKG_VERSION"),
+                }
+            }),
+        )
     }
 
     fn handle_tools_list(&self, id: Option<Value>) -> JsonRpcResponse {
         let tool_defs = tools::generate_tools(&self.registry, &self.config.mcp);
-        let tools_json: Vec<Value> = tool_defs.iter().map(|t| {
-            serde_json::to_value(t).unwrap_or(Value::Null)
-        }).collect();
+        let tools_json: Vec<Value> = tool_defs
+            .iter()
+            .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+            .collect();
         JsonRpcResponse::success(id, json!({ "tools": tools_json }))
     }
 
@@ -91,7 +105,13 @@ impl McpServer {
         let call: ToolCallParams = match params {
             Some(p) => match serde_json::from_value(p) {
                 Ok(c) => c,
-                Err(e) => return JsonRpcResponse::error(id, INVALID_PARAMS, format!("Invalid params: {}", e)),
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        INVALID_PARAMS,
+                        format!("Invalid params: {}", e),
+                    )
+                }
             },
             None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
         };
@@ -105,31 +125,34 @@ impl McpServer {
             &self.config_dir,
             &self.config,
         ) {
-            Ok(result_text) => {
-                JsonRpcResponse::success(id, json!({
+            Ok(result_text) => JsonRpcResponse::success(
+                id,
+                json!({
                     "content": [{
                         "type": "text",
                         "text": result_text,
                     }]
-                }))
-            }
-            Err(e) => {
-                JsonRpcResponse::success(id, json!({
+                }),
+            ),
+            Err(e) => JsonRpcResponse::success(
+                id,
+                json!({
                     "content": [{
                         "type": "text",
                         "text": format!("Error: {}", e),
                     }],
                     "isError": true,
-                }))
-            }
+                }),
+            ),
         }
     }
 
     fn handle_resources_list(&self, id: Option<Value>) -> JsonRpcResponse {
         let resource_defs = resources::list_resources();
-        let resources_json: Vec<Value> = resource_defs.iter().map(|r| {
-            serde_json::to_value(r).unwrap_or(Value::Null)
-        }).collect();
+        let resources_json: Vec<Value> = resource_defs
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap_or(Value::Null))
+            .collect();
         JsonRpcResponse::success(id, json!({ "resources": resources_json }))
     }
 
@@ -137,20 +160,29 @@ impl McpServer {
         let read_params: ResourceReadParams = match params {
             Some(p) => match serde_json::from_value(p) {
                 Ok(r) => r,
-                Err(e) => return JsonRpcResponse::error(id, INVALID_PARAMS, format!("Invalid params: {}", e)),
+                Err(e) => {
+                    return JsonRpcResponse::error(
+                        id,
+                        INVALID_PARAMS,
+                        format!("Invalid params: {}", e),
+                    )
+                }
             },
             None => return JsonRpcResponse::error(id, INVALID_PARAMS, "Missing params"),
         };
 
         match resources::read_resource(&read_params.uri, &self.registry, &self.config) {
-            Some(content) => {
-                JsonRpcResponse::success(id, json!({
+            Some(content) => JsonRpcResponse::success(
+                id,
+                json!({
                     "contents": [serde_json::to_value(&content).unwrap_or(Value::Null)]
-                }))
-            }
-            None => {
-                JsonRpcResponse::error(id, INTERNAL_ERROR, format!("Resource not found: {}", read_params.uri))
-            }
+                }),
+            ),
+            None => JsonRpcResponse::error(
+                id,
+                INTERNAL_ERROR,
+                format!("Resource not found: {}", read_params.uri),
+            ),
         }
     }
 }
@@ -259,11 +291,15 @@ mod tests {
     #[test]
     fn handle_initialize_success() {
         let (_tmp, server) = make_server();
-        let req = make_request("initialize", Some(json!(1)), Some(json!({
-            "protocolVersion": "2025-03-26",
-            "capabilities": {},
-            "clientInfo": { "name": "test-client", "version": "0.1" }
-        })));
+        let req = make_request(
+            "initialize",
+            Some(json!(1)),
+            Some(json!({
+                "protocolVersion": "2025-03-26",
+                "capabilities": {},
+                "clientInfo": { "name": "test-client", "version": "0.1" }
+            })),
+        );
         let resp = server.handle_message(req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
@@ -301,7 +337,8 @@ mod tests {
         let tools = result["tools"].as_array().unwrap();
         // Should have at least the introspection tools + collection CRUD tools
         assert!(!tools.is_empty());
-        let names: Vec<&str> = tools.iter()
+        let names: Vec<&str> = tools
+            .iter()
             .map(|t| t["name"].as_str().unwrap_or(""))
             .collect();
         assert!(names.contains(&"list_collections"));
@@ -311,10 +348,14 @@ mod tests {
     #[test]
     fn handle_tools_call_list_collections() {
         let (_tmp, server) = make_server();
-        let req = make_request("tools/call", Some(json!(6)), Some(json!({
-            "name": "list_collections",
-            "arguments": {}
-        })));
+        let req = make_request(
+            "tools/call",
+            Some(json!(6)),
+            Some(json!({
+                "name": "list_collections",
+                "arguments": {}
+            })),
+        );
         let resp = server.handle_message(req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
@@ -329,10 +370,14 @@ mod tests {
     #[test]
     fn handle_tools_call_unknown_tool_returns_is_error() {
         let (_tmp, server) = make_server();
-        let req = make_request("tools/call", Some(json!(7)), Some(json!({
-            "name": "nonexistent_tool",
-            "arguments": {}
-        })));
+        let req = make_request(
+            "tools/call",
+            Some(json!(7)),
+            Some(json!({
+                "name": "nonexistent_tool",
+                "arguments": {}
+            })),
+        );
         let resp = server.handle_message(req);
         // Error during tool execution is returned as a success response with isError=true
         assert!(resp.error.is_none());
@@ -367,7 +412,8 @@ mod tests {
         let result = resp.result.unwrap();
         let resources = result["resources"].as_array().unwrap();
         assert!(!resources.is_empty());
-        let uris: Vec<&str> = resources.iter()
+        let uris: Vec<&str> = resources
+            .iter()
             .map(|r| r["uri"].as_str().unwrap_or(""))
             .collect();
         assert!(uris.contains(&"crap://schema/collections"));
@@ -376,9 +422,13 @@ mod tests {
     #[test]
     fn handle_resources_read_collections_schema() {
         let (_tmp, server) = make_server();
-        let req = make_request("resources/read", Some(json!(11)), Some(json!({
-            "uri": "crap://schema/collections"
-        })));
+        let req = make_request(
+            "resources/read",
+            Some(json!(11)),
+            Some(json!({
+                "uri": "crap://schema/collections"
+            })),
+        );
         let resp = server.handle_message(req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
@@ -390,9 +440,13 @@ mod tests {
     #[test]
     fn handle_resources_read_unknown_uri_returns_error() {
         let (_tmp, server) = make_server();
-        let req = make_request("resources/read", Some(json!(12)), Some(json!({
-            "uri": "crap://nonexistent"
-        })));
+        let req = make_request(
+            "resources/read",
+            Some(json!(12)),
+            Some(json!({
+                "uri": "crap://nonexistent"
+            })),
+        );
         let resp = server.handle_message(req);
         assert!(resp.error.is_some());
         assert_eq!(resp.error.unwrap().code, INTERNAL_ERROR);
@@ -419,10 +473,14 @@ mod tests {
     #[test]
     fn handle_tools_call_list_field_types() {
         let (_tmp, server) = make_server();
-        let req = make_request("tools/call", Some(json!(15)), Some(json!({
-            "name": "list_field_types",
-            "arguments": {}
-        })));
+        let req = make_request(
+            "tools/call",
+            Some(json!(15)),
+            Some(json!({
+                "name": "list_field_types",
+                "arguments": {}
+            })),
+        );
         let resp = server.handle_message(req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
@@ -434,10 +492,14 @@ mod tests {
     #[test]
     fn handle_tools_call_cli_reference() {
         let (_tmp, server) = make_server();
-        let req = make_request("tools/call", Some(json!(16)), Some(json!({
-            "name": "cli_reference",
-            "arguments": {}
-        })));
+        let req = make_request(
+            "tools/call",
+            Some(json!(16)),
+            Some(json!({
+                "name": "cli_reference",
+                "arguments": {}
+            })),
+        );
         let resp = server.handle_message(req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
@@ -448,10 +510,14 @@ mod tests {
     #[test]
     fn handle_tools_call_describe_collection() {
         let (_tmp, server) = make_server();
-        let req = make_request("tools/call", Some(json!(17)), Some(json!({
-            "name": "describe_collection",
-            "arguments": { "slug": "posts" }
-        })));
+        let req = make_request(
+            "tools/call",
+            Some(json!(17)),
+            Some(json!({
+                "name": "describe_collection",
+                "arguments": { "slug": "posts" }
+            })),
+        );
         let resp = server.handle_message(req);
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();

@@ -1,6 +1,6 @@
-use super::*;
 use super::super::builder::build_field_contexts;
-use crate::core::field::{FieldDefinition, SelectOption, LocalizedString, BlockDefinition};
+use super::*;
+use crate::core::field::{BlockDefinition, FieldDefinition, LocalizedString, SelectOption};
 
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
     FieldDefinition::builder(name, ft).build()
@@ -23,8 +23,14 @@ fn enriched_sub_field_nested_array_populates_rows() {
     ]);
 
     let ctx = build_enriched_sub_field_context(
-        &inner_array, Some(&raw_value), "content", 0,
-        false, false, 1, &HashMap::new(),
+        &inner_array,
+        Some(&raw_value),
+        "content",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
 
     assert_eq!(ctx["field_type"], "array");
@@ -47,7 +53,10 @@ fn enriched_sub_field_nested_array_populates_rows() {
 
     // Template sub_fields should use __INDEX__
     let template_sub = ctx["sub_fields"].as_array().unwrap();
-    assert_eq!(template_sub[0]["name"], "content[0][images][__INDEX__][url]");
+    assert_eq!(
+        template_sub[0]["name"],
+        "content[0][images][__INDEX__][url]"
+    );
 }
 
 #[test]
@@ -64,8 +73,14 @@ fn enriched_sub_field_nested_blocks_populates_rows() {
     ]);
 
     let ctx = build_enriched_sub_field_context(
-        &inner_blocks, Some(&raw_value), "page", 2,
-        false, false, 1, &HashMap::new(),
+        &inner_blocks,
+        Some(&raw_value),
+        "page",
+        2,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
 
     assert_eq!(ctx["field_type"], "blocks");
@@ -98,8 +113,14 @@ fn enriched_sub_field_nested_group_populates_values() {
     });
 
     let ctx = build_enriched_sub_field_context(
-        &inner_group, Some(&raw_value), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &inner_group,
+        Some(&raw_value),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
 
     assert_eq!(ctx["field_type"], "group");
@@ -118,8 +139,14 @@ fn enriched_sub_field_empty_nested_array() {
 
     // No data
     let ctx = build_enriched_sub_field_context(
-        &inner_array, None, "items", 0,
-        false, false, 1, &HashMap::new(),
+        &inner_array,
+        None,
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
 
     assert_eq!(ctx["field_type"], "array");
@@ -139,8 +166,14 @@ fn enriched_sub_field_select_preserves_selected() {
     let raw_value = serde_json::json!("published");
 
     let ctx = build_enriched_sub_field_context(
-        &select_field, Some(&raw_value), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &select_field,
+        Some(&raw_value),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
 
     let opts = ctx["options"].as_array().unwrap();
@@ -152,7 +185,8 @@ fn enriched_sub_field_select_preserves_selected() {
 fn max_depth_prevents_infinite_recursion() {
     // Build a deeply nested array structure
     fn make_nested_array(depth: usize) -> FieldDefinition {
-        let mut field = FieldDefinition::builder(format!("level{}", depth), FieldType::Array).build();
+        let mut field =
+            FieldDefinition::builder(format!("level{}", depth), FieldType::Array).build();
         if depth < 10 {
             field.fields = vec![make_nested_array(depth + 1)];
         } else {
@@ -176,8 +210,14 @@ fn enriched_sub_field_with_error() {
     let mut errors = HashMap::new();
     errors.insert("content[0][title]".to_string(), "Required".to_string());
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&serde_json::json!("val")), "content", 0,
-        false, false, 1, &errors,
+        &sf,
+        Some(&serde_json::json!("val")),
+        "content",
+        0,
+        false,
+        false,
+        1,
+        &errors,
     );
     assert_eq!(ctx["error"], "Required");
 }
@@ -189,8 +229,14 @@ fn enriched_sub_field_max_depth_returns_early() {
     let mut arr = make_field("deep", FieldType::Array);
     arr.fields = vec![make_field("leaf", FieldType::Text)];
     let ctx = build_enriched_sub_field_context(
-        &arr, Some(&serde_json::json!([])), "parent", 0,
-        false, false, MAX_FIELD_DEPTH, &HashMap::new(),
+        &arr,
+        Some(&serde_json::json!([])),
+        "parent",
+        0,
+        false,
+        false,
+        MAX_FIELD_DEPTH,
+        &HashMap::new(),
     );
     // At max depth, array-specific fields should not be added
     assert!(ctx.get("rows").is_none());
@@ -204,7 +250,14 @@ fn enriched_sub_field_date_day_only() {
     let sf = make_field("d", FieldType::Date);
     let raw = serde_json::json!("2026-03-15T10:00:00Z");
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&raw), "items", 0, false, false, 1, &HashMap::new(),
+        &sf,
+        Some(&raw),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["picker_appearance"], "dayOnly");
     assert_eq!(ctx["date_only_value"], "2026-03-15");
@@ -216,7 +269,14 @@ fn enriched_sub_field_date_day_and_time() {
     sf.picker_appearance = Some("dayAndTime".to_string());
     let raw = serde_json::json!("2026-03-15T10:30:00Z");
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&raw), "items", 0, false, false, 1, &HashMap::new(),
+        &sf,
+        Some(&raw),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["picker_appearance"], "dayAndTime");
     assert_eq!(ctx["datetime_local_value"], "2026-03-15T10:30");
@@ -227,7 +287,14 @@ fn enriched_sub_field_date_short_value() {
     let sf = make_field("d", FieldType::Date);
     let raw = serde_json::json!("short");
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&raw), "items", 0, false, false, 1, &HashMap::new(),
+        &sf,
+        Some(&raw),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["date_only_value"], "short");
 }
@@ -240,8 +307,14 @@ fn enriched_sub_field_upload() {
     let mut sf = make_field("image", FieldType::Upload);
     sf.relationship = Some(RelationshipConfig::new("media", false));
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&serde_json::json!("img123")), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &sf,
+        Some(&serde_json::json!("img123")),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["relationship_collection"], "media");
     assert_eq!(ctx["picker"], "drawer");
@@ -255,8 +328,14 @@ fn enriched_sub_field_relationship() {
     let mut sf = make_field("author", FieldType::Relationship);
     sf.relationship = Some(RelationshipConfig::new("users", true));
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&serde_json::json!("user1")), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &sf,
+        Some(&serde_json::json!("user1")),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["relationship_collection"], "users");
     assert_eq!(ctx["has_many"], true);
@@ -268,8 +347,14 @@ fn enriched_sub_field_relationship() {
 fn enriched_sub_field_null_value_empty_string() {
     let sf = make_field("title", FieldType::Text);
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&serde_json::Value::Null), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &sf,
+        Some(&serde_json::Value::Null),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["value"], "");
 }
@@ -278,8 +363,14 @@ fn enriched_sub_field_null_value_empty_string() {
 fn enriched_sub_field_number_to_string() {
     let sf = make_field("count", FieldType::Number);
     let ctx = build_enriched_sub_field_context(
-        &sf, Some(&serde_json::json!(42)), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &sf,
+        Some(&serde_json::json!(42)),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["value"], "42");
 }
@@ -287,9 +378,8 @@ fn enriched_sub_field_number_to_string() {
 #[test]
 fn enriched_sub_field_no_value() {
     let sf = make_field("title", FieldType::Text);
-    let ctx = build_enriched_sub_field_context(
-        &sf, None, "items", 0, false, false, 1, &HashMap::new(),
-    );
+    let ctx =
+        build_enriched_sub_field_context(&sf, None, "items", 0, false, false, 1, &HashMap::new());
     assert_eq!(ctx["value"], "");
 }
 
@@ -304,8 +394,14 @@ fn enriched_sub_field_array_with_options() {
     arr.admin.collapsed = true;
     arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
     let ctx = build_enriched_sub_field_context(
-        &arr, Some(&serde_json::json!([])), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &arr,
+        Some(&serde_json::json!([])),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["min_rows"], 1);
     assert_eq!(ctx["max_rows"], 5);
@@ -318,15 +414,24 @@ fn enriched_sub_field_array_with_options() {
 #[test]
 fn enriched_sub_field_blocks_with_options() {
     let mut blk = make_field("sections", FieldType::Blocks);
-    blk.blocks = vec![BlockDefinition::new("text", vec![make_field("body", FieldType::Text)])];
+    blk.blocks = vec![BlockDefinition::new(
+        "text",
+        vec![make_field("body", FieldType::Text)],
+    )];
     blk.min_rows = Some(0);
     blk.max_rows = Some(10);
     blk.admin.collapsed = true;
     blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
     blk.admin.label_field = Some("body".to_string());
     let ctx = build_enriched_sub_field_context(
-        &blk, Some(&serde_json::json!([])), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &blk,
+        Some(&serde_json::json!([])),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["min_rows"], 0);
     assert_eq!(ctx["max_rows"], 10);
@@ -344,11 +449,20 @@ fn enriched_sub_field_nested_array_row_errors() {
 
     let raw_value = serde_json::json!([{"title": ""}]);
     let mut errors = HashMap::new();
-    errors.insert("parent[0][items][0][title]".to_string(), "Required".to_string());
+    errors.insert(
+        "parent[0][items][0][title]".to_string(),
+        "Required".to_string(),
+    );
 
     let ctx = build_enriched_sub_field_context(
-        &inner_array, Some(&raw_value), "parent", 0,
-        false, false, 1, &errors,
+        &inner_array,
+        Some(&raw_value),
+        "parent",
+        0,
+        false,
+        false,
+        1,
+        &errors,
     );
 
     let rows = ctx["rows"].as_array().unwrap();
@@ -369,11 +483,20 @@ fn enriched_sub_field_nested_blocks_row_errors() {
 
     let raw_value = serde_json::json!([{"_block_type": "text", "body": ""}]);
     let mut errors = HashMap::new();
-    errors.insert("parent[0][sections][0][body]".to_string(), "Required".to_string());
+    errors.insert(
+        "parent[0][sections][0][body]".to_string(),
+        "Required".to_string(),
+    );
 
     let ctx = build_enriched_sub_field_context(
-        &blk, Some(&raw_value), "parent", 0,
-        false, false, 1, &errors,
+        &blk,
+        Some(&raw_value),
+        "parent",
+        0,
+        false,
+        false,
+        1,
+        &errors,
     );
 
     let rows = ctx["rows"].as_array().unwrap();
@@ -390,8 +513,14 @@ fn enriched_sub_field_group_collapsed() {
     grp.admin.collapsed = true;
     let raw = serde_json::json!({"author": "Alice"});
     let ctx = build_enriched_sub_field_context(
-        &grp, Some(&raw), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &grp,
+        Some(&raw),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     assert_eq!(ctx["collapsed"], true);
 }
@@ -403,8 +532,14 @@ fn enriched_sub_field_group_with_null_value() {
     let mut grp = make_field("meta", FieldType::Group);
     grp.fields = vec![make_field("author", FieldType::Text)];
     let ctx = build_enriched_sub_field_context(
-        &grp, Some(&serde_json::Value::Null), "items", 0,
-        false, false, 1, &HashMap::new(),
+        &grp,
+        Some(&serde_json::Value::Null),
+        "items",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
     // group_obj should be None so nested values are empty
     let sub_fields = ctx["sub_fields"].as_array().unwrap();
@@ -426,15 +561,21 @@ fn enriched_sub_field_nested_blocks_unknown_type() {
     let raw_value = serde_json::json!([{"_block_type": "unknown_type", "body": "content"}]);
 
     let ctx = build_enriched_sub_field_context(
-        &blk, Some(&raw_value), "parent", 0,
-        false, false, 1, &HashMap::new(),
+        &blk,
+        Some(&raw_value),
+        "parent",
+        0,
+        false,
+        false,
+        1,
+        &HashMap::new(),
     );
 
     let rows = ctx["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["_block_type"], "unknown_type");
     assert_eq!(rows[0]["block_label"], "unknown_type"); // falls back to block_type string
-    // sub_fields should be empty since block_def is not found
+                                                        // sub_fields should be empty since block_def is not found
     let sub_fields = rows[0]["sub_fields"].as_array().unwrap();
     assert!(sub_fields.is_empty());
 }
@@ -494,7 +635,8 @@ fn enrich_nested_fields_upload_gets_options() {
 
     enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
 
-    let items = sub_fields[0]["selected_items"].as_array()
+    let items = sub_fields[0]["selected_items"]
+        .as_array()
         .expect("selected_items should be populated");
     assert_eq!(items.len(), 1, "Should have 1 selected item");
     assert_eq!(items[0]["id"], "img1");
@@ -517,8 +659,9 @@ fn enrich_nested_fields_relationship_gets_options() {
         INSERT INTO users (id, name, created_at, updated_at)
         VALUES ('u1', 'Alice', '2024-01-01', '2024-01-01');
         INSERT INTO users (id, name, created_at, updated_at)
-        VALUES ('u2', 'Bob', '2024-01-01', '2024-01-01');"
-    ).unwrap();
+        VALUES ('u2', 'Bob', '2024-01-01', '2024-01-01');",
+    )
+    .unwrap();
 
     let mut users_def = CollectionDefinition::new("users");
     users_def.timestamps = true;
@@ -541,7 +684,8 @@ fn enrich_nested_fields_relationship_gets_options() {
 
     enrich_nested_fields(&mut sub_fields, &field_defs, &conn, &registry, None);
 
-    let items = sub_fields[0]["selected_items"].as_array()
+    let items = sub_fields[0]["selected_items"]
+        .as_array()
         .expect("selected_items should be populated");
     assert_eq!(items.len(), 1, "Should have 1 selected item");
     assert_eq!(items[0]["id"], "u1");
@@ -562,8 +706,9 @@ fn enrich_nested_fields_recurses_into_layout() {
             updated_at TEXT
         );
         INSERT INTO tags (id, label, created_at, updated_at)
-        VALUES ('t1', 'Rust', '2024-01-01', '2024-01-01');"
-    ).unwrap();
+        VALUES ('t1', 'Rust', '2024-01-01', '2024-01-01');",
+    )
+    .unwrap();
 
     let mut tags_def = CollectionDefinition::new("tags");
     tags_def.timestamps = true;
@@ -576,7 +721,9 @@ fn enrich_nested_fields_recurses_into_layout() {
     // A Row containing a Relationship field
     let mut rel_field = make_field("tag", FieldType::Relationship);
     rel_field.relationship = Some(RelationshipConfig::new("tags", false));
-    let row_field = FieldDefinition::builder("row1", FieldType::Row).fields(vec![rel_field]).build();
+    let row_field = FieldDefinition::builder("row1", FieldType::Row)
+        .fields(vec![rel_field])
+        .build();
 
     let field_defs = vec![row_field];
     let mut sub_fields = vec![serde_json::json!({
@@ -594,9 +741,14 @@ fn enrich_nested_fields_recurses_into_layout() {
 
     let row_subs = sub_fields[0]["sub_fields"].as_array().unwrap();
     // Empty value → selected_items is empty array
-    let items = row_subs[0]["selected_items"].as_array()
+    let items = row_subs[0]["selected_items"]
+        .as_array()
         .expect("Nested relationship inside Row should be enriched");
-    assert_eq!(items.len(), 0, "Empty value should produce empty selected_items");
+    assert_eq!(
+        items.len(),
+        0,
+        "Empty value should produce empty selected_items"
+    );
 }
 
 #[test]
@@ -662,9 +814,14 @@ fn enrich_nested_fields_blocks_template_gets_upload_options() {
     let block_defs = sub_fields[0]["block_definitions"].as_array().unwrap();
     let fields = block_defs[0]["fields"].as_array().unwrap();
     // Empty value → selected_items is empty array (no full table scan)
-    let items = fields[0]["selected_items"].as_array()
+    let items = fields[0]["selected_items"]
+        .as_array()
         .expect("Upload inside block template should have selected_items");
-    assert_eq!(items.len(), 0, "Empty value should produce empty selected_items");
+    assert_eq!(
+        items.len(),
+        0,
+        "Empty value should produce empty selected_items"
+    );
 }
 
 #[test]
@@ -703,7 +860,9 @@ fn enrich_nested_fields_array_template_gets_upload_options() {
 
     let mut upload_field = make_field("file", FieldType::Upload);
     upload_field.relationship = Some(RelationshipConfig::new("media", false));
-    let array_field = FieldDefinition::builder("attachments", FieldType::Array).fields(vec![upload_field]).build();
+    let array_field = FieldDefinition::builder("attachments", FieldType::Array)
+        .fields(vec![upload_field])
+        .build();
 
     let field_defs = vec![array_field];
     let mut sub_fields = vec![serde_json::json!({
@@ -722,9 +881,14 @@ fn enrich_nested_fields_array_template_gets_upload_options() {
 
     let template_fields = sub_fields[0]["sub_fields"].as_array().unwrap();
     // Empty value → selected_items is empty array (no full table scan)
-    let items = template_fields[0]["selected_items"].as_array()
+    let items = template_fields[0]["selected_items"]
+        .as_array()
         .expect("Upload inside array template should have selected_items");
-    assert_eq!(items.len(), 0, "Empty value should produce empty selected_items");
+    assert_eq!(
+        items.len(),
+        0,
+        "Empty value should produce empty selected_items"
+    );
 }
 
 #[test]
@@ -740,7 +904,10 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         bd
     }];
     let mut tabs_field = FieldDefinition::builder("page_settings", FieldType::Tabs).build();
-    tabs_field.tabs = vec![crate::core::field::FieldTab::new("Content", vec![blocks_field.clone()])];
+    tabs_field.tabs = vec![crate::core::field::FieldTab::new(
+        "Content",
+        vec![blocks_field.clone()],
+    )];
     let field_defs = vec![tabs_field];
 
     // Build initial field contexts (like the template would)
@@ -750,17 +917,20 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
 
     // Simulate doc_fields with blocks data (as hydrate_document would produce)
     let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
-    doc_fields.insert("content".to_string(), serde_json::json!([
-        {"_block_type": "hero", "heading": "Welcome"},
-    ]));
+    doc_fields.insert(
+        "content".to_string(),
+        serde_json::json!([
+            {"_block_type": "hero", "heading": "Welcome"},
+        ]),
+    );
 
     // Construct a minimal AdminState for the test
     let tmp = tempfile::tempdir().unwrap();
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
     let pool = r2d2::Pool::builder().max_size(4).build(manager).unwrap();
-    let shared_reg = std::sync::Arc::new(
-        std::sync::RwLock::new(crate::core::registry::Registry::default())
-    );
+    let shared_reg = std::sync::Arc::new(std::sync::RwLock::new(
+        crate::core::registry::Registry::default(),
+    ));
     let config = crate::config::CrapConfig::default();
     let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -770,15 +940,11 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         .unwrap();
     let registry = std::sync::Arc::new(shared_reg.read().unwrap().clone());
     let hbs = std::sync::Arc::new(handlebars::Handlebars::new());
-    let email_renderer = std::sync::Arc::new(
-        crate::core::email::EmailRenderer::new(tmp.path()).unwrap()
-    );
-    let login_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::LoginRateLimiter::new(5, 300)
-    );
-    let translations = std::sync::Arc::new(
-        crate::admin::translations::Translations::load(tmp.path())
-    );
+    let email_renderer =
+        std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
+    let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let translations =
+        std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     let state = crate::admin::AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
@@ -790,7 +956,9 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         email_renderer,
         event_bus: None,
         login_limiter,
-        forgot_password_limiter: std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth: false,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -798,8 +966,14 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
     enrich_field_contexts(
-        &mut contexts, &field_defs, &doc_fields, &state,
-        false, false, &errors, None,
+        &mut contexts,
+        &field_defs,
+        &doc_fields,
+        &state,
+        false,
+        false,
+        &errors,
+        None,
     );
 
     // Verify: the blocks field inside the first tab should have populated rows
@@ -807,7 +981,8 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
     let tab_sub_fields = tabs[0]["sub_fields"].as_array().unwrap();
     let blocks_ctx = &tab_sub_fields[0];
     assert_eq!(blocks_ctx["field_type"], "blocks");
-    let rows = blocks_ctx["rows"].as_array()
+    let rows = blocks_ctx["rows"]
+        .as_array()
         .expect("blocks inside Tabs must have rows populated from doc_fields");
     assert_eq!(rows.len(), 1, "should have 1 block row");
     assert_eq!(rows[0]["_block_type"], "hero");
@@ -829,17 +1004,20 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
     let mut contexts = build_field_contexts(&field_defs, &values, &errors, false, false);
 
     let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
-    doc_fields.insert("items".to_string(), serde_json::json!([
-        {"label": "First"},
-        {"label": "Second"},
-    ]));
+    doc_fields.insert(
+        "items".to_string(),
+        serde_json::json!([
+            {"label": "First"},
+            {"label": "Second"},
+        ]),
+    );
 
     let tmp = tempfile::tempdir().unwrap();
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
     let pool = r2d2::Pool::builder().max_size(4).build(manager).unwrap();
-    let shared_reg = std::sync::Arc::new(
-        std::sync::RwLock::new(crate::core::registry::Registry::default())
-    );
+    let shared_reg = std::sync::Arc::new(std::sync::RwLock::new(
+        crate::core::registry::Registry::default(),
+    ));
     let config = crate::config::CrapConfig::default();
     let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -849,15 +1027,11 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         .unwrap();
     let registry = std::sync::Arc::new(shared_reg.read().unwrap().clone());
     let hbs = std::sync::Arc::new(handlebars::Handlebars::new());
-    let email_renderer = std::sync::Arc::new(
-        crate::core::email::EmailRenderer::new(tmp.path()).unwrap()
-    );
-    let login_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::LoginRateLimiter::new(5, 300)
-    );
-    let translations = std::sync::Arc::new(
-        crate::admin::translations::Translations::load(tmp.path())
-    );
+    let email_renderer =
+        std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
+    let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let translations =
+        std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     let state = crate::admin::AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
@@ -869,21 +1043,30 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         email_renderer,
         event_bus: None,
         login_limiter,
-        forgot_password_limiter: std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth: false,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
     };
 
     enrich_field_contexts(
-        &mut contexts, &field_defs, &doc_fields, &state,
-        false, false, &errors, None,
+        &mut contexts,
+        &field_defs,
+        &doc_fields,
+        &state,
+        false,
+        false,
+        &errors,
+        None,
     );
 
     let row_sub_fields = contexts[0]["sub_fields"].as_array().unwrap();
     let array_ctx = &row_sub_fields[0];
     assert_eq!(array_ctx["field_type"], "array");
-    let rows = array_ctx["rows"].as_array()
+    let rows = array_ctx["rows"]
+        .as_array()
         .expect("array inside Row must have rows populated from doc_fields");
     assert_eq!(rows.len(), 2, "should have 2 array rows");
 }
@@ -894,9 +1077,9 @@ fn make_test_state() -> crate::admin::AdminState {
     let tmp = tempfile::tempdir().unwrap();
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
     let pool = r2d2::Pool::builder().max_size(4).build(manager).unwrap();
-    let shared_reg = std::sync::Arc::new(
-        std::sync::RwLock::new(crate::core::registry::Registry::default())
-    );
+    let shared_reg = std::sync::Arc::new(std::sync::RwLock::new(
+        crate::core::registry::Registry::default(),
+    ));
     let config = crate::config::CrapConfig::default();
     let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
         .config_dir(tmp.path())
@@ -906,15 +1089,11 @@ fn make_test_state() -> crate::admin::AdminState {
         .unwrap();
     let registry = std::sync::Arc::new(shared_reg.read().unwrap().clone());
     let hbs = std::sync::Arc::new(handlebars::Handlebars::new());
-    let email_renderer = std::sync::Arc::new(
-        crate::core::email::EmailRenderer::new(tmp.path()).unwrap()
-    );
-    let login_limiter = std::sync::Arc::new(
-        crate::core::rate_limit::LoginRateLimiter::new(5, 300)
-    );
-    let translations = std::sync::Arc::new(
-        crate::admin::translations::Translations::load(tmp.path())
-    );
+    let email_renderer =
+        std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
+    let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let translations =
+        std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     crate::admin::AdminState {
         config,
         config_dir: tmp.path().to_path_buf(),
@@ -926,7 +1105,9 @@ fn make_test_state() -> crate::admin::AdminState {
         email_renderer,
         event_bus: None,
         login_limiter,
-        forgot_password_limiter: std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth: false,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -939,14 +1120,12 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
 
     // Array "items" with sub-fields inside a Tabs wrapper
     let mut arr_field = make_field("items", FieldType::Array);
-    arr_field.fields = vec![
-        FieldDefinition::builder("layout", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
-                FieldTab::new("Content", vec![make_field("body", FieldType::Textarea)]),
-            ])
-            .build(),
-    ];
+    arr_field.fields = vec![FieldDefinition::builder("layout", FieldType::Tabs)
+        .tabs(vec![
+            FieldTab::new("General", vec![make_field("title", FieldType::Text)]),
+            FieldTab::new("Content", vec![make_field("body", FieldType::Textarea)]),
+        ])
+        .build()];
 
     // Simulate hydrated data: flat JSON (as it comes from the join table)
     let row_data = serde_json::json!([
@@ -964,8 +1143,14 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
     let state = make_test_state();
 
     enrich_field_contexts(
-        &mut contexts, &fields, &doc_fields, &state,
-        false, false, &errors, None,
+        &mut contexts,
+        &fields,
+        &doc_fields,
+        &state,
+        false,
+        false,
+        &errors,
+        None,
     );
 
     // The array row should contain a Tabs sub-field whose tabs contain the actual fields
@@ -997,14 +1182,12 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
 fn enriched_sub_field_row_in_array_transparent_names() {
     // Array "items" with sub-fields inside a Row wrapper
     let mut arr_field = make_field("items", FieldType::Array);
-    arr_field.fields = vec![
-        FieldDefinition::builder("row_wrap", FieldType::Row)
-            .fields(vec![
-                make_field("x", FieldType::Text),
-                make_field("y", FieldType::Text),
-            ])
-            .build(),
-    ];
+    arr_field.fields = vec![FieldDefinition::builder("row_wrap", FieldType::Row)
+        .fields(vec![
+            make_field("x", FieldType::Text),
+            make_field("y", FieldType::Text),
+        ])
+        .build()];
 
     let row_data = serde_json::json!([
         {"id": "r1", "x": "10", "y": "20"}
@@ -1021,8 +1204,14 @@ fn enriched_sub_field_row_in_array_transparent_names() {
     let state = make_test_state();
 
     enrich_field_contexts(
-        &mut contexts, &fields, &doc_fields, &state,
-        false, false, &errors, None,
+        &mut contexts,
+        &fields,
+        &doc_fields,
+        &state,
+        false,
+        false,
+        &errors,
+        None,
     );
 
     let rows = contexts[0]["rows"].as_array().expect("should have rows");
@@ -1049,10 +1238,11 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
 
     // Array "team_members" with Tabs containing Rows (double nesting)
     let mut arr_field = make_field("team_members", FieldType::Array);
-    arr_field.fields = vec![
-        FieldDefinition::builder("member_tabs", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new("Personal", vec![
+    arr_field.fields = vec![FieldDefinition::builder("member_tabs", FieldType::Tabs)
+        .tabs(vec![
+            FieldTab::new(
+                "Personal",
+                vec![
                     FieldDefinition::builder("name_row", FieldType::Row)
                         .fields(vec![
                             make_field("first_name", FieldType::Text),
@@ -1060,13 +1250,14 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
                         ])
                         .build(),
                     make_field("email", FieldType::Email),
-                ]),
-                FieldTab::new("Professional", vec![
-                    make_field("job_title", FieldType::Text),
-                ]),
-            ])
-            .build(),
-    ];
+                ],
+            ),
+            FieldTab::new(
+                "Professional",
+                vec![make_field("job_title", FieldType::Text)],
+            ),
+        ])
+        .build()];
 
     let row_data = serde_json::json!([
         {"id": "r1", "first_name": "John", "last_name": "Doe", "email": "john@example.com", "job_title": "Dev"}
@@ -1083,8 +1274,14 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
     let state = make_test_state();
 
     enrich_field_contexts(
-        &mut contexts, &fields, &doc_fields, &state,
-        false, false, &errors, None,
+        &mut contexts,
+        &fields,
+        &doc_fields,
+        &state,
+        false,
+        false,
+        &errors,
+        None,
     );
 
     let rows = contexts[0]["rows"].as_array().expect("should have rows");
@@ -1123,4 +1320,3 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
     assert_eq!(pro_fields[0]["name"], "team_members[0][job_title]");
     assert_eq!(pro_fields[0]["value"], "Dev");
 }
-

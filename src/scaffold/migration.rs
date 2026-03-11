@@ -6,7 +6,11 @@ use std::path::Path;
 
 /// Create a new migration file at `<config_dir>/migrations/YYYYMMDDHHMMSS_name.lua`.
 pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
-    if name.is_empty() || !name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+    if name.is_empty()
+        || !name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
         anyhow::bail!(
             "Invalid migration name '{}' — use lowercase letters, digits, and underscores only",
             name
@@ -14,8 +18,7 @@ pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
     }
 
     let migrations_dir = config_dir.join("migrations");
-    fs::create_dir_all(&migrations_dir)
-        .context("Failed to create migrations/ directory")?;
+    fs::create_dir_all(&migrations_dir).context("Failed to create migrations/ directory")?;
 
     let timestamp = chrono::Local::now().format("%Y%m%d%H%M%S");
     let filename = format!("{}_{}.lua", timestamp, name);
@@ -33,7 +36,8 @@ function M.down()
 end
 
 return M
-"#.to_string();
+"#
+    .to_string();
 
     fs::write(&file_path, &lua)
         .with_context(|| format!("Failed to write {}", file_path.display()))?;

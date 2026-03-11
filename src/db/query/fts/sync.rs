@@ -61,7 +61,10 @@ pub fn sync_fts_table(
     // Validate field names (defense against injection — they come from Lua config)
     for f in &fts_fields {
         if !super::super::is_valid_identifier(f) {
-            anyhow::bail!("Invalid FTS field name '{}': must be alphanumeric/underscore", f);
+            anyhow::bail!(
+                "Invalid FTS field name '{}': must be alphanumeric/underscore",
+                f
+            );
         }
     }
 
@@ -80,7 +83,14 @@ pub fn sync_fts_table(
     if json_rt_cols.is_empty() {
         bulk_populate_fast(conn, slug, &fts_table, &fts_fields, &field_list)
     } else {
-        bulk_populate_slow(conn, slug, &fts_table, &fts_fields, &field_list, &json_rt_cols)
+        bulk_populate_slow(
+            conn,
+            slug,
+            &fts_table,
+            &fts_fields,
+            &field_list,
+            &json_rt_cols,
+        )
     }
 }
 
@@ -270,11 +280,8 @@ pub fn fts_delete(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<(
         return Ok(());
     }
 
-    conn.execute(
-        &format!("DELETE FROM {} WHERE id = ?1", fts_table),
-        [id],
-    )
-    .with_context(|| format!("FTS delete in {}", fts_table))?;
+    conn.execute(&format!("DELETE FROM {} WHERE id = ?1", fts_table), [id])
+        .with_context(|| format!("FTS delete in {}", fts_table))?;
 
     Ok(())
 }
@@ -329,7 +336,9 @@ mod tests {
     }
 
     fn localized_text_field(name: &str) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Text).localized(true).build()
+        FieldDefinition::builder(name, FieldType::Text)
+            .localized(true)
+            .build()
     }
 
     // ── sync_fts_table ──────────────────────────────────────────────────
@@ -364,7 +373,9 @@ mod tests {
         conn.execute_batch("CREATE VIRTUAL TABLE _fts_posts USING fts5(id UNINDEXED, title)")
             .unwrap();
 
-        let def = simple_def(vec![FieldDefinition::builder("count", FieldType::Number).build()]);
+        let def = simple_def(vec![
+            FieldDefinition::builder("count", FieldType::Number).build()
+        ]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         let exists: bool = conn
@@ -474,7 +485,11 @@ mod tests {
         let mut def = simple_def(vec![
             text_field("title"),
             FieldDefinition::builder("content", FieldType::Richtext)
-                .admin(FieldAdmin::builder().richtext_format("json".to_string()).build())
+                .admin(
+                    FieldAdmin::builder()
+                        .richtext_format("json".to_string())
+                        .build(),
+                )
                 .build(),
         ]);
         def.admin.list_searchable_fields = vec!["title".into(), "content".into()];
@@ -499,10 +514,13 @@ mod tests {
         ))
         .unwrap();
 
-        let mut def = simple_def(vec![FieldDefinition::builder("content", FieldType::Richtext)
-            .localized(true)
-            .admin(FieldAdmin::builder().richtext_format("json").build())
-            .build()]);
+        let mut def = simple_def(vec![FieldDefinition::builder(
+            "content",
+            FieldType::Richtext,
+        )
+        .localized(true)
+        .admin(FieldAdmin::builder().richtext_format("json").build())
+        .build()]);
         def.admin.list_searchable_fields = vec!["content".into()];
 
         let locale_config = LocaleConfig {
@@ -527,8 +545,10 @@ mod tests {
 
         insert_post(&conn, "new1", "Unique Title", "Some content");
         let mut doc = Document::new("new1".to_string());
-        doc.fields.insert("title".into(), serde_json::json!("Unique Title"));
-        doc.fields.insert("body".into(), serde_json::json!("Some content"));
+        doc.fields
+            .insert("title".into(), serde_json::json!("Unique Title"));
+        doc.fields
+            .insert("body".into(), serde_json::json!("Some content"));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let results = fts_search(&conn, "posts", "Unique", 10).unwrap();
@@ -543,7 +563,8 @@ mod tests {
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         let mut doc = Document::new("1".to_string());
-        doc.fields.insert("title".into(), serde_json::json!("New Title"));
+        doc.fields
+            .insert("title".into(), serde_json::json!("New Title"));
         doc.fields.insert("body".into(), serde_json::json!(""));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
@@ -561,10 +582,15 @@ mod tests {
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
-        assert_eq!(fts_search(&conn, "posts", "Searchable", 10).unwrap().len(), 1);
+        assert_eq!(
+            fts_search(&conn, "posts", "Searchable", 10).unwrap().len(),
+            1
+        );
 
         fts_delete(&conn, "posts", "1").unwrap();
-        assert!(fts_search(&conn, "posts", "Searchable", 10).unwrap().is_empty());
+        assert!(fts_search(&conn, "posts", "Searchable", 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -599,8 +625,10 @@ mod tests {
         sync_fts_table(&conn, "posts", &def, &locale).unwrap();
 
         let mut doc = Document::new("doc1".to_string());
-        doc.fields.insert("title__en".into(), serde_json::json!("English Title"));
-        doc.fields.insert("title__de".into(), serde_json::json!("Deutscher Titel"));
+        doc.fields
+            .insert("title__en".into(), serde_json::json!("English Title"));
+        doc.fields
+            .insert("title__de".into(), serde_json::json!("Deutscher Titel"));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let en_results = fts_search(&conn, "posts", "English", 10).unwrap();
@@ -634,7 +662,8 @@ mod tests {
 
         let mut doc = Document::new("1".to_string());
         doc.fields.insert("title".into(), serde_json::json!("Test"));
-        doc.fields.insert("content".into(), serde_json::json!(pm_json));
+        doc.fields
+            .insert("content".into(), serde_json::json!(pm_json));
         fts_upsert(&conn, "posts", &doc, Some(&def)).unwrap();
 
         let results = fts_search(&conn, "posts", "Searchable", 10).unwrap();
@@ -655,10 +684,12 @@ mod tests {
         let mut def = simple_def(vec![
             text_field("title"),
             FieldDefinition::builder("content", FieldType::Richtext)
-                .admin(FieldAdmin::builder()
-                    .richtext_format("json")
-                    .nodes(vec!["cta".to_string()])
-                    .build())
+                .admin(
+                    FieldAdmin::builder()
+                        .richtext_format("json")
+                        .nodes(vec!["cta".to_string()])
+                        .build(),
+                )
                 .build(),
         ]);
         def.admin.list_searchable_fields = vec!["title".into(), "content".into()];
@@ -678,8 +709,10 @@ mod tests {
         let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]},{"type":"cta","attrs":{"button_text":"Click Here","url":"/go"}}]}"#;
 
         let mut doc = Document::new("rg1".to_string());
-        doc.fields.insert("title".into(), serde_json::json!("Registry Test"));
-        doc.fields.insert("content".into(), serde_json::json!(pm_json));
+        doc.fields
+            .insert("title".into(), serde_json::json!("Registry Test"));
+        doc.fields
+            .insert("content".into(), serde_json::json!(pm_json));
 
         fts_upsert_with_registry(&conn, "posts", &doc, Some(&def), Some(&registry)).unwrap();
 
@@ -711,7 +744,8 @@ mod tests {
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         let mut doc = Document::new("plain1".to_string());
-        doc.fields.insert("title".into(), serde_json::json!("Plain text"));
+        doc.fields
+            .insert("title".into(), serde_json::json!("Plain text"));
 
         fts_upsert_with_registry(&conn, "posts", &doc, None, None).unwrap();
 
@@ -733,7 +767,8 @@ mod tests {
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         let mut doc = Document::new("obj1".to_string());
-        doc.fields.insert("title".into(), serde_json::json!({"nested": "object"}));
+        doc.fields
+            .insert("title".into(), serde_json::json!({"nested": "object"}));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let results = fts_search(&conn, "posts", "nested", 10).unwrap();

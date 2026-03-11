@@ -3,51 +3,107 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
-
 /// Dispatch user management subcommands.
 /// Untestable: dispatches to interactive CLI functions that require stdin/dialoguer.
 #[cfg(not(tarpaulin_include))]
 pub fn run(action: super::UserAction) -> Result<()> {
     match action {
-        super::UserAction::Create { config, collection, email, password, fields } => {
-            let cfg = crate::config::CrapConfig::load(&config)
-                .context("Failed to load config")?;
+        super::UserAction::Create {
+            config,
+            collection,
+            email,
+            password,
+            fields,
+        } => {
+            let cfg = crate::config::CrapConfig::load(&config).context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config)?;
-            user_create(&pool, &registry, &collection, email, password, fields, &cfg.auth.password_policy)
+            user_create(
+                &pool,
+                &registry,
+                &collection,
+                email,
+                password,
+                fields,
+                &cfg.auth.password_policy,
+            )
         }
         super::UserAction::List { config, collection } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_list(&pool, &registry, &collection)
         }
-        super::UserAction::Info { config, collection, email, id } => {
+        super::UserAction::Info {
+            config,
+            collection,
+            email,
+            id,
+        } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_info(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Delete { config, collection, email, id, confirm } => {
+        super::UserAction::Delete {
+            config,
+            collection,
+            email,
+            id,
+            confirm,
+        } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_delete(&pool, &registry, &collection, email, id, confirm)
         }
-        super::UserAction::Lock { config, collection, email, id } => {
+        super::UserAction::Lock {
+            config,
+            collection,
+            email,
+            id,
+        } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_lock(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Unlock { config, collection, email, id } => {
+        super::UserAction::Unlock {
+            config,
+            collection,
+            email,
+            id,
+        } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_unlock(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Verify { config, collection, email, id } => {
+        super::UserAction::Verify {
+            config,
+            collection,
+            email,
+            id,
+        } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_verify(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::Unverify { config, collection, email, id } => {
+        super::UserAction::Unverify {
+            config,
+            collection,
+            email,
+            id,
+        } => {
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_unverify(&pool, &registry, &collection, email, id)
         }
-        super::UserAction::ChangePassword { config, collection, email, id, password } => {
-            let cfg = crate::config::CrapConfig::load(&config)
-                .context("Failed to load config")?;
+        super::UserAction::ChangePassword {
+            config,
+            collection,
+            email,
+            id,
+            password,
+        } => {
+            let cfg = crate::config::CrapConfig::load(&config).context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config)?;
-            user_change_password(&pool, &registry, &collection, email, id, password, &cfg.auth.password_policy)
+            user_change_password(
+                &pool,
+                &registry,
+                &collection,
+                email,
+                id,
+                password,
+                &cfg.auth.password_policy,
+            )
         }
     }
 }
@@ -62,14 +118,19 @@ fn resolve_user(
     email: Option<String>,
     id: Option<String>,
 ) -> Result<(crate::core::CollectionDefinition, crate::core::Document)> {
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
-    let def = reg.get_collection(collection)
+    let def = reg
+        .get_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
 
     if !def.is_auth_collection() {
-        anyhow::bail!("Collection '{}' is not an auth collection (auth must be enabled)", collection);
+        anyhow::bail!(
+            "Collection '{}' is not an auth collection (auth must be enabled)",
+            collection
+        );
     }
 
     let def = def.clone();
@@ -78,8 +139,10 @@ fn resolve_user(
     let conn = pool.get().context("Failed to get database connection")?;
 
     if let Some(email) = email {
-        let doc = crate::db::query::find_by_email(&conn, collection, &def, &email)?
-            .ok_or_else(|| anyhow::anyhow!("No user found with email '{}' in '{}'", email, collection))?;
+        let doc =
+            crate::db::query::find_by_email(&conn, collection, &def, &email)?.ok_or_else(|| {
+                anyhow::anyhow!("No user found with email '{}' in '{}'", email, collection)
+            })?;
         Ok((def, doc))
     } else if let Some(id) = id {
         let doc = crate::db::query::find_by_id(&conn, collection, &def, &id, None)?
@@ -93,10 +156,17 @@ fn resolve_user(
         if users.is_empty() {
             anyhow::bail!("No users in '{}'", collection);
         }
-        let labels: Vec<String> = users.iter().map(|u| {
-            let email = u.fields.get("email").and_then(|v| v.as_str()).unwrap_or("-");
-            format!("{} — {}", email, u.id)
-        }).collect();
+        let labels: Vec<String> = users
+            .iter()
+            .map(|u| {
+                let email = u
+                    .fields
+                    .get("email")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("-");
+                format!("{} — {}", email, u.id)
+            })
+            .collect();
         if users.len() == 1 {
             println!("Auto-selected only user: {}", labels[0]);
             let doc = users.into_iter().next().expect("guarded by len == 1");
@@ -107,7 +177,13 @@ fn resolve_user(
             .items(&labels)
             .interact()
             .context("Failed to read user selection")?;
-        Ok((def, users.into_iter().nth(selection).expect("selection within bounds")))
+        Ok((
+            def,
+            users
+                .into_iter()
+                .nth(selection)
+                .expect("selection within bounds"),
+        ))
     }
 }
 
@@ -123,14 +199,19 @@ pub fn user_create(
     fields: Vec<(String, String)>,
     password_policy: &crate::config::PasswordPolicy,
 ) -> Result<()> {
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
-    let def = reg.get_collection(collection)
+    let def = reg
+        .get_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
 
     if !def.is_auth_collection() {
-        anyhow::bail!("Collection '{}' is not an auth collection (auth must be enabled)", collection);
+        anyhow::bail!(
+            "Collection '{}' is not an auth collection (auth must be enabled)",
+            collection
+        );
     }
 
     let def = def.clone();
@@ -142,7 +223,8 @@ pub fn user_create(
         None => {
             eprint!("Email: ");
             let mut input = String::new();
-            std::io::stdin().read_line(&mut input)
+            std::io::stdin()
+                .read_line(&mut input)
                 .context("Failed to read email")?;
             let trimmed = input.trim().to_string();
             if trimmed.is_empty() {
@@ -155,19 +237,19 @@ pub fn user_create(
     // Get password — from flag or interactive prompt
     let password = match password {
         Some(p) => {
-            eprintln!("Warning: password provided via command line — it may be visible in shell history");
+            eprintln!(
+                "Warning: password provided via command line — it may be visible in shell history"
+            );
             p
         }
         None => {
             eprint!("Password: ");
-            let p1 = rpassword::read_password()
-                .context("Failed to read password")?;
+            let p1 = rpassword::read_password().context("Failed to read password")?;
             if p1.is_empty() {
                 anyhow::bail!("Password cannot be empty");
             }
             eprint!("Confirm password: ");
-            let p2 = rpassword::read_password()
-                .context("Failed to read password confirmation")?;
+            let p2 = rpassword::read_password().context("Failed to read password confirmation")?;
             if p1 != p2 {
                 anyhow::bail!("Passwords do not match");
             }
@@ -215,7 +297,8 @@ pub fn user_create(
             };
             eprint!("{} [{}]: ", field.name, val);
             let mut input = String::new();
-            std::io::stdin().read_line(&mut input)
+            std::io::stdin()
+                .read_line(&mut input)
                 .with_context(|| format!("Failed to read {}", field.name))?;
             let trimmed = input.trim();
             if trimmed.is_empty() {
@@ -228,7 +311,8 @@ pub fn user_create(
         // Required field, no default — must prompt
         eprint!("{}: ", field.name);
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input)
+        std::io::stdin()
+            .read_line(&mut input)
             .with_context(|| format!("Failed to read {}", field.name))?;
         let trimmed = input.trim().to_string();
         if trimmed.is_empty() {
@@ -262,14 +346,19 @@ pub fn user_list(
     registry: &crate::core::SharedRegistry,
     collection: &str,
 ) -> Result<()> {
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
-    let def = reg.get_collection(collection)
+    let def = reg
+        .get_collection(collection)
         .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
 
     if !def.is_auth_collection() {
-        anyhow::bail!("Collection '{}' is not an auth collection (auth must be enabled)", collection);
+        anyhow::bail!(
+            "Collection '{}' is not an auth collection (auth must be enabled)",
+            collection
+        );
     }
 
     let def = def.clone();
@@ -289,7 +378,10 @@ pub fn user_list(
 
     // Print header
     if verify_email {
-        println!("{:<24} {:<30} {:<8} {:<8}", "ID", "Email", "Locked", "Verified");
+        println!(
+            "{:<24} {:<30} {:<8} {:<8}",
+            "ID", "Email", "Locked", "Verified"
+        );
         println!("{}", "-".repeat(72));
     } else {
         println!("{:<24} {:<30} {:<8}", "ID", "Email", "Locked");
@@ -297,16 +389,22 @@ pub fn user_list(
     }
 
     for user in &users {
-        let email = user.fields.get("email")
+        let email = user
+            .fields
+            .get("email")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
         let locked = crate::db::query::is_locked(&conn, collection, &user.id).unwrap_or(false);
         let locked_str = if locked { "yes" } else { "no" };
 
         if verify_email {
-            let verified = crate::db::query::is_verified(&conn, collection, &user.id).unwrap_or(false);
+            let verified =
+                crate::db::query::is_verified(&conn, collection, &user.id).unwrap_or(false);
             let verified_str = if verified { "yes" } else { "no" };
-            println!("{:<24} {:<30} {:<8} {:<8}", user.id, email, locked_str, verified_str);
+            println!(
+                "{:<24} {:<30} {:<8} {:<8}",
+                user.id, email, locked_str, verified_str
+            );
         } else {
             println!("{:<24} {:<30} {:<8}", user.id, email, locked_str);
         }
@@ -336,7 +434,9 @@ pub fn user_info(
     let locked = crate::db::query::is_locked(&conn, collection, &doc.id).unwrap_or(false);
     let has_pw = crate::db::query::has_password(&conn, collection, &doc.id).unwrap_or(false);
 
-    let user_email = doc.fields.get("email")
+    let user_email = doc
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
 
@@ -353,10 +453,14 @@ pub fn user_info(
     println!("  Password:  {}", if has_pw { "set" } else { "not set" });
 
     // Timestamps
-    let created = doc.fields.get("created_at")
+    let created = doc
+        .fields
+        .get("created_at")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
-    let updated = doc.fields.get("updated_at")
+    let updated = doc
+        .fields
+        .get("updated_at")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
     println!("\nTimestamps:");
@@ -365,7 +469,9 @@ pub fn user_info(
 
     // Extra fields (skip email, created_at, updated_at — already shown)
     let skip = ["email", "created_at", "updated_at"];
-    let extra: Vec<_> = doc.fields.iter()
+    let extra: Vec<_> = doc
+        .fields
+        .iter()
         .filter(|(k, _)| !skip.contains(&k.as_str()))
         .collect();
 
@@ -397,14 +503,19 @@ pub fn user_delete(
 ) -> Result<()> {
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
-    let user_email = doc.fields.get("email")
+    let user_email = doc
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
 
     if !confirm {
         use dialoguer::Confirm;
         let proceed = Confirm::new()
-            .with_prompt(format!("Delete user {} ({}) from '{}'?", doc.id, user_email, collection))
+            .with_prompt(format!(
+                "Delete user {} ({}) from '{}'?",
+                doc.id, user_email, collection
+            ))
             .default(false)
             .interact()
             .context("Failed to read confirmation")?;
@@ -415,10 +526,12 @@ pub fn user_delete(
     }
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::delete(&conn, collection, &doc.id)
-        .context("Failed to delete user")?;
+    crate::db::query::delete(&conn, collection, &doc.id).context("Failed to delete user")?;
 
-    println!("Deleted user {} ({}) from '{}'", doc.id, user_email, collection);
+    println!(
+        "Deleted user {} ({}) from '{}'",
+        doc.id, user_email, collection
+    );
 
     Ok(())
 }
@@ -436,13 +549,17 @@ pub fn user_lock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::lock_user(&conn, collection, &doc.id)
-        .context("Failed to lock user")?;
+    crate::db::query::lock_user(&conn, collection, &doc.id).context("Failed to lock user")?;
 
-    let user_email = doc.fields.get("email")
+    let user_email = doc
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    println!("Locked user {} ({}) in '{}'", doc.id, user_email, collection);
+    println!(
+        "Locked user {} ({}) in '{}'",
+        doc.id, user_email, collection
+    );
 
     Ok(())
 }
@@ -460,13 +577,17 @@ pub fn user_unlock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::unlock_user(&conn, collection, &doc.id)
-        .context("Failed to unlock user")?;
+    crate::db::query::unlock_user(&conn, collection, &doc.id).context("Failed to unlock user")?;
 
-    let user_email = doc.fields.get("email")
+    let user_email = doc
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    println!("Unlocked user {} ({}) in '{}'", doc.id, user_email, collection);
+    println!(
+        "Unlocked user {} ({}) in '{}'",
+        doc.id, user_email, collection
+    );
 
     Ok(())
 }
@@ -484,17 +605,24 @@ pub fn user_verify(
     let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
-        anyhow::bail!("Collection '{}' does not have email verification enabled (verify_email must be true)", collection);
+        anyhow::bail!(
+            "Collection '{}' does not have email verification enabled (verify_email must be true)",
+            collection
+        );
     }
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::mark_verified(&conn, collection, &doc.id)
-        .context("Failed to verify user")?;
+    crate::db::query::mark_verified(&conn, collection, &doc.id).context("Failed to verify user")?;
 
-    let user_email = doc.fields.get("email")
+    let user_email = doc
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    println!("Verified user {} ({}) in '{}'", doc.id, user_email, collection);
+    println!(
+        "Verified user {} ({}) in '{}'",
+        doc.id, user_email, collection
+    );
 
     Ok(())
 }
@@ -512,17 +640,25 @@ pub fn user_unverify(
     let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
-        anyhow::bail!("Collection '{}' does not have email verification enabled (verify_email must be true)", collection);
+        anyhow::bail!(
+            "Collection '{}' does not have email verification enabled (verify_email must be true)",
+            collection
+        );
     }
 
     let conn = pool.get().context("Failed to get database connection")?;
     crate::db::query::mark_unverified(&conn, collection, &doc.id)
         .context("Failed to unverify user")?;
 
-    let user_email = doc.fields.get("email")
+    let user_email = doc
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    println!("Unverified user {} ({}) in '{}'", doc.id, user_email, collection);
+    println!(
+        "Unverified user {} ({}) in '{}'",
+        doc.id, user_email, collection
+    );
 
     Ok(())
 }
@@ -543,19 +679,19 @@ pub fn user_change_password(
 
     let password = match password {
         Some(p) => {
-            eprintln!("Warning: password provided via command line — it may be visible in shell history");
+            eprintln!(
+                "Warning: password provided via command line — it may be visible in shell history"
+            );
             p
         }
         None => {
             eprint!("New password: ");
-            let p1 = rpassword::read_password()
-                .context("Failed to read password")?;
+            let p1 = rpassword::read_password().context("Failed to read password")?;
             if p1.is_empty() {
                 anyhow::bail!("Password cannot be empty");
             }
             eprint!("Confirm password: ");
-            let p2 = rpassword::read_password()
-                .context("Failed to read password confirmation")?;
+            let p2 = rpassword::read_password().context("Failed to read password confirmation")?;
             if p1 != p2 {
                 anyhow::bail!("Passwords do not match");
             }
@@ -570,10 +706,15 @@ pub fn user_change_password(
     crate::db::query::update_password(&conn, collection, &doc.id, &password)
         .context("Failed to update password")?;
 
-    let user_email = doc.fields.get("email")
+    let user_email = doc
+        .fields
+        .get("email")
         .and_then(|v| v.as_str())
         .unwrap_or("unknown");
-    println!("Password changed for user {} ({}) in '{}'", doc.id, user_email, collection);
+    println!(
+        "Password changed for user {} ({}) in '{}'",
+        doc.id, user_email, collection
+    );
 
     Ok(())
 }

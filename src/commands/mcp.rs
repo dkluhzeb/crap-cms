@@ -7,18 +7,19 @@ use tracing::info;
 /// Start the MCP server in stdio mode.
 #[cfg(not(tarpaulin_include))] // async server startup, requires interactive stdio
 pub async fn run(config_dir: &Path) -> Result<()> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
 
     // Use stderr for logging since stdout is the MCP transport
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     if let Some(warning) = cfg.check_version() {
         eprintln!("Warning: {}", warning);
     }
 
-    let registry = crate::hooks::init_lua(&config_dir, &cfg)
-        .context("Failed to initialize Lua VM")?;
+    let registry =
+        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
 
     let pool = crate::db::pool::create_pool(&config_dir, &cfg)
         .context("Failed to create database pool")?;

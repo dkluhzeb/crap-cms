@@ -132,8 +132,7 @@ mod tests {
 
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations =
-            Arc::new(crate::admin::translations::Translations::load(tmp.path()));
+        let translations = Arc::new(crate::admin::translations::Translations::load(tmp.path()));
         let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
             .expect("create_handlebars");
         (*hbs).clone()
@@ -142,25 +141,16 @@ mod tests {
     #[test]
     fn nested_helpers_work() {
         let mut hbs = test_hbs();
-        hbs.register_template_string(
-            "t",
-            "{{#if (and (not a) (or b c))}}YES{{else}}NO{{/if}}",
-        )
-        .unwrap();
+        hbs.register_template_string("t", "{{#if (and (not a) (or b c))}}YES{{else}}NO{{/if}}")
+            .unwrap();
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"a": false, "b": true, "c": false})
-            )
-            .unwrap(),
+            hbs.render("t", &serde_json::json!({"a": false, "b": true, "c": false}))
+                .unwrap(),
             "YES"
         );
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"a": true, "b": true, "c": true})
-            )
-            .unwrap(),
+            hbs.render("t", &serde_json::json!({"a": true, "b": true, "c": true}))
+                .unwrap(),
             "NO"
         );
     }
@@ -202,11 +192,8 @@ mod tests {
     #[test]
     fn default_helper_with_object_is_truthy() {
         let mut hbs = test_hbs();
-        hbs.register_template_string(
-            "t",
-            "{{#if (not (not val))}}TRUTHY{{else}}FALSY{{/if}}",
-        )
-        .unwrap();
+        hbs.register_template_string("t", "{{#if (not (not val))}}TRUTHY{{else}}FALSY{{/if}}")
+            .unwrap();
         assert_eq!(
             hbs.render("t", &serde_json::json!({"val": {}})).unwrap(),
             "TRUTHY"

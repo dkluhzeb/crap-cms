@@ -4,15 +4,15 @@ use anyhow::Result;
 use mlua::{Lua, Table, Value};
 
 use crate::core::collection::{
-    Access, AdminConfig, CollectionDefinition,
-    Labels, GlobalDefinition, IndexDefinition, LiveSetting, VersionsConfig,
+    Access, AdminConfig, CollectionDefinition, GlobalDefinition, IndexDefinition, Labels,
+    LiveSetting, VersionsConfig,
 };
 use crate::core::field::{FieldAdmin, FieldDefinition, FieldType, LocalizedString};
 
-use super::helpers::*;
-use super::fields::parse_fields;
-use super::upload::{inject_upload_fields, parse_collection_upload};
 use super::auth::parse_collection_auth;
+use super::fields::parse_fields;
+use super::helpers::*;
+use super::upload::{inject_upload_fields, parse_collection_upload};
 
 /// Admin UI max nesting depth for rendering fields (must match `MAX_FIELD_DEPTH` in field_context.rs).
 const ADMIN_MAX_FIELD_DEPTH: usize = 5;
@@ -40,13 +40,20 @@ pub(super) fn warn_deep_nesting(kind: &str, slug: &str, fields: &[FieldDefinitio
     if depth > ADMIN_MAX_FIELD_DEPTH {
         tracing::warn!(
             "{} '{}': field nesting depth is {} — the admin UI only renders up to {} levels",
-            kind, slug, depth, ADMIN_MAX_FIELD_DEPTH
+            kind,
+            slug,
+            depth,
+            ADMIN_MAX_FIELD_DEPTH
         );
     }
 }
 
 /// Parse a Lua table into a `CollectionDefinition`, extracting fields, hooks, auth, upload, etc.
-pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Result<CollectionDefinition> {
+pub fn parse_collection_definition(
+    _lua: &Lua,
+    slug: &str,
+    config: &Table,
+) -> Result<CollectionDefinition> {
     crate::db::query::validate_slug(slug)?;
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {
         Labels {
@@ -60,11 +67,14 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
     let timestamps = get_bool(config, "timestamps", true);
 
     let admin = if let Ok(admin_tbl) = get_table(config, "admin") {
-        let list_searchable_fields = if let Ok(tbl) = get_table(&admin_tbl, "list_searchable_fields") {
-            tbl.sequence_values::<String>().filter_map(|r| r.ok()).collect()
-        } else {
-            Vec::new()
-        };
+        let list_searchable_fields =
+            if let Ok(tbl) = get_table(&admin_tbl, "list_searchable_fields") {
+                tbl.sequence_values::<String>()
+                    .filter_map(|r| r.ok())
+                    .collect()
+            } else {
+                Vec::new()
+            };
         AdminConfig {
             use_as_title: get_string(&admin_tbl, "use_as_title"),
             default_sort: get_string(&admin_tbl, "default_sort"),
@@ -117,13 +127,18 @@ pub fn parse_collection_definition(_lua: &Lua, slug: &str, config: &Table) -> Re
     // If auth enabled and no email field defined, inject one at index 0
     if let Some(ref a) = auth {
         if a.enabled && !fields.iter().any(|f| f.name == "email") {
-            fields.insert(0, FieldDefinition::builder("email", FieldType::Email)
-                .required(true)
-                .unique(true)
-                .admin(FieldAdmin::builder()
-                    .placeholder(LocalizedString::Plain("user@example.com".to_string()))
-                    .build())
-                .build());
+            fields.insert(
+                0,
+                FieldDefinition::builder("email", FieldType::Email)
+                    .required(true)
+                    .unique(true)
+                    .admin(
+                        FieldAdmin::builder()
+                            .placeholder(LocalizedString::Plain("user@example.com".to_string()))
+                            .build(),
+                    )
+                    .build(),
+            );
         }
     }
 
@@ -305,8 +320,10 @@ pub(super) fn parse_access_config(config: &Table) -> Access {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::field::{
+        BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString,
+    };
     use mlua::Lua;
-    use crate::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType, LocalizedString};
 
     #[test]
     fn test_parse_versions_config_true() {
@@ -480,7 +497,10 @@ mod tests {
         let lua = Lua::new();
         let config = lua.create_table().unwrap();
         let indexes = parse_indexes(&config);
-        assert!(indexes.is_empty(), "Missing indexes key should return empty");
+        assert!(
+            indexes.is_empty(),
+            "Missing indexes key should return empty"
+        );
     }
 
     #[test]
@@ -523,7 +543,10 @@ mod tests {
         mcp_tbl.set("description", "A collection of posts").unwrap();
         config.set("mcp", mcp_tbl).unwrap();
         let def = parse_collection_definition(&lua, "posts", &config).unwrap();
-        assert_eq!(def.mcp.description.as_deref(), Some("A collection of posts"));
+        assert_eq!(
+            def.mcp.description.as_deref(),
+            Some("A collection of posts")
+        );
     }
 
     #[test]

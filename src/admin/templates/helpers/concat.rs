@@ -32,7 +32,8 @@ impl HelperDef for ConcatHelper {
 mod tests {
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let translations = std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
+        let translations =
+            std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
         let hbs = crate::admin::templates::create_handlebars(tmp.path(), false, translations)
             .expect("create_handlebars");
         (*hbs).clone()
@@ -44,7 +45,11 @@ mod tests {
         hbs.register_template_string("t", "{{concat a b c}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "hello", "b": " ", "c": "world"})).unwrap(),
+            hbs.render(
+                "t",
+                &serde_json::json!({"a": "hello", "b": " ", "c": "world"})
+            )
+            .unwrap(),
             "hello world"
         );
     }
@@ -54,7 +59,8 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{concat a b}}").unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "count:", "b": 42})).unwrap(),
+            hbs.render("t", &serde_json::json!({"a": "count:", "b": 42}))
+                .unwrap(),
             "count:42"
         );
     }
@@ -64,7 +70,8 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{concat a b}}").unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "is:", "b": true})).unwrap(),
+            hbs.render("t", &serde_json::json!({"a": "is:", "b": true}))
+                .unwrap(),
             "is:true"
         );
     }
@@ -75,7 +82,11 @@ mod tests {
         hbs.register_template_string("t", "{{concat a b c}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "hello", "b": null, "c": "world"})).unwrap(),
+            hbs.render(
+                "t",
+                &serde_json::json!({"a": "hello", "b": null, "c": "world"})
+            )
+            .unwrap(),
             "helloworld"
         );
     }

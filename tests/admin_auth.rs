@@ -9,9 +9,9 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
 use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
+use crap_cms::admin::AdminState;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
@@ -30,9 +30,9 @@ fn make_posts_def() -> CollectionDefinition {
         plural: Some(LocalizedString::Plain("Posts".to_string())),
     };
     def.timestamps = true;
-    def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
-    ];
+    def.fields = vec![FieldDefinition::builder("title", FieldType::Text)
+        .required(true)
+        .build()];
     def
 }
 
@@ -44,10 +44,16 @@ fn make_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
-    def.auth = Some(Auth { enabled: true, ..Default::default() });
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
     def
 }
 
@@ -59,10 +65,7 @@ struct TestApp {
     jwt_secret: String,
 }
 
-fn setup_app(
-    collections: Vec<CollectionDefinition>,
-    globals: Vec<GlobalDefinition>,
-) -> TestApp {
+fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     config.auth.secret = "test-jwt-secret".to_string();
@@ -92,19 +95,19 @@ fn setup_app_with_config(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let translations = Arc::new(crap_cms::admin::translations::Translations::load(tmp.path()));
-    let handlebars =
-        templates::create_handlebars(tmp.path(), false, translations.clone()).expect("create handlebars");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let translations = Arc::new(crap_cms::admin::translations::Translations::load(
+        tmp.path(),
+    ));
+    let handlebars = templates::create_handlebars(tmp.path(), false, translations.clone())
+        .expect("create handlebars");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let has_auth = {
         let reg = registry.read().unwrap();
@@ -121,8 +124,12 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".to_string(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
-        forgot_password_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
+        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            5, 300,
+        )),
+        forgot_password_limiter: std::sync::Arc::new(
+            crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
         has_auth,
         translations,
         shutdown: tokio_util::sync::CancellationToken::new(),
@@ -189,7 +196,10 @@ fn make_verify_users_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("email", FieldType::Email).required(true).unique(true).build(),
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
         FieldDefinition::builder("name", FieldType::Text).build(),
     ];
     def.auth = Some(Auth {
@@ -205,13 +215,17 @@ fn make_verify_users_def() -> CollectionDefinition {
 #[tokio::test]
 async fn login_page_returns_200() {
     let app = setup_app(vec![make_users_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/admin/login").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
-    assert!(body.to_lowercase().contains("login"), "Login page should contain 'login'");
+    assert!(
+        body.to_lowercase().contains("login"),
+        "Login page should contain 'login'"
+    );
 }
 
 #[tokio::test]
@@ -219,13 +233,16 @@ async fn login_action_invalid_credentials() {
     let app = setup_app(vec![make_users_def()], vec![]);
     create_test_user(&app, "user@test.com", "secret123");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("collection=users&email=user@test.com&password=wrong"))
+                .body(Body::from(
+                    "collection=users&email=user@test.com&password=wrong",
+                ))
                 .unwrap(),
         )
         .await
@@ -243,13 +260,16 @@ async fn login_action_valid_credentials() {
     let app = setup_app(vec![make_users_def()], vec![]);
     create_test_user(&app, "valid@test.com", "correct123");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("collection=users&email=valid@test.com&password=correct123"))
+                .body(Body::from(
+                    "collection=users&email=valid@test.com&password=correct123",
+                ))
                 .unwrap(),
         )
         .await
@@ -260,16 +280,22 @@ async fn login_action_valid_credentials() {
         "Expected redirect, got {}",
         status
     );
-    let cookie = resp.headers().get("set-cookie")
+    let cookie = resp
+        .headers()
+        .get("set-cookie")
         .map(|v| v.to_str().unwrap_or(""));
     assert!(cookie.is_some(), "Should set a session cookie");
-    assert!(cookie.unwrap().contains("crap_session"), "Cookie should be crap_session");
+    assert!(
+        cookie.unwrap().contains("crap_session"),
+        "Cookie should be crap_session"
+    );
 }
 
 #[tokio::test]
 async fn logout_clears_cookie() {
     let app = setup_app(vec![make_users_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/logout")
                 .header("Cookie", csrf_cookie())
@@ -285,11 +311,15 @@ async fn logout_clears_cookie() {
         "Expected redirect, got {}",
         status
     );
-    let cookie = resp.headers().get("set-cookie")
+    let cookie = resp
+        .headers()
+        .get("set-cookie")
         .map(|v| v.to_str().unwrap_or(""));
     if let Some(c) = cookie {
         assert!(
-            c.contains("Max-Age=0") || c.contains("max-age=0") || c.contains("expires=Thu, 01 Jan 1970"),
+            c.contains("Max-Age=0")
+                || c.contains("max-age=0")
+                || c.contains("expires=Thu, 01 Jan 1970"),
             "Cookie should be expired: {}",
             c
         );
@@ -301,7 +331,8 @@ async fn logout_clears_cookie() {
 #[tokio::test]
 async fn protected_route_redirects_without_auth() {
     let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/admin").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -318,7 +349,8 @@ async fn protected_route_allows_with_cookie() {
     let user_id = create_test_user(&app, "admin@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "admin@test.com");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin")
                 .header("cookie", &cookie)
@@ -337,7 +369,8 @@ async fn protected_route_allows_with_cookie() {
 #[tokio::test]
 async fn no_auth_collections_skips_middleware() {
     let app = setup_app(vec![make_posts_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(Request::get("/admin").body(Body::empty()).unwrap())
         .await
         .unwrap();
@@ -365,7 +398,9 @@ async fn login_locked_account() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("collection=users&email=locked@test.com&password=secret123"))
+                .body(Body::from(
+                    "collection=users&email=locked@test.com&password=secret123",
+                ))
                 .unwrap(),
         )
         .await
@@ -379,7 +414,9 @@ async fn login_locked_account() {
     );
 
     if status == StatusCode::SEE_OTHER || status == StatusCode::FOUND {
-        let location = resp.headers().get("location")
+        let location = resp
+            .headers()
+            .get("location")
             .map(|v| v.to_str().unwrap_or(""));
         if let Some(loc) = location {
             assert!(
@@ -396,24 +433,33 @@ async fn login_wrong_password_shows_error() {
     let app = setup_app(vec![make_users_def()], vec![]);
     create_test_user(&app, "wrongpw@test.com", "correct123");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("collection=users&email=wrongpw@test.com&password=wrongpassword"))
+                .body(Body::from(
+                    "collection=users&email=wrongpw@test.com&password=wrongpassword",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
 
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Wrong password should re-render login page");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Wrong password should re-render login page"
+    );
     let body = body_string(resp.into_body()).await;
     let body_lower = body.to_lowercase();
     assert!(
-        body_lower.contains("invalid") || body_lower.contains("error") || body_lower.contains("login"),
+        body_lower.contains("invalid")
+            || body_lower.contains("error")
+            || body_lower.contains("login"),
         "Should show error message on wrong password"
     );
 }
@@ -423,40 +469,54 @@ async fn login_nonexistent_email() {
     let app = setup_app(vec![make_users_def()], vec![]);
     create_test_user(&app, "exists@test.com", "secret123");
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("collection=users&email=nope@test.com&password=secret123"))
+                .body(Body::from(
+                    "collection=users&email=nope@test.com&password=secret123",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
 
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Nonexistent email should re-render login page");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Nonexistent email should re-render login page"
+    );
 }
 
 #[tokio::test]
 async fn login_invalid_collection() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/login")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("collection=nonexistent&email=a@b.com&password=x"))
+                .body(Body::from(
+                    "collection=nonexistent&email=a@b.com&password=x",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
 
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Invalid collection should re-render login page");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Invalid collection should re-render login page"
+    );
 }
 
 // ── Email Verification Tests ──────────────────────────────────────────────
@@ -464,7 +524,8 @@ async fn login_invalid_collection() {
 #[tokio::test]
 async fn verify_email_invalid_token() {
     let app = setup_app(vec![make_users_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/verify-email?token=badtoken&collection=users")
                 .body(Body::empty())
@@ -505,7 +566,9 @@ async fn login_unverified_email() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("collection=vusers&email=unverified@test.com&password=secret123"))
+                .body(Body::from(
+                    "collection=vusers&email=unverified@test.com&password=secret123",
+                ))
                 .unwrap(),
         )
         .await
@@ -580,8 +643,13 @@ async fn verify_email_with_valid_token() {
 #[tokio::test]
 async fn forgot_password_page_returns_200() {
     let app = setup_app(vec![make_users_def()], vec![]);
-    let resp = app.router
-        .oneshot(Request::get("/admin/forgot-password").body(Body::empty()).unwrap())
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin/forgot-password")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -634,7 +702,9 @@ async fn forgot_password_action_existing_email() {
     let body = body_string(resp.into_body()).await;
     let body_lower = body.to_lowercase();
     assert!(
-        body_lower.contains("success") || body_lower.contains("sent") || body_lower.contains("check"),
+        body_lower.contains("success")
+            || body_lower.contains("sent")
+            || body_lower.contains("check"),
         "Should show success message"
     );
 }
@@ -644,7 +714,8 @@ async fn forgot_password_action_existing_email() {
 #[tokio::test]
 async fn reset_password_page_invalid_token() {
     let app = setup_app(vec![make_users_def()], vec![]);
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::get("/admin/reset-password?token=badtoken&collection=users")
                 .body(Body::empty())
@@ -690,8 +761,10 @@ async fn reset_password_expired_token() {
 
     let status = resp.status();
     assert!(
-        status == StatusCode::OK || status == StatusCode::SEE_OTHER
-            || status == StatusCode::FOUND || status == StatusCode::UNPROCESSABLE_ENTITY,
+        status == StatusCode::OK
+            || status == StatusCode::SEE_OTHER
+            || status == StatusCode::FOUND
+            || status == StatusCode::UNPROCESSABLE_ENTITY,
         "Expected 200, redirect, or 422 for expired token, got {}",
         status
     );
@@ -783,13 +856,19 @@ async fn reset_password_mismatch() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("token=sometoken&password=newpass123&password_confirm=different456"))
+                .body(Body::from(
+                    "token=sometoken&password=newpass123&password_confirm=different456",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Mismatched passwords should re-render form");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Mismatched passwords should re-render form"
+    );
     let body = body_string(resp.into_body()).await;
     assert!(
         body.to_lowercase().contains("match"),
@@ -801,20 +880,27 @@ async fn reset_password_mismatch() {
 async fn reset_password_mismatched_passwords() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/reset-password")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("token=sometoken&password=newpass123&password_confirm=different456"))
+                .body(Body::from(
+                    "token=sometoken&password=newpass123&password_confirm=different456",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
 
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Mismatched passwords should re-render form");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Mismatched passwords should re-render form"
+    );
     let body = body_string(resp.into_body()).await;
     let body_lower = body.to_lowercase();
     assert!(
@@ -834,17 +920,24 @@ async fn reset_password_too_short() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("token=sometoken&password=ab&password_confirm=ab"))
+                .body(Body::from(
+                    "token=sometoken&password=ab&password_confirm=ab",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Too-short password should re-render form");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Too-short password should re-render form"
+    );
     let body = body_string(resp.into_body()).await;
     assert!(
         body.to_lowercase().contains("at least") && body.to_lowercase().contains("characters"),
-        "Should show minimum password length error, got: {}", body
+        "Should show minimum password length error, got: {}",
+        body
     );
 }
 
@@ -859,13 +952,19 @@ async fn reset_password_action_invalid_token() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("token=totally-fake-token&password=newpass123&password_confirm=newpass123"))
+                .body(Body::from(
+                    "token=totally-fake-token&password=newpass123&password_confirm=newpass123",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Invalid token should re-render form with error");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Invalid token should re-render form with error"
+    );
     let body = body_string(resp.into_body()).await;
     assert!(
         body.to_lowercase().contains("invalid") || body.to_lowercase().contains("expired"),
@@ -877,24 +976,34 @@ async fn reset_password_action_invalid_token() {
 async fn reset_password_invalid_token() {
     let app = setup_app(vec![make_users_def()], vec![]);
 
-    let resp = app.router
+    let resp = app
+        .router
         .oneshot(
             Request::post("/admin/reset-password")
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .body(Body::from("token=totally-invalid-token&password=newpass123&password_confirm=newpass123"))
+                .body(Body::from(
+                    "token=totally-invalid-token&password=newpass123&password_confirm=newpass123",
+                ))
                 .unwrap(),
         )
         .await
         .unwrap();
 
     let status = resp.status();
-    assert_eq!(status, StatusCode::OK, "Invalid token should re-render with error");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Invalid token should re-render with error"
+    );
     let body = body_string(resp.into_body()).await;
     let body_lower = body.to_lowercase();
     assert!(
-        body_lower.contains("invalid") || body_lower.contains("expired") || body_lower.contains("error") || body_lower.contains("reset"),
+        body_lower.contains("invalid")
+            || body_lower.contains("expired")
+            || body_lower.contains("error")
+            || body_lower.contains("reset"),
         "Should indicate invalid/expired token"
     );
 }

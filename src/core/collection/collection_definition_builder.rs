@@ -1,8 +1,8 @@
 //! Builder for [`CollectionDefinition`](super::CollectionDefinition).
 
 use super::{
-    Access, AdminConfig, Auth, CollectionDefinition, Hooks,
-    Labels, IndexDefinition, LiveSetting, McpConfig, VersionsConfig,
+    Access, AdminConfig, Auth, CollectionDefinition, Hooks, IndexDefinition, Labels, LiveSetting,
+    McpConfig, VersionsConfig,
 };
 use crate::core::field::FieldDefinition;
 use crate::core::upload::CollectionUpload;

@@ -2,12 +2,12 @@
 
 use anyhow::{bail, Result};
 
-use crate::core::CollectionDefinition;
-use crate::core::field::{FieldDefinition, FieldType};
+use super::super::{is_valid_identifier, sanitize_locale};
 use super::super::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode};
 use super::operators::{build_filter_condition, build_op_condition};
 use super::resolve::{resolve_filter, ResolvedFilter, SubqueryCondition};
-use super::super::{is_valid_identifier, sanitize_locale};
+use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::CollectionDefinition;
 
 // ── Subquery SQL generation ──────────────────────────────────────────────
 
@@ -21,12 +21,18 @@ fn build_filter_sql(
 ) -> Result<String> {
     let resolved = resolve_filter(&f.field, slug, fields)?;
     match resolved {
-        ResolvedFilter::Column(col) => {
-            build_filter_condition(&Filter { field: col, op: f.op.clone() }, params)
-        }
-        ResolvedFilter::Subquery { ref join_table, ref parent_table, ref condition } => {
-            build_subquery_sql(join_table, parent_table, condition, &f.op, params)
-        }
+        ResolvedFilter::Column(col) => build_filter_condition(
+            &Filter {
+                field: col,
+                op: f.op.clone(),
+            },
+            params,
+        ),
+        ResolvedFilter::Subquery {
+            ref join_table,
+            ref parent_table,
+            ref condition,
+        } => build_subquery_sql(join_table, parent_table, condition, &f.op, params),
     }
 }
 
@@ -56,7 +62,10 @@ fn build_subquery_sql(
                 join_table, parent_table, cond
             ))
         }
-        SubqueryCondition::Json { each_joins, extract_expr } => {
+        SubqueryCondition::Json {
+            each_joins,
+            extract_expr,
+        } => {
             let mut from_parts = vec![join_table.to_string()];
             for (source, alias) in each_joins {
                 from_parts.push(format!("json_each({}) AS {}", source, alias));
@@ -112,7 +121,8 @@ pub fn build_where_clause(
                         if group.len() == 1 {
                             or_parts.push(build_filter_sql(&group[0], slug, fields, params)?);
                         } else {
-                            let and_parts: Vec<String> = group.iter()
+                            let and_parts: Vec<String> = group
+                                .iter()
                                 .map(|f| build_filter_sql(f, slug, fields, params))
                                 .collect::<Result<_, _>>()?;
                             or_parts.push(format!("({})", and_parts.join(" AND ")));
@@ -139,22 +149,35 @@ pub fn resolve_filters(
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> Vec<FilterClause> {
-    filters.iter().map(|clause| {
-        match clause {
+    filters
+        .iter()
+        .map(|clause| match clause {
             FilterClause::Single(f) => {
                 let resolved = resolve_filter_column(&f.field, def, locale_ctx);
-                FilterClause::Single(Filter { field: resolved, op: f.op.clone() })
+                FilterClause::Single(Filter {
+                    field: resolved,
+                    op: f.op.clone(),
+                })
             }
-            FilterClause::Or(groups) => {
-                FilterClause::Or(groups.iter().map(|group| {
-                    group.iter().map(|f| {
-                        let resolved = resolve_filter_column(&f.field, def, locale_ctx);
-                        Filter { field: resolved, op: f.op.clone() }
-                    }).collect()
-                }).collect())
-            }
-        }
-    }).collect()
+            FilterClause::Or(groups) => FilterClause::Or(
+                groups
+                    .iter()
+                    .map(|group| {
+                        group
+                            .iter()
+                            .map(|f| {
+                                let resolved = resolve_filter_column(&f.field, def, locale_ctx);
+                                Filter {
+                                    field: resolved,
+                                    op: f.op.clone(),
+                                }
+                            })
+                            .collect()
+                    })
+                    .collect(),
+            ),
+        })
+        .collect()
 }
 
 /// Map a filter field name to its actual SQL column name, accounting for locale.
@@ -254,11 +277,15 @@ mod tests {
     use super::*;
     use crate::config::LocaleConfig;
     use crate::core::collection::CollectionDefinition;
-    use crate::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig};
+    use crate::core::field::{
+        BlockDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig,
+    };
     use crate::db::query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode};
 
     fn make_field(name: &str, ft: FieldType, localized: bool) -> FieldDefinition {
-        FieldDefinition::builder(name, ft).localized(localized).build()
+        FieldDefinition::builder(name, ft)
+            .localized(localized)
+            .build()
     }
 
     fn make_collection(fields: Vec<FieldDefinition>) -> CollectionDefinition {
@@ -276,11 +303,15 @@ mod tests {
     }
 
     fn make_array_field(name: &str, sub_fields: Vec<FieldDefinition>) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Array).fields(sub_fields).build()
+        FieldDefinition::builder(name, FieldType::Array)
+            .fields(sub_fields)
+            .build()
     }
 
     fn make_blocks_field(name: &str, blocks: Vec<BlockDefinition>) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Blocks).blocks(blocks).build()
+        FieldDefinition::builder(name, FieldType::Blocks)
+            .blocks(blocks)
+            .build()
     }
 
     fn make_has_many_field(name: &str, collection: &str) -> FieldDefinition {
@@ -305,9 +336,10 @@ mod tests {
 
     #[test]
     fn where_clause_single_filter() {
-        let filters = vec![
-            FilterClause::Single(Filter { field: "status".into(), op: FilterOp::Equals("active".into()) }),
-        ];
+        let filters = vec![FilterClause::Single(Filter {
+            field: "status".into(),
+            op: FilterOp::Equals("active".into()),
+        })];
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
         assert_eq!(sql, " WHERE status = ?");
@@ -317,8 +349,14 @@ mod tests {
     #[test]
     fn where_clause_multiple_and() {
         let filters = vec![
-            FilterClause::Single(Filter { field: "status".into(), op: FilterOp::Equals("active".into()) }),
-            FilterClause::Single(Filter { field: "role".into(), op: FilterOp::Equals("admin".into()) }),
+            FilterClause::Single(Filter {
+                field: "status".into(),
+                op: FilterOp::Equals("active".into()),
+            }),
+            FilterClause::Single(Filter {
+                field: "role".into(),
+                op: FilterOp::Equals("admin".into()),
+            }),
         ];
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
@@ -328,15 +366,22 @@ mod tests {
 
     #[test]
     fn where_clause_or_groups() {
-        let filters = vec![
-            FilterClause::Or(vec![
-                vec![Filter { field: "a".into(), op: FilterOp::Equals("1".into()) }],
-                vec![
-                    Filter { field: "b".into(), op: FilterOp::Equals("2".into()) },
-                    Filter { field: "c".into(), op: FilterOp::Equals("3".into()) },
-                ],
-            ]),
-        ];
+        let filters = vec![FilterClause::Or(vec![
+            vec![Filter {
+                field: "a".into(),
+                op: FilterOp::Equals("1".into()),
+            }],
+            vec![
+                Filter {
+                    field: "b".into(),
+                    op: FilterOp::Equals("2".into()),
+                },
+                Filter {
+                    field: "c".into(),
+                    op: FilterOp::Equals("3".into()),
+                },
+            ],
+        ])];
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
         assert_eq!(sql, " WHERE (a = ? OR (b = ? AND c = ?))");
@@ -345,11 +390,10 @@ mod tests {
 
     #[test]
     fn where_clause_or_single_item_group() {
-        let filters = vec![
-            FilterClause::Or(vec![
-                vec![Filter { field: "a".into(), op: FilterOp::Equals("1".into()) }],
-            ]),
-        ];
+        let filters = vec![FilterClause::Or(vec![vec![Filter {
+            field: "a".into(),
+            op: FilterOp::Equals("1".into()),
+        }]])];
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
         // Single-item OR should simplify to just the condition
@@ -365,8 +409,14 @@ mod tests {
             make_array_field("items", vec![make_field("name", FieldType::Text, false)]),
         ];
         let filters = vec![
-            FilterClause::Single(Filter { field: "status".into(), op: FilterOp::Equals("active".into()) }),
-            FilterClause::Single(Filter { field: "items.name".into(), op: FilterOp::Equals("X".into()) }),
+            FilterClause::Single(Filter {
+                field: "status".into(),
+                op: FilterOp::Equals("active".into()),
+            }),
+            FilterClause::Single(Filter {
+                field: "items.name".into(),
+                op: FilterOp::Equals("X".into()),
+            }),
         ];
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_where_clause(&filters, "posts", &fields, &mut params).unwrap();
@@ -383,12 +433,16 @@ mod tests {
             make_field("status", FieldType::Text, false),
             make_has_many_field("tags", "tags"),
         ];
-        let filters = vec![
-            FilterClause::Or(vec![
-                vec![Filter { field: "status".into(), op: FilterOp::Equals("draft".into()) }],
-                vec![Filter { field: "tags.id".into(), op: FilterOp::Equals("t1".into()) }],
-            ]),
-        ];
+        let filters = vec![FilterClause::Or(vec![
+            vec![Filter {
+                field: "status".into(),
+                op: FilterOp::Equals("draft".into()),
+            }],
+            vec![Filter {
+                field: "tags.id".into(),
+                op: FilterOp::Equals("t1".into()),
+            }],
+        ])];
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_where_clause(&filters, "posts", &fields, &mut params).unwrap();
         assert_eq!(
@@ -402,32 +456,52 @@ mod tests {
 
     #[test]
     fn subquery_array_column() {
-        let fields = vec![make_array_field("items", vec![
-            make_field("name", FieldType::Text, false),
-        ])];
-        let f = Filter { field: "items.name".into(), op: FilterOp::Equals("X".into()) };
+        let fields = vec![make_array_field(
+            "items",
+            vec![make_field("name", FieldType::Text, false)],
+        )];
+        let f = Filter {
+            field: "items.name".into(),
+            op: FilterOp::Equals("X".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
-        assert_eq!(sql, "EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?)");
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?)"
+        );
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn subquery_block_type() {
         let fields = vec![make_blocks_field("content", vec![])];
-        let f = Filter { field: "content._block_type".into(), op: FilterOp::Equals("image".into()) };
+        let f = Filter {
+            field: "content._block_type".into(),
+            op: FilterOp::Equals("image".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
-        assert_eq!(sql, "EXISTS (SELECT 1 FROM posts_content WHERE parent_id = posts.id AND _block_type = ?)");
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM posts_content WHERE parent_id = posts.id AND _block_type = ?)"
+        );
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn subquery_block_json_simple() {
-        let fields = vec![make_blocks_field("content", vec![
-            make_block_def("paragraph", vec![make_field("body", FieldType::Textarea, false)]),
-        ])];
-        let f = Filter { field: "content.body".into(), op: FilterOp::Contains("hello".into()) };
+        let fields = vec![make_blocks_field(
+            "content",
+            vec![make_block_def(
+                "paragraph",
+                vec![make_field("body", FieldType::Textarea, false)],
+            )],
+        )];
+        let f = Filter {
+            field: "content.body".into(),
+            op: FilterOp::Contains("hello".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
@@ -439,15 +513,20 @@ mod tests {
 
     #[test]
     fn subquery_block_nested_with_json_each() {
-        let inner_blocks = vec![
-            make_block_def("quote", vec![make_field("text", FieldType::Text, false)]),
-        ];
+        let inner_blocks = vec![make_block_def(
+            "quote",
+            vec![make_field("text", FieldType::Text, false)],
+        )];
         let mut nested = make_field("nested", FieldType::Blocks, false);
         nested.blocks = inner_blocks;
-        let fields = vec![make_blocks_field("content", vec![
-            make_block_def("rich", vec![nested]),
-        ])];
-        let f = Filter { field: "content.nested.text".into(), op: FilterOp::Equals("hi".into()) };
+        let fields = vec![make_blocks_field(
+            "content",
+            vec![make_block_def("rich", vec![nested])],
+        )];
+        let f = Filter {
+            field: "content.nested.text".into(),
+            op: FilterOp::Equals("hi".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
@@ -459,20 +538,32 @@ mod tests {
     #[test]
     fn subquery_has_many_relationship() {
         let fields = vec![make_has_many_field("tags", "tags")];
-        let f = Filter { field: "tags.id".into(), op: FilterOp::Equals("tag1".into()) };
+        let f = Filter {
+            field: "tags.id".into(),
+            op: FilterOp::Equals("tag1".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
-        assert_eq!(sql, "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?)");
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?)"
+        );
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn subquery_with_in_operator() {
         let fields = vec![make_has_many_field("tags", "tags")];
-        let f = Filter { field: "tags.id".into(), op: FilterOp::In(vec!["a".into(), "b".into()]) };
+        let f = Filter {
+            field: "tags.id".into(),
+            op: FilterOp::In(vec!["a".into(), "b".into()]),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
-        assert_eq!(sql, "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id IN (?, ?))");
+        assert_eq!(
+            sql,
+            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id IN (?, ?))"
+        );
         assert_eq!(params.len(), 2);
     }
 
@@ -599,9 +690,10 @@ mod tests {
     fn resolve_column_tabs_sub_field_localized() {
         // Sub-field inside a Tabs wrapper is localized
         let tabs_field = FieldDefinition::builder("page_tabs", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new("Content", vec![make_field("description", FieldType::Textarea, true)]),
-            ])
+            .tabs(vec![FieldTab::new(
+                "Content",
+                vec![make_field("description", FieldType::Textarea, true)],
+            )])
             .build();
         let def = make_collection(vec![tabs_field]);
         let ctx = LocaleContext {
@@ -616,9 +708,10 @@ mod tests {
     fn resolve_column_tabs_sub_field_non_localized_passthrough() {
         // Sub-field inside a Tabs wrapper is NOT localized
         let tabs_field = FieldDefinition::builder("page_tabs", FieldType::Tabs)
-            .tabs(vec![
-                FieldTab::new("Content", vec![make_field("description", FieldType::Textarea, false)]),
-            ])
+            .tabs(vec![FieldTab::new(
+                "Content",
+                vec![make_field("description", FieldType::Textarea, false)],
+            )])
             .build();
         let def = make_collection(vec![tabs_field]);
         let ctx = LocaleContext {
@@ -654,9 +747,10 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let filters = vec![
-            FilterClause::Single(Filter { field: "status".into(), op: FilterOp::Equals("active".into()) }),
-        ];
+        let filters = vec![FilterClause::Single(Filter {
+            field: "status".into(),
+            op: FilterOp::Equals("active".into()),
+        })];
         let resolved = resolve_filters(&filters, &def, Some(&ctx));
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "status"),
@@ -671,12 +765,16 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let filters = vec![
-            FilterClause::Or(vec![
-                vec![Filter { field: "title".into(), op: FilterOp::Equals("A".into()) }],
-                vec![Filter { field: "title".into(), op: FilterOp::Equals("B".into()) }],
-            ]),
-        ];
+        let filters = vec![FilterClause::Or(vec![
+            vec![Filter {
+                field: "title".into(),
+                op: FilterOp::Equals("A".into()),
+            }],
+            vec![Filter {
+                field: "title".into(),
+                op: FilterOp::Equals("B".into()),
+            }],
+        ])];
         let resolved = resolve_filters(&filters, &def, Some(&ctx));
         match &resolved[0] {
             FilterClause::Or(groups) => {
@@ -694,9 +792,10 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let filters = vec![
-            FilterClause::Single(Filter { field: "title".into(), op: FilterOp::Equals("Hallo".into()) }),
-        ];
+        let filters = vec![FilterClause::Single(Filter {
+            field: "title".into(),
+            op: FilterOp::Equals("Hallo".into()),
+        })];
         let resolved = resolve_filters(&filters, &def, Some(&ctx));
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "title__de"),

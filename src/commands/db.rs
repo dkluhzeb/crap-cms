@@ -8,17 +8,18 @@ use std::path::{Path, PathBuf};
 /// Untestable as unit: requires full Lua VM + DB setup. Covered by CLI integration tests.
 #[cfg(not(tarpaulin_include))]
 pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
 
     // Create only writes a file — no Lua/DB needed
     if let super::MigrateAction::Create { ref name } = action {
         return crate::scaffold::make_migration(&config_dir, name);
     }
 
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
-    let registry = crate::hooks::init_lua(&config_dir, &cfg)
-        .context("Failed to initialize Lua VM")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let registry =
+        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
     let pool = crate::db::pool::create_pool(&config_dir, &cfg)
         .context("Failed to create database pool")?;
 
@@ -96,7 +97,11 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
                 println!("{:<50} Status", "Migration");
                 println!("{}", "-".repeat(60));
                 for f in &all_files {
-                    let status = if applied.contains(f) { "applied" } else { "pending" };
+                    let status = if applied.contains(f) {
+                        "applied"
+                    } else {
+                        "pending"
+                    };
                     println!("{:<50} {}", f, status);
                 }
             }
@@ -151,10 +156,11 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
 /// Untestable: spawns interactive sqlite3 process.
 #[cfg(not(tarpaulin_include))]
 pub fn console(config_dir: &Path) -> Result<()> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     let db_path = cfg.db_path(&config_dir);
     if !db_path.exists() {
@@ -179,15 +185,12 @@ pub fn console(config_dir: &Path) -> Result<()> {
 /// Untestable: spawns tar process for uploads, opens raw SQLite connection, writes timestamped files.
 /// Covered by CLI integration tests.
 #[cfg(not(tarpaulin_include))]
-pub fn backup(
-    config_dir: &Path,
-    output: Option<PathBuf>,
-    include_uploads: bool,
-) -> Result<()> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool) -> Result<()> {
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     let db_path = cfg.db_path(&config_dir);
     if !db_path.exists() {
@@ -200,22 +203,33 @@ pub fn backup(
     let backup_base = output.unwrap_or_else(|| config_dir.join("backups"));
     let backup_dir = backup_base.join(&backup_dir_name);
 
-    std::fs::create_dir_all(&backup_dir)
-        .with_context(|| format!("Failed to create backup directory: {}", backup_dir.display()))?;
+    std::fs::create_dir_all(&backup_dir).with_context(|| {
+        format!(
+            "Failed to create backup directory: {}",
+            backup_dir.display()
+        )
+    })?;
 
     // VACUUM INTO for a consistent snapshot
     let backup_db_path = backup_dir.join("crap.db");
     println!("Creating database snapshot...");
     {
-        let conn = rusqlite::Connection::open(&db_path)
-            .context("Failed to open database for backup")?;
-        conn.execute("VACUUM INTO ?1", [backup_db_path.to_string_lossy().as_ref()])
-            .context("VACUUM INTO failed")?;
+        let conn =
+            rusqlite::Connection::open(&db_path).context("Failed to open database for backup")?;
+        conn.execute(
+            "VACUUM INTO ?1",
+            [backup_db_path.to_string_lossy().as_ref()],
+        )
+        .context("VACUUM INTO failed")?;
     }
     let db_size = std::fs::metadata(&backup_db_path)
         .map(|m| m.len())
         .unwrap_or(0);
-    println!("Database snapshot: {} ({} bytes)", backup_db_path.display(), db_size);
+    println!(
+        "Database snapshot: {} ({} bytes)",
+        backup_db_path.display(),
+        db_size
+    );
 
     // Optionally backup uploads
     let mut uploads_size: Option<u64> = None;
@@ -225,20 +239,31 @@ pub fn backup(
             let archive_path = backup_dir.join("uploads.tar.gz");
             println!("Compressing uploads...");
             let status = std::process::Command::new("tar")
-                .args(["czf", &archive_path.to_string_lossy(), "-C", &config_dir.to_string_lossy(), "uploads"])
+                .args([
+                    "czf",
+                    &archive_path.to_string_lossy(),
+                    "-C",
+                    &config_dir.to_string_lossy(),
+                    "uploads",
+                ])
                 .status();
             match status {
                 Ok(s) if s.success() => {
                     uploads_size = std::fs::metadata(&archive_path).map(|m| m.len()).ok();
-                    println!("Uploads archive: {} ({} bytes)",
+                    println!(
+                        "Uploads archive: {} ({} bytes)",
                         archive_path.display(),
-                        uploads_size.unwrap_or(0));
+                        uploads_size.unwrap_or(0)
+                    );
                 }
                 Ok(s) => {
                     eprintln!("Warning: tar exited with status {}", s);
                 }
                 Err(e) => {
-                    eprintln!("Warning: tar not found or failed: {}. Skipping uploads backup.", e);
+                    eprintln!(
+                        "Warning: tar not found or failed: {}. Skipping uploads backup.",
+                        e
+                    );
                 }
             }
         } else {
@@ -281,8 +306,12 @@ pub fn restore(
         );
     }
 
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
-    let backup_dir = backup_dir.canonicalize().unwrap_or_else(|_| backup_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
+    let backup_dir = backup_dir
+        .canonicalize()
+        .unwrap_or_else(|_| backup_dir.to_path_buf());
 
     // Validate backup directory
     let manifest_path = backup_dir.join("manifest.json");
@@ -296,22 +325,39 @@ pub fn restore(
     }
 
     // Read and display manifest
-    let manifest_str = std::fs::read_to_string(&manifest_path)
-        .context("Failed to read manifest.json")?;
-    let manifest: serde_json::Value = serde_json::from_str(&manifest_str)
-        .context("Failed to parse manifest.json")?;
+    let manifest_str =
+        std::fs::read_to_string(&manifest_path).context("Failed to read manifest.json")?;
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_str).context("Failed to parse manifest.json")?;
 
     println!("Restoring from backup:");
-    println!("  Version:   {}", manifest.get("crap_version").and_then(|v| v.as_str()).unwrap_or("unknown"));
-    println!("  Timestamp: {}", manifest.get("timestamp").and_then(|v| v.as_str()).unwrap_or("unknown"));
-    println!("  DB size:   {} bytes", manifest.get("db_size").and_then(|v| v.as_u64()).unwrap_or(0));
+    println!(
+        "  Version:   {}",
+        manifest
+            .get("crap_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+    );
+    println!(
+        "  Timestamp: {}",
+        manifest
+            .get("timestamp")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+    );
+    println!(
+        "  DB size:   {} bytes",
+        manifest
+            .get("db_size")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0)
+    );
     if let Some(size) = manifest.get("uploads_size").and_then(|v| v.as_u64()) {
         println!("  Uploads:   {} bytes", size);
     }
 
     // Load config to find target DB path
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
     let db_path = cfg.db_path(&config_dir);
 
     // Ensure target directory exists
@@ -342,7 +388,12 @@ pub fn restore(
         if archive_path.exists() {
             println!("Extracting uploads...");
             let status = std::process::Command::new("tar")
-                .args(["xzf", &archive_path.to_string_lossy(), "-C", &config_dir.to_string_lossy()])
+                .args([
+                    "xzf",
+                    &archive_path.to_string_lossy(),
+                    "-C",
+                    &config_dir.to_string_lossy(),
+                ])
                 .status();
             match status {
                 Ok(s) if s.success() => {
@@ -352,7 +403,10 @@ pub fn restore(
                     eprintln!("Warning: tar exited with status {}", s);
                 }
                 Err(e) => {
-                    eprintln!("Warning: tar not found or failed: {}. Skipping uploads restore.", e);
+                    eprintln!(
+                        "Warning: tar not found or failed: {}. Skipping uploads restore.",
+                        e
+                    );
                 }
             }
         } else {
@@ -375,19 +429,21 @@ pub fn restore(
 /// drop orphan columns.
 #[cfg(not(tarpaulin_include))]
 pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
-    let registry = crate::hooks::init_lua(&config_dir, &cfg)
-        .context("Failed to initialize Lua VM")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let registry =
+        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
     let pool = crate::db::pool::create_pool(&config_dir, &cfg)
         .context("Failed to create database pool")?;
 
     crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
         .context("Failed to sync database schema")?;
 
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
     let conn = pool.get().context("Failed to get database connection")?;
@@ -475,7 +531,8 @@ pub fn find_orphan_columns(
             if field.field_type == FieldType::Group {
                 for sub in &field.fields {
                     let base = format!("{}__{}", field.name, sub.name);
-                    let is_localized = (field.localized || sub.localized) && locale_config.is_enabled();
+                    let is_localized =
+                        (field.localized || sub.localized) && locale_config.is_enabled();
                     if is_localized {
                         for locale in &locale_config.locales {
                             expected.insert(format!("{}__{}", base, locale));
@@ -532,10 +589,10 @@ pub fn find_orphan_columns(
         }
 
         // Find orphans: columns in DB but not in expected, excluding system columns
-        let mut orphan_cols: Vec<String> = existing.iter()
+        let mut orphan_cols: Vec<String> = existing
+            .iter()
             .filter(|col| {
-                !expected.contains(*col)
-                    && !col.starts_with('_')  // system columns: _password_hash, _locked, etc.
+                !expected.contains(*col) && !col.starts_with('_') // system columns: _password_hash, _locked, etc.
             })
             .cloned()
             .collect();
@@ -587,10 +644,17 @@ mod tests {
     #[test]
     fn no_orphans_when_columns_match() {
         let conn = make_conn();
-        conn.execute("CREATE TABLE posts (id TEXT, title TEXT, created_at TEXT, updated_at TEXT)", []).unwrap();
+        conn.execute(
+            "CREATE TABLE posts (id TEXT, title TEXT, created_at TEXT, updated_at TEXT)",
+            [],
+        )
+        .unwrap();
 
         let mut reg = Registry::default();
-        reg.collections.insert("posts".to_string(), simple_collection("posts", vec![text_field("title")]));
+        reg.collections.insert(
+            "posts".to_string(),
+            simple_collection("posts", vec![text_field("title")]),
+        );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert!(orphans.is_empty());
@@ -602,7 +666,10 @@ mod tests {
         conn.execute("CREATE TABLE posts (id TEXT, title TEXT, old_field TEXT, created_at TEXT, updated_at TEXT)", []).unwrap();
 
         let mut reg = Registry::default();
-        reg.collections.insert("posts".to_string(), simple_collection("posts", vec![text_field("title")]));
+        reg.collections.insert(
+            "posts".to_string(),
+            simple_collection("posts", vec![text_field("title")]),
+        );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert_eq!(orphans.len(), 1);
@@ -619,7 +686,10 @@ mod tests {
         ).unwrap();
 
         let mut reg = Registry::default();
-        reg.collections.insert("users".to_string(), simple_collection("users", vec![text_field("email")]));
+        reg.collections.insert(
+            "users".to_string(),
+            simple_collection("users", vec![text_field("email")]),
+        );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert!(orphans.is_empty(), "system columns should not be flagged");
@@ -634,11 +704,15 @@ mod tests {
         ).unwrap();
 
         let mut reg = Registry::default();
-        reg.collections.insert("posts".to_string(), simple_collection("posts", vec![
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![text_field("meta_title"), text_field("meta_desc")])
-                .build(),
-        ]));
+        reg.collections.insert(
+            "posts".to_string(),
+            simple_collection(
+                "posts",
+                vec![FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![text_field("meta_title"), text_field("meta_desc")])
+                    .build()],
+            ),
+        );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert!(orphans.is_empty(), "group fields should not be flagged");
@@ -653,9 +727,15 @@ mod tests {
         ).unwrap();
 
         let mut reg = Registry::default();
-        reg.collections.insert("posts".to_string(), simple_collection("posts", vec![
-            FieldDefinition::builder("title", FieldType::Text).localized(true).build(),
-        ]));
+        reg.collections.insert(
+            "posts".to_string(),
+            simple_collection(
+                "posts",
+                vec![FieldDefinition::builder("title", FieldType::Text)
+                    .localized(true)
+                    .build()],
+            ),
+        );
 
         let orphans = find_orphan_columns(&conn, &reg, &locale_en_de()).unwrap();
         assert!(orphans.is_empty());
@@ -670,12 +750,18 @@ mod tests {
         ).unwrap();
 
         let mut reg = Registry::default();
-        reg.collections.insert("posts".to_string(), simple_collection("posts", vec![
-            text_field("title"),
-            FieldDefinition::builder("seo", FieldType::Group)
-                .fields(vec![text_field("meta")])
-                .build(),
-        ]));
+        reg.collections.insert(
+            "posts".to_string(),
+            simple_collection(
+                "posts",
+                vec![
+                    text_field("title"),
+                    FieldDefinition::builder("seo", FieldType::Group)
+                        .fields(vec![text_field("meta")])
+                        .build(),
+                ],
+            ),
+        );
 
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert_eq!(orphans.len(), 1);

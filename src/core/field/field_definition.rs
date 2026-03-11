@@ -1,8 +1,7 @@
 //! Complete definition of a single field within a collection.
 
 use super::{
-    BlockDefinition, FieldAdmin, FieldTab, FieldType, JoinConfig, RelationshipConfig,
-    SelectOption,
+    BlockDefinition, FieldAdmin, FieldTab, FieldType, JoinConfig, RelationshipConfig, SelectOption,
 };
 use serde::{Deserialize, Serialize};
 
@@ -148,7 +147,10 @@ impl Default for FieldDefinition {
 }
 
 impl FieldDefinition {
-    pub fn builder(name: impl Into<String>, field_type: FieldType) -> super::FieldDefinitionBuilder {
+    pub fn builder(
+        name: impl Into<String>,
+        field_type: FieldType,
+    ) -> super::FieldDefinitionBuilder {
         super::FieldDefinitionBuilder::new(name, field_type)
     }
 
@@ -158,11 +160,11 @@ impl FieldDefinition {
         match self.field_type {
             FieldType::Array => false,
             FieldType::Group => false, // sub-fields get prefixed columns instead
-            FieldType::Row => false,         // sub-fields promoted to parent level (no prefix)
+            FieldType::Row => false,   // sub-fields promoted to parent level (no prefix)
             FieldType::Collapsible => false, // sub-fields promoted to parent level (no prefix)
-            FieldType::Tabs => false,        // sub-fields promoted to parent level (no prefix)
-            FieldType::Blocks => false,      // uses a join table
-            FieldType::Join => false,        // virtual field, no column
+            FieldType::Tabs => false,  // sub-fields promoted to parent level (no prefix)
+            FieldType::Blocks => false, // uses a join table
+            FieldType::Join => false,  // virtual field, no column
             FieldType::Relationship | FieldType::Upload => {
                 match &self.relationship {
                     Some(rc) => !rc.has_many,
@@ -226,48 +228,80 @@ mod tests {
 
     #[test]
     fn has_parent_column_scalar_types() {
-        for ft in [FieldType::Text, FieldType::Number, FieldType::Textarea,
-                    FieldType::Select, FieldType::Checkbox, FieldType::Date,
-                    FieldType::Email, FieldType::Json, FieldType::Richtext,
-                    FieldType::Upload] {
-            let f = FieldDefinition { field_type: ft.clone(), ..Default::default() };
+        for ft in [
+            FieldType::Text,
+            FieldType::Number,
+            FieldType::Textarea,
+            FieldType::Select,
+            FieldType::Checkbox,
+            FieldType::Date,
+            FieldType::Email,
+            FieldType::Json,
+            FieldType::Richtext,
+            FieldType::Upload,
+        ] {
+            let f = FieldDefinition {
+                field_type: ft.clone(),
+                ..Default::default()
+            };
             assert!(f.has_parent_column(), "{:?} should have parent column", ft);
         }
     }
 
     #[test]
     fn has_parent_column_array_false() {
-        let f = FieldDefinition { field_type: FieldType::Array, ..Default::default() };
+        let f = FieldDefinition {
+            field_type: FieldType::Array,
+            ..Default::default()
+        };
         assert!(!f.has_parent_column());
     }
 
     #[test]
     fn has_parent_column_group_false() {
-        let f = FieldDefinition { field_type: FieldType::Group, ..Default::default() };
+        let f = FieldDefinition {
+            field_type: FieldType::Group,
+            ..Default::default()
+        };
         assert!(!f.has_parent_column());
     }
 
     #[test]
     fn has_parent_column_blocks_false() {
-        let f = FieldDefinition { field_type: FieldType::Blocks, ..Default::default() };
+        let f = FieldDefinition {
+            field_type: FieldType::Blocks,
+            ..Default::default()
+        };
         assert!(!f.has_parent_column());
     }
 
     #[test]
     fn has_parent_column_row_false() {
-        let f = FieldDefinition { field_type: FieldType::Row, ..Default::default() };
+        let f = FieldDefinition {
+            field_type: FieldType::Row,
+            ..Default::default()
+        };
         assert!(!f.has_parent_column(), "Row should not have parent column");
     }
 
     #[test]
     fn has_parent_column_collapsible_false() {
-        let f = FieldDefinition { field_type: FieldType::Collapsible, ..Default::default() };
-        assert!(!f.has_parent_column(), "Collapsible should not have parent column");
+        let f = FieldDefinition {
+            field_type: FieldType::Collapsible,
+            ..Default::default()
+        };
+        assert!(
+            !f.has_parent_column(),
+            "Collapsible should not have parent column"
+        );
     }
 
     #[test]
     fn has_parent_column_tabs_false() {
-        let f = FieldDefinition { field_type: FieldType::Tabs, ..Default::default() };
+        let f = FieldDefinition {
+            field_type: FieldType::Tabs,
+            ..Default::default()
+        };
         assert!(!f.has_parent_column(), "Tabs should not have parent column");
     }
 
@@ -278,7 +312,10 @@ mod tests {
             relationship: Some(RelationshipConfig::new("posts", false)),
             ..Default::default()
         };
-        assert!(f.has_parent_column(), "has-one relationship should have parent column");
+        assert!(
+            f.has_parent_column(),
+            "has-one relationship should have parent column"
+        );
     }
 
     #[test]
@@ -288,7 +325,10 @@ mod tests {
             relationship: Some(RelationshipConfig::new("tags", true)),
             ..Default::default()
         };
-        assert!(!f.has_parent_column(), "has-many relationship should not have parent column");
+        assert!(
+            !f.has_parent_column(),
+            "has-many relationship should not have parent column"
+        );
     }
 
     #[test]
@@ -298,7 +338,10 @@ mod tests {
             relationship: None,
             ..Default::default()
         };
-        assert!(f.has_parent_column(), "relationship with no config defaults to has-one");
+        assert!(
+            f.has_parent_column(),
+            "relationship with no config defaults to has-one"
+        );
     }
 
     #[test]
@@ -308,7 +351,10 @@ mod tests {
             relationship: Some(RelationshipConfig::new("media", true)),
             ..Default::default()
         };
-        assert!(!f.has_parent_column(), "has-many upload should not have parent column");
+        assert!(
+            !f.has_parent_column(),
+            "has-many upload should not have parent column"
+        );
     }
 
     #[test]
@@ -318,7 +364,10 @@ mod tests {
             relationship: Some(RelationshipConfig::new("media", false)),
             ..Default::default()
         };
-        assert!(f.has_parent_column(), "has-one upload should have parent column");
+        assert!(
+            f.has_parent_column(),
+            "has-one upload should have parent column"
+        );
     }
 
     #[test]
@@ -380,21 +429,20 @@ mod tests {
 
     #[test]
     fn flatten_array_sub_fields_nested() {
-        let fields = vec![
-            FieldDefinition {
-                name: "layout".to_string(),
-                field_type: FieldType::Tabs,
-                tabs: vec![FieldTab::new("Tab", vec![
-                    FieldDefinition {
-                        name: "row".to_string(),
-                        field_type: FieldType::Row,
-                        fields: vec![text_field("a"), text_field("b")],
-                        ..Default::default()
-                    },
-                ])],
-                ..Default::default()
-            },
-        ];
+        let fields = vec![FieldDefinition {
+            name: "layout".to_string(),
+            field_type: FieldType::Tabs,
+            tabs: vec![FieldTab::new(
+                "Tab",
+                vec![FieldDefinition {
+                    name: "row".to_string(),
+                    field_type: FieldType::Row,
+                    fields: vec![text_field("a"), text_field("b")],
+                    ..Default::default()
+                }],
+            )],
+            ..Default::default()
+        }];
         let flat = flatten_array_sub_fields(&fields);
         let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["a", "b"]);
@@ -408,14 +456,12 @@ mod tests {
 
     #[test]
     fn flatten_array_sub_fields_collapsible() {
-        let fields = vec![
-            FieldDefinition {
-                name: "advanced".to_string(),
-                field_type: FieldType::Collapsible,
-                fields: vec![text_field("x"), text_field("y")],
-                ..Default::default()
-            },
-        ];
+        let fields = vec![FieldDefinition {
+            name: "advanced".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![text_field("x"), text_field("y")],
+            ..Default::default()
+        }];
         let flat = flatten_array_sub_fields(&fields);
         let names: Vec<&str> = flat.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(names, vec!["x", "y"]);

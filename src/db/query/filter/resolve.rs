@@ -6,8 +6,8 @@
 
 use anyhow::{bail, Result};
 
+use super::super::{is_valid_identifier, FilterClause};
 use crate::core::field::{BlockDefinition, FieldDefinition, FieldType};
-use super::super::{FilterClause, is_valid_identifier};
 
 // ── Dot notation normalization ───────────────────────────────────────────
 
@@ -101,7 +101,9 @@ pub(super) fn resolve_filter(
     let root = &field[..dot_pos];
     let rest = &field[dot_pos + 1..];
 
-    let field_def = fields.iter().find(|f| f.name == root)
+    let field_def = fields
+        .iter()
+        .find(|f| f.name == root)
         .ok_or_else(|| anyhow::anyhow!("Unknown field '{}' in filter path '{}'", root, field))?;
 
     let join_table = format!("{}_{}", slug, root);
@@ -109,11 +111,14 @@ pub(super) fn resolve_filter(
     match field_def.field_type {
         FieldType::Array => resolve_array_filter(root, rest, field, slug, field_def, join_table),
         FieldType::Blocks => resolve_blocks_filter(root, rest, field, slug, field_def, join_table),
-        FieldType::Relationship => resolve_relationship_filter(root, rest, slug, field_def, join_table),
+        FieldType::Relationship => {
+            resolve_relationship_filter(root, rest, slug, field_def, join_table)
+        }
         _ => {
             bail!(
                 "Field '{}' (type {:?}) does not support sub-field filtering",
-                root, field_def.field_type
+                root,
+                field_def.field_type
             );
         }
     }
@@ -189,13 +194,15 @@ fn resolve_blocks_filter(
                 bail!("Invalid segment '{}' in filter path '{}'", seg, field);
             }
         }
-        let (each_joins, extract_expr) = walk_block_fields(
-            &rest_parts, &field_def.blocks, &join_table,
-        )?;
+        let (each_joins, extract_expr) =
+            walk_block_fields(&rest_parts, &field_def.blocks, &join_table)?;
         Ok(ResolvedFilter::Subquery {
             join_table,
             parent_table: slug.to_string(),
-            condition: SubqueryCondition::Json { each_joins, extract_expr },
+            condition: SubqueryCondition::Json {
+                each_joins,
+                extract_expr,
+            },
         })
     }
 }
@@ -212,7 +219,8 @@ fn resolve_relationship_filter(
             if rest != "id" {
                 bail!(
                     "Has-many relationship '{}' can only be filtered by '.id', got '.{}'",
-                    root, rest
+                    root,
+                    rest
                 );
             }
             Ok(ResolvedFilter::Subquery {
@@ -221,7 +229,10 @@ fn resolve_relationship_filter(
                 condition: SubqueryCondition::Column("related_id".to_string()),
             })
         } else {
-            bail!("Has-one relationship '{}' does not use dot notation for filtering", root);
+            bail!(
+                "Has-one relationship '{}' does not use dot notation for filtering",
+                root
+            );
         }
     } else {
         bail!("Relationship field '{}' missing relationship config", root);
@@ -249,9 +260,8 @@ pub(super) fn walk_block_fields(
     let mut json_path_parts: Vec<String> = Vec::new();
 
     // Collect all fields across all block types at the current level.
-    let all_fields: Vec<&FieldDefinition> = block_defs.iter()
-        .flat_map(|bd| bd.fields.iter())
-        .collect();
+    let all_fields: Vec<&FieldDefinition> =
+        block_defs.iter().flat_map(|bd| bd.fields.iter()).collect();
     let mut current_fields = all_fields;
 
     let mut remaining = segments;
@@ -269,28 +279,27 @@ pub(super) fn walk_block_fields(
             return Ok((each_joins, expr));
         }
 
-        let field_def = current_fields.iter()
+        let field_def = current_fields
+            .iter()
             .find(|f| f.name == seg)
             .ok_or_else(|| anyhow::anyhow!("Unknown field '{}' in block filter path", seg))?;
 
         match field_def.field_type {
             FieldType::Blocks => {
                 // Nested blocks → json_each join
-                let source = build_json_each_source(
-                    &each_joins, &json_path_parts, seg, join_table,
-                );
+                let source = build_json_each_source(&each_joins, &json_path_parts, seg, join_table);
                 let alias = format!("j{}", each_joins.len());
                 each_joins.push((source, alias));
                 json_path_parts.clear();
-                current_fields = field_def.blocks.iter()
+                current_fields = field_def
+                    .blocks
+                    .iter()
                     .flat_map(|bd| bd.fields.iter())
                     .collect();
             }
             FieldType::Array => {
                 // Nested array in block JSON → json_each join
-                let source = build_json_each_source(
-                    &each_joins, &json_path_parts, seg, join_table,
-                );
+                let source = build_json_each_source(&each_joins, &json_path_parts, seg, join_table);
                 let alias = format!("j{}", each_joins.len());
                 each_joins.push((source, alias));
                 json_path_parts.clear();
@@ -302,7 +311,11 @@ pub(super) fn walk_block_fields(
             }
             FieldType::Tabs => {
                 json_path_parts.push(seg.to_string());
-                current_fields = field_def.tabs.iter().flat_map(|t| t.fields.iter()).collect();
+                current_fields = field_def
+                    .tabs
+                    .iter()
+                    .flat_map(|t| t.fields.iter())
+                    .collect();
             }
             _ => {
                 // Scalar leaf
@@ -312,7 +325,11 @@ pub(super) fn walk_block_fields(
                 json_path_parts.push(seg.to_string());
                 let expr = if !each_joins.is_empty() {
                     let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
-                    format!("json_extract({}.value, '$.{}')", last_alias, json_path_parts.join("."))
+                    format!(
+                        "json_extract({}.value, '$.{}')",
+                        last_alias,
+                        json_path_parts.join(".")
+                    )
                 } else {
                     format!("json_extract(data, '$.{}')", json_path_parts.join("."))
                 };
@@ -335,7 +352,11 @@ fn build_block_type_expr(
             format!("json_extract({}.value, '$._block_type')", last_alias)
         } else {
             json_path_parts.push("_block_type".to_string());
-            format!("json_extract({}.value, '$.{}')", last_alias, json_path_parts.join("."))
+            format!(
+                "json_extract({}.value, '$.{}')",
+                last_alias,
+                json_path_parts.join(".")
+            )
         }
     } else {
         json_path_parts.push("_block_type".to_string());
@@ -369,18 +390,24 @@ pub(super) fn build_json_each_source(
 mod tests {
     use super::*;
     use crate::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
-    use crate::db::query::{FilterClause, FilterOp, Filter};
+    use crate::db::query::{Filter, FilterClause, FilterOp};
 
     fn make_field(name: &str, ft: FieldType, localized: bool) -> FieldDefinition {
-        FieldDefinition::builder(name, ft).localized(localized).build()
+        FieldDefinition::builder(name, ft)
+            .localized(localized)
+            .build()
     }
 
     fn make_array_field(name: &str, sub_fields: Vec<FieldDefinition>) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Array).fields(sub_fields).build()
+        FieldDefinition::builder(name, FieldType::Array)
+            .fields(sub_fields)
+            .build()
     }
 
     fn make_blocks_field(name: &str, blocks: Vec<BlockDefinition>) -> FieldDefinition {
-        FieldDefinition::builder(name, FieldType::Blocks).blocks(blocks).build()
+        FieldDefinition::builder(name, FieldType::Blocks)
+            .blocks(blocks)
+            .build()
     }
 
     fn make_has_many_field(name: &str, collection: &str) -> FieldDefinition {
@@ -398,12 +425,10 @@ mod tests {
     #[test]
     fn normalize_group_dot_to_double_underscore() {
         let fields = vec![make_field("seo", FieldType::Group, false)];
-        let mut filters = vec![
-            FilterClause::Single(Filter {
-                field: "seo.meta_title".into(),
-                op: FilterOp::Equals("test".into()),
-            }),
-        ];
+        let mut filters = vec![FilterClause::Single(Filter {
+            field: "seo.meta_title".into(),
+            op: FilterOp::Equals("test".into()),
+        })];
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "seo__meta_title"),
@@ -413,15 +438,14 @@ mod tests {
 
     #[test]
     fn normalize_preserves_array_dots() {
-        let fields = vec![make_array_field("items", vec![
-            make_field("name", FieldType::Text, false),
-        ])];
-        let mut filters = vec![
-            FilterClause::Single(Filter {
-                field: "items.name".into(),
-                op: FilterOp::Equals("test".into()),
-            }),
-        ];
+        let fields = vec![make_array_field(
+            "items",
+            vec![make_field("name", FieldType::Text, false)],
+        )];
+        let mut filters = vec![FilterClause::Single(Filter {
+            field: "items.name".into(),
+            op: FilterOp::Equals("test".into()),
+        })];
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "items.name"),
@@ -432,12 +456,10 @@ mod tests {
     #[test]
     fn normalize_preserves_blocks_dots() {
         let fields = vec![make_blocks_field("content", vec![])];
-        let mut filters = vec![
-            FilterClause::Single(Filter {
-                field: "content.body".into(),
-                op: FilterOp::Equals("test".into()),
-            }),
-        ];
+        let mut filters = vec![FilterClause::Single(Filter {
+            field: "content.body".into(),
+            op: FilterOp::Equals("test".into()),
+        })];
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "content.body"),
@@ -448,12 +470,16 @@ mod tests {
     #[test]
     fn normalize_in_or_groups() {
         let fields = vec![make_field("seo", FieldType::Group, false)];
-        let mut filters = vec![
-            FilterClause::Or(vec![
-                vec![Filter { field: "seo.title".into(), op: FilterOp::Equals("a".into()) }],
-                vec![Filter { field: "seo.desc".into(), op: FilterOp::Equals("b".into()) }],
-            ]),
-        ];
+        let mut filters = vec![FilterClause::Or(vec![
+            vec![Filter {
+                field: "seo.title".into(),
+                op: FilterOp::Equals("a".into()),
+            }],
+            vec![Filter {
+                field: "seo.desc".into(),
+                op: FilterOp::Equals("b".into()),
+            }],
+        ])];
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Or(groups) => {
@@ -467,12 +493,10 @@ mod tests {
     #[test]
     fn normalize_no_dots_passthrough() {
         let fields = vec![make_field("title", FieldType::Text, false)];
-        let mut filters = vec![
-            FilterClause::Single(Filter {
-                field: "title".into(),
-                op: FilterOp::Equals("test".into()),
-            }),
-        ];
+        let mut filters = vec![FilterClause::Single(Filter {
+            field: "title".into(),
+            op: FilterOp::Equals("test".into()),
+        })];
         normalize_filter_fields(&mut filters, &fields);
         match &filters[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "title"),
@@ -493,12 +517,17 @@ mod tests {
 
     #[test]
     fn resolve_filter_array_subfield() {
-        let fields = vec![make_array_field("items", vec![
-            make_field("name", FieldType::Text, false),
-        ])];
+        let fields = vec![make_array_field(
+            "items",
+            vec![make_field("name", FieldType::Text, false)],
+        )];
         let resolved = resolve_filter("items.name", "posts", &fields).unwrap();
         match resolved {
-            ResolvedFilter::Subquery { join_table, parent_table, condition } => {
+            ResolvedFilter::Subquery {
+                join_table,
+                parent_table,
+                condition,
+            } => {
                 assert_eq!(join_table, "posts_items");
                 assert_eq!(parent_table, "posts");
                 match condition {
@@ -518,15 +547,16 @@ mod tests {
 
         let resolved = resolve_filter("items.address.city", "posts", &fields).unwrap();
         match resolved {
-            ResolvedFilter::Subquery { condition, .. } => {
-                match condition {
-                    SubqueryCondition::Json { each_joins, extract_expr } => {
-                        assert!(each_joins.is_empty());
-                        assert_eq!(extract_expr, "json_extract(address, '$.city')");
-                    }
-                    other => panic!("Expected Json, got {:?}", other),
+            ResolvedFilter::Subquery { condition, .. } => match condition {
+                SubqueryCondition::Json {
+                    each_joins,
+                    extract_expr,
+                } => {
+                    assert!(each_joins.is_empty());
+                    assert_eq!(extract_expr, "json_extract(address, '$.city')");
                 }
-            }
+                other => panic!("Expected Json, got {:?}", other),
+            },
             other => panic!("Expected Subquery, got {:?}", other),
         }
     }
@@ -545,20 +575,25 @@ mod tests {
 
     #[test]
     fn resolve_filter_block_scalar() {
-        let fields = vec![make_blocks_field("content", vec![
-            make_block_def("paragraph", vec![make_field("body", FieldType::Textarea, false)]),
-        ])];
+        let fields = vec![make_blocks_field(
+            "content",
+            vec![make_block_def(
+                "paragraph",
+                vec![make_field("body", FieldType::Textarea, false)],
+            )],
+        )];
         let resolved = resolve_filter("content.body", "posts", &fields).unwrap();
         match resolved {
-            ResolvedFilter::Subquery { condition, .. } => {
-                match condition {
-                    SubqueryCondition::Json { each_joins, extract_expr } => {
-                        assert!(each_joins.is_empty());
-                        assert_eq!(extract_expr, "json_extract(data, '$.body')");
-                    }
-                    other => panic!("Expected Json, got {:?}", other),
+            ResolvedFilter::Subquery { condition, .. } => match condition {
+                SubqueryCondition::Json {
+                    each_joins,
+                    extract_expr,
+                } => {
+                    assert!(each_joins.is_empty());
+                    assert_eq!(extract_expr, "json_extract(data, '$.body')");
                 }
-            }
+                other => panic!("Expected Json, got {:?}", other),
+            },
             other => panic!("Expected Subquery, got {:?}", other),
         }
     }
@@ -568,7 +603,11 @@ mod tests {
         let fields = vec![make_has_many_field("tags", "tags")];
         let resolved = resolve_filter("tags.id", "posts", &fields).unwrap();
         match resolved {
-            ResolvedFilter::Subquery { join_table, condition, .. } => {
+            ResolvedFilter::Subquery {
+                join_table,
+                condition,
+                ..
+            } => {
                 assert_eq!(join_table, "posts_tags");
                 match condition {
                     SubqueryCondition::Column(col) => assert_eq!(col, "related_id"),
@@ -584,7 +623,10 @@ mod tests {
         let fields = vec![make_has_many_field("tags", "tags")];
         let result = resolve_filter("tags.name", "posts", &fields);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("only be filtered by '.id'"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("only be filtered by '.id'"));
     }
 
     #[test]
@@ -602,7 +644,10 @@ mod tests {
         let fields = vec![make_field("title", FieldType::Text, false)];
         let result = resolve_filter("title.sub", "posts", &fields);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("does not support sub-field filtering"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("does not support sub-field filtering"));
     }
 
     #[test]
@@ -610,7 +655,10 @@ mod tests {
         let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship).build()];
         let result = resolve_filter("tags.id", "posts", &fields);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("missing relationship config"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("missing relationship config"));
     }
 
     #[test]
@@ -623,9 +671,10 @@ mod tests {
 
     #[test]
     fn resolve_filter_array_nested_non_group_error() {
-        let fields = vec![make_array_field("items", vec![
-            make_field("name", FieldType::Text, false),
-        ])];
+        let fields = vec![make_array_field(
+            "items",
+            vec![make_field("name", FieldType::Text, false)],
+        )];
         let result = resolve_filter("items.name.deep", "posts", &fields);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Nested dot path"));
@@ -633,9 +682,10 @@ mod tests {
 
     #[test]
     fn resolve_filter_array_invalid_segment() {
-        let fields = vec![make_array_field("items", vec![
-            make_field("name", FieldType::Text, false),
-        ])];
+        let fields = vec![make_array_field(
+            "items",
+            vec![make_field("name", FieldType::Text, false)],
+        )];
         let result = resolve_filter("items.bad field", "posts", &fields);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid segment"));
@@ -643,9 +693,13 @@ mod tests {
 
     #[test]
     fn resolve_filter_blocks_invalid_segment() {
-        let fields = vec![make_blocks_field("content", vec![
-            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
-        ])];
+        let fields = vec![make_blocks_field(
+            "content",
+            vec![make_block_def(
+                "text",
+                vec![make_field("body", FieldType::Textarea, false)],
+            )],
+        )];
         let result = resolve_filter("content.bad field", "posts", &fields);
         assert!(result.is_err());
     }
@@ -654,9 +708,10 @@ mod tests {
 
     #[test]
     fn walk_block_simple_scalar() {
-        let block_defs = vec![
-            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
-        ];
+        let block_defs = vec![make_block_def(
+            "text",
+            vec![make_field("body", FieldType::Textarea, false)],
+        )];
         let (joins, expr) = walk_block_fields(&["body"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.body')");
@@ -668,21 +723,24 @@ mod tests {
         grp.fields = vec![make_field("title", FieldType::Text, false)];
         let block_defs = vec![make_block_def("rich", vec![grp])];
 
-        let (joins, expr) = walk_block_fields(&["meta", "title"], &block_defs, "posts_content").unwrap();
+        let (joins, expr) =
+            walk_block_fields(&["meta", "title"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.meta.title')");
     }
 
     #[test]
     fn walk_block_nested_blocks_scalar() {
-        let inner_blocks = vec![
-            make_block_def("quote", vec![make_field("text", FieldType::Text, false)]),
-        ];
+        let inner_blocks = vec![make_block_def(
+            "quote",
+            vec![make_field("text", FieldType::Text, false)],
+        )];
         let mut nested = make_field("nested", FieldType::Blocks, false);
         nested.blocks = inner_blocks;
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
-        let (joins, expr) = walk_block_fields(&["nested", "text"], &block_defs, "posts_content").unwrap();
+        let (joins, expr) =
+            walk_block_fields(&["nested", "text"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.nested')");
         assert_eq!(joins[0].1, "j0");
@@ -692,9 +750,10 @@ mod tests {
     #[test]
     fn walk_block_deeply_nested() {
         // content -> nested -> deeper -> field
-        let deep_blocks = vec![
-            make_block_def("leaf", vec![make_field("field", FieldType::Text, false)]),
-        ];
+        let deep_blocks = vec![make_block_def(
+            "leaf",
+            vec![make_field("field", FieldType::Text, false)],
+        )];
         let mut deeper = make_field("deeper", FieldType::Blocks, false);
         deeper.blocks = deep_blocks;
         let mid_blocks = vec![make_block_def("mid", vec![deeper])];
@@ -702,9 +761,9 @@ mod tests {
         nested.blocks = mid_blocks;
         let block_defs = vec![make_block_def("top", vec![nested])];
 
-        let (joins, expr) = walk_block_fields(
-            &["nested", "deeper", "field"], &block_defs, "posts_content"
-        ).unwrap();
+        let (joins, expr) =
+            walk_block_fields(&["nested", "deeper", "field"], &block_defs, "posts_content")
+                .unwrap();
         assert_eq!(joins.len(), 2);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.nested')");
         assert_eq!(joins[0].1, "j0");
@@ -715,16 +774,16 @@ mod tests {
 
     #[test]
     fn walk_block_nested_block_type() {
-        let inner_blocks = vec![
-            make_block_def("quote", vec![make_field("text", FieldType::Text, false)]),
-        ];
+        let inner_blocks = vec![make_block_def(
+            "quote",
+            vec![make_field("text", FieldType::Text, false)],
+        )];
         let mut nested = make_field("nested", FieldType::Blocks, false);
         nested.blocks = inner_blocks;
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
-        let (joins, expr) = walk_block_fields(
-            &["nested", "_block_type"], &block_defs, "posts_content"
-        ).unwrap();
+        let (joins, expr) =
+            walk_block_fields(&["nested", "_block_type"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(expr, "json_extract(j0.value, '$._block_type')");
     }
@@ -732,20 +791,24 @@ mod tests {
     #[test]
     fn walk_block_group_then_nested_blocks() {
         // group "sidebar" → blocks "nested" → scalar "body"
-        let inner_blocks = vec![
-            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
-        ];
+        let inner_blocks = vec![make_block_def(
+            "text",
+            vec![make_field("body", FieldType::Textarea, false)],
+        )];
         let mut nested = make_field("nested", FieldType::Blocks, false);
         nested.blocks = inner_blocks;
         let mut sidebar = make_field("sidebar", FieldType::Group, false);
         sidebar.fields = vec![nested];
         let block_defs = vec![make_block_def("layout", vec![sidebar])];
 
-        let (joins, expr) = walk_block_fields(
-            &["sidebar", "nested", "body"], &block_defs, "posts_content"
-        ).unwrap();
+        let (joins, expr) =
+            walk_block_fields(&["sidebar", "nested", "body"], &block_defs, "posts_content")
+                .unwrap();
         assert_eq!(joins.len(), 1);
-        assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.sidebar.nested')");
+        assert_eq!(
+            joins[0].0,
+            "json_extract(posts_content.data, '$.sidebar.nested')"
+        );
         assert_eq!(expr, "json_extract(j0.value, '$.body')");
     }
 
@@ -759,9 +822,10 @@ mod tests {
 
     #[test]
     fn walk_block_scalar_with_subpath_error() {
-        let block_defs = vec![
-            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
-        ];
+        let block_defs = vec![make_block_def(
+            "text",
+            vec![make_field("body", FieldType::Textarea, false)],
+        )];
         let result = walk_block_fields(&["body", "extra"], &block_defs, "table");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Scalar field"));
@@ -774,25 +838,34 @@ mod tests {
         let block_defs = vec![make_block_def("outer", vec![nested])];
         let result = walk_block_fields(&["nested"], &block_defs, "table");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must end on a scalar"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must end on a scalar"));
     }
 
     #[test]
     fn walk_block_block_type_not_last_error() {
-        let block_defs = vec![
-            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
-        ];
+        let block_defs = vec![make_block_def(
+            "text",
+            vec![make_field("body", FieldType::Textarea, false)],
+        )];
         let result = walk_block_fields(&["_block_type", "extra"], &block_defs, "table");
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("_block_type must be the last segment"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("_block_type must be the last segment"));
     }
 
     #[test]
     fn walk_block_top_level_block_type_without_joins() {
-        let block_defs = vec![
-            make_block_def("text", vec![make_field("body", FieldType::Textarea, false)]),
-        ];
-        let (joins, expr) = walk_block_fields(&["_block_type"], &block_defs, "posts_content").unwrap();
+        let block_defs = vec![make_block_def(
+            "text",
+            vec![make_field("body", FieldType::Textarea, false)],
+        )];
+        let (joins, expr) =
+            walk_block_fields(&["_block_type"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$._block_type')");
     }
@@ -803,7 +876,8 @@ mod tests {
         arr.fields = vec![make_field("name", FieldType::Text, false)];
         let block_defs = vec![make_block_def("list", vec![arr])];
 
-        let (joins, expr) = walk_block_fields(&["items", "name"], &block_defs, "posts_content").unwrap();
+        let (joins, expr) =
+            walk_block_fields(&["items", "name"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.items')");
         assert_eq!(expr, "json_extract(j0.value, '$.name')");
@@ -812,9 +886,10 @@ mod tests {
     #[test]
     fn walk_block_nested_block_type_with_group_path() {
         // group "meta" → nested blocks → _block_type
-        let inner_blocks = vec![
-            make_block_def("quote", vec![make_field("text", FieldType::Text, false)]),
-        ];
+        let inner_blocks = vec![make_block_def(
+            "quote",
+            vec![make_field("text", FieldType::Text, false)],
+        )];
         let mut nested = make_field("nested", FieldType::Blocks, false);
         nested.blocks = inner_blocks;
         let mut meta = make_field("meta", FieldType::Group, false);
@@ -822,10 +897,16 @@ mod tests {
         let block_defs = vec![make_block_def("rich", vec![meta])];
 
         let (joins, expr) = walk_block_fields(
-            &["meta", "nested", "_block_type"], &block_defs, "posts_content"
-        ).unwrap();
+            &["meta", "nested", "_block_type"],
+            &block_defs,
+            "posts_content",
+        )
+        .unwrap();
         assert_eq!(joins.len(), 1);
-        assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.meta.nested')");
+        assert_eq!(
+            joins[0].0,
+            "json_extract(posts_content.data, '$.meta.nested')"
+        );
         assert_eq!(expr, "json_extract(j0.value, '$._block_type')");
     }
 }

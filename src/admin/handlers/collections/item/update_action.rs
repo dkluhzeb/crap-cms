@@ -5,11 +5,11 @@ use axum::{
 };
 use std::collections::HashMap;
 
+use crate::admin::handlers::collections::forms::parse_multipart_form;
+use crate::admin::handlers::collections::shared::do_update;
+use crate::admin::handlers::shared::redirect_response;
 use crate::admin::AdminState;
 use crate::core::auth::AuthUser;
-use crate::admin::handlers::collections::shared::do_update;
-use crate::admin::handlers::collections::forms::parse_multipart_form;
-use crate::admin::handlers::shared::redirect_response;
 
 /// POST handler for update/delete (HTML forms use _method override).
 pub async fn update_action(
@@ -33,7 +33,8 @@ pub async fn update_action(
             }
         }
     } else {
-        let Form(data) = match Form::<HashMap<String, String>>::from_request(request, &state).await {
+        let Form(data) = match Form::<HashMap<String, String>>::from_request(request, &state).await
+        {
             Ok(f) => f,
             Err(e) => {
                 tracing::error!("Form parse error: {}", e);
@@ -46,7 +47,11 @@ pub async fn update_action(
     let method = form_data.remove("_method").unwrap_or_default();
 
     if method.eq_ignore_ascii_case("DELETE") {
-        return crate::admin::handlers::collections::shared::delete_action_impl(&state, &slug, &id, &auth_user).await.into_response();
+        return crate::admin::handlers::collections::shared::delete_action_impl(
+            &state, &slug, &id, &auth_user,
+        )
+        .await
+        .into_response();
     }
 
     do_update(&state, &slug, &id, form_data, file, &auth_user).await

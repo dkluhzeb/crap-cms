@@ -3,40 +3,47 @@
 use anyhow::Result;
 use std::collections::HashMap;
 
-use crate::core::field::{FieldDefinition, FieldType};
-use super::super::super::{LocaleContext};
+use super::super::super::LocaleContext;
 use super::super::arrays::set_array_rows;
 use super::super::blocks::set_block_rows;
 use super::super::relationships::{set_polymorphic_related, set_related_ids};
 use super::resolve_join_locale;
+use crate::core::field::{FieldDefinition, FieldType};
 
 /// Parse polymorphic relationship values from form data.
 /// Accepts "collection/id" composite strings from either a JSON array or comma-separated string.
 fn parse_polymorphic_values(val: &serde_json::Value) -> Vec<(String, String)> {
     let raw_items: Vec<String> = match val {
-        serde_json::Value::Array(arr) => {
-            arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-        }
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect(),
         serde_json::Value::String(s) => {
             if s.is_empty() {
                 Vec::new()
             } else {
-                s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
             }
         }
         _ => Vec::new(),
     };
-    raw_items.into_iter().filter_map(|item| {
-        // Parse "collection/id" format
-        if let Some(pos) = item.find('/') {
-            let col = item[..pos].to_string();
-            let id = item[pos + 1..].to_string();
-            if !col.is_empty() && !id.is_empty() {
-                return Some((col, id));
+    raw_items
+        .into_iter()
+        .filter_map(|item| {
+            // Parse "collection/id" format
+            if let Some(pos) = item.find('/') {
+                let col = item[..pos].to_string();
+                let id = item[pos + 1..].to_string();
+                if !col.is_empty() && !id.is_empty() {
+                    return Some((col, id));
+                }
             }
-        }
-        None
-    }).collect()
+            None
+        })
+        .collect()
 }
 
 /// Save join table data for has-many relationships and arrays.
@@ -62,22 +69,40 @@ pub fn save_join_table_data(
                             if rc.is_polymorphic() {
                                 // Polymorphic: values are "collection/id" composite strings
                                 let items = parse_polymorphic_values(val);
-                                set_polymorphic_related(conn, slug, &field.name, parent_id, &items, locale_ref)?;
+                                set_polymorphic_related(
+                                    conn,
+                                    slug,
+                                    &field.name,
+                                    parent_id,
+                                    &items,
+                                    locale_ref,
+                                )?;
                             } else {
                                 let ids = match val {
-                                    serde_json::Value::Array(arr) => {
-                                        arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect()
-                                    }
+                                    serde_json::Value::Array(arr) => arr
+                                        .iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect(),
                                     serde_json::Value::String(s) => {
                                         if s.is_empty() {
                                             Vec::new()
                                         } else {
-                                            s.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+                                            s.split(',')
+                                                .map(|s| s.trim().to_string())
+                                                .filter(|s| !s.is_empty())
+                                                .collect()
                                         }
                                     }
                                     _ => Vec::new(),
                                 };
-                                set_related_ids(conn, slug, &field.name, parent_id, &ids, locale_ref)?;
+                                set_related_ids(
+                                    conn,
+                                    slug,
+                                    &field.name,
+                                    parent_id,
+                                    &ids,
+                                    locale_ref,
+                                )?;
                             }
                         }
                     }
@@ -86,25 +111,37 @@ pub fn save_join_table_data(
             FieldType::Array => {
                 if let Some(val) = data.get(&field.name) {
                     let rows = match val {
-                        serde_json::Value::Array(arr) => {
-                            arr.iter().filter_map(|v| {
+                        serde_json::Value::Array(arr) => arr
+                            .iter()
+                            .filter_map(|v| {
                                 if let serde_json::Value::Object(map) = v {
-                                    let row: HashMap<String, String> = map.iter().map(|(k, v)| {
-                                        let s = match v {
-                                            serde_json::Value::String(s) => s.clone(),
-                                            other => other.to_string(),
-                                        };
-                                        (k.clone(), s)
-                                    }).collect();
+                                    let row: HashMap<String, String> = map
+                                        .iter()
+                                        .map(|(k, v)| {
+                                            let s = match v {
+                                                serde_json::Value::String(s) => s.clone(),
+                                                other => other.to_string(),
+                                            };
+                                            (k.clone(), s)
+                                        })
+                                        .collect();
                                     Some(row)
                                 } else {
                                     None
                                 }
-                            }).collect()
-                        }
+                            })
+                            .collect(),
                         _ => Vec::new(),
                     };
-                    set_array_rows(conn, slug, &field.name, parent_id, &rows, &field.fields, locale_ref)?;
+                    set_array_rows(
+                        conn,
+                        slug,
+                        &field.name,
+                        parent_id,
+                        &rows,
+                        &field.fields,
+                        locale_ref,
+                    )?;
                 }
             }
             FieldType::Blocks => {
@@ -132,12 +169,14 @@ pub fn save_join_table_data(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rusqlite::Connection;
-    use crate::core::field::*;
-    use super::super::super::relationships::{find_related_ids, find_polymorphic_related, set_related_ids};
     use super::super::super::blocks::find_block_rows;
-    use super::super::test_helpers::{setup_join_db, posts_def_with_joins};
+    use super::super::super::relationships::{
+        find_polymorphic_related, find_related_ids, set_related_ids,
+    };
+    use super::super::test_helpers::{posts_def_with_joins, setup_join_db};
+    use super::*;
+    use crate::core::field::*;
+    use rusqlite::Connection;
 
     #[test]
     fn save_join_table_data_has_many_from_string() {
@@ -189,10 +228,13 @@ mod tests {
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
-        data.insert("content".to_string(), serde_json::json!([
-            {"_block_type": "paragraph", "text": "Hello"},
-            {"_block_type": "image", "url": "/img.jpg"},
-        ]));
+        data.insert(
+            "content".to_string(),
+            serde_json::json!([
+                {"_block_type": "paragraph", "text": "Hello"},
+                {"_block_type": "image", "url": "/img.jpg"},
+            ]),
+        );
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
@@ -214,7 +256,11 @@ mod tests {
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
         let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
-        assert_eq!(found, vec!["t1"], "tags should be preserved when not in data");
+        assert_eq!(
+            found,
+            vec!["t1"],
+            "tags should be preserved when not in data"
+        );
     }
 
     #[test]
@@ -256,55 +302,68 @@ mod tests {
                  PRIMARY KEY (parent_id, related_id, related_collection)
              );
              INSERT INTO posts (id) VALUES ('p1');",
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut refs_rel = RelationshipConfig::new("articles", true);
         refs_rel.polymorphic = vec!["articles".to_string(), "pages".to_string()];
-        let fields = vec![
-            FieldDefinition::builder("refs", FieldType::Relationship)
-                .relationship(refs_rel)
-                .build(),
-        ];
+        let fields = vec![FieldDefinition::builder("refs", FieldType::Relationship)
+            .relationship(refs_rel)
+            .build()];
 
         let mut data = HashMap::new();
-        data.insert("refs".to_string(), serde_json::json!("articles/a1,pages/pg1"));
+        data.insert(
+            "refs".to_string(),
+            serde_json::json!("articles/a1,pages/pg1"),
+        );
 
         save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
 
         let found = find_polymorphic_related(&conn, "posts", "refs", "p1", None).unwrap();
-        assert_eq!(found, vec![
-            ("articles".to_string(), "a1".to_string()),
-            ("pages".to_string(), "pg1".to_string()),
-        ]);
+        assert_eq!(
+            found,
+            vec![
+                ("articles".to_string(), "a1".to_string()),
+                ("pages".to_string(), "pg1".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn parse_polymorphic_values_from_json_array() {
         let val = serde_json::json!(["articles/a1", "pages/pg1"]);
         let items = parse_polymorphic_values(&val);
-        assert_eq!(items, vec![
-            ("articles".to_string(), "a1".to_string()),
-            ("pages".to_string(), "pg1".to_string()),
-        ]);
+        assert_eq!(
+            items,
+            vec![
+                ("articles".to_string(), "a1".to_string()),
+                ("pages".to_string(), "pg1".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn parse_polymorphic_values_from_comma_string() {
         let val = serde_json::json!("articles/a1,pages/pg1");
         let items = parse_polymorphic_values(&val);
-        assert_eq!(items, vec![
-            ("articles".to_string(), "a1".to_string()),
-            ("pages".to_string(), "pg1".to_string()),
-        ]);
+        assert_eq!(
+            items,
+            vec![
+                ("articles".to_string(), "a1".to_string()),
+                ("pages".to_string(), "pg1".to_string()),
+            ]
+        );
     }
 
     #[test]
     fn parse_polymorphic_values_skips_invalid() {
         let val = serde_json::json!(["articles/a1", "no_slash", "", "pages/"]);
         let items = parse_polymorphic_values(&val);
-        assert_eq!(items, vec![
-            ("articles".to_string(), "a1".to_string()),
-        ], "Should skip entries without valid collection/id format");
+        assert_eq!(
+            items,
+            vec![("articles".to_string(), "a1".to_string()),],
+            "Should skip entries without valid collection/id format"
+        );
     }
 
     #[test]

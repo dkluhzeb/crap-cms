@@ -9,7 +9,10 @@ pub enum DisplayConditionResult {
     Bool(bool),
     /// Lua returned a condition table. Can be evaluated client-side.
     /// `visible` is the initial evaluation result; `condition` is the JSON to embed.
-    Table { condition: serde_json::Value, visible: bool },
+    Table {
+        condition: serde_json::Value,
+        visible: bool,
+    },
 }
 
 /// Events that trigger hooks.

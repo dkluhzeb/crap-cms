@@ -62,7 +62,9 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
 
     tracing::info!(
         "Lua init: loaded {} collection(s), {} global(s), {} job(s){}",
-        n_collections, n_globals, n_jobs,
+        n_collections,
+        n_globals,
+        n_jobs,
         if has_init { ", executed init.lua" } else { "" }
     );
 
@@ -78,7 +80,9 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
         "#,
         config_str
     );
-    lua.load(&code).exec().context("Failed to set package paths")?;
+    lua.load(&code)
+        .exec()
+        .context("Failed to set package paths")?;
     Ok(())
 }
 
@@ -88,9 +92,7 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
     let mut entries: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("Failed to read {} directory: {}", kind, dir.display()))?
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path().extension().is_some_and(|ext| ext == "lua")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "lua"))
         .collect();
 
     entries.sort_by_key(|e| e.file_name());
@@ -102,7 +104,10 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
             Some(n) => n.to_string_lossy(),
             None => continue,
         };
-        let label = lua.app_data_ref::<api::VmLabel>().map(|l| l.0.clone()).unwrap_or_else(|| "lua".into());
+        let label = lua
+            .app_data_ref::<api::VmLabel>()
+            .map(|l| l.0.clone())
+            .unwrap_or_else(|| "lua".into());
         tracing::debug!("[lua:{label}] Loading {kind}: {name}");
 
         let code = std::fs::read_to_string(&path)

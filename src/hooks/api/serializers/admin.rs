@@ -1,10 +1,13 @@
 //! Lua table serializer for field admin configuration.
 
-use mlua::{Lua, Table};
 use super::helpers::localized_string_to_lua;
+use mlua::{Lua, Table};
 
 /// Convert a `FieldAdmin` to a Lua table. Returns `None` if no properties are set.
-pub(super) fn field_admin_to_lua(lua: &Lua, admin: &crate::core::field::FieldAdmin) -> mlua::Result<Option<Table>> {
+pub(super) fn field_admin_to_lua(
+    lua: &Lua,
+    admin: &crate::core::field::FieldAdmin,
+) -> mlua::Result<Option<Table>> {
     let tbl = lua.create_table()?;
     let mut has_any = false;
     if let Some(ref l) = admin.label {
@@ -19,13 +22,22 @@ pub(super) fn field_admin_to_lua(lua: &Lua, admin: &crate::core::field::FieldAdm
         tbl.set("description", localized_string_to_lua(lua, d)?)?;
         has_any = true;
     }
-    if admin.hidden { tbl.set("hidden", true)?; has_any = true; }
-    if admin.readonly { tbl.set("readonly", true)?; has_any = true; }
+    if admin.hidden {
+        tbl.set("hidden", true)?;
+        has_any = true;
+    }
+    if admin.readonly {
+        tbl.set("readonly", true)?;
+        has_any = true;
+    }
     if let Some(ref w) = admin.width {
         tbl.set("width", w.as_str())?;
         has_any = true;
     }
-    if !admin.collapsed { tbl.set("collapsed", false)?; has_any = true; }
+    if !admin.collapsed {
+        tbl.set("collapsed", false)?;
+        has_any = true;
+    }
     if let Some(ref lf) = admin.label_field {
         tbl.set("label_field", lf.as_str())?;
         has_any = true;
@@ -111,7 +123,9 @@ mod tests {
     fn test_field_admin_to_lua_with_properties() {
         let lua = mlua::Lua::new();
         let admin = crate::core::field::FieldAdmin::builder()
-            .label(crate::core::field::LocalizedString::Plain("Title".to_string()))
+            .label(crate::core::field::LocalizedString::Plain(
+                "Title".to_string(),
+            ))
             .hidden(true)
             .build();
         let result = field_admin_to_lua(&lua, &admin).unwrap();

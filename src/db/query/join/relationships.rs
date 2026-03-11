@@ -16,7 +16,10 @@ pub fn set_related_ids(
     let table_name = format!("{}_{}", collection, field);
     if let Some(loc) = locale {
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2", table_name),
+            &format!(
+                "DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2",
+                table_name
+            ),
             rusqlite::params![parent_id, loc],
         )?;
     } else {
@@ -64,9 +67,12 @@ pub fn find_related_ids(
             table_name
         );
         let mut stmt = conn.prepare(&sql)?;
-        let ids: Vec<String> = stmt.query_map(rusqlite::params![parent_id, loc], |row| {
-            row.get::<_, String>(0)
-        })?.filter_map(|r| r.ok()).collect();
+        let ids: Vec<String> = stmt
+            .query_map(rusqlite::params![parent_id, loc], |row| {
+                row.get::<_, String>(0)
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(ids)
     } else {
         let sql = format!(
@@ -74,9 +80,10 @@ pub fn find_related_ids(
             table_name
         );
         let mut stmt = conn.prepare(&sql)?;
-        let ids: Vec<String> = stmt.query_map([parent_id], |row| {
-            row.get::<_, String>(0)
-        })?.filter_map(|r| r.ok()).collect();
+        let ids: Vec<String> = stmt
+            .query_map([parent_id], |row| row.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(ids)
     }
 }
@@ -95,7 +102,10 @@ pub fn set_polymorphic_related(
     let table_name = format!("{}_{}", collection, field);
     if let Some(loc) = locale {
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2", table_name),
+            &format!(
+                "DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2",
+                table_name
+            ),
             rusqlite::params![parent_id, loc],
         )?;
         let sql = format!(
@@ -139,9 +149,12 @@ pub fn find_polymorphic_related(
             table_name
         );
         let mut stmt = conn.prepare(&sql)?;
-        let items: Vec<(String, String)> = stmt.query_map(rusqlite::params![parent_id, loc], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let items: Vec<(String, String)> = stmt
+            .query_map(rusqlite::params![parent_id, loc], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(items)
     } else {
         let sql = format!(
@@ -149,9 +162,12 @@ pub fn find_polymorphic_related(
             table_name
         );
         let mut stmt = conn.prepare(&sql)?;
-        let items: Vec<(String, String)> = stmt.query_map([parent_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?.filter_map(|r| r.ok()).collect();
+        let items: Vec<(String, String)> = stmt
+            .query_map([parent_id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
         Ok(items)
     }
 }
@@ -169,7 +185,8 @@ mod tests {
                 related_id TEXT,
                 _order INTEGER
             );",
-        ).unwrap();
+        )
+        .unwrap();
         conn
     }
 
@@ -183,7 +200,8 @@ mod tests {
                 _order INTEGER,
                 PRIMARY KEY (parent_id, related_id, related_collection)
             );",
-        ).unwrap();
+        )
+        .unwrap();
         conn
     }
 
@@ -196,7 +214,11 @@ mod tests {
         set_related_ids(&conn, "posts", "tags", "p1", &ids, None).unwrap();
 
         let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
-        assert_eq!(found, vec!["t1", "t2", "t3"], "Should return IDs in insertion order");
+        assert_eq!(
+            found,
+            vec!["t1", "t2", "t3"],
+            "Should return IDs in insertion order"
+        );
     }
 
     #[test]
@@ -209,7 +231,11 @@ mod tests {
         set_related_ids(&conn, "posts", "tags", "p1", &ids_new, None).unwrap();
 
         let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
-        assert_eq!(found, vec!["t3", "t4"], "Old IDs should be replaced by new ones");
+        assert_eq!(
+            found,
+            vec!["t3", "t4"],
+            "Old IDs should be replaced by new ones"
+        );
     }
 
     #[test]
@@ -220,7 +246,10 @@ mod tests {
         set_related_ids(&conn, "posts", "tags", "p1", &[], None).unwrap();
 
         let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
-        assert!(found.is_empty(), "Should return empty list after setting empty IDs");
+        assert!(
+            found.is_empty(),
+            "Should return empty list after setting empty IDs"
+        );
     }
 
     #[test]
@@ -233,10 +262,27 @@ mod tests {
                 _order INTEGER,
                 _locale TEXT
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
-        set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string(), "t2".to_string()], Some("en")).unwrap();
-        set_related_ids(&conn, "posts", "tags", "p1", &["t3".to_string()], Some("de")).unwrap();
+        set_related_ids(
+            &conn,
+            "posts",
+            "tags",
+            "p1",
+            &["t1".to_string(), "t2".to_string()],
+            Some("en"),
+        )
+        .unwrap();
+        set_related_ids(
+            &conn,
+            "posts",
+            "tags",
+            "p1",
+            &["t3".to_string()],
+            Some("de"),
+        )
+        .unwrap();
 
         let en = find_related_ids(&conn, "posts", "tags", "p1", Some("en")).unwrap();
         assert_eq!(en, vec!["t1", "t2"]);
@@ -245,7 +291,15 @@ mod tests {
         assert_eq!(de, vec!["t3"]);
 
         // Replacing en should not affect de
-        set_related_ids(&conn, "posts", "tags", "p1", &["t4".to_string()], Some("en")).unwrap();
+        set_related_ids(
+            &conn,
+            "posts",
+            "tags",
+            "p1",
+            &["t4".to_string()],
+            Some("en"),
+        )
+        .unwrap();
         let en = find_related_ids(&conn, "posts", "tags", "p1", Some("en")).unwrap();
         assert_eq!(en, vec!["t4"]);
         let de = find_related_ids(&conn, "posts", "tags", "p1", Some("de")).unwrap();
@@ -265,11 +319,14 @@ mod tests {
         set_polymorphic_related(&conn, "posts", "refs", "p1", &items, None).unwrap();
 
         let found = find_polymorphic_related(&conn, "posts", "refs", "p1", None).unwrap();
-        assert_eq!(found, vec![
-            ("articles".to_string(), "a1".to_string()),
-            ("pages".to_string(), "pg1".to_string()),
-            ("articles".to_string(), "a2".to_string()),
-        ]);
+        assert_eq!(
+            found,
+            vec![
+                ("articles".to_string(), "a1".to_string()),
+                ("pages".to_string(), "pg1".to_string()),
+                ("articles".to_string(), "a2".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -285,10 +342,13 @@ mod tests {
         set_polymorphic_related(&conn, "posts", "refs", "p1", &new_items, None).unwrap();
 
         let found = find_polymorphic_related(&conn, "posts", "refs", "p1", None).unwrap();
-        assert_eq!(found, vec![
-            ("pages".to_string(), "pg1".to_string()),
-            ("pages".to_string(), "pg2".to_string()),
-        ]);
+        assert_eq!(
+            found,
+            vec![
+                ("pages".to_string(), "pg1".to_string()),
+                ("pages".to_string(), "pg2".to_string()),
+            ]
+        );
     }
 
     #[test]
@@ -302,7 +362,8 @@ mod tests {
                 _order INTEGER,
                 _locale TEXT
             );",
-        ).unwrap();
+        )
+        .unwrap();
 
         let items_en = vec![
             ("articles".to_string(), "a1".to_string()),
@@ -322,7 +383,15 @@ mod tests {
         assert_eq!(de[0], ("articles".to_string(), "a2".to_string()));
 
         // Replacing en should not affect de
-        set_polymorphic_related(&conn, "posts", "refs", "p1", &[("pages".to_string(), "pg2".to_string())], Some("en")).unwrap();
+        set_polymorphic_related(
+            &conn,
+            "posts",
+            "refs",
+            "p1",
+            &[("pages".to_string(), "pg2".to_string())],
+            Some("en"),
+        )
+        .unwrap();
         let en2 = find_polymorphic_related(&conn, "posts", "refs", "p1", Some("en")).unwrap();
         assert_eq!(en2.len(), 1);
         assert_eq!(en2[0], ("pages".to_string(), "pg2".to_string()));

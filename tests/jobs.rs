@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::job::{JobStatus};
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::core::job::JobStatus;
 use crap_cms::db::query::jobs as job_query;
+use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -11,7 +11,12 @@ fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/job_tests")
 }
 
-fn setup() -> (tempfile::TempDir, crap_cms::db::DbPool, crap_cms::core::SharedRegistry, HookRunner) {
+fn setup() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    crap_cms::core::SharedRegistry,
+    HookRunner,
+) {
     let config_dir = fixture_dir();
     let config = CrapConfig::default();
     let registry = hooks::init_lua(&config_dir, &config).expect("Failed to init Lua");
@@ -38,9 +43,18 @@ fn job_definitions_loaded_from_lua() {
     let (_tmp, _pool, registry, _runner) = setup();
     let reg = registry.read().unwrap();
 
-    assert!(reg.get_job("test_create_post").is_some(), "test_create_post job should be defined");
-    assert!(reg.get_job("test_failing_job").is_some(), "test_failing_job should be defined");
-    assert!(reg.get_job("test_echo_job").is_some(), "test_echo_job should be defined");
+    assert!(
+        reg.get_job("test_create_post").is_some(),
+        "test_create_post job should be defined"
+    );
+    assert!(
+        reg.get_job("test_failing_job").is_some(),
+        "test_failing_job should be defined"
+    );
+    assert!(
+        reg.get_job("test_echo_job").is_some(),
+        "test_echo_job should be defined"
+    );
 
     let def = reg.get_job("test_create_post").unwrap();
     assert_eq!(def.handler, "jobs.test_job.create_post");
@@ -58,8 +72,15 @@ fn insert_job_creates_pending_row() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run = job_query::insert_job(&conn, "test_echo_job", "{\"key\":\"value\"}", "manual", 1, "default")
-        .expect("insert_job");
+    let run = job_query::insert_job(
+        &conn,
+        "test_echo_job",
+        "{\"key\":\"value\"}",
+        "manual",
+        1,
+        "default",
+    )
+    .expect("insert_job");
 
     assert!(!run.id.is_empty());
     assert_eq!(run.slug, "test_echo_job");
@@ -80,9 +101,14 @@ fn claim_pending_jobs_marks_running() {
 
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
 
-    assert_eq!(claimed.len(), 2, "Should claim both pending jobs (different slugs)");
+    assert_eq!(
+        claimed.len(),
+        2,
+        "Should claim both pending jobs (different slugs)"
+    );
     for job in &claimed {
         assert_eq!(job.status, JobStatus::Running);
     }
@@ -96,7 +122,8 @@ fn complete_job_sets_completed_status() {
     let run = job_query::insert_job(&conn, "test_echo_job", "{}", "manual", 1, "default").unwrap();
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
-    let claimed = job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
+    let claimed =
+        job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
     assert_eq!(claimed.len(), 1);
 
     job_query::complete_job(&conn, &run.id, Some("{\"done\":true}")).unwrap();
@@ -113,7 +140,8 @@ fn fail_job_with_retry_resets_to_pending() {
     let conn = pool.get().expect("DB connection");
 
     // max_attempts = 3 (retries=2 means 3 total attempts)
-    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default").unwrap();
+    let run =
+        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 3, "default").unwrap();
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
@@ -122,7 +150,11 @@ fn fail_job_with_retry_resets_to_pending() {
     job_query::fail_job(&conn, &run.id, "test error", true).unwrap();
 
     let fetched = job_query::get_job_run(&conn, &run.id).unwrap().unwrap();
-    assert_eq!(fetched.status, JobStatus::Pending, "Should reset to pending for retry");
+    assert_eq!(
+        fetched.status,
+        JobStatus::Pending,
+        "Should reset to pending for retry"
+    );
     assert_eq!(fetched.attempt, 1, "Attempt should be incremented");
     assert_eq!(fetched.error.as_deref(), Some("test error"));
 }
@@ -132,7 +164,8 @@ fn fail_job_no_retry_stays_failed() {
     let (_tmp, pool, _registry, _runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let run = job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default").unwrap();
+    let run =
+        job_query::insert_job(&conn, "test_failing_job", "{}", "manual", 1, "default").unwrap();
     let running_counts = job_query::count_running_per_slug(&conn).unwrap();
     let job_concurrency = std::collections::HashMap::new();
     job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
@@ -183,9 +216,18 @@ fn count_running_jobs() {
     job_query::claim_pending_jobs(&conn, 5, &running_counts, &job_concurrency).unwrap();
 
     assert_eq!(job_query::count_running(&conn, None).unwrap(), 2);
-    assert_eq!(job_query::count_running(&conn, Some("test_echo_job")).unwrap(), 1);
-    assert_eq!(job_query::count_running(&conn, Some("test_create_post")).unwrap(), 1);
-    assert_eq!(job_query::count_running(&conn, Some("nonexistent")).unwrap(), 0);
+    assert_eq!(
+        job_query::count_running(&conn, Some("test_echo_job")).unwrap(),
+        1
+    );
+    assert_eq!(
+        job_query::count_running(&conn, Some("test_create_post")).unwrap(),
+        1
+    );
+    assert_eq!(
+        job_query::count_running(&conn, Some("nonexistent")).unwrap(),
+        0
+    );
 }
 
 #[test]
@@ -203,7 +245,8 @@ fn purge_old_jobs() {
     conn.execute(
         "UPDATE _crap_jobs SET created_at = datetime('now', '-3600 seconds') WHERE id = ?1",
         [&run.id],
-    ).unwrap();
+    )
+    .unwrap();
 
     // Purge with 60 seconds threshold should purge the backdated completed job
     let purged = job_query::purge_old_jobs(&conn, 60).unwrap();
@@ -221,14 +264,16 @@ fn execute_echo_job_via_hook_runner() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let result = runner.run_job_handler(
-        "jobs.test_job.echo",
-        "test_echo_job",
-        "{\"hello\":\"world\"}",
-        1,
-        1,
-        &conn,
-    ).expect("run_job_handler");
+    let result = runner
+        .run_job_handler(
+            "jobs.test_job.echo",
+            "test_echo_job",
+            "{\"hello\":\"world\"}",
+            1,
+            1,
+            &conn,
+        )
+        .expect("run_job_handler");
 
     assert!(result.is_some(), "Echo job should return a result");
     let json: serde_json::Value = serde_json::from_str(result.as_deref().unwrap()).unwrap();
@@ -241,14 +286,16 @@ fn execute_job_that_creates_document() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    runner.run_job_handler(
-        "jobs.test_job.create_post",
-        "test_create_post",
-        "{\"title\":\"From Job\"}",
-        1,
-        1,
-        &tx,
-    ).expect("run_job_handler");
+    runner
+        .run_job_handler(
+            "jobs.test_job.create_post",
+            "test_create_post",
+            "{\"title\":\"From Job\"}",
+            1,
+            1,
+            &tx,
+        )
+        .expect("run_job_handler");
 
     tx.commit().expect("Commit");
 
@@ -258,11 +305,14 @@ fn execute_job_that_creates_document() {
     drop(reg);
 
     let conn2 = pool.get().expect("DB connection");
-    let docs = query::find(&conn2, "posts", &def, &query::FindQuery::default(), None)
-        .expect("find posts");
+    let docs =
+        query::find(&conn2, "posts", &def, &query::FindQuery::default(), None).expect("find posts");
     assert!(!docs.is_empty(), "Job should have created a post");
     let doc = &docs[0];
-    assert_eq!(doc.fields.get("title").and_then(|v| v.as_str()), Some("From Job"));
+    assert_eq!(
+        doc.fields.get("title").and_then(|v| v.as_str()),
+        Some("From Job")
+    );
 }
 
 #[test]
@@ -270,18 +320,16 @@ fn execute_failing_job_returns_error() {
     let (_tmp, pool, _registry, runner) = setup();
     let conn = pool.get().expect("DB connection");
 
-    let result = runner.run_job_handler(
-        "jobs.test_job.fail",
-        "test_failing_job",
-        "{}",
-        1,
-        3,
-        &conn,
-    );
+    let result =
+        runner.run_job_handler("jobs.test_job.fail", "test_failing_job", "{}", 1, 3, &conn);
 
     assert!(result.is_err(), "Failing job should return an error");
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("intentional failure"), "Error should contain the failure message: {}", err_msg);
+    assert!(
+        err_msg.contains("intentional failure"),
+        "Error should contain the failure message: {}",
+        err_msg
+    );
 }
 
 // ── Stale Job Detection ─────────────────────────────────────────────────
@@ -300,7 +348,8 @@ fn find_stale_jobs_detects_running() {
     conn.execute(
         "UPDATE _crap_jobs SET heartbeat_at = datetime('now', '-600 seconds') WHERE id = ?1",
         [&run.id],
-    ).unwrap();
+    )
+    .unwrap();
 
     // With threshold 60 seconds, the backdated heartbeat should be detected as stale
     let stale = job_query::find_stale_jobs(&conn, 60).unwrap();

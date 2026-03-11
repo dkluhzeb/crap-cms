@@ -3,7 +3,7 @@
 use anyhow::{Context as _, Result};
 use std::path::Path;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Path to the PID file within the config directory.
 fn pid_file_path(config_dir: &Path) -> std::path::PathBuf {
@@ -35,7 +35,10 @@ fn check_existing_pid(config_dir: &Path) {
             // Check if process is still running (kill -0)
             let running = std::path::Path::new(&format!("/proc/{}", pid)).exists();
             if running {
-                warn!("PID file exists with PID {} — another instance may be running", pid);
+                warn!(
+                    "PID file exists with PID {} — another instance may be running",
+                    pid
+                );
             }
         }
     }
@@ -46,7 +49,9 @@ fn check_existing_pid(config_dir: &Path) {
 pub fn detach(config_dir: &Path) -> Result<()> {
     let exe = std::env::current_exe().context("Failed to determine executable path")?;
 
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
     check_existing_pid(&config_dir);
 
     let child = std::process::Command::new(&exe)
@@ -67,7 +72,9 @@ pub fn detach(config_dir: &Path) -> Result<()> {
 /// Start the admin UI and gRPC servers.
 #[cfg(not(tarpaulin_include))]
 pub async fn run(config_dir: &Path) -> Result<()> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
 
     // PID file management
     check_existing_pid(&config_dir);
@@ -76,8 +83,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     info!("Config directory: {}", config_dir.display());
 
     // Load config
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
     info!("Configuration loaded");
 
     // Validate configuration
@@ -89,14 +95,18 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     }
 
     // Initialize Lua VM and load collections/globals
-    let registry = crate::hooks::init_lua(&config_dir, &cfg)
-        .context("Failed to initialize Lua VM")?;
+    let registry =
+        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
 
     {
-        let reg = registry.read()
+        let reg = registry
+            .read()
             .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
-        info!("Loaded {} collection(s), {} global(s)",
-            reg.collections.len(), reg.globals.len());
+        info!(
+            "Loaded {} collection(s), {} global(s)",
+            reg.collections.len(),
+            reg.globals.len()
+        );
         for (slug, col) in &reg.collections {
             info!("  Collection '{}': {} field(s)", slug, col.fields.len());
         }
@@ -104,7 +114,8 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // Auto-generate Lua type definitions on startup
     {
-        let reg = registry.read()
+        let reg = registry
+            .read()
             .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
         match crate::typegen::generate(&config_dir, &reg) {
             Ok(path) => info!("Generated type definitions: {}", path.display()),
@@ -132,7 +143,8 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         info!("Running on_init hooks...");
         let mut conn = pool.get().context("DB connection for on_init")?;
         let tx = conn.transaction().context("Transaction for on_init")?;
-        hook_runner.run_system_hooks_with_conn(&cfg.hooks.on_init, &tx)
+        hook_runner
+            .run_system_hooks_with_conn(&cfg.hooks.on_init, &tx)
             .context("on_init hooks failed")?;
         tx.commit().context("Commit on_init transaction")?;
         info!("on_init hooks completed");
@@ -152,9 +164,16 @@ pub async fn run(config_dir: &Path) -> Result<()> {
                     let secret = nanoid::nanoid!(64);
                     let _ = std::fs::create_dir_all(secret_path.parent().expect("path has parent"));
                     if let Err(e) = std::fs::write(&secret_path, &secret) {
-                        warn!("Failed to write JWT secret to {}: {}", secret_path.display(), e);
+                        warn!(
+                            "Failed to write JWT secret to {}: {}",
+                            secret_path.display(),
+                            e
+                        );
                     } else {
-                        warn!("Generated and persisted JWT secret to {}", secret_path.display());
+                        warn!(
+                            "Generated and persisted JWT secret to {}",
+                            secret_path.display()
+                        );
                     }
                     secret
                 }
@@ -163,9 +182,16 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             let secret = nanoid::nanoid!(64);
             let _ = std::fs::create_dir_all(secret_path.parent().expect("path has parent"));
             if let Err(e) = std::fs::write(&secret_path, &secret) {
-                warn!("Failed to write JWT secret to {}: {}", secret_path.display(), e);
+                warn!(
+                    "Failed to write JWT secret to {}: {}",
+                    secret_path.display(),
+                    e
+                );
             } else {
-                warn!("Generated and persisted JWT secret to {}", secret_path.display());
+                warn!(
+                    "Generated and persisted JWT secret to {}",
+                    secret_path.display()
+                );
             }
             secret
         }
@@ -175,22 +201,29 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // Log auth collection info
     {
-        let reg = registry.read()
+        let reg = registry
+            .read()
             .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
-        let auth_collections: Vec<_> = reg.collections.values()
+        let auth_collections: Vec<_> = reg
+            .collections
+            .values()
             .filter(|d| d.is_auth_collection())
             .map(|d| d.slug.as_str())
             .collect();
         if auth_collections.is_empty() {
             info!("No auth collections — admin UI and API are open");
         } else {
-            info!("Auth collections: {:?} — admin login required", auth_collections);
+            info!(
+                "Auth collections: {:?} — admin login required",
+                auth_collections
+            );
         }
     }
 
     // Warn about per-collection max_file_size exceeding the global body limit
     {
-        let reg = registry.read()
+        let reg = registry
+            .read()
             .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
         let global_max = cfg.upload.max_file_size;
         for (slug, def) in &reg.collections {
@@ -217,7 +250,10 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     // Create EventBus for live updates (if enabled)
     let event_bus = if cfg.live.enabled {
         let bus = crate::core::event::EventBus::new(cfg.live.channel_capacity);
-        info!("Live event streaming enabled (capacity: {})", cfg.live.channel_capacity);
+        info!(
+            "Live event streaming enabled (capacity: {})",
+            cfg.live.channel_capacity
+        );
         Some(bus)
     } else {
         info!("Live event streaming disabled");
@@ -234,8 +270,8 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm = signal(SignalKind::terminate())
-                .expect("Failed to register SIGTERM handler");
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     info!("Received SIGINT, shutting down gracefully...");
@@ -258,8 +294,8 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         #[cfg(unix)]
         {
             use tokio::signal::unix::{signal, SignalKind};
-            let mut sigterm = signal(SignalKind::terminate())
-                .expect("Failed to register SIGTERM handler");
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     warn!("Received second SIGINT, forcing exit");
@@ -318,15 +354,20 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let scheduler_config = cfg.jobs.clone();
     let scheduler_shutdown = shutdown.clone();
     let scheduler_handle = async move {
-        crate::scheduler::start(scheduler_pool, scheduler_runner, scheduler_registry, scheduler_config, scheduler_shutdown)
-            .await
+        crate::scheduler::start(
+            scheduler_pool,
+            scheduler_runner,
+            scheduler_registry,
+            scheduler_config,
+            scheduler_shutdown,
+        )
+        .await
     };
 
-    tokio::try_join!(admin_handle, grpc_handle, scheduler_handle)
-        .map_err(|e| {
-            error!("Server error: {}", e);
-            e
-        })?;
+    tokio::try_join!(admin_handle, grpc_handle, scheduler_handle).map_err(|e| {
+        error!("Server error: {}", e);
+        e
+    })?;
 
     remove_pid_file(&config_dir);
     info!("All servers stopped. Goodbye.");

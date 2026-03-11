@@ -97,16 +97,14 @@ fn setup_service(
 
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
 
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
 
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
 
     let service = ContentService::new(
         db_pool.clone(),
@@ -127,7 +125,11 @@ fn setup_service(
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
 
-    TestSetup { _tmp: tmp, service, pool: db_pool }
+    TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    }
 }
 
 fn make_categories_def() -> CollectionDefinition {
@@ -204,7 +206,6 @@ fn make_posts_with_unique_slug() -> CollectionDefinition {
 
 // ── Depth > 0 in gRPC ────────────────────────────────────────────────────
 
-
 #[tokio::test]
 async fn find_with_where_operators() {
     let ts = setup_service(vec![make_numbered_posts_def()], vec![]);
@@ -241,7 +242,12 @@ async fn find_with_where_operators() {
         .into_inner();
     // Delta has tag="" which may be stored as NULL — SQL NULL != 'red' is NULL (not true)
     // So we expect either 2 (excluding NULL) or 3 (if "" is stored as empty string)
-    assert!(resp.pagination.as_ref().unwrap().total_docs >= 2 && resp.pagination.as_ref().unwrap().total_docs <= 3, "not_equals: got {}", resp.pagination.as_ref().unwrap().total_docs);
+    assert!(
+        resp.pagination.as_ref().unwrap().total_docs >= 2
+            && resp.pagination.as_ref().unwrap().total_docs <= 3,
+        "not_equals: got {}",
+        resp.pagination.as_ref().unwrap().total_docs
+    );
 
     // greater_than
     let resp = ts
@@ -254,7 +260,11 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2, "greater_than 30 → Delta(40), Epsilon(50)");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        2,
+        "greater_than 30 → Delta(40), Epsilon(50)"
+    );
 
     // less_than
     let resp = ts
@@ -267,7 +277,11 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "less_than 20 → Alpha(10)");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "less_than 20 → Alpha(10)"
+    );
 
     // greater_than_or_equal
     let resp = ts
@@ -280,7 +294,11 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 3, "gte 30 → Gamma, Delta, Epsilon");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        3,
+        "gte 30 → Gamma, Delta, Epsilon"
+    );
 
     // less_than_or_equal
     let resp = ts
@@ -293,7 +311,11 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 2, "lte 20 → Alpha, Beta");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        2,
+        "lte 20 → Alpha, Beta"
+    );
 
     // in
     let resp = ts
@@ -306,7 +328,11 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 3, "in [red, green] → Alpha, Gamma, Epsilon");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        3,
+        "in [red, green] → Alpha, Gamma, Epsilon"
+    );
 
     // not_in
     let resp = ts
@@ -320,7 +346,12 @@ async fn find_with_where_operators() {
         .unwrap()
         .into_inner();
     // Delta has tag="" stored as NULL — SQL NOT IN excludes NULLs
-    assert!(resp.pagination.as_ref().unwrap().total_docs >= 1 && resp.pagination.as_ref().unwrap().total_docs <= 2, "not_in [red, green]: got {}", resp.pagination.as_ref().unwrap().total_docs);
+    assert!(
+        resp.pagination.as_ref().unwrap().total_docs >= 1
+            && resp.pagination.as_ref().unwrap().total_docs <= 2,
+        "not_in [red, green]: got {}",
+        resp.pagination.as_ref().unwrap().total_docs
+    );
 
     // like
     let resp = ts
@@ -333,7 +364,11 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "like '%lph%' → Alpha");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "like '%lph%' → Alpha"
+    );
 
     // contains
     let resp = ts
@@ -346,7 +381,11 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(resp.pagination.as_ref().unwrap().total_docs, 1, "contains 'eta' → Beta");
+    assert_eq!(
+        resp.pagination.as_ref().unwrap().total_docs,
+        1,
+        "contains 'eta' → Beta"
+    );
 
     // exists (tag is non-empty)
     let resp = ts
@@ -359,7 +398,10 @@ async fn find_with_where_operators() {
         .await
         .unwrap()
         .into_inner();
-    assert!(resp.pagination.as_ref().unwrap().total_docs >= 3, "exists: at least the non-empty tags");
+    assert!(
+        resp.pagination.as_ref().unwrap().total_docs >= 3,
+        "exists: at least the non-empty tags"
+    );
 
     // not_exists (tag is empty/null)
     let resp = ts
@@ -373,7 +415,10 @@ async fn find_with_where_operators() {
         .unwrap()
         .into_inner();
     // Delta has tag="" which may or may not count as "not exists" depending on impl
-    assert!(resp.pagination.as_ref().unwrap().total_docs <= 2, "not_exists: empty/null tags");
+    assert!(
+        resp.pagination.as_ref().unwrap().total_docs <= 2,
+        "not_exists: empty/null tags"
+    );
 }
 
 // ── Group 2: Unique Constraints (gRPC) ────────────────────────────────────
@@ -467,25 +512,36 @@ return M
         reg.register_collection(def);
     }
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
+        db_pool.clone(),
+        Registry::snapshot(&registry),
+        hook_runner,
+        config.auth.secret.clone(),
+        &config.depth,
+        &config.pagination,
+        config.email.clone(),
+        email_renderer,
+        config.server.clone(),
+        None,
+        config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
         config.auth.password_policy.clone(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
+    let ts = TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    };
 
     // Valid score passes
     let resp = ts
@@ -570,25 +626,36 @@ return M
         reg.register_collection(def);
     }
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
+        db_pool.clone(),
+        Registry::snapshot(&registry),
+        hook_runner,
+        config.auth.secret.clone(),
+        &config.depth,
+        &config.pagination,
+        config.email.clone(),
+        email_renderer,
+        config.server.clone(),
+        None,
+        config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
         config.auth.password_policy.clone(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
+    let ts = TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    };
 
     // Create without providing slug — hook should auto-generate
     let doc = ts
@@ -656,25 +723,36 @@ return M
         reg.register_collection(def);
     }
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
+        db_pool.clone(),
+        Registry::snapshot(&registry),
+        hook_runner,
+        config.auth.secret.clone(),
+        &config.depth,
+        &config.pagination,
+        config.email.clone(),
+        email_renderer,
+        config.server.clone(),
+        None,
+        config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
         config.auth.password_policy.clone(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
+    let ts = TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    };
 
     ts.service
         .create(Request::new(content::CreateRequest {
@@ -754,25 +832,36 @@ return M
         reg.register_collection(def);
     }
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
+        db_pool.clone(),
+        Registry::snapshot(&registry),
+        hook_runner,
+        config.auth.secret.clone(),
+        &config.depth,
+        &config.pagination,
+        config.email.clone(),
+        email_renderer,
+        config.server.clone(),
+        None,
+        config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
         config.auth.password_policy.clone(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
+    let ts = TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    };
 
     ts.service
         .create(Request::new(content::CreateRequest {
@@ -847,25 +936,36 @@ return M
         reg.register_collection(def);
     }
     migrate::sync_all(&db_pool, &registry, &config.locale).expect("sync schema");
-    let hook_runner =
-        HookRunner::builder()
-            .config_dir(tmp.path())
-            .registry(registry.clone())
-            .config(&config)
-            .build()
-            .expect("create hook runner");
-    let email_renderer =
-        Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
+    let hook_runner = HookRunner::builder()
+        .config_dir(tmp.path())
+        .registry(registry.clone())
+        .config(&config)
+        .build()
+        .expect("create hook runner");
+    let email_renderer = Arc::new(EmailRenderer::new(tmp.path()).expect("create email renderer"));
     let service = ContentService::new(
-        db_pool.clone(), Registry::snapshot(&registry), hook_runner, config.auth.secret.clone(), &config.depth, &config.pagination,
-        config.email.clone(), email_renderer, config.server.clone(), None, config.locale.clone(),
+        db_pool.clone(),
+        Registry::snapshot(&registry),
+        hook_runner,
+        config.auth.secret.clone(),
+        &config.depth,
+        &config.pagination,
+        config.email.clone(),
+        email_renderer,
+        config.server.clone(),
+        None,
+        config.locale.clone(),
         tmp.path().to_path_buf(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300)),
         config.auth.reset_token_expiry,
         config.auth.password_policy.clone(),
         std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900)),
     );
-    let ts = TestSetup { _tmp: tmp, service, pool: db_pool };
+    let ts = TestSetup {
+        _tmp: tmp,
+        service,
+        pool: db_pool,
+    };
 
     // Valid title succeeds
     let resp = ts

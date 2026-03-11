@@ -6,11 +6,11 @@ mod poly;
 use anyhow::Result;
 use std::collections::HashSet;
 
-use crate::core::Document;
-use crate::core::field::FieldType;
-use crate::db::query::{FindQuery, FilterClause, Filter, FilterOp};
-use super::{PopulateContext, PopulateOpts, PopulateCache, document_to_json};
 use super::single::populate_relationships_cached;
+use super::{document_to_json, PopulateCache, PopulateContext, PopulateOpts};
+use crate::core::field::FieldType;
+use crate::core::Document;
+use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
 
 /// Batch-populate relationship fields across a slice of documents.
 ///
@@ -70,9 +70,27 @@ pub fn populate_relationships_batch_cached(
 
         if rel.is_polymorphic() {
             if rel.has_many {
-                poly::batch_poly_has_many(conn, registry, docs, &field.name, &visited, effective_depth, locale_ctx, cache)?;
+                poly::batch_poly_has_many(
+                    conn,
+                    registry,
+                    docs,
+                    &field.name,
+                    &visited,
+                    effective_depth,
+                    locale_ctx,
+                    cache,
+                )?;
             } else {
-                poly::batch_poly_has_one(conn, registry, docs, &field.name, &visited, effective_depth, locale_ctx, cache)?;
+                poly::batch_poly_has_one(
+                    conn,
+                    registry,
+                    docs,
+                    &field.name,
+                    &visited,
+                    effective_depth,
+                    locale_ctx,
+                    cache,
+                )?;
             }
         } else {
             let rel_def = match registry.get_collection(&rel.collection) {
@@ -81,9 +99,31 @@ pub fn populate_relationships_batch_cached(
             };
 
             if rel.has_many {
-                nonpoly::batch_nonpoly_has_many(conn, registry, docs, &field.name, &rel.collection, &rel_def, &visited, effective_depth, locale_ctx, cache)?;
+                nonpoly::batch_nonpoly_has_many(
+                    conn,
+                    registry,
+                    docs,
+                    &field.name,
+                    &rel.collection,
+                    &rel_def,
+                    &visited,
+                    effective_depth,
+                    locale_ctx,
+                    cache,
+                )?;
             } else {
-                nonpoly::batch_nonpoly_has_one(conn, registry, docs, &field.name, &rel.collection, &rel_def, &visited, effective_depth, locale_ctx, cache)?;
+                nonpoly::batch_nonpoly_has_one(
+                    conn,
+                    registry,
+                    docs,
+                    &field.name,
+                    &rel.collection,
+                    &rel_def,
+                    &visited,
+                    effective_depth,
+                    locale_ctx,
+                    cache,
+                )?;
             }
         }
     }
@@ -120,24 +160,44 @@ pub fn populate_relationships_batch_cached(
                     op: FilterOp::Equals(doc.id.clone()),
                 })];
                 let fq = fq;
-                if let Ok(matched_docs) = crate::db::query::read::find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
+                if let Ok(matched_docs) =
+                    crate::db::query::read::find(conn, &jc.collection, &target_def, &fq, locale_ctx)
+                {
                     let mut populated = Vec::new();
                     for mut matched_doc in matched_docs {
-                        crate::db::query::hydrate_document(conn, &jc.collection, &target_def.fields, &mut matched_doc, None, locale_ctx)?;
+                        crate::db::query::hydrate_document(
+                            conn,
+                            &jc.collection,
+                            &target_def.fields,
+                            &mut matched_doc,
+                            None,
+                            locale_ctx,
+                        )?;
                         if let Some(ref uc) = target_def.upload {
                             if uc.enabled {
                                 crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
                             }
                         }
                         populate_relationships_cached(
-                            &PopulateContext { conn, registry, collection_slug: &jc.collection, def: &target_def },
-                            &mut matched_doc, &mut doc_visited,
-                            &PopulateOpts { depth: depth - 1, select: None, locale_ctx },
+                            &PopulateContext {
+                                conn,
+                                registry,
+                                collection_slug: &jc.collection,
+                                def: &target_def,
+                            },
+                            &mut matched_doc,
+                            &mut doc_visited,
+                            &PopulateOpts {
+                                depth: depth - 1,
+                                select: None,
+                                locale_ctx,
+                            },
                             cache,
                         )?;
                         populated.push(document_to_json(&matched_doc, &jc.collection));
                     }
-                    doc.fields.insert(field.name.clone(), serde_json::Value::Array(populated));
+                    doc.fields
+                        .insert(field.name.clone(), serde_json::Value::Array(populated));
                 }
             }
         }
@@ -148,12 +208,12 @@ pub fn populate_relationships_batch_cached(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::test_helpers::*;
-    use super::super::{PopulateContext, PopulateOpts, PopulateCache};
-    use rusqlite::Connection;
-    use crate::core::{Document, Registry};
+    use super::super::{PopulateCache, PopulateContext, PopulateOpts};
+    use super::*;
     use crate::core::field::*;
+    use crate::core::{Document, Registry};
+    use rusqlite::Connection;
 
     // ── Basic depth/empty guard ───────────────────────────────────────────────
 
@@ -165,11 +225,21 @@ mod tests {
 
         let mut docs = vec![];
         populate_relationships_batch_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
             &mut docs,
-            &PopulateOpts { depth: 0, select: None, locale_ctx: None },
+            &PopulateOpts {
+                depth: 0,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
         // Empty docs + depth 0 → no-op, no error
     }
 
@@ -181,11 +251,21 @@ mod tests {
 
         let mut docs = vec![];
         populate_relationships_batch_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
             &mut docs,
-            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
     }
 
     // ── Select filtering ──────────────────────────────────────────────────────
@@ -204,29 +284,44 @@ mod tests {
         author_field.relationship = Some(RelationshipConfig::new("authors", false));
         let mut editor_field = make_field("editor", FieldType::Relationship);
         editor_field.relationship = Some(RelationshipConfig::new("authors", false));
-        let posts_def = make_collection_def("posts", vec![
-            make_field("title", FieldType::Text),
-            author_field,
-            editor_field,
-        ]);
+        let posts_def = make_collection_def(
+            "posts",
+            vec![
+                make_field("title", FieldType::Text),
+                author_field,
+                editor_field,
+            ],
+        );
         let mut registry = Registry::new();
         registry.register_collection(posts_def.clone());
         registry.register_collection(make_authors_def());
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields.insert("author".to_string(), serde_json::json!("a1"));
-            d.fields.insert("editor".to_string(), serde_json::json!("a1"));
+            d.fields
+                .insert("author".to_string(), serde_json::json!("a1"));
+            d.fields
+                .insert("editor".to_string(), serde_json::json!("a1"));
             d
         }];
 
         let select = vec!["author".to_string()];
         populate_relationships_batch_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
             &mut docs,
-            &PopulateOpts { depth: 1, select: Some(&select), locale_ctx: None },
+            &PopulateOpts {
+                depth: 1,
+                select: Some(&select),
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // author should be populated
         assert!(docs[0].fields["author"].is_object());
@@ -244,26 +339,37 @@ mod tests {
         let mut rel = RelationshipConfig::new("authors", false);
         rel.max_depth = Some(0);
         author_field.relationship = Some(rel);
-        let posts_def = make_collection_def("posts", vec![
-            make_field("title", FieldType::Text),
-            author_field,
-        ]);
+        let posts_def = make_collection_def(
+            "posts",
+            vec![make_field("title", FieldType::Text), author_field],
+        );
         let mut registry = Registry::new();
         registry.register_collection(posts_def.clone());
         registry.register_collection(make_authors_def());
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields.insert("author".to_string(), serde_json::json!("a1"));
+            d.fields
+                .insert("author".to_string(), serde_json::json!("a1"));
             d
         }];
 
         populate_relationships_batch_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
             &mut docs,
-            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // max_depth=0 should prevent population
         assert_eq!(docs[0].fields["author"].as_str(), Some("a1"));
@@ -285,16 +391,27 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields.insert("author".to_string(), serde_json::json!("nonexistent"));
+            d.fields
+                .insert("author".to_string(), serde_json::json!("nonexistent"));
             d
         }];
 
         populate_relationships_batch_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
             &mut docs,
-            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Missing doc stays as ID string
         assert_eq!(docs[0].fields["author"].as_str(), Some("nonexistent"));
@@ -311,22 +428,34 @@ mod tests {
         registry.register_collection(authors_def.clone());
         registry.register_collection(posts_def);
 
-        let mut docs = vec![
-            {
-                let mut d = Document::new("a1".to_string());
-                d.fields.insert("name".to_string(), serde_json::json!("Alice"));
-                d
-            },
-        ];
+        let mut docs = vec![{
+            let mut d = Document::new("a1".to_string());
+            d.fields
+                .insert("name".to_string(), serde_json::json!("Alice"));
+            d
+        }];
 
         populate_relationships_batch_cached(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "authors", def: &authors_def },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "authors",
+                def: &authors_def,
+            },
             &mut docs,
-            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+            },
             &PopulateCache::new(),
-        ).unwrap();
+        )
+        .unwrap();
 
-        let posts = docs[0].fields.get("posts").expect("join field should be populated");
+        let posts = docs[0]
+            .fields
+            .get("posts")
+            .expect("join field should be populated");
         let arr = posts.as_array().unwrap();
         assert_eq!(arr.len(), 2, "Alice has 2 posts");
     }
@@ -341,17 +470,33 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields.insert("author".to_string(), serde_json::json!("a1"));
+            d.fields
+                .insert("author".to_string(), serde_json::json!("a1"));
             d
         }];
 
         // wrapper should succeed (creates fresh cache internally)
         super::super::populate_relationships_batch(
-            &PopulateContext { conn: &conn, registry: &registry, collection_slug: "posts", def: &posts_def },
+            &PopulateContext {
+                conn: &conn,
+                registry: &registry,
+                collection_slug: "posts",
+                def: &posts_def,
+            },
             &mut docs,
-            &PopulateOpts { depth: 1, select: None, locale_ctx: None },
-        ).unwrap();
+            &PopulateOpts {
+                depth: 1,
+                select: None,
+                locale_ctx: None,
+            },
+        )
+        .unwrap();
         assert!(docs[0].fields["author"].is_object());
-        assert_eq!(docs[0].fields["author"].get("name").and_then(|v| v.as_str()), Some("Alice"));
+        assert_eq!(
+            docs[0].fields["author"]
+                .get("name")
+                .and_then(|v| v.as_str()),
+            Some("Alice")
+        );
     }
 }

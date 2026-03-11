@@ -2,7 +2,7 @@
 
 use anyhow::{bail, Result};
 
-use super::super::{Filter, FilterOp, is_valid_identifier};
+use super::super::{is_valid_identifier, Filter, FilterOp};
 
 /// Generate a SQL condition applying a [`FilterOp`] to an arbitrary SQL
 /// expression, appending bind parameters to `params`.
@@ -46,17 +46,23 @@ pub(super) fn build_op_condition(
             format!("{} <= ?", expr)
         }
         FilterOp::In(vals) => {
-            let placeholders: Vec<_> = vals.iter().map(|v| {
-                params.push(Box::new(v.clone()));
-                "?".to_string()
-            }).collect();
+            let placeholders: Vec<_> = vals
+                .iter()
+                .map(|v| {
+                    params.push(Box::new(v.clone()));
+                    "?".to_string()
+                })
+                .collect();
             format!("{} IN ({})", expr, placeholders.join(", "))
         }
         FilterOp::NotIn(vals) => {
-            let placeholders: Vec<_> = vals.iter().map(|v| {
-                params.push(Box::new(v.clone()));
-                "?".to_string()
-            }).collect();
+            let placeholders: Vec<_> = vals
+                .iter()
+                .map(|v| {
+                    params.push(Box::new(v.clone()));
+                    "?".to_string()
+                })
+                .collect();
             format!("{} NOT IN ({})", expr, placeholders.join(", "))
         }
         FilterOp::Exists => {
@@ -79,7 +85,10 @@ pub fn build_filter_condition(
     params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
 ) -> Result<String> {
     if !is_valid_identifier(&f.field) {
-        bail!("Invalid field name '{}': must be alphanumeric/underscore", f.field);
+        bail!(
+            "Invalid field name '{}': must be alphanumeric/underscore",
+            f.field
+        );
     }
     Ok(build_op_condition(&f.field, &f.op, params))
 }
@@ -91,7 +100,10 @@ mod tests {
 
     #[test]
     fn filter_condition_equals() {
-        let f = Filter { field: "status".into(), op: FilterOp::Equals("active".into()) };
+        let f = Filter {
+            field: "status".into(),
+            op: FilterOp::Equals("active".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "status = ?");
@@ -100,7 +112,10 @@ mod tests {
 
     #[test]
     fn filter_condition_not_equals() {
-        let f = Filter { field: "status".into(), op: FilterOp::NotEquals("draft".into()) };
+        let f = Filter {
+            field: "status".into(),
+            op: FilterOp::NotEquals("draft".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "status != ?");
@@ -109,7 +124,10 @@ mod tests {
 
     #[test]
     fn filter_condition_like() {
-        let f = Filter { field: "title".into(), op: FilterOp::Like("%hello%".into()) };
+        let f = Filter {
+            field: "title".into(),
+            op: FilterOp::Like("%hello%".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "title LIKE ?");
@@ -118,7 +136,10 @@ mod tests {
 
     #[test]
     fn filter_condition_contains() {
-        let f = Filter { field: "body".into(), op: FilterOp::Contains("search term".into()) };
+        let f = Filter {
+            field: "body".into(),
+            op: FilterOp::Contains("search term".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "body LIKE ? ESCAPE '\\'");
@@ -127,7 +148,10 @@ mod tests {
 
     #[test]
     fn filter_condition_greater_than() {
-        let f = Filter { field: "age".into(), op: FilterOp::GreaterThan("18".into()) };
+        let f = Filter {
+            field: "age".into(),
+            op: FilterOp::GreaterThan("18".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "age > ?");
@@ -136,7 +160,10 @@ mod tests {
 
     #[test]
     fn filter_condition_less_than() {
-        let f = Filter { field: "price".into(), op: FilterOp::LessThan("100".into()) };
+        let f = Filter {
+            field: "price".into(),
+            op: FilterOp::LessThan("100".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "price < ?");
@@ -145,7 +172,10 @@ mod tests {
 
     #[test]
     fn filter_condition_greater_than_or_equal() {
-        let f = Filter { field: "score".into(), op: FilterOp::GreaterThanOrEqual("50".into()) };
+        let f = Filter {
+            field: "score".into(),
+            op: FilterOp::GreaterThanOrEqual("50".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "score >= ?");
@@ -154,7 +184,10 @@ mod tests {
 
     #[test]
     fn filter_condition_less_than_or_equal() {
-        let f = Filter { field: "rating".into(), op: FilterOp::LessThanOrEqual("5".into()) };
+        let f = Filter {
+            field: "rating".into(),
+            op: FilterOp::LessThanOrEqual("5".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "rating <= ?");
@@ -187,7 +220,10 @@ mod tests {
 
     #[test]
     fn filter_condition_exists() {
-        let f = Filter { field: "avatar".into(), op: FilterOp::Exists };
+        let f = Filter {
+            field: "avatar".into(),
+            op: FilterOp::Exists,
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "avatar IS NOT NULL");
@@ -196,7 +232,10 @@ mod tests {
 
     #[test]
     fn filter_condition_not_exists() {
-        let f = Filter { field: "deleted_at".into(), op: FilterOp::NotExists };
+        let f = Filter {
+            field: "deleted_at".into(),
+            op: FilterOp::NotExists,
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let sql = build_filter_condition(&f, &mut params).unwrap();
         assert_eq!(sql, "deleted_at IS NULL");
@@ -205,10 +244,16 @@ mod tests {
 
     #[test]
     fn filter_condition_rejects_invalid_identifier() {
-        let f = Filter { field: "field name".into(), op: FilterOp::Equals("v".into()) };
+        let f = Filter {
+            field: "field name".into(),
+            op: FilterOp::Equals("v".into()),
+        };
         let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
         let result = build_filter_condition(&f, &mut params);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid field name"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid field name"));
     }
 }

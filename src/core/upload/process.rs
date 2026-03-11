@@ -1,17 +1,17 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{bail, Context as _, Result};
 
 use super::collection_upload::CollectionUpload;
 use super::format::FormatResult;
-use super::uploaded_file::UploadedFile;
 use super::processed_upload::ProcessedUpload;
 use super::processed_upload_builder::ProcessedUploadBuilder;
 use super::queued_conversion_builder::QueuedConversionBuilder;
+use super::resize::{resize_image, save_avif, save_webp};
 use super::size_result_builder::SizeResultBuilder;
-use super::validate::{validate_mime_type, sanitize_filename, mime_matches, format_filesize};
-use super::resize::{resize_image, save_webp, save_avif};
+use super::uploaded_file::UploadedFile;
+use super::validate::{format_filesize, mime_matches, sanitize_filename, validate_mime_type};
 
 /// RAII guard that deletes written files if the upload process fails.
 /// Call `commit()` on success to prevent cleanup.
@@ -22,7 +22,10 @@ struct CleanupGuard {
 
 impl CleanupGuard {
     fn new() -> Self {
-        Self { files: Vec::new(), committed: false }
+        Self {
+            files: Vec::new(),
+            committed: false,
+        }
     }
 
     fn push(&mut self, path: PathBuf) {
@@ -93,8 +96,12 @@ pub fn process_upload(
 
     // Create upload directory
     let upload_dir = config_dir.join("uploads").join(collection_slug);
-    std::fs::create_dir_all(&upload_dir)
-        .with_context(|| format!("Failed to create upload directory: {}", upload_dir.display()))?;
+    std::fs::create_dir_all(&upload_dir).with_context(|| {
+        format!(
+            "Failed to create upload directory: {}",
+            upload_dir.display()
+        )
+    })?;
 
     // Track written files for cleanup on error
     let mut guard = CleanupGuard::new();
@@ -116,8 +123,7 @@ pub fn process_upload(
 
     if is_image {
         // Load image for processing
-        let img = image::load_from_memory(&file.data)
-            .with_context(|| "Failed to decode image")?;
+        let img = image::load_from_memory(&file.data).with_context(|| "Failed to decode image")?;
 
         width = Some(img.width());
         height = Some(img.height());
@@ -128,13 +134,15 @@ pub fn process_upload(
         // Generate image sizes
         for size_def in &upload_config.image_sizes {
             let resized = resize_image(&img, size_def);
-            let (stem, ext) = unique_filename.rsplit_once('.')
+            let (stem, ext) = unique_filename
+                .rsplit_once('.')
                 .unwrap_or((&unique_filename, "bin"));
 
             let size_filename = format!("{}_{}.{}", stem, size_def.name, ext);
             let size_path = upload_dir.join(&size_filename);
-            resized.save(&size_path)
-                .with_context(|| format!("Failed to save resized image: {}", size_path.display()))?;
+            resized.save(&size_path).with_context(|| {
+                format!("Failed to save resized image: {}", size_path.display())
+            })?;
             guard.push(size_path.clone());
 
             let size_url = format!("/uploads/{}/{}", collection_slug, size_filename);
@@ -147,15 +155,17 @@ pub fn process_upload(
                 let webp_url = format!("/uploads/{}/{}", collection_slug, webp_filename);
 
                 if webp_opts.queue {
-                    queued_conversions.push(QueuedConversionBuilder::new(
-                        size_path.to_string_lossy(),
-                        webp_path.to_string_lossy(),
-                    )
-                    .format("webp")
-                    .quality(webp_opts.quality)
-                    .url_column(format!("{}_webp_url", size_def.name))
-                    .url_value(webp_url)
-                    .build());
+                    queued_conversions.push(
+                        QueuedConversionBuilder::new(
+                            size_path.to_string_lossy(),
+                            webp_path.to_string_lossy(),
+                        )
+                        .format("webp")
+                        .quality(webp_opts.quality)
+                        .url_column(format!("{}_webp_url", size_def.name))
+                        .url_value(webp_url)
+                        .build(),
+                    );
                 } else {
                     save_webp(&resized, &webp_path, webp_opts.quality)?;
                     guard.push(webp_path);
@@ -170,15 +180,17 @@ pub fn process_upload(
                 let avif_url = format!("/uploads/{}/{}", collection_slug, avif_filename);
 
                 if avif_opts.queue {
-                    queued_conversions.push(QueuedConversionBuilder::new(
-                        size_path.to_string_lossy(),
-                        avif_path.to_string_lossy(),
-                    )
-                    .format("avif")
-                    .quality(avif_opts.quality)
-                    .url_column(format!("{}_avif_url", size_def.name))
-                    .url_value(avif_url)
-                    .build());
+                    queued_conversions.push(
+                        QueuedConversionBuilder::new(
+                            size_path.to_string_lossy(),
+                            avif_path.to_string_lossy(),
+                        )
+                        .format("avif")
+                        .quality(avif_opts.quality)
+                        .url_column(format!("{}_avif_url", size_def.name))
+                        .url_value(avif_url)
+                        .build(),
+                    );
                 } else {
                     save_avif(&resized, &avif_path, avif_opts.quality)?;
                     guard.push(avif_path);
@@ -186,11 +198,14 @@ pub fn process_upload(
                 }
             }
 
-            sizes.insert(size_def.name.clone(), SizeResultBuilder::new(size_url)
-                .width(resized.width())
-                .height(resized.height())
-                .formats(formats)
-                .build());
+            sizes.insert(
+                size_def.name.clone(),
+                SizeResultBuilder::new(size_url)
+                    .width(resized.width())
+                    .height(resized.height())
+                    .formats(formats)
+                    .build(),
+            );
         }
     }
 
@@ -220,18 +235,15 @@ mod tests {
 
     /// Create a small test PNG image in memory.
     fn create_test_png(width: u32, height: u32) -> Vec<u8> {
-        use image::{ImageBuffer, Rgba, ImageEncoder};
+        use image::{ImageBuffer, ImageEncoder, Rgba};
         let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
             Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
         });
         let mut buf = Vec::new();
         let encoder = image::codecs::png::PngEncoder::new(&mut buf);
-        encoder.write_image(
-            img.as_raw(),
-            width,
-            height,
-            image::ExtendedColorType::Rgba8,
-        ).expect("encode PNG");
+        encoder
+            .write_image(img.as_raw(), width, height, image::ExtendedColorType::Rgba8)
+            .expect("encode PNG");
         buf
     }
 
@@ -247,7 +259,11 @@ mod tests {
         let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("does not match claimed type"), "Error: {}", err);
+        assert!(
+            err.contains("does not match claimed type"),
+            "Error: {}",
+            err
+        );
     }
 
     #[test]
@@ -263,8 +279,16 @@ mod tests {
         // Won't fully succeed (no valid full PNG) but passes the MIME check
         let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
         // Should pass MIME validation (might fail later on image processing, that's OK)
-        let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
-        assert!(!err_msg.contains("does not match claimed type"), "Unexpected mismatch: {}", err_msg);
+        let err_msg = result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            !err_msg.contains("does not match claimed type"),
+            "Unexpected mismatch: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -276,8 +300,16 @@ mod tests {
         let upload_config = CollectionUpload::default();
         let tmp = tempfile::tempdir().unwrap();
         let result = process_upload(file, &upload_config, tmp.path(), "test", 10_000_000);
-        let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
-        assert!(!err_msg.contains("does not match claimed type"), "Unexpected mismatch: {}", err_msg);
+        let err_msg = result
+            .as_ref()
+            .err()
+            .map(|e| e.to_string())
+            .unwrap_or_default();
+        assert!(
+            !err_msg.contains("does not match claimed type"),
+            "Unexpected mismatch: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -292,7 +324,10 @@ mod tests {
         let result = process_upload(file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("text/plain"), "Error should mention the rejected MIME type");
+        assert!(
+            err_msg.contains("text/plain"),
+            "Error should mention the rejected MIME type"
+        );
     }
 
     #[test]
@@ -307,7 +342,10 @@ mod tests {
         let result = process_upload(file, &config, tmp.path(), "posts", 50 * 1024 * 1024);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("exceeds"), "Error should mention size exceeded");
+        assert!(
+            err_msg.contains("exceeds"),
+            "Error should mention size exceeded"
+        );
     }
 
     #[test]
@@ -360,7 +398,10 @@ mod tests {
         assert_eq!(result.mime_type, "image/png");
         assert_eq!(result.width, Some(50));
         assert_eq!(result.height, Some(50));
-        assert!(result.sizes.is_empty(), "No image_sizes configured, so no sizes generated");
+        assert!(
+            result.sizes.is_empty(),
+            "No image_sizes configured, so no sizes generated"
+        );
     }
 
     #[test]
@@ -372,9 +413,11 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![
-            ImageSizeBuilder::new("thumb").width(50).height(50).fit(ImageFit::Cover).build(),
-        ];
+        config.image_sizes = vec![ImageSizeBuilder::new("thumb")
+            .width(50)
+            .height(50)
+            .fit(ImageFit::Cover)
+            .build()];
         let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         assert_eq!(result.width, Some(200));
@@ -399,9 +442,11 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![
-            ImageSizeBuilder::new("small").width(30).height(30).fit(ImageFit::Cover).build(),
-        ];
+        config.image_sizes = vec![ImageSizeBuilder::new("small")
+            .width(30)
+            .height(30)
+            .fit(ImageFit::Cover)
+            .build()];
         config.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: None,
@@ -409,7 +454,10 @@ mod tests {
         let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let small = &result.sizes["small"];
-        assert!(small.formats.contains_key("webp"), "WebP format should be generated");
+        assert!(
+            small.formats.contains_key("webp"),
+            "WebP format should be generated"
+        );
         let webp = &small.formats["webp"];
         assert!(webp.url.ends_with(".webp"));
     }
@@ -423,9 +471,11 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![
-            ImageSizeBuilder::new("small").width(30).height(30).fit(ImageFit::Cover).build(),
-        ];
+        config.image_sizes = vec![ImageSizeBuilder::new("small")
+            .width(30)
+            .height(30)
+            .fit(ImageFit::Cover)
+            .build()];
         config.format_options = FormatOptions {
             webp: None,
             avif: Some(FormatQuality::new(50, false)),
@@ -433,7 +483,10 @@ mod tests {
         let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let small = &result.sizes["small"];
-        assert!(small.formats.contains_key("avif"), "AVIF format should be generated");
+        assert!(
+            small.formats.contains_key("avif"),
+            "AVIF format should be generated"
+        );
         let avif = &small.formats["avif"];
         assert!(avif.url.ends_with(".avif"));
     }
@@ -447,9 +500,11 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![
-            ImageSizeBuilder::new("icon").width(20).height(20).fit(ImageFit::Fill).build(),
-        ];
+        config.image_sizes = vec![ImageSizeBuilder::new("icon")
+            .width(20)
+            .height(20)
+            .fit(ImageFit::Fill)
+            .build()];
         config.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, false)),
             avif: Some(FormatQuality::new(50, false)),
@@ -488,13 +543,19 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![
-            ImageSizeBuilder::new("thumb").width(30).height(30).fit(ImageFit::Cover).build(),
-        ];
+        config.image_sizes = vec![ImageSizeBuilder::new("thumb")
+            .width(30)
+            .height(30)
+            .fit(ImageFit::Cover)
+            .build()];
         let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let thumb = &result.sizes["thumb"];
-        assert!(thumb.url.ends_with("_thumb.png"), "Size URL should have .png extension: {}", thumb.url);
+        assert!(
+            thumb.url.ends_with("_thumb.png"),
+            "Size URL should have .png extension: {}",
+            thumb.url
+        );
     }
 
     #[test]
@@ -506,9 +567,11 @@ mod tests {
             .build();
         let mut config = CollectionUpload::default();
         config.enabled = true;
-        config.image_sizes = vec![
-            ImageSizeBuilder::new("small").width(30).height(30).fit(ImageFit::Cover).build(),
-        ];
+        config.image_sizes = vec![ImageSizeBuilder::new("small")
+            .width(30)
+            .height(30)
+            .fit(ImageFit::Cover)
+            .build()];
         config.format_options = FormatOptions {
             webp: Some(FormatQuality::new(80, true)),
             avif: Some(FormatQuality::new(50, true)),
@@ -518,18 +581,28 @@ mod tests {
 
         // Sizes should be created but format variants should NOT exist on disk
         let small = &result.sizes["small"];
-        assert!(small.formats.is_empty(), "No format variants should be created in queue mode");
+        assert!(
+            small.formats.is_empty(),
+            "No format variants should be created in queue mode"
+        );
         assert!(!small.url.is_empty());
 
         // Should have queued conversions instead
         assert_eq!(result.queued_conversions.len(), 2);
-        let formats: Vec<&str> = result.queued_conversions.iter().map(|q| q.format.as_str()).collect();
+        let formats: Vec<&str> = result
+            .queued_conversions
+            .iter()
+            .map(|q| q.format.as_str())
+            .collect();
         assert!(formats.contains(&"webp"));
         assert!(formats.contains(&"avif"));
 
         // Verify source paths point to the sized image
         for q in &result.queued_conversions {
-            assert!(q.source_path.contains("_small.png"), "Source should be the sized image");
+            assert!(
+                q.source_path.contains("_small.png"),
+                "Source should be the sized image"
+            );
             assert!(!q.url_value.is_empty());
             assert!(!q.url_column.is_empty());
         }

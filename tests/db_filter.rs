@@ -1,13 +1,9 @@
 use std::collections::HashMap;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::collection::{
-    CollectionDefinition,
-    Labels,
-};
+use crap_cms::core::collection::{CollectionDefinition, Labels};
 use crap_cms::core::field::{
-    BlockDefinition, FieldDefinition, FieldType,
-    LocalizedString, RelationshipConfig,
+    BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
 use crap_cms::core::Registry;
 use crap_cms::db::{migrate, ops, pool, query};
@@ -20,7 +16,9 @@ fn make_posts_def() -> CollectionDefinition {
     };
     def.timestamps = true;
     def.fields = vec![
-        FieldDefinition::builder("title", FieldType::Text).required(true).build(),
+        FieldDefinition::builder("title", FieldType::Text)
+            .required(true)
+            .build(),
         FieldDefinition::builder("status", FieldType::Select)
             .default_value(serde_json::json!("draft"))
             .build(),
@@ -44,7 +42,11 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
 
 /// Set up a fresh DB with 5 seeded posts for filter testing.
 /// Returns (pool, def, _tmp). Hold _tmp to keep the temp dir alive.
-fn seed_posts() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn seed_posts() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_posts_def();
@@ -348,9 +350,15 @@ fn select_fields_in_find() {
         // id is always included
         assert!(!doc.id.is_empty());
         // title should be present
-        assert!(doc.fields.contains_key("title"), "title should be in fields");
+        assert!(
+            doc.fields.contains_key("title"),
+            "title should be in fields"
+        );
         // status should NOT be present (not selected)
-        assert!(!doc.fields.contains_key("status"), "status should not be in fields");
+        assert!(
+            !doc.fields.contains_key("status"),
+            "status should not be in fields"
+        );
     }
 }
 
@@ -433,7 +441,11 @@ fn contains_filter_escapes_percent() {
         op: query::FilterOp::Contains("50%".to_string()),
     })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
-    assert_eq!(docs.len(), 1, "Contains('50%') should only match one document");
+    assert_eq!(
+        docs.len(),
+        1,
+        "Contains('50%') should only match one document"
+    );
     assert_eq!(docs[0].get_str("title"), Some("50% off"));
 }
 
@@ -466,7 +478,11 @@ fn contains_filter_escapes_underscore() {
         op: query::FilterOp::Contains("a_b".to_string()),
     })];
     let docs = ops::find_documents(&pool, "posts", &def, &q, None).expect("Find failed");
-    assert_eq!(docs.len(), 1, "Contains('a_b') should only match literal underscore");
+    assert_eq!(
+        docs.len(),
+        1,
+        "Contains('a_b') should only match literal underscore"
+    );
     assert_eq!(docs[0].get_str("title"), Some("a_b"));
 }
 
@@ -482,7 +498,11 @@ fn validate_query_fields_passes_valid() {
     })];
     q.order_by = Some("status".to_string());
     let result = query::validate_query_fields(&def, &q, None);
-    assert!(result.is_ok(), "Valid fields should pass validation: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "Valid fields should pass validation: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -496,7 +516,11 @@ fn validate_query_fields_rejects_invalid_filter() {
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid filter field should be rejected");
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("nonexistent_field"), "Error should mention the invalid field name, got: {}", err_msg);
+    assert!(
+        err_msg.contains("nonexistent_field"),
+        "Error should mention the invalid field name, got: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -507,7 +531,11 @@ fn validate_query_fields_rejects_invalid_order() {
     let result = query::validate_query_fields(&def, &q, None);
     assert!(result.is_err(), "Invalid order_by field should be rejected");
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("nonexistent_field"), "Error should mention the invalid field name, got: {}", err_msg);
+    assert!(
+        err_msg.contains("nonexistent_field"),
+        "Error should mention the invalid field name, got: {}",
+        err_msg
+    );
 }
 
 // ── Dot-notation / sub-field filter integration tests ───────────────────────
@@ -544,18 +572,22 @@ fn make_filterable_def() -> CollectionDefinition {
         FieldDefinition::builder("content", FieldType::Blocks)
             .blocks(vec![
                 BlockDefinition::new("text", vec![make_field("body", FieldType::Textarea)]),
-                BlockDefinition::new("image", vec![
-                    make_field("url", FieldType::Text),
-                    make_field("alt", FieldType::Text),
-                ]),
-                BlockDefinition::new("section", vec![
-                    make_field("heading", FieldType::Text),
-                    FieldDefinition::builder("meta", FieldType::Group)
-                        .fields(vec![
-                            make_field("author", FieldType::Text),
-                        ])
-                        .build(),
-                ]),
+                BlockDefinition::new(
+                    "image",
+                    vec![
+                        make_field("url", FieldType::Text),
+                        make_field("alt", FieldType::Text),
+                    ],
+                ),
+                BlockDefinition::new(
+                    "section",
+                    vec![
+                        make_field("heading", FieldType::Text),
+                        FieldDefinition::builder("meta", FieldType::Group)
+                            .fields(vec![make_field("author", FieldType::Text)])
+                            .build(),
+                    ],
+                ),
             ])
             .build(),
         // Has-many relationship
@@ -566,7 +598,11 @@ fn make_filterable_def() -> CollectionDefinition {
     def
 }
 
-fn setup_filterable() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDefinition) {
+fn setup_filterable() -> (
+    tempfile::TempDir,
+    crap_cms::db::DbPool,
+    CollectionDefinition,
+) {
     let (_tmp, pool) = create_test_pool();
     let registry = Registry::shared();
     let def = make_filterable_def();
@@ -583,7 +619,10 @@ fn setup_filterable() -> (tempfile::TempDir, crap_cms::db::DbPool, CollectionDef
 }
 
 /// Seed two products with different array/block/relationship data.
-fn seed_filterable_products(pool: &crap_cms::db::DbPool, def: &CollectionDefinition) -> (String, String) {
+fn seed_filterable_products(
+    pool: &crap_cms::db::DbPool,
+    def: &CollectionDefinition,
+) -> (String, String) {
     let variants_field = def.fields.iter().find(|f| f.name == "variants").unwrap();
 
     // Product 1: "Widget" with red variant, text block, tagged "sale"
@@ -592,20 +631,33 @@ fn seed_filterable_products(pool: &crap_cms::db::DbPool, def: &CollectionDefinit
     let mut data1 = HashMap::new();
     data1.insert("name".to_string(), "Widget".to_string());
     data1.insert("seo__meta_title".to_string(), "Buy Widget".to_string());
-    data1.insert("seo__meta_description".to_string(), "Best widget".to_string());
+    data1.insert(
+        "seo__meta_description".to_string(),
+        "Best widget".to_string(),
+    );
     let doc1 = query::create(&tx, "products", def, &data1, None).unwrap();
     let id1 = doc1.id.clone();
 
     // Array rows for product 1
-    let rows1 = vec![
-        HashMap::from([
-            ("sku".to_string(), "W-001".to_string()),
-            ("color".to_string(), "red".to_string()),
-            ("size".to_string(), "large".to_string()),
-            ("dimensions".to_string(), r#"{"width":"10","height":"20"}"#.to_string()),
-        ]),
-    ];
-    query::set_array_rows(&tx, "products", "variants", &id1, &rows1, &variants_field.fields, None).unwrap();
+    let rows1 = vec![HashMap::from([
+        ("sku".to_string(), "W-001".to_string()),
+        ("color".to_string(), "red".to_string()),
+        ("size".to_string(), "large".to_string()),
+        (
+            "dimensions".to_string(),
+            r#"{"width":"10","height":"20"}"#.to_string(),
+        ),
+    ])];
+    query::set_array_rows(
+        &tx,
+        "products",
+        "variants",
+        &id1,
+        &rows1,
+        &variants_field.fields,
+        None,
+    )
+    .unwrap();
 
     // Block rows for product 1
     let blocks1 = vec![
@@ -615,7 +667,15 @@ fn seed_filterable_products(pool: &crap_cms::db::DbPool, def: &CollectionDefinit
     query::set_block_rows(&tx, "products", "content", &id1, &blocks1, None).unwrap();
 
     // Relationship for product 1
-    query::set_related_ids(&tx, "products", "tags", &id1, &["tag-sale".to_string()], None).unwrap();
+    query::set_related_ids(
+        &tx,
+        "products",
+        "tags",
+        &id1,
+        &["tag-sale".to_string()],
+        None,
+    )
+    .unwrap();
 
     tx.commit().unwrap();
 
@@ -625,26 +685,47 @@ fn seed_filterable_products(pool: &crap_cms::db::DbPool, def: &CollectionDefinit
     let mut data2 = HashMap::new();
     data2.insert("name".to_string(), "Gadget".to_string());
     data2.insert("seo__meta_title".to_string(), "Buy Gadget".to_string());
-    data2.insert("seo__meta_description".to_string(), "Cool gadget".to_string());
+    data2.insert(
+        "seo__meta_description".to_string(),
+        "Cool gadget".to_string(),
+    );
     let doc2 = query::create(&tx2, "products", def, &data2, None).unwrap();
     let id2 = doc2.id.clone();
 
-    let rows2 = vec![
-        HashMap::from([
-            ("sku".to_string(), "G-001".to_string()),
-            ("color".to_string(), "blue".to_string()),
-            ("size".to_string(), "small".to_string()),
-            ("dimensions".to_string(), r#"{"width":"5","height":"15"}"#.to_string()),
-        ]),
-    ];
-    query::set_array_rows(&tx2, "products", "variants", &id2, &rows2, &variants_field.fields, None).unwrap();
+    let rows2 = vec![HashMap::from([
+        ("sku".to_string(), "G-001".to_string()),
+        ("color".to_string(), "blue".to_string()),
+        ("size".to_string(), "small".to_string()),
+        (
+            "dimensions".to_string(),
+            r#"{"width":"5","height":"15"}"#.to_string(),
+        ),
+    ])];
+    query::set_array_rows(
+        &tx2,
+        "products",
+        "variants",
+        &id2,
+        &rows2,
+        &variants_field.fields,
+        None,
+    )
+    .unwrap();
 
     let blocks2 = vec![
         serde_json::json!({"_block_type": "section", "heading": "About Gadget", "meta": {"author": "Alice"}}),
     ];
     query::set_block_rows(&tx2, "products", "content", &id2, &blocks2, None).unwrap();
 
-    query::set_related_ids(&tx2, "products", "tags", &id2, &["tag-new".to_string()], None).unwrap();
+    query::set_related_ids(
+        &tx2,
+        "products",
+        "tags",
+        &id2,
+        &["tag-new".to_string()],
+        None,
+    )
+    .unwrap();
 
     tx2.commit().unwrap();
 

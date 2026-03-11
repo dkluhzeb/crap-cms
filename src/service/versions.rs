@@ -105,19 +105,19 @@ pub(crate) fn prune_versions(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-    use rusqlite::Connection;
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::query;
-    use crate::service::{persist_create, persist_update, persist_draft_version, persist_unpublish};
+    use crate::service::{
+        persist_create, persist_draft_version, persist_unpublish, persist_update,
+    };
+    use rusqlite::Connection;
+    use std::collections::HashMap;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
         def.timestamps = true;
-        def.fields = vec![
-            FieldDefinition::builder("title", FieldType::Text).build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
         def
     }
 
@@ -146,8 +146,9 @@ mod tests {
                 snapshot TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
         conn
     }
 
@@ -158,7 +159,17 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Versioned".to_string());
 
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(doc.get_str("title"), Some("Versioned"));
 
         let count = query::count_versions(&conn, "posts", &doc.id).unwrap();
@@ -172,7 +183,17 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Draft Post".to_string());
 
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, true).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            true,
+        )
+        .unwrap();
         assert_eq!(doc.get_str("title"), Some("Draft Post"));
 
         let status = query::get_document_status(&conn, "posts", &doc.id).unwrap();
@@ -186,12 +207,32 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "V1".to_string());
 
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         let id = doc.id.clone();
 
         let mut update_data = HashMap::new();
         update_data.insert("title".to_string(), "V2".to_string());
-        persist_update(&conn, "posts", &id, &def, &update_data, &HashMap::new(), None, None).unwrap();
+        persist_update(
+            &conn,
+            "posts",
+            &id,
+            &def,
+            &update_data,
+            &HashMap::new(),
+            None,
+            None,
+        )
+        .unwrap();
 
         let count = query::count_versions(&conn, "posts", &id).unwrap();
         assert_eq!(count, 2, "should have 2 versions after create + update");
@@ -204,17 +245,34 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Published".to_string());
 
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         let id = doc.id.clone();
 
         let mut draft_data = HashMap::new();
         draft_data.insert("title".to_string(), serde_json::json!("Draft Title"));
 
         let existing = persist_draft_version(&conn, "posts", &id, &def, &draft_data, None).unwrap();
-        assert_eq!(existing.get_str("title"), Some("Published"), "main table should not be modified");
+        assert_eq!(
+            existing.get_str("title"),
+            Some("Published"),
+            "main table should not be modified"
+        );
 
         let count = query::count_versions(&conn, "posts", &id).unwrap();
-        assert_eq!(count, 2, "should have 2 versions (create published + draft)");
+        assert_eq!(
+            count, 2,
+            "should have 2 versions (create published + draft)"
+        );
     }
 
     #[test]
@@ -224,7 +282,17 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "To Unpublish".to_string());
 
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         let id = doc.id.clone();
 
         let status = query::get_document_status(&conn, "posts", &id).unwrap();
@@ -237,7 +305,10 @@ mod tests {
         assert_eq!(status.as_deref(), Some("draft"));
 
         let count = query::count_versions(&conn, "posts", &id).unwrap();
-        assert_eq!(count, 2, "should have 2 versions (published create + draft unpublish)");
+        assert_eq!(
+            count, 2,
+            "should have 2 versions (published create + draft unpublish)"
+        );
     }
 
     #[test]
@@ -248,13 +319,33 @@ mod tests {
 
         let mut data = HashMap::new();
         data.insert("title".to_string(), "V1".to_string());
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         let id = doc.id.clone();
 
         for i in 2..=4 {
             let mut update_data = HashMap::new();
             update_data.insert("title".to_string(), format!("V{}", i));
-            persist_update(&conn, "posts", &id, &def, &update_data, &HashMap::new(), None, None).unwrap();
+            persist_update(
+                &conn,
+                "posts",
+                &id,
+                &def,
+                &update_data,
+                &HashMap::new(),
+                None,
+                None,
+            )
+            .unwrap();
         }
 
         let count = query::count_versions(&conn, "posts", &id).unwrap();
@@ -288,8 +379,9 @@ mod tests {
                 snapshot TEXT NOT NULL,
                 created_at TEXT DEFAULT (datetime('now')),
                 updated_at TEXT DEFAULT (datetime('now'))
-            )"
-        ).unwrap();
+            )",
+        )
+        .unwrap();
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();
         let tabs_field = FieldDefinition::builder("page_settings", FieldType::Tabs)
@@ -304,23 +396,39 @@ mod tests {
 
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Page 1".to_string());
-        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), None, None, false).unwrap();
+        let doc = persist_create(
+            &conn,
+            "posts",
+            &def,
+            &data,
+            &HashMap::new(),
+            None,
+            None,
+            false,
+        )
+        .unwrap();
         let id = doc.id.clone();
 
         let mut hook_data: HashMap<String, serde_json::Value> = HashMap::new();
         hook_data.insert("title".to_string(), serde_json::json!("Page 1 Draft"));
-        hook_data.insert("content".to_string(), serde_json::json!([
-            {"_block_type": "hero", "heading": "Welcome"},
-            {"_block_type": "text", "body": "Hello world"},
-        ]));
+        hook_data.insert(
+            "content".to_string(),
+            serde_json::json!([
+                {"_block_type": "hero", "heading": "Welcome"},
+                {"_block_type": "text", "body": "Hello world"},
+            ]),
+        );
 
         persist_draft_version(&conn, "posts", &id, &def, &hook_data, None).unwrap();
 
         let versions = query::list_versions(&conn, "posts", &id, None, None).unwrap();
-        let draft_version = versions.iter().find(|v| v.status == "draft")
+        let draft_version = versions
+            .iter()
+            .find(|v| v.status == "draft")
             .expect("should have a draft version");
         let snapshot = draft_version.snapshot.as_object().unwrap();
-        let content = snapshot.get("content")
+        let content = snapshot
+            .get("content")
             .expect("draft snapshot must include blocks from inside Tabs");
         let blocks = content.as_array().unwrap();
         assert_eq!(blocks.len(), 2, "draft snapshot should have 2 blocks");

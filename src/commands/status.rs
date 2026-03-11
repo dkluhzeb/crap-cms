@@ -43,19 +43,21 @@ fn dir_size(path: &Path) -> u64 {
 
 /// Print project status: collections, globals, migrations, jobs, uploads, locale.
 pub fn run(config_dir: &Path) -> Result<()> {
-    let config_dir = config_dir.canonicalize().unwrap_or_else(|_| config_dir.to_path_buf());
+    let config_dir = config_dir
+        .canonicalize()
+        .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir)
-        .context("Failed to load config")?;
-    let registry = crate::hooks::init_lua(&config_dir, &cfg)
-        .context("Failed to initialize Lua VM")?;
+    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let registry =
+        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
     let pool = crate::db::pool::create_pool(&config_dir, &cfg)
         .context("Failed to create database pool")?;
 
     crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
         .context("Failed to sync database schema")?;
 
-    let reg = registry.read()
+    let reg = registry
+        .read()
         .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
 
     // Config dir
@@ -64,14 +66,22 @@ pub fn run(config_dir: &Path) -> Result<()> {
     // DB file + size
     let db_path = cfg.db_path(&config_dir);
     let db_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
-    println!("Database: {} ({})", db_path.display(), format_bytes(db_size));
+    println!(
+        "Database: {} ({})",
+        db_path.display(),
+        format_bytes(db_size)
+    );
 
     // Uploads size
     let uploads_dir = config_dir.join("uploads");
     if uploads_dir.is_dir() {
         let uploads_size = dir_size(&uploads_dir);
         let file_count: usize = walkdir_count(&uploads_dir);
-        println!("Uploads: {} ({} file(s))", format_bytes(uploads_size), file_count);
+        println!(
+            "Uploads: {} ({} file(s))",
+            format_bytes(uploads_size),
+            file_count
+        );
     }
 
     // Locale
@@ -80,7 +90,11 @@ pub fn run(config_dir: &Path) -> Result<()> {
             "Locales: {} (default: {}{})",
             cfg.locale.locales.join(", "),
             cfg.locale.default_locale,
-            if cfg.locale.fallback { ", fallback enabled" } else { "" }
+            if cfg.locale.fallback {
+                ", fallback enabled"
+            } else {
+                ""
+            }
         );
     }
     println!();
@@ -136,21 +150,28 @@ pub fn run(config_dir: &Path) -> Result<()> {
     let applied = crate::db::migrate::get_applied_migrations(&pool).unwrap_or_default();
     let pending = all_files.iter().filter(|f| !applied.contains(*f)).count();
 
-    println!("Migrations: {} total, {} applied, {} pending",
-        all_files.len(), applied.len(), pending);
+    println!(
+        "Migrations: {} total, {} applied, {} pending",
+        all_files.len(),
+        applied.len(),
+        pending
+    );
 
     // Jobs summary
     let jobs_dir = config_dir.join("jobs");
     if jobs_dir.is_dir() {
         let defined = reg.jobs.len();
-        let running: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM _crap_jobs WHERE status = 'running'",
-            [], |row| row.get(0),
-        ).unwrap_or(0);
+        let running: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM _crap_jobs WHERE status = 'running'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
         let failed_24h = crate::db::query::jobs::count_failed_since(
-            &conn,
-            86400, // 24 hours in seconds
-        ).unwrap_or(0);
+            &conn, 86400, // 24 hours in seconds
+        )
+        .unwrap_or(0);
 
         let mut job_parts = vec![format!("{} defined", defined)];
         if running > 0 {

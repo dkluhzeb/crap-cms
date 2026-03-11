@@ -6,10 +6,10 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use serde_json::{json, Value};
 
-use crate::core::Registry;
 use crate::core::document::Document;
-use crate::db::DbPool;
+use crate::core::Registry;
 use crate::db::query::{self, FindQuery};
+use crate::db::DbPool;
 use crate::hooks::lifecycle::HookRunner;
 
 /// Parse JSON `where` object into filter clauses.
@@ -50,11 +50,14 @@ pub(super) fn parse_where_filters(args: &Value) -> Vec<query::FilterClause> {
                     // Handle array-valued operators (in, not_in)
                     if matches!(op_name.as_str(), "in" | "not_in") {
                         if let Some(arr) = op_value.as_array() {
-                            let vals: Vec<String> = arr.iter().filter_map(|v| match v {
-                                Value::String(s) => Some(s.clone()),
-                                Value::Number(n) => Some(n.to_string()),
-                                _ => None,
-                            }).collect();
+                            let vals: Vec<String> = arr
+                                .iter()
+                                .filter_map(|v| match v {
+                                    Value::String(s) => Some(s.clone()),
+                                    Value::Number(n) => Some(n.to_string()),
+                                    _ => None,
+                                })
+                                .collect();
                             let op = match op_name.as_str() {
                                 "in" => query::FilterOp::In(vals),
                                 "not_in" => query::FilterOp::NotIn(vals),
@@ -133,15 +136,27 @@ pub(super) fn exec_find(
     _runner: &HookRunner,
     config: &crate::config::CrapConfig,
 ) -> Result<String> {
-    let def = registry.collections.get(slug)
+    let def = registry
+        .collections
+        .get(slug)
         .context("Collection not found")?;
     let conn = pool.get().context("DB connection")?;
 
     let limit = args.get("limit").and_then(|v| v.as_i64());
-    let limit = query::apply_pagination_limits(limit, config.pagination.default_limit, config.pagination.max_limit);
+    let limit = query::apply_pagination_limits(
+        limit,
+        config.pagination.default_limit,
+        config.pagination.max_limit,
+    );
     let offset = args.get("offset").and_then(|v| v.as_i64());
-    let order_by = args.get("order_by").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let search = args.get("search").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let order_by = args
+        .get("order_by")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let search = args
+        .get("search")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let depth = args.get("depth").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
     let depth = depth.min(config.depth.max_depth);
     let filters = parse_where_filters(args);
@@ -157,9 +172,16 @@ pub(super) fn exec_find(
 
     if depth > 0 {
         let pop_ctx = query::PopulateContext {
-            conn: &conn, registry, collection_slug: slug, def,
+            conn: &conn,
+            registry,
+            collection_slug: slug,
+            def,
         };
-        let pop_opts = query::PopulateOpts { depth, select: None, locale_ctx: None };
+        let pop_opts = query::PopulateOpts {
+            depth,
+            select: None,
+            locale_ctx: None,
+        };
         query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)?;
     }
 
@@ -179,14 +201,20 @@ pub(super) fn exec_find_by_id(
     pool: &DbPool,
     config: &crate::config::CrapConfig,
 ) -> Result<String> {
-    let id = args.get("id").and_then(|v| v.as_str())
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
 
-    let def = registry.collections.get(slug)
+    let def = registry
+        .collections
+        .get(slug)
         .context("Collection not found")?;
     let conn = pool.get().context("DB connection")?;
 
-    let depth = args.get("depth").and_then(|v| v.as_i64())
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_i64())
         .unwrap_or(config.depth.default_depth as i64) as i32;
     let depth = depth.min(config.depth.max_depth);
 
@@ -198,9 +226,16 @@ pub(super) fn exec_find_by_id(
     if depth > 0 {
         let mut visited = std::collections::HashSet::new();
         let pop_ctx = query::PopulateContext {
-            conn: &conn, registry, collection_slug: slug, def,
+            conn: &conn,
+            registry,
+            collection_slug: slug,
+            def,
         };
-        let pop_opts = query::PopulateOpts { depth, select: None, locale_ctx: None };
+        let pop_opts = query::PopulateOpts {
+            depth,
+            select: None,
+            locale_ctx: None,
+        };
         query::populate_relationships(&pop_ctx, &mut doc, &mut visited, &pop_opts)?;
     }
 
@@ -215,12 +250,16 @@ pub(super) fn exec_create(
     runner: &HookRunner,
     config: &crate::config::CrapConfig,
 ) -> Result<String> {
-    let def = registry.collections.get(slug)
+    let def = registry
+        .collections
+        .get(slug)
         .context("Collection not found")?;
 
     // Extract password for auth collections
     let password = if def.is_auth_collection() {
-        args.get("password").and_then(|v| v.as_str()).map(|s| s.to_string())
+        args.get("password")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
     } else {
         None
     };
@@ -235,22 +274,43 @@ pub(super) fn exec_create(
     let mut join_data = HashMap::new();
     if let Some(obj) = args.as_object() {
         for (k, v) in obj {
-            if k == "password" { continue; }
+            if k == "password" {
+                continue;
+            }
             match v {
-                Value::String(s) => { data.insert(k.clone(), s.clone()); }
-                Value::Number(n) => { data.insert(k.clone(), n.to_string()); }
-                Value::Bool(b) => { data.insert(k.clone(), if *b { "1".to_string() } else { "0".to_string() }); }
-                Value::Array(_) | Value::Object(_) => { join_data.insert(k.clone(), v.clone()); }
+                Value::String(s) => {
+                    data.insert(k.clone(), s.clone());
+                }
+                Value::Number(n) => {
+                    data.insert(k.clone(), n.to_string());
+                }
+                Value::Bool(b) => {
+                    data.insert(
+                        k.clone(),
+                        if *b { "1".to_string() } else { "0".to_string() },
+                    );
+                }
+                Value::Array(_) | Value::Object(_) => {
+                    join_data.insert(k.clone(), v.clone());
+                }
                 Value::Null => {}
             }
         }
     }
 
     let (doc, _ctx) = crate::service::create_document(
-        pool, runner, slug, def,
+        pool,
+        runner,
+        slug,
+        def,
         crate::service::WriteInput {
-            data, join_data: &join_data, password: password.as_deref(),
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data,
+            join_data: &join_data,
+            password: password.as_deref(),
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
     )?;
@@ -267,13 +327,18 @@ pub(super) fn exec_update(
     runner: &HookRunner,
     config: &crate::config::CrapConfig,
 ) -> Result<String> {
-    let id = args.get("id").and_then(|v| v.as_str())
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = registry.collections.get(slug)
+    let def = registry
+        .collections
+        .get(slug)
         .context("Collection not found")?;
 
     let password = if def.is_auth_collection() {
-        args.get("password").and_then(|v| v.as_str())
+        args.get("password")
+            .and_then(|v| v.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
     } else {
@@ -289,22 +354,44 @@ pub(super) fn exec_update(
     let mut join_data = HashMap::new();
     if let Some(obj) = args.as_object() {
         for (k, v) in obj {
-            if k == "id" || k == "password" { continue; }
+            if k == "id" || k == "password" {
+                continue;
+            }
             match v {
-                Value::String(s) => { data.insert(k.clone(), s.clone()); }
-                Value::Number(n) => { data.insert(k.clone(), n.to_string()); }
-                Value::Bool(b) => { data.insert(k.clone(), if *b { "1".to_string() } else { "0".to_string() }); }
-                Value::Array(_) | Value::Object(_) => { join_data.insert(k.clone(), v.clone()); }
+                Value::String(s) => {
+                    data.insert(k.clone(), s.clone());
+                }
+                Value::Number(n) => {
+                    data.insert(k.clone(), n.to_string());
+                }
+                Value::Bool(b) => {
+                    data.insert(
+                        k.clone(),
+                        if *b { "1".to_string() } else { "0".to_string() },
+                    );
+                }
+                Value::Array(_) | Value::Object(_) => {
+                    join_data.insert(k.clone(), v.clone());
+                }
                 Value::Null => {}
             }
         }
     }
 
     let (doc, _ctx) = crate::service::update_document(
-        pool, runner, slug, id, def,
+        pool,
+        runner,
+        slug,
+        id,
+        def,
         crate::service::WriteInput {
-            data, join_data: &join_data, password: password.as_deref(),
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data,
+            join_data: &join_data,
+            password: password.as_deref(),
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
     )?;
@@ -320,9 +407,13 @@ pub(super) fn exec_delete(
     pool: &DbPool,
     runner: &HookRunner,
 ) -> Result<String> {
-    let id = args.get("id").and_then(|v| v.as_str())
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
         .context("Missing 'id' argument")?;
-    let def = registry.collections.get(slug)
+    let def = registry
+        .collections
+        .get(slug)
         .context("Collection not found")?;
 
     crate::service::delete_document(pool, runner, slug, id, def, None, None)?;
@@ -336,8 +427,7 @@ pub(super) fn exec_read_global(
     registry: &Arc<Registry>,
     pool: &DbPool,
 ) -> Result<String> {
-    let def = registry.globals.get(slug)
-        .context("Global not found")?;
+    let def = registry.globals.get(slug).context("Global not found")?;
     let conn = pool.get().context("DB connection")?;
 
     match query::get_global(&conn, slug, def, None) {
@@ -361,28 +451,46 @@ pub(super) fn exec_update_global(
     pool: &DbPool,
     runner: &HookRunner,
 ) -> Result<String> {
-    let def = registry.globals.get(slug)
-        .context("Global not found")?;
+    let def = registry.globals.get(slug).context("Global not found")?;
 
     let mut data = HashMap::new();
     let mut join_data = HashMap::new();
     if let Some(obj) = args.as_object() {
         for (k, v) in obj {
             match v {
-                Value::String(s) => { data.insert(k.clone(), s.clone()); }
-                Value::Number(n) => { data.insert(k.clone(), n.to_string()); }
-                Value::Bool(b) => { data.insert(k.clone(), if *b { "1".to_string() } else { "0".to_string() }); }
-                Value::Array(_) | Value::Object(_) => { join_data.insert(k.clone(), v.clone()); }
+                Value::String(s) => {
+                    data.insert(k.clone(), s.clone());
+                }
+                Value::Number(n) => {
+                    data.insert(k.clone(), n.to_string());
+                }
+                Value::Bool(b) => {
+                    data.insert(
+                        k.clone(),
+                        if *b { "1".to_string() } else { "0".to_string() },
+                    );
+                }
+                Value::Array(_) | Value::Object(_) => {
+                    join_data.insert(k.clone(), v.clone());
+                }
                 Value::Null => {}
             }
         }
     }
 
     let (doc, _ctx) = crate::service::update_global_document(
-        pool, runner, slug, def,
+        pool,
+        runner,
+        slug,
+        def,
         crate::service::WriteInput {
-            data, join_data: &join_data, password: None,
-            locale_ctx: None, locale: None, draft: false, ui_locale: None,
+            data,
+            join_data: &join_data,
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
         },
         None,
     )?;

@@ -7,8 +7,8 @@ pub use builder::HookContextBuilder;
 use mlua::{Lua, Value};
 use std::collections::HashMap;
 
-use crate::core::Document;
 use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::Document;
 
 use super::HookDepth;
 
@@ -70,7 +70,8 @@ impl HookContext {
 
         // Authenticated user document
         if let Some(ref user_doc) = self.user {
-            let user_tbl = crate::hooks::lifecycle::converters::document_to_lua_table(lua, user_doc)?;
+            let user_tbl =
+                crate::hooks::lifecycle::converters::document_to_lua_table(lua, user_doc)?;
             ctx_table.set("user", user_tbl)?;
         }
 
@@ -91,9 +92,9 @@ impl HookContext {
         let mut map = HashMap::new();
         for (k, v) in &self.data {
             // Check if this key is a group field that needs flattening
-            let is_group = fields.iter().any(|f| {
-                f.name == *k && f.field_type == FieldType::Group
-            });
+            let is_group = fields
+                .iter()
+                .any(|f| f.name == *k && f.field_type == FieldType::Group);
             if is_group {
                 if let Some(obj) = v.as_object() {
                     for (sub_key, sub_val) in obj {
@@ -108,14 +109,16 @@ impl HookContext {
                 }
                 // If the value is already a string (e.g. from form data), fall through
             }
-            map.insert(k.clone(), match v {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            });
+            map.insert(
+                k.clone(),
+                match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                },
+            );
         }
         map
     }
-
 
     /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
     pub(crate) fn read_context_back(&mut self, lua: &Lua, tbl: &mlua::Table) {
@@ -181,7 +184,10 @@ mod tests {
             .build();
         ctx.read_context_back(&lua, &tbl);
 
-        assert!(!ctx.context.contains_key("old_key"), "old entries should be cleared");
+        assert!(
+            !ctx.context.contains_key("old_key"),
+            "old entries should be cleared"
+        );
         assert_eq!(ctx.context.get("key1"), Some(&json!("value1")));
         assert_eq!(ctx.context.get("key2"), Some(&json!(42)));
     }
@@ -208,9 +214,7 @@ mod tests {
         data.insert("count".to_string(), json!(42));
         data.insert("active".to_string(), json!(true));
 
-        let ctx = HookContext::builder("posts", "create")
-            .data(data)
-            .build();
+        let ctx = HookContext::builder("posts", "create").data(data).build();
 
         let fields = vec![
             FieldDefinition::builder("title", FieldType::Text).build(),
@@ -227,15 +231,16 @@ mod tests {
     #[test]
     fn string_map_group_flattening() {
         let mut data = HashMap::new();
-        data.insert("seo".to_string(), json!({
-            "meta_title": "My Title",
-            "meta_description": "My Description"
-        }));
+        data.insert(
+            "seo".to_string(),
+            json!({
+                "meta_title": "My Title",
+                "meta_description": "My Description"
+            }),
+        );
         data.insert("title".to_string(), json!("Hello"));
 
-        let ctx = HookContext::builder("posts", "create")
-            .data(data)
-            .build();
+        let ctx = HookContext::builder("posts", "create").data(data).build();
 
         let fields = vec![
             FieldDefinition::builder("seo", FieldType::Group).build(),
@@ -254,9 +259,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("seo".to_string(), json!("plain-string"));
 
-        let ctx = HookContext::builder("posts", "create")
-            .data(data)
-            .build();
+        let ctx = HookContext::builder("posts", "create").data(data).build();
 
         let fields = vec![FieldDefinition::builder("seo", FieldType::Group).build()];
 
@@ -267,14 +270,15 @@ mod tests {
     #[test]
     fn string_map_group_with_numeric_subfields() {
         let mut data = HashMap::new();
-        data.insert("metrics".to_string(), json!({
-            "views": 100,
-            "likes": 42
-        }));
+        data.insert(
+            "metrics".to_string(),
+            json!({
+                "views": 100,
+                "likes": 42
+            }),
+        );
 
-        let ctx = HookContext::builder("posts", "create")
-            .data(data)
-            .build();
+        let ctx = HookContext::builder("posts", "create").data(data).build();
 
         let fields = vec![FieldDefinition::builder("metrics", FieldType::Group).build()];
 

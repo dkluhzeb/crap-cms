@@ -20,7 +20,12 @@ pub struct RelationshipConfig {
 
 impl RelationshipConfig {
     pub fn new(collection: impl Into<String>, has_many: bool) -> Self {
-        Self { collection: collection.into(), has_many, max_depth: None, polymorphic: vec![] }
+        Self {
+            collection: collection.into(),
+            has_many,
+            max_depth: None,
+            polymorphic: vec![],
+        }
     }
 
     /// Returns true if this relationship targets multiple collections.
@@ -49,6 +54,9 @@ pub struct JoinConfig {
 
 impl JoinConfig {
     pub fn new(collection: impl Into<String>, on: impl Into<String>) -> Self {
-        Self { collection: collection.into(), on: on.into() }
+        Self {
+            collection: collection.into(),
+            on: on.into(),
+        }
     }
 }

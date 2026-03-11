@@ -123,8 +123,12 @@ fn cmd_export_all() {
     // Verify the JSON file structure
     let content = std::fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-    let collections = parsed.get("collections").expect("should have 'collections' key");
-    let posts = collections.get("posts").expect("should have 'posts' collection");
+    let collections = parsed
+        .get("collections")
+        .expect("should have 'collections' key");
+    let posts = collections
+        .get("posts")
+        .expect("should have 'posts' collection");
     let posts_arr = posts.as_array().unwrap();
     assert_eq!(posts_arr.len(), 3, "should have 3 posts");
 
@@ -166,13 +170,17 @@ fn cmd_export_collection_filter() {
         &config_dir,
         Some("posts".to_string()),
         Some(output_path.clone()),
-    ).unwrap();
+    )
+    .unwrap();
 
     let content = std::fs::read_to_string(&output_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
     let collections = parsed.get("collections").unwrap().as_object().unwrap();
     assert!(collections.contains_key("posts"), "should contain posts");
-    assert!(!collections.contains_key("users"), "should NOT contain users");
+    assert!(
+        !collections.contains_key("users"),
+        "should NOT contain users"
+    );
     assert_eq!(collections["posts"].as_array().unwrap().len(), 1);
 }
 
@@ -187,9 +195,16 @@ fn cmd_export_nonexistent_errors() {
         Some("nonexistent_collection".to_string()),
         Some(output_path),
     );
-    assert!(result.is_err(), "exporting nonexistent collection should fail");
+    assert!(
+        result.is_err(),
+        "exporting nonexistent collection should fail"
+    );
     let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("not found"), "error should mention 'not found', got: {}", err_msg);
+    assert!(
+        err_msg.contains("not found"),
+        "error should mention 'not found', got: {}",
+        err_msg
+    );
 }
 
 #[test]
@@ -248,7 +263,10 @@ fn cmd_import_roundtrip() {
         let docs = query::find(&conn, "posts", def, &query::FindQuery::default(), None).unwrap();
         assert_eq!(docs.len(), 3, "should have 3 posts after import");
         for doc in &docs {
-            assert!(original_ids.contains(&doc.id), "restored doc should have original ID");
+            assert!(
+                original_ids.contains(&doc.id),
+                "restored doc should have original ID"
+            );
         }
     }
 }
@@ -269,7 +287,8 @@ fn cmd_user_create_via_library() {
         Some("password123".to_string()),
         vec![("name".to_string(), "Lib User".to_string())],
         &crap_cms::config::PasswordPolicy::default(),
-    ).unwrap();
+    )
+    .unwrap();
 
     // Verify user was created in DB
     let reg = registry.read().unwrap();
@@ -303,7 +322,8 @@ fn cmd_user_create_extra_fields() {
             ("role".to_string(), "admin".to_string()),
         ],
         &crap_cms::config::PasswordPolicy::default(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let reg = registry.read().unwrap();
     let def = reg.get_collection("users").unwrap();
@@ -328,7 +348,10 @@ fn cmd_user_create_non_auth_errors() {
         vec![],
         &crap_cms::config::PasswordPolicy::default(),
     );
-    assert!(result.is_err(), "creating user in non-auth collection should fail");
+    assert!(
+        result.is_err(),
+        "creating user in non-auth collection should fail"
+    );
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("not an auth collection"),
@@ -347,7 +370,11 @@ fn cmd_typegen_via_library() {
     let config_dir = tmp.path().join("config");
 
     let result = commands::typegen::run(&config_dir, "lua", None);
-    assert!(result.is_ok(), "typegen lua should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "typegen lua should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -356,7 +383,11 @@ fn cmd_typegen_all_via_library() {
     let config_dir = tmp.path().join("config");
 
     let result = commands::typegen::run(&config_dir, "all", None);
-    assert!(result.is_ok(), "typegen all should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "typegen all should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -381,9 +412,19 @@ fn cmd_typegen_custom_output_dir() {
     let custom_output = tmp.path().join("custom_types");
 
     let result = commands::typegen::run(&config_dir, "lua", Some(&custom_output));
-    assert!(result.is_ok(), "typegen with custom output should succeed: {:?}", result.err());
-    assert!(custom_output.join("generated.lua").exists(), "should write to custom output dir");
-    assert!(custom_output.join("crap.lua").exists(), "should write API types to custom output dir");
+    assert!(
+        result.is_ok(),
+        "typegen with custom output should succeed: {:?}",
+        result.err()
+    );
+    assert!(
+        custom_output.join("generated.lua").exists(),
+        "should write to custom output dir"
+    );
+    assert!(
+        custom_output.join("crap.lua").exists(),
+        "should write API types to custom output dir"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -397,8 +438,11 @@ fn cmd_migrate_create() {
 
     commands::db::migrate(
         &config_dir,
-        commands::MigrateAction::Create { name: "test_migration".into() },
-    ).unwrap();
+        commands::MigrateAction::Create {
+            name: "test_migration".into(),
+        },
+    )
+    .unwrap();
 
     let migrations_dir = config_dir.join("migrations");
     let files: Vec<_> = std::fs::read_dir(&migrations_dir)
@@ -415,7 +459,10 @@ fn cmd_migrate_create() {
 
     let content = std::fs::read_to_string(files[0].path()).unwrap();
     assert!(content.contains("function M.up()"), "should have M.up()");
-    assert!(content.contains("function M.down()"), "should have M.down()");
+    assert!(
+        content.contains("function M.down()"),
+        "should have M.down()"
+    );
 }
 
 #[test]
@@ -460,7 +507,10 @@ fn cmd_backup_creates_snapshot() {
     commands::db::backup(&config_dir, Some(backup_output.clone()), false).unwrap();
 
     // The backup command creates a timestamped subdirectory
-    assert!(backup_output.exists(), "backup output directory should exist");
+    assert!(
+        backup_output.exists(),
+        "backup output directory should exist"
+    );
     let backup_dirs: Vec<_> = std::fs::read_dir(&backup_output)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -469,15 +519,30 @@ fn cmd_backup_creates_snapshot() {
     assert_eq!(backup_dirs.len(), 1, "should have one backup directory");
 
     let backup_dir = backup_dirs[0].path();
-    assert!(backup_dir.join("crap.db").exists(), "backup should contain crap.db");
-    assert!(backup_dir.join("manifest.json").exists(), "backup should contain manifest.json");
+    assert!(
+        backup_dir.join("crap.db").exists(),
+        "backup should contain crap.db"
+    );
+    assert!(
+        backup_dir.join("manifest.json").exists(),
+        "backup should contain manifest.json"
+    );
 
     // Verify manifest
     let manifest_content = std::fs::read_to_string(backup_dir.join("manifest.json")).unwrap();
     let manifest: serde_json::Value = serde_json::from_str(&manifest_content).unwrap();
-    assert!(manifest.get("timestamp").is_some(), "manifest should have timestamp");
-    assert!(manifest.get("db_size").is_some(), "manifest should have db_size");
-    assert!(manifest["db_size"].as_u64().unwrap() > 0, "db_size should be > 0");
+    assert!(
+        manifest.get("timestamp").is_some(),
+        "manifest should have timestamp"
+    );
+    assert!(
+        manifest.get("db_size").is_some(),
+        "manifest should have db_size"
+    );
+    assert!(
+        manifest["db_size"].as_u64().unwrap() > 0,
+        "db_size should be > 0"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -508,7 +573,8 @@ function M.run(ctx)
 end
 return M
 "#,
-    ).unwrap();
+    )
+    .unwrap();
 
     let cfg = CrapConfig::load(&config_dir).expect("load config");
     let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
@@ -518,7 +584,10 @@ return M
     // Verify the job is registered
     {
         let reg = registry.read().unwrap();
-        assert!(reg.get_job("cleanup").is_some(), "cleanup job should be registered");
+        assert!(
+            reg.get_job("cleanup").is_some(),
+            "cleanup job should be registered"
+        );
     }
 
     // Use the jobs command to trigger it
@@ -526,11 +595,13 @@ return M
         config: config_dir.clone(),
         slug: "cleanup".to_string(),
         data: None,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Verify a job run was created in the DB
     let conn = db_pool.get().unwrap();
-    let runs = crap_cms::db::query::jobs::list_job_runs(&conn, Some("cleanup"), None, 10, 0).unwrap();
+    let runs =
+        crap_cms::db::query::jobs::list_job_runs(&conn, Some("cleanup"), None, 10, 0).unwrap();
     assert_eq!(runs.len(), 1, "should have one job run");
     assert_eq!(runs[0].slug, "cleanup");
     assert_eq!(runs[0].status, crap_cms::core::job::JobStatus::Pending);
@@ -625,11 +696,15 @@ fn has_locales_enabled_true_with_locales() {
 
     // Add locales to crap.toml
     let toml_path = config_dir.join("crap.toml");
-    std::fs::write(&toml_path, r#"
+    std::fs::write(
+        &toml_path,
+        r#"
 [locale]
 locales = ["en", "de"]
 default_locale = "en"
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     assert!(commands::make::has_locales_enabled(&config_dir));
 }
@@ -640,10 +715,14 @@ fn has_locales_enabled_empty_array() {
     let config_dir = tmp.path().join("config");
     std::fs::create_dir_all(&config_dir).unwrap();
 
-    std::fs::write(config_dir.join("crap.toml"), r#"
+    std::fs::write(
+        config_dir.join("crap.toml"),
+        r#"
 [locale]
 locales = []
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     assert!(!commands::make::has_locales_enabled(&config_dir));
 }
@@ -726,7 +805,9 @@ fn try_load_field_infos_returns_infos() {
     let status_info = infos.iter().find(|i| i.name == "status").unwrap();
     assert_eq!(status_info.field_type, "select");
     assert!(status_info.select_options.contains(&"draft".to_string()));
-    assert!(status_info.select_options.contains(&"published".to_string()));
+    assert!(status_info
+        .select_options
+        .contains(&"published".to_string()));
 }
 
 #[test]
@@ -757,12 +838,22 @@ fn cmd_user_list() {
     drop(reg);
 
     // Create some users
-    create_user(&pool, &def, "alice@example.com", "pw123", &[("name", "Alice")]);
+    create_user(
+        &pool,
+        &def,
+        "alice@example.com",
+        "pw123",
+        &[("name", "Alice")],
+    );
     create_user(&pool, &def, "bob@example.com", "pw456", &[("name", "Bob")]);
 
     // user_list should succeed
     let result = commands::user::user_list(&pool, &registry, "users");
-    assert!(result.is_ok(), "user_list should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "user_list should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -771,7 +862,11 @@ fn cmd_user_list_empty() {
 
     // No users yet — should succeed with "No users" message
     let result = commands::user::user_list(&pool, &registry, "users");
-    assert!(result.is_ok(), "user_list on empty collection should succeed: {:?}", result.err());
+    assert!(
+        result.is_ok(),
+        "user_list on empty collection should succeed: {:?}",
+        result.err()
+    );
 }
 
 #[test]
@@ -779,7 +874,10 @@ fn cmd_user_list_non_auth_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_list(&pool, &registry, "posts");
-    assert!(result.is_err(), "user_list on non-auth collection should fail");
+    assert!(
+        result.is_err(),
+        "user_list on non-auth collection should fail"
+    );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not an auth collection"), "error: {}", err);
 }
@@ -789,8 +887,10 @@ fn cmd_user_list_missing_collection_errors() {
     let (_tmp, pool, registry) = full_setup();
 
     let result = commands::user::user_list(&pool, &registry, "nonexistent");
-    assert!(result.is_err(), "user_list on missing collection should fail");
+    assert!(
+        result.is_err(),
+        "user_list on missing collection should fail"
+    );
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not found"), "error: {}", err);
 }
-
