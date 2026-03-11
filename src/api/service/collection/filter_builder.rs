@@ -57,8 +57,8 @@ impl<'a> FilterBuilder<'a> {
         normalize_filter_fields(&mut filters, self.fields);
 
         // Merge access constraint filters
-        if let AccessResult::Constrained(ref constraint_filters) = self.access_result {
-            filters.extend(constraint_filters.clone());
+        if let AccessResult::Constrained(constraint_filters) = &self.access_result {
+            filters.extend(constraint_filters.iter().cloned());
         }
 
         // Draft-aware filtering

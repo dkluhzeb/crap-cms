@@ -85,7 +85,7 @@ pub fn append_default_value(
     default_value: &Option<serde_json::Value>,
     field_type: &FieldType,
 ) {
-    if let Some(ref default) = default_value {
+    if let Some(default) = &default_value {
         match default {
             serde_json::Value::String(s) => {
                 col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''")))
