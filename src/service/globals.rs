@@ -50,9 +50,6 @@ pub fn update_global_document(
         &tx,
         &global_table,
         Some("default"),
-        user,
-        is_draft,
-        ui_locale,
         input.locale_ctx,
     )?;
     let final_data = final_ctx.to_string_map(&def.fields);

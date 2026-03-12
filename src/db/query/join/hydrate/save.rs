@@ -62,48 +62,41 @@ pub fn save_join_table_data(
         let locale_ref = locale.as_deref();
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
-                if let Some(ref rc) = field.relationship {
-                    if rc.has_many {
-                        // Only touch join table if the field was explicitly included in the data.
-                        if let Some(val) = data.get(&field.name) {
-                            if rc.is_polymorphic() {
-                                // Polymorphic: values are "collection/id" composite strings
-                                let items = parse_polymorphic_values(val);
-                                set_polymorphic_related(
-                                    conn,
-                                    slug,
-                                    &field.name,
-                                    parent_id,
-                                    &items,
-                                    locale_ref,
-                                )?;
-                            } else {
-                                let ids = match val {
-                                    serde_json::Value::Array(arr) => arr
-                                        .iter()
-                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                        .collect(),
-                                    serde_json::Value::String(s) => {
-                                        if s.is_empty() {
-                                            Vec::new()
-                                        } else {
-                                            s.split(',')
-                                                .map(|s| s.trim().to_string())
-                                                .filter(|s| !s.is_empty())
-                                                .collect()
-                                        }
+                if let Some(ref rc) = field.relationship
+                    && rc.has_many
+                {
+                    // Only touch join table if the field was explicitly included in the data.
+                    if let Some(val) = data.get(&field.name) {
+                        if rc.is_polymorphic() {
+                            // Polymorphic: values are "collection/id" composite strings
+                            let items = parse_polymorphic_values(val);
+                            set_polymorphic_related(
+                                conn,
+                                slug,
+                                &field.name,
+                                parent_id,
+                                &items,
+                                locale_ref,
+                            )?;
+                        } else {
+                            let ids = match val {
+                                serde_json::Value::Array(arr) => arr
+                                    .iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect(),
+                                serde_json::Value::String(s) => {
+                                    if s.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        s.split(',')
+                                            .map(|s| s.trim().to_string())
+                                            .filter(|s| !s.is_empty())
+                                            .collect()
                                     }
-                                    _ => Vec::new(),
-                                };
-                                set_related_ids(
-                                    conn,
-                                    slug,
-                                    &field.name,
-                                    parent_id,
-                                    &ids,
-                                    locale_ref,
-                                )?;
-                            }
+                                }
+                                _ => Vec::new(),
+                            };
+                            set_related_ids(conn, slug, &field.name, parent_id, &ids, locale_ref)?;
                         }
                     }
                 }

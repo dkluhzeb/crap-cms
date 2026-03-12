@@ -30,16 +30,16 @@ fn remove_pid_file(config_dir: &Path) {
 /// Check if a PID file exists and warn if the process is still running.
 fn check_existing_pid(config_dir: &Path) {
     let path = pid_file_path(config_dir);
-    if let Ok(contents) = std::fs::read_to_string(&path) {
-        if let Ok(pid) = contents.trim().parse::<u32>() {
-            // Check if process is still running (kill -0)
-            let running = std::path::Path::new(&format!("/proc/{}", pid)).exists();
-            if running {
-                warn!(
-                    "PID file exists with PID {} — another instance may be running",
-                    pid
-                );
-            }
+    if let Ok(contents) = std::fs::read_to_string(&path)
+        && let Ok(pid) = contents.trim().parse::<u32>()
+    {
+        // Check if process is still running (kill -0)
+        let running = std::path::Path::new(&format!("/proc/{}", pid)).exists();
+        if running {
+            warn!(
+                "PID file exists with PID {} — another instance may be running",
+                pid
+            );
         }
     }
 }
@@ -227,18 +227,17 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
         let global_max = cfg.upload.max_file_size;
         for (slug, def) in &reg.collections {
-            if let Some(ref upload_cfg) = def.upload {
-                if let Some(collection_max) = upload_cfg.max_file_size {
-                    if collection_max > global_max {
-                        warn!(
-                            "Collection '{}' has max_file_size ({}) exceeding global limit ({}). \
+            if let Some(ref upload_cfg) = def.upload
+                && let Some(collection_max) = upload_cfg.max_file_size
+                && collection_max > global_max
+            {
+                warn!(
+                    "Collection '{}' has max_file_size ({}) exceeding global limit ({}). \
                              Axum's body limit will reject uploads before the per-collection check.",
-                            slug,
-                            crate::core::upload::format_filesize(collection_max),
-                            crate::core::upload::format_filesize(global_max),
-                        );
-                    }
-                }
+                    slug,
+                    crate::core::upload::format_filesize(collection_max),
+                    crate::core::upload::format_filesize(global_max),
+                );
             }
         }
     }

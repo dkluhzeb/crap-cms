@@ -112,27 +112,26 @@ pub async fn edit_form(
     let values: HashMap<String, String> = doc_fields
         .iter()
         .flat_map(|(k, v)| {
-            if let Value::Object(obj) = v {
-                if def
+            if let Value::Object(obj) = v
+                && def
                     .fields
                     .iter()
                     .any(|f| f.name == *k && f.field_type == FieldType::Group)
-                {
-                    return obj
-                        .iter()
-                        .map(|(sub_k, sub_v)| {
-                            let col = format!("{}__{}", k, sub_k);
-                            let s = match sub_v {
-                                Value::String(s) => s.clone(),
-                                Value::Number(n) => n.to_string(),
-                                Value::Bool(b) => b.to_string(),
-                                Value::Null => String::new(),
-                                other => other.to_string(),
-                            };
-                            (col, s)
-                        })
-                        .collect::<Vec<_>>();
-                }
+            {
+                return obj
+                    .iter()
+                    .map(|(sub_k, sub_v)| {
+                        let col = format!("{}__{}", k, sub_k);
+                        let s = match sub_v {
+                            Value::String(s) => s.clone(),
+                            Value::Number(n) => n.to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => String::new(),
+                            other => other.to_string(),
+                        };
+                        (col, s)
+                    })
+                    .collect::<Vec<_>>();
             }
             let s = match v {
                 Value::String(s) => s.clone(),

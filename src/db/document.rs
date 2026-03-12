@@ -55,10 +55,10 @@ fn sqlite_value_to_json(row: &Row, column: &str) -> rusqlite::Result<serde_json:
     if let Ok(v) = row.get::<_, i64>(column) {
         return Ok(serde_json::Value::Number(v.into()));
     }
-    if let Ok(v) = row.get::<_, f64>(column) {
-        if let Some(n) = serde_json::Number::from_f64(v) {
-            return Ok(serde_json::Value::Number(n));
-        }
+    if let Ok(v) = row.get::<_, f64>(column)
+        && let Some(n) = serde_json::Number::from_f64(v)
+    {
+        return Ok(serde_json::Value::Number(n));
     }
     if let Ok(v) = row.get::<_, String>(column) {
         return Ok(serde_json::Value::String(v));

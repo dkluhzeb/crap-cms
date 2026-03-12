@@ -11,10 +11,10 @@ pub fn extract_prosemirror_text(json_str: &str) -> String {
             Some(o) => o,
             None => return,
         };
-        if obj.get("type").and_then(|t| t.as_str()) == Some("text") {
-            if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
-                out.push(text.to_string());
-            }
+        if obj.get("type").and_then(|t| t.as_str()) == Some("text")
+            && let Some(text) = obj.get("text").and_then(|t| t.as_str())
+        {
+            out.push(text.to_string());
         }
         if let Some(content) = obj.get("content").and_then(|c| c.as_array()) {
             for child in content {
@@ -51,20 +51,20 @@ pub fn extract_prosemirror_text_with_nodes(
             None => return,
         };
         let node_type = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        if node_type == "text" {
-            if let Some(text) = obj.get("text").and_then(|t| t.as_str()) {
-                out.push(text.to_string());
-            }
+        if node_type == "text"
+            && let Some(text) = obj.get("text").and_then(|t| t.as_str())
+        {
+            out.push(text.to_string());
         }
         // Check for custom node with searchable attrs
-        if let Some(searchable) = node_searchable.get(node_type) {
-            if let Some(attrs) = obj.get("attrs").and_then(|a| a.as_object()) {
-                for attr_name in searchable {
-                    if let Some(val) = attrs.get(*attr_name).and_then(|v| v.as_str()) {
-                        if !val.is_empty() {
-                            out.push(val.to_string());
-                        }
-                    }
+        if let Some(searchable) = node_searchable.get(node_type)
+            && let Some(attrs) = obj.get("attrs").and_then(|a| a.as_object())
+        {
+            for attr_name in searchable {
+                if let Some(val) = attrs.get(*attr_name).and_then(|v| v.as_str())
+                    && !val.is_empty()
+                {
+                    out.push(val.to_string());
                 }
             }
         }

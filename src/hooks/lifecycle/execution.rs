@@ -51,18 +51,18 @@ pub(crate) fn apply_after_read_inner(
     }
 
     // Run field-level after_read hooks first
-    if has_field_hooks {
-        if let Err(e) = run_field_hooks_inner(
+    if has_field_hooks
+        && let Err(e) = run_field_hooks_inner(
             lua,
             fields,
             &FieldHookEvent::AfterRead,
             &mut data,
             collection,
             operation,
-        ) {
-            tracing::warn!("field after_read hook error for {}: {}", collection, e);
-            return doc;
-        }
+        )
+    {
+        tracing::warn!("field after_read hook error for {}: {}", collection, e);
+        return doc;
     }
 
     let ctx = HookContext::builder(collection, operation)
@@ -213,10 +213,10 @@ pub(crate) fn scan_registered_events(lua: &Lua) -> HashSet<String> {
         Err(_) => return events,
     };
     for pair in event_hooks.pairs::<String, Value>() {
-        if let Ok((key, Value::Table(t))) = pair {
-            if t.raw_len() > 0 {
-                events.insert(key);
-            }
+        if let Ok((key, Value::Table(t))) = pair
+            && t.raw_len() > 0
+        {
+            events.insert(key);
         }
     }
     events

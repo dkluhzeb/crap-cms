@@ -124,11 +124,11 @@ pub async fn list_items(
         )?;
 
         // Assemble sizes for upload collections
-        if let Some(ref upload_config) = def_owned.upload {
-            if upload_config.enabled {
-                for doc in &mut docs {
-                    upload::assemble_sizes_object(doc, upload_config);
-                }
+        if let Some(ref upload_config) = def_owned.upload
+            && upload_config.enabled
+        {
+            for doc in &mut docs {
+                upload::assemble_sizes_object(doc, upload_config);
             }
         }
 

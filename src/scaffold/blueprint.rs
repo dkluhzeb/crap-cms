@@ -171,10 +171,10 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
     }
 
     // Check blueprint version compatibility (warn but don't block)
-    if let Some(manifest) = read_manifest(&source)? {
-        if let Some(warning) = check_blueprint_version(&manifest.crap_version) {
-            eprintln!("Warning: {}", warning);
-        }
+    if let Some(manifest) = read_manifest(&source)?
+        && let Some(warning) = check_blueprint_version(&manifest.crap_version)
+    {
+        eprintln!("Warning: {}", warning);
     }
 
     let target = dir.unwrap_or_else(|| PathBuf::from("./crap-cms"));

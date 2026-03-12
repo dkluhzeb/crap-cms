@@ -113,10 +113,10 @@ pub fn get_valid_filter_paths(
                 prefixes.insert(field.name.clone());
             }
             FieldType::Relationship => {
-                if let Some(ref rc) = field.relationship {
-                    if rc.has_many {
-                        prefixes.insert(field.name.clone());
-                    }
+                if let Some(ref rc) = field.relationship
+                    && rc.has_many
+                {
+                    prefixes.insert(field.name.clone());
                 }
             }
             _ => {}

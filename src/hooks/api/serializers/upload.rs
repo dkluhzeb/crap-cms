@@ -8,65 +8,65 @@ pub(super) fn collection_upload_to_lua(
     tbl: &Table,
     def: &crate::core::CollectionDefinition,
 ) -> mlua::Result<()> {
-    if let Some(ref upload) = def.upload {
-        if upload.enabled {
-            if upload.mime_types.is_empty()
-                && upload.max_file_size.is_none()
-                && upload.image_sizes.is_empty()
-                && upload.admin_thumbnail.is_none()
-                && upload.format_options.webp.is_none()
-                && upload.format_options.avif.is_none()
-            {
-                tbl.set("upload", true)?;
-            } else {
-                let u = lua.create_table()?;
-                if !upload.mime_types.is_empty() {
-                    let mt = lua.create_table()?;
-                    for (i, m) in upload.mime_types.iter().enumerate() {
-                        mt.set(i + 1, m.as_str())?;
-                    }
-                    u.set("mime_types", mt)?;
+    if let Some(ref upload) = def.upload
+        && upload.enabled
+    {
+        if upload.mime_types.is_empty()
+            && upload.max_file_size.is_none()
+            && upload.image_sizes.is_empty()
+            && upload.admin_thumbnail.is_none()
+            && upload.format_options.webp.is_none()
+            && upload.format_options.avif.is_none()
+        {
+            tbl.set("upload", true)?;
+        } else {
+            let u = lua.create_table()?;
+            if !upload.mime_types.is_empty() {
+                let mt = lua.create_table()?;
+                for (i, m) in upload.mime_types.iter().enumerate() {
+                    mt.set(i + 1, m.as_str())?;
                 }
-                if let Some(max) = upload.max_file_size {
-                    u.set("max_file_size", max)?;
-                }
-                if !upload.image_sizes.is_empty() {
-                    let sizes = lua.create_table()?;
-                    for (i, s) in upload.image_sizes.iter().enumerate() {
-                        let st = lua.create_table()?;
-                        st.set("name", s.name.as_str())?;
-                        st.set("width", s.width)?;
-                        st.set("height", s.height)?;
-                        let fit_str = match s.fit {
-                            crate::core::upload::ImageFit::Cover => "cover",
-                            crate::core::upload::ImageFit::Contain => "contain",
-                            crate::core::upload::ImageFit::Inside => "inside",
-                            crate::core::upload::ImageFit::Fill => "fill",
-                        };
-                        st.set("fit", fit_str)?;
-                        sizes.set(i + 1, st)?;
-                    }
-                    u.set("image_sizes", sizes)?;
-                }
-                if let Some(ref thumb) = upload.admin_thumbnail {
-                    u.set("admin_thumbnail", thumb.as_str())?;
-                }
-                if upload.format_options.webp.is_some() || upload.format_options.avif.is_some() {
-                    let fo = lua.create_table()?;
-                    if let Some(ref webp) = upload.format_options.webp {
-                        let w = lua.create_table()?;
-                        w.set("quality", webp.quality)?;
-                        fo.set("webp", w)?;
-                    }
-                    if let Some(ref avif) = upload.format_options.avif {
-                        let a = lua.create_table()?;
-                        a.set("quality", avif.quality)?;
-                        fo.set("avif", a)?;
-                    }
-                    u.set("format_options", fo)?;
-                }
-                tbl.set("upload", u)?;
+                u.set("mime_types", mt)?;
             }
+            if let Some(max) = upload.max_file_size {
+                u.set("max_file_size", max)?;
+            }
+            if !upload.image_sizes.is_empty() {
+                let sizes = lua.create_table()?;
+                for (i, s) in upload.image_sizes.iter().enumerate() {
+                    let st = lua.create_table()?;
+                    st.set("name", s.name.as_str())?;
+                    st.set("width", s.width)?;
+                    st.set("height", s.height)?;
+                    let fit_str = match s.fit {
+                        crate::core::upload::ImageFit::Cover => "cover",
+                        crate::core::upload::ImageFit::Contain => "contain",
+                        crate::core::upload::ImageFit::Inside => "inside",
+                        crate::core::upload::ImageFit::Fill => "fill",
+                    };
+                    st.set("fit", fit_str)?;
+                    sizes.set(i + 1, st)?;
+                }
+                u.set("image_sizes", sizes)?;
+            }
+            if let Some(ref thumb) = upload.admin_thumbnail {
+                u.set("admin_thumbnail", thumb.as_str())?;
+            }
+            if upload.format_options.webp.is_some() || upload.format_options.avif.is_some() {
+                let fo = lua.create_table()?;
+                if let Some(ref webp) = upload.format_options.webp {
+                    let w = lua.create_table()?;
+                    w.set("quality", webp.quality)?;
+                    fo.set("webp", w)?;
+                }
+                if let Some(ref avif) = upload.format_options.avif {
+                    let a = lua.create_table()?;
+                    a.set("quality", avif.quality)?;
+                    fo.set("avif", a)?;
+                }
+                u.set("format_options", fo)?;
+            }
+            tbl.set("upload", u)?;
         }
     }
     Ok(())

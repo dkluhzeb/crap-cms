@@ -279,15 +279,15 @@ pub fn user_create(
             continue; // optional with no default — skip
         }
         // Use default_value if available and field is not required
-        if !field.required {
-            if let Some(ref dv) = field.default_value {
-                let val = match dv {
-                    serde_json::Value::String(s) => s.clone(),
-                    other => other.to_string(),
-                };
-                data.insert(field.name.clone(), val);
-                continue;
-            }
+        if !field.required
+            && let Some(ref dv) = field.default_value
+        {
+            let val = match dv {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            data.insert(field.name.clone(), val);
+            continue;
         }
         // Required field with a default — use it automatically
         if let Some(ref dv) = field.default_value {

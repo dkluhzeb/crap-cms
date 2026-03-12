@@ -52,17 +52,13 @@ impl HookRunner {
     /// Runs collection-level hook refs first, then global registered hooks.
     /// CRUD functions (`crap.collections.find`, `.create`, etc.) become available
     /// to Lua hooks and share the provided connection for transaction atomicity.
-    /// `user` is the authenticated user (if any) — propagated to CRUD closures
-    /// for `overrideAccess = false` enforcement.
-    #[allow(clippy::too_many_arguments)]
+    /// The authenticated user and UI locale are extracted from the `HookContext`.
     pub fn run_hooks_with_conn(
         &self,
         hooks: &Hooks,
         event: HookEvent,
         mut context: HookContext,
         conn: &rusqlite::Connection,
-        user: Option<&Document>,
-        ui_locale: Option<&str>,
     ) -> Result<HookContext> {
         let hook_refs = get_hook_refs(hooks, &event);
 
@@ -77,8 +73,8 @@ impl HookRunner {
         // Safety: conn is valid for the duration of this method, and we hold
         // the Lua mutex so no concurrent access is possible.
         lua.set_app_data(TxContext(conn as *const _));
-        lua.set_app_data(UserContext(user.cloned()));
-        lua.set_app_data(UiLocaleContext(ui_locale.map(|s| s.to_string())));
+        lua.set_app_data(UserContext(context.user.clone()));
+        lua.set_app_data(UiLocaleContext(context.ui_locale.clone()));
 
         let result = (|| -> Result<HookContext> {
             for hook_ref in hook_refs {

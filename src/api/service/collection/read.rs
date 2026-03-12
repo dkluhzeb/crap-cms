@@ -160,11 +160,11 @@ impl ContentService {
                 )?;
             }
             // Assemble sizes for upload collections
-            if let Some(ref upload_config) = def_owned.upload {
-                if upload_config.enabled {
-                    for doc in &mut docs {
-                        upload::assemble_sizes_object(doc, upload_config);
-                    }
+            if let Some(ref upload_config) = def_owned.upload
+                && upload_config.enabled
+            {
+                for doc in &mut docs {
+                    upload::assemble_sizes_object(doc, upload_config);
                 }
             }
             let docs = runner.apply_after_read_many(
@@ -305,54 +305,53 @@ impl ContentService {
             )?;
 
             // Assemble sizes for upload collections
-            if let Some(ref mut d) = doc {
-                if let Some(ref upload_config) = def_owned.upload {
-                    if upload_config.enabled {
-                        upload::assemble_sizes_object(d, upload_config);
-                    }
-                }
+            if let Some(ref mut d) = doc
+                && let Some(ref upload_config) = def_owned.upload
+                && upload_config.enabled
+            {
+                upload::assemble_sizes_object(d, upload_config);
             }
             let mut doc = doc.map(|d| {
                 runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d, None, None)
             });
             let select_slice = select.as_deref();
             // Populate relationships if depth > 0
-            if depth > 0 {
-                if let Some(ref mut d) = doc {
-                    let mut visited = std::collections::HashSet::new();
-                    let local_cache;
-                    let cache_ref = match &pop_cache {
-                        Some(shared) => &**shared,
-                        None => {
-                            local_cache = query::PopulateCache::new();
-                            &local_cache
-                        }
-                    };
-                    let pop_ctx = query::PopulateContext {
-                        conn: &conn,
-                        registry: &registry,
-                        collection_slug: &collection,
-                        def: &def_owned,
-                    };
-                    let pop_opts = query::PopulateOpts {
-                        depth,
-                        select: select_slice,
-                        locale_ctx: locale_ctx.as_ref(),
-                    };
-                    query::populate_relationships_cached(
-                        &pop_ctx,
-                        d,
-                        &mut visited,
-                        &pop_opts,
-                        cache_ref,
-                    )?;
-                }
+            if depth > 0
+                && let Some(ref mut d) = doc
+            {
+                let mut visited = std::collections::HashSet::new();
+                let local_cache;
+                let cache_ref = match &pop_cache {
+                    Some(shared) => &**shared,
+                    None => {
+                        local_cache = query::PopulateCache::new();
+                        &local_cache
+                    }
+                };
+                let pop_ctx = query::PopulateContext {
+                    conn: &conn,
+                    registry: &registry,
+                    collection_slug: &collection,
+                    def: &def_owned,
+                };
+                let pop_opts = query::PopulateOpts {
+                    depth,
+                    select: select_slice,
+                    locale_ctx: locale_ctx.as_ref(),
+                };
+                query::populate_relationships_cached(
+                    &pop_ctx,
+                    d,
+                    &mut visited,
+                    &pop_opts,
+                    cache_ref,
+                )?;
             }
             // Apply select field stripping for find_by_id
-            if let Some(ref sel) = select {
-                if let Some(ref mut d) = doc {
-                    query::apply_select_to_document(d, sel);
-                }
+            if let Some(ref sel) = select
+                && let Some(ref mut d) = doc
+            {
+                query::apply_select_to_document(d, sel);
             }
             Ok::<_, anyhow::Error>(doc)
         })

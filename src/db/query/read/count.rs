@@ -53,17 +53,16 @@ pub fn count_with_search(
     }
 
     // FTS5 full-text search filter
-    if let Some(search_term) = search {
-        if let Some((fts_clause, sanitized)) =
+    if let Some(search_term) = search
+        && let Some((fts_clause, sanitized)) =
             super::super::fts::fts_where_clause(conn, slug, search_term)
-        {
-            if where_clause.is_empty() {
-                sql.push_str(&format!(" WHERE {}", fts_clause));
-            } else {
-                sql.push_str(&format!(" AND {}", fts_clause));
-            }
-            params.push(Box::new(sanitized));
+    {
+        if where_clause.is_empty() {
+            sql.push_str(&format!(" WHERE {}", fts_clause));
+        } else {
+            sql.push_str(&format!(" AND {}", fts_clause));
         }
+        params.push(Box::new(sanitized));
     }
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();

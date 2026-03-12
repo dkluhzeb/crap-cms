@@ -155,8 +155,6 @@ fn run_after_write_runs_hooks_with_crud_access() {
         crap_cms::hooks::lifecycle::HookEvent::AfterChange,
         ctx,
         &tx,
-        None,
-        None,
     );
     // Should succeed (no after_change hooks defined in the fixture = no-op)
     assert!(result.is_ok());
@@ -264,18 +262,7 @@ fn validate_required_field_errors() {
 
     // run_before_write runs field hooks, validation, then collection hooks.
     // It should fail because "title" is required.
-    let result = runner.run_before_write(
-        &def.hooks,
-        &def.fields,
-        ctx,
-        &tx,
-        "articles",
-        None,
-        None,
-        false,
-        None,
-        None,
-    );
+    let result = runner.run_before_write(&def.hooks, &def.fields, ctx, &tx, "articles", None, None);
     assert!(
         result.is_err(),
         "Should fail when required field 'title' is missing"
@@ -477,15 +464,7 @@ fn run_after_write_runs_field_after_change_hooks() {
 
     // run_after_write with AfterChange event should trigger field-level after_change hooks
     let result = runner
-        .run_after_write(
-            &def.hooks,
-            &def.fields,
-            HookEvent::AfterChange,
-            ctx,
-            &tx,
-            None,
-            None,
-        )
+        .run_after_write(&def.hooks, &def.fields, HookEvent::AfterChange, ctx, &tx)
         .expect("run_after_write failed");
 
     // The collection-level after_change hook runs (logs but doesn't modify data)
@@ -521,15 +500,7 @@ fn run_after_write_with_non_after_change_event() {
     let tx = conn.transaction().unwrap();
 
     // AfterDelete event should not trigger field-level after_change hooks
-    let result = runner.run_after_write(
-        &def.hooks,
-        &def.fields,
-        HookEvent::AfterDelete,
-        ctx,
-        &tx,
-        None,
-        None,
-    );
+    let result = runner.run_after_write(&def.hooks, &def.fields, HookEvent::AfterDelete, ctx, &tx);
     assert!(result.is_ok());
     tx.commit().unwrap();
 }
@@ -591,7 +562,7 @@ fn hook_context_passes_locale_and_draft() {
 
     // Should not error even with locale and draft set
     let result = runner
-        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx, None, None)
+        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx)
         .expect("Hook execution failed");
 
     assert_eq!(result.locale, Some("en".to_string()));
@@ -632,7 +603,7 @@ fn hook_context_table_flows_through() {
 
     // The hooks should receive the context table
     let result = runner
-        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx, None, None)
+        .run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, ctx, &tx)
         .expect("Hook execution failed");
 
     // The result should still contain the before_marker since hooks don't clear it
@@ -770,7 +741,7 @@ fn run_before_write_with_user_context() {
         locale: None,
         draft: None,
         context: HashMap::new(),
-        user: None,
+        user: Some(user),
         ui_locale: None,
     };
 
@@ -778,18 +749,7 @@ fn run_before_write_with_user_context() {
     let tx = conn.transaction().unwrap();
 
     let result = runner
-        .run_before_write(
-            &def.hooks,
-            &def.fields,
-            ctx,
-            &tx,
-            "articles",
-            None,
-            Some(&user),
-            false,
-            None,
-            None,
-        )
+        .run_before_write(&def.hooks, &def.fields, ctx, &tx, "articles", None, None)
         .expect("run_before_write with user failed");
 
     assert!(result.data.contains_key("title"));

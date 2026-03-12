@@ -95,10 +95,10 @@ pub(crate) fn prune_versions(
     parent_id: &str,
     versions: Option<&VersionsConfig>,
 ) -> Result<()> {
-    if let Some(vc) = versions {
-        if vc.max_versions > 0 {
-            query::prune_versions(conn, table, parent_id, vc.max_versions)?;
-        }
+    if let Some(vc) = versions
+        && vc.max_versions > 0
+    {
+        query::prune_versions(conn, table, parent_id, vc.max_versions)?;
     }
     Ok(())
 }

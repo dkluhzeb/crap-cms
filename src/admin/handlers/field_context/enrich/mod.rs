@@ -541,125 +541,122 @@ pub fn enrich_nested_fields(
     for (ctx, field_def) in sub_fields.iter_mut().zip(field_defs.iter()) {
         match field_def.field_type {
             FieldType::Relationship => {
-                if let Some(ref rc) = field_def.relationship {
-                    if let Some(related_def) = reg.get_collection(&rc.collection) {
-                        let title_field = related_def.title_field().map(|s| s.to_string());
-                        if rc.has_many {
-                            // Has-many nested relationships use selected_items built by parent
-                        } else {
-                            let current_value = ctx
-                                .get("value")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
+                if let Some(ref rc) = field_def.relationship
+                    && let Some(related_def) = reg.get_collection(&rc.collection)
+                {
+                    let title_field = related_def.title_field().map(|s| s.to_string());
+                    if rc.has_many {
+                        // Has-many nested relationships use selected_items built by parent
+                    } else {
+                        let current_value = ctx
+                            .get("value")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
 
-                            if !current_value.is_empty() {
-                                if let Ok(Some(doc)) = query::find_by_id(
-                                    conn,
-                                    &rc.collection,
-                                    related_def,
-                                    &current_value,
-                                    rel_locale_ctx,
-                                ) {
-                                    let label = title_field
-                                        .as_ref()
-                                        .and_then(|f| doc.get_str(f))
-                                        .unwrap_or(&doc.id)
-                                        .to_string();
+                        if !current_value.is_empty() {
+                            if let Ok(Some(doc)) = query::find_by_id(
+                                conn,
+                                &rc.collection,
+                                related_def,
+                                &current_value,
+                                rel_locale_ctx,
+                            ) {
+                                let label = title_field
+                                    .as_ref()
+                                    .and_then(|f| doc.get_str(f))
+                                    .unwrap_or(&doc.id)
+                                    .to_string();
 
-                                    ctx["selected_items"] =
-                                        json!([{ "id": doc.id, "label": label }]);
-                                } else {
-                                    ctx["selected_items"] = json!([]);
-                                }
+                                ctx["selected_items"] = json!([{ "id": doc.id, "label": label }]);
                             } else {
                                 ctx["selected_items"] = json!([]);
                             }
+                        } else {
+                            ctx["selected_items"] = json!([]);
                         }
                     }
                 }
             }
             FieldType::Upload => {
-                if let Some(ref rc) = field_def.relationship {
-                    if let Some(related_def) = reg.get_collection(&rc.collection) {
-                        let title_field = related_def.title_field().map(|s| s.to_string());
-                        let admin_thumbnail = related_def
-                            .upload
-                            .as_ref()
-                            .and_then(|u| u.admin_thumbnail.as_ref().cloned());
+                if let Some(ref rc) = field_def.relationship
+                    && let Some(related_def) = reg.get_collection(&rc.collection)
+                {
+                    let title_field = related_def.title_field().map(|s| s.to_string());
+                    let admin_thumbnail = related_def
+                        .upload
+                        .as_ref()
+                        .and_then(|u| u.admin_thumbnail.as_ref().cloned());
 
-                        if rc.has_many {
-                            // Has-many: selected_items already handled by the parent context
-                        } else {
-                            // Has-one upload: fetch only the selected doc via search widget
-                            let current_value = ctx
-                                .get("value")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
+                    if rc.has_many {
+                        // Has-many: selected_items already handled by the parent context
+                    } else {
+                        // Has-one upload: fetch only the selected doc via search widget
+                        let current_value = ctx
+                            .get("value")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
 
-                            if !current_value.is_empty() {
-                                if let Ok(Some(mut doc)) = query::find_by_id(
-                                    conn,
-                                    &rc.collection,
-                                    related_def,
-                                    &current_value,
-                                    rel_locale_ctx,
-                                ) {
-                                    if let Some(ref uc) = related_def.upload {
-                                        if uc.enabled {
-                                            upload::assemble_sizes_object(&mut doc, uc);
-                                        }
-                                    }
-
-                                    let label = doc
-                                        .get_str("filename")
-                                        .or_else(|| {
-                                            title_field.as_ref().and_then(|f| doc.get_str(f))
-                                        })
-                                        .unwrap_or(&doc.id)
-                                        .to_string();
-                                    let mime = doc.get_str("mime_type").unwrap_or("").to_string();
-                                    let is_image = mime.starts_with("image/");
-                                    let thumb_url = if is_image {
-                                        admin_thumbnail
-                                            .as_ref()
-                                            .and_then(|thumb_name| {
-                                                doc.fields
-                                                    .get("sizes")
-                                                    .and_then(|v| v.get(thumb_name))
-                                                    .and_then(|v| v.get("url"))
-                                                    .and_then(|v| v.as_str())
-                                                    .map(|s| s.to_string())
-                                            })
-                                            .or_else(|| doc.get_str("url").map(|s| s.to_string()))
-                                    } else {
-                                        None
-                                    };
-                                    let mut item = json!({ "id": doc.id, "label": label });
-
-                                    if let Some(ref url) = thumb_url {
-                                        item["thumbnail_url"] = json!(url);
-                                    }
-
-                                    if is_image {
-                                        item["is_image"] = json!(true);
-                                    }
-
-                                    item["filename"] = json!(label);
-                                    ctx["selected_items"] = json!([item]);
-
-                                    if let Some(url) = thumb_url {
-                                        ctx["selected_preview_url"] = json!(url);
-                                    }
-
-                                    ctx["selected_filename"] = json!(label);
-                                } else {
-                                    ctx["selected_items"] = json!([]);
+                        if !current_value.is_empty() {
+                            if let Ok(Some(mut doc)) = query::find_by_id(
+                                conn,
+                                &rc.collection,
+                                related_def,
+                                &current_value,
+                                rel_locale_ctx,
+                            ) {
+                                if let Some(ref uc) = related_def.upload
+                                    && uc.enabled
+                                {
+                                    upload::assemble_sizes_object(&mut doc, uc);
                                 }
+
+                                let label = doc
+                                    .get_str("filename")
+                                    .or_else(|| title_field.as_ref().and_then(|f| doc.get_str(f)))
+                                    .unwrap_or(&doc.id)
+                                    .to_string();
+                                let mime = doc.get_str("mime_type").unwrap_or("").to_string();
+                                let is_image = mime.starts_with("image/");
+                                let thumb_url = if is_image {
+                                    admin_thumbnail
+                                        .as_ref()
+                                        .and_then(|thumb_name| {
+                                            doc.fields
+                                                .get("sizes")
+                                                .and_then(|v| v.get(thumb_name))
+                                                .and_then(|v| v.get("url"))
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string())
+                                        })
+                                        .or_else(|| doc.get_str("url").map(|s| s.to_string()))
+                                } else {
+                                    None
+                                };
+                                let mut item = json!({ "id": doc.id, "label": label });
+
+                                if let Some(ref url) = thumb_url {
+                                    item["thumbnail_url"] = json!(url);
+                                }
+
+                                if is_image {
+                                    item["is_image"] = json!(true);
+                                }
+
+                                item["filename"] = json!(label);
+                                ctx["selected_items"] = json!([item]);
+
+                                if let Some(url) = thumb_url {
+                                    ctx["selected_preview_url"] = json!(url);
+                                }
+
+                                ctx["selected_filename"] = json!(label);
                             } else {
                                 ctx["selected_items"] = json!([]);
                             }
+                        } else {
+                            ctx["selected_items"] = json!([]);
                         }
                     }
                 }
@@ -722,18 +719,16 @@ pub fn enrich_nested_fields(
                             .blocks
                             .iter()
                             .find(|bd| bd.block_type == block_type)
-                        {
-                            if let Some(sub_arr) =
+                            && let Some(sub_arr) =
                                 row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut())
-                            {
-                                enrich_nested_fields(
-                                    sub_arr,
-                                    &block_def.fields,
-                                    conn,
-                                    reg,
-                                    rel_locale_ctx,
-                                );
-                            }
+                        {
+                            enrich_nested_fields(
+                                sub_arr,
+                                &block_def.fields,
+                                conn,
+                                reg,
+                                rel_locale_ctx,
+                            );
                         }
                     }
                 }

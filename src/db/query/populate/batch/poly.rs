@@ -27,12 +27,11 @@ pub(super) fn batch_poly_has_many(
     for doc in docs.iter() {
         if let Some(serde_json::Value::Array(arr)) = doc.fields.get(field_name) {
             for v in arr {
-                if let Some(s) = v.as_str() {
-                    if let Some((col, id)) = parse_poly_ref(s) {
-                        if !visited.contains(&(col.clone(), id.clone())) {
-                            ids_by_collection.entry(col).or_default().push(id);
-                        }
-                    }
+                if let Some(s) = v.as_str()
+                    && let Some((col, id)) = parse_poly_ref(s)
+                    && !visited.contains(&(col.clone(), id.clone()))
+                {
+                    ids_by_collection.entry(col).or_default().push(id);
                 }
             }
         }
@@ -98,14 +97,12 @@ pub(super) fn batch_poly_has_one(
 ) -> Result<()> {
     let mut ids_by_collection: HashMap<String, Vec<String>> = HashMap::new();
     for doc in docs.iter() {
-        if let Some(serde_json::Value::String(s)) = doc.fields.get(field_name) {
-            if !s.is_empty() {
-                if let Some((col, id)) = parse_poly_ref(s) {
-                    if !visited.contains(&(col.clone(), id.clone())) {
-                        ids_by_collection.entry(col).or_default().push(id);
-                    }
-                }
-            }
+        if let Some(serde_json::Value::String(s)) = doc.fields.get(field_name)
+            && !s.is_empty()
+            && let Some((col, id)) = parse_poly_ref(s)
+            && !visited.contains(&(col.clone(), id.clone()))
+        {
+            ids_by_collection.entry(col).or_default().push(id);
         }
     }
 
@@ -128,13 +125,12 @@ pub(super) fn batch_poly_has_one(
             Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
             _ => continue,
         };
-        if let Some((col, id)) = parse_poly_ref(&raw) {
-            if let Some(col_map) = fetched_map.get(&col) {
-                if let Some(cached_doc) = col_map.get(&id) {
-                    doc.fields
-                        .insert(field_name.to_string(), document_to_json(cached_doc, &col));
-                }
-            }
+        if let Some((col, id)) = parse_poly_ref(&raw)
+            && let Some(col_map) = fetched_map.get(&col)
+            && let Some(cached_doc) = col_map.get(&id)
+        {
+            doc.fields
+                .insert(field_name.to_string(), document_to_json(cached_doc, &col));
         }
     }
     Ok(())
@@ -167,10 +163,10 @@ pub(super) fn batch_fetch_with_cache(
             if !uncached_ids.is_empty() {
                 let mut fetched = find_by_ids(conn, col, &item_def, &uncached_ids, locale_ctx)?;
                 for d in &mut fetched {
-                    if let Some(ref uc) = item_def.upload {
-                        if uc.enabled {
-                            crate::core::upload::assemble_sizes_object(d, uc);
-                        }
+                    if let Some(ref uc) = item_def.upload
+                        && uc.enabled
+                    {
+                        crate::core::upload::assemble_sizes_object(d, uc);
                     }
                 }
                 if effective_depth - 1 > 0 {

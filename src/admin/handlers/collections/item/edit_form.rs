@@ -91,12 +91,11 @@ pub async fn edit_form(
         )?;
 
         // Assemble sizes for upload collections
-        if let Some(ref mut d) = doc {
-            if let Some(ref upload_config) = def_owned.upload {
-                if upload_config.enabled {
-                    upload::assemble_sizes_object(d, upload_config);
-                }
-            }
+        if let Some(ref mut d) = doc
+            && let Some(ref upload_config) = def_owned.upload
+            && upload_config.enabled
+        {
+            upload::assemble_sizes_object(d, upload_config);
         }
 
         let doc = doc.map(|d| {
@@ -159,27 +158,26 @@ pub async fn edit_form(
             // Group fields are hydrated as nested objects — flatten back to
             // prefixed column names (e.g. location → location__venue_name)
             // so that build_field_contexts can find the sub-field values.
-            if let Value::Object(obj) = v {
-                if def
+            if let Value::Object(obj) = v
+                && def
                     .fields
                     .iter()
                     .any(|f| f.name == *k && f.field_type == FieldType::Group)
-                {
-                    return obj
-                        .iter()
-                        .map(|(sub_k, sub_v)| {
-                            let col = format!("{}__{}", k, sub_k);
-                            let s = match sub_v {
-                                Value::String(s) => s.clone(),
-                                Value::Number(n) => n.to_string(),
-                                Value::Bool(b) => b.to_string(),
-                                Value::Null => String::new(),
-                                other => other.to_string(),
-                            };
-                            (col, s)
-                        })
-                        .collect::<Vec<_>>();
-                }
+            {
+                return obj
+                    .iter()
+                    .map(|(sub_k, sub_v)| {
+                        let col = format!("{}__{}", k, sub_k);
+                        let s = match sub_v {
+                            Value::String(s) => s.clone(),
+                            Value::Number(n) => n.to_string(),
+                            Value::Bool(b) => b.to_string(),
+                            Value::Null => String::new(),
+                            other => other.to_string(),
+                        };
+                        (col, s)
+                    })
+                    .collect::<Vec<_>>();
             }
             let s = match v {
                 Value::String(s) => s.clone(),
@@ -314,10 +312,10 @@ pub async fn edit_form(
     // Add upload context for upload collections
     if def.is_upload_collection() {
         let mut upload_ctx = json!({});
-        if let Some(ref u) = def.upload {
-            if !u.mime_types.is_empty() {
-                upload_ctx["accept"] = json!(u.mime_types.join(","));
-            }
+        if let Some(ref u) = def.upload
+            && !u.mime_types.is_empty()
+        {
+            upload_ctx["accept"] = json!(u.mime_types.join(","));
         }
 
         // Upload preview and file info from existing document
@@ -351,25 +349,25 @@ pub async fn edit_form(
         }
 
         // Show preview for images
-        if let (Some(url), Some(mime)) = (url, mime_type) {
-            if mime.starts_with("image/") {
-                // Use admin_thumbnail size if available
-                let preview_url = def
-                    .upload
-                    .as_ref()
-                    .and_then(|u| u.admin_thumbnail.as_ref())
-                    .and_then(|thumb_name| {
-                        document
-                            .fields
-                            .get("sizes")
-                            .and_then(|v| v.get(thumb_name))
-                            .and_then(|v| v.get("url"))
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string())
-                    })
-                    .unwrap_or_else(|| url.to_string());
-                upload_ctx["preview"] = json!(preview_url);
-            }
+        if let (Some(url), Some(mime)) = (url, mime_type)
+            && mime.starts_with("image/")
+        {
+            // Use admin_thumbnail size if available
+            let preview_url = def
+                .upload
+                .as_ref()
+                .and_then(|u| u.admin_thumbnail.as_ref())
+                .and_then(|thumb_name| {
+                    document
+                        .fields
+                        .get("sizes")
+                        .and_then(|v| v.get(thumb_name))
+                        .and_then(|v| v.get("url"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| url.to_string());
+            upload_ctx["preview"] = json!(preview_url);
         }
 
         if let Some(fname) = filename {

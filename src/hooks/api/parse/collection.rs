@@ -106,10 +106,10 @@ pub fn parse_collection_definition(
     let upload = parse_collection_upload(config);
 
     // If upload enabled, auto-inject metadata fields
-    if let Some(ref u) = upload {
-        if u.enabled {
-            inject_upload_fields(&mut fields, u);
-        }
+    if let Some(ref u) = upload
+        && u.enabled
+    {
+        inject_upload_fields(&mut fields, u);
     }
 
     // Parse access control
@@ -125,21 +125,22 @@ pub fn parse_collection_definition(
     let indexes = parse_indexes(config);
 
     // If auth enabled and no email field defined, inject one at index 0
-    if let Some(ref a) = auth {
-        if a.enabled && !fields.iter().any(|f| f.name == "email") {
-            fields.insert(
-                0,
-                FieldDefinition::builder("email", FieldType::Email)
-                    .required(true)
-                    .unique(true)
-                    .admin(
-                        FieldAdmin::builder()
-                            .placeholder(LocalizedString::Plain("user@example.com".to_string()))
-                            .build(),
-                    )
-                    .build(),
-            );
-        }
+    if let Some(ref a) = auth
+        && a.enabled
+        && !fields.iter().any(|f| f.name == "email")
+    {
+        fields.insert(
+            0,
+            FieldDefinition::builder("email", FieldType::Email)
+                .required(true)
+                .unique(true)
+                .admin(
+                    FieldAdmin::builder()
+                        .placeholder(LocalizedString::Plain("user@example.com".to_string()))
+                        .build(),
+                )
+                .build(),
+        );
     }
 
     // Parse MCP config

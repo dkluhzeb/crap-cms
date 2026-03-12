@@ -1,5 +1,7 @@
-use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
 use std::sync::Arc;
+
+use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
+use serde_json::Value;
 
 use crate::admin::translations::Translations;
 
@@ -31,28 +33,28 @@ impl HelperDef for TranslationHelper {
         let hash = h.hash();
         if hash.is_empty() {
             let translated = self.translations.get(locale, key);
-            Ok(ScopedJson::Derived(serde_json::Value::String(
-                translated.to_string(),
-            )))
+            Ok(ScopedJson::Derived(Value::String(translated.to_string())))
         } else {
             let mut params = std::collections::HashMap::new();
             for (k, v) in hash {
                 let val = match v.value() {
-                    serde_json::Value::String(s) => s.clone(),
-                    serde_json::Value::Number(n) => n.to_string(),
-                    serde_json::Value::Bool(b) => b.to_string(),
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    Value::Bool(b) => b.to_string(),
                     other => other.to_string(),
                 };
                 params.insert(k.to_string(), val);
             }
             let translated = self.translations.get_interpolated(locale, key, &params);
-            Ok(ScopedJson::Derived(serde_json::Value::String(translated)))
+            Ok(ScopedJson::Derived(Value::String(translated)))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     fn test_hbs_with_translations(config_dir: &std::path::Path) -> handlebars::Handlebars<'static> {
         let translations =
             std::sync::Arc::new(crate::admin::translations::Translations::load(config_dir));
@@ -75,7 +77,7 @@ mod tests {
         let mut hbs = test_hbs_with_translations(tmp.path());
         hbs.register_template_string("t", "{{t \"hello\"}}")
             .unwrap();
-        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        let result = hbs.render("t", &json!({})).unwrap();
         assert_eq!(result, "Hello World");
     }
 
@@ -93,7 +95,7 @@ mod tests {
         let mut hbs = test_hbs_with_translations(tmp.path());
         hbs.register_template_string("t", "{{t \"greeting\" name=\"Alice\" count=5}}")
             .unwrap();
-        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        let result = hbs.render("t", &json!({})).unwrap();
         assert_eq!(result, "Hello Alice, you have 5 items");
     }
 
@@ -111,7 +113,7 @@ mod tests {
         let mut hbs = test_hbs_with_translations(tmp.path());
         hbs.register_template_string("t", "{{t \"status\" active=true}}")
             .unwrap();
-        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        let result = hbs.render("t", &json!({})).unwrap();
         assert_eq!(result, "Active: true");
     }
 
@@ -121,7 +123,7 @@ mod tests {
         let mut hbs = test_hbs_with_translations(tmp.path());
         hbs.register_template_string("t", "{{t \"nonexistent.key\"}}")
             .unwrap();
-        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        let result = hbs.render("t", &json!({})).unwrap();
         assert_eq!(result, "nonexistent.key");
     }
 }

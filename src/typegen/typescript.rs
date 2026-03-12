@@ -105,18 +105,17 @@ fn render_collection_slug_type(out: &mut String, registry: &Registry) {
 }
 
 fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: &str) {
-    if field.field_type == FieldType::Relationship {
-        if let Some(rc) = &field.relationship {
-            if rc.is_polymorphic() {
-                let targets = rc.all_collections().join(", ");
-                writeln!(
-                    out,
-                    "{}/** Polymorphic relationship — targets: {} */",
-                    indent, targets
-                )
-                .expect("write to String");
-            }
-        }
+    if field.field_type == FieldType::Relationship
+        && let Some(rc) = &field.relationship
+        && rc.is_polymorphic()
+    {
+        let targets = rc.all_collections().join(", ");
+        writeln!(
+            out,
+            "{}/** Polymorphic relationship — targets: {} */",
+            indent, targets
+        )
+        .expect("write to String");
     }
 }
 

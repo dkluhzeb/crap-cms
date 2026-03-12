@@ -8,19 +8,15 @@ use super::parsing::{serde_duration, serde_duration_option, serde_filesize};
 /// SMTP TLS mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum SmtpTls {
     /// Connect plain, upgrade via STARTTLS (port 587).
+    #[default]
     Starttls,
     /// Implicit TLS from the start (port 465).
     Tls,
     /// No encryption (local/test servers, port 25/1025).
     None,
-}
-
-impl Default for SmtpTls {
-    fn default() -> Self {
-        Self::Starttls
-    }
 }
 
 /// SMTP email configuration. Empty `smtp_host` disables email (no-op sends).

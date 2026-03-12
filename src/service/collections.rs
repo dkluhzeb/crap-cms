@@ -52,9 +52,6 @@ pub fn create_document(
         &tx,
         slug,
         None,
-        user,
-        is_draft,
-        ui_locale,
         input.locale_ctx,
     )?;
     let final_data = final_ctx.to_string_map(&def.fields);
@@ -128,9 +125,6 @@ pub fn update_document(
         &tx,
         slug,
         Some(id),
-        user,
-        is_draft,
-        ui_locale,
         input.locale_ctx,
     )?;
     let final_data = final_ctx.to_string_map(&def.fields);
@@ -190,14 +184,8 @@ pub fn unpublish_document(
         .ok_or_else(|| anyhow::anyhow!("Document {} not found in {}", id, slug))?;
 
     let hook_ctx = build_before_ctx(slug, "update", doc.fields.clone(), None, false, user, None);
-    let final_ctx = runner.run_hooks_with_conn(
-        &def.hooks,
-        HookEvent::BeforeChange,
-        hook_ctx,
-        &tx,
-        user,
-        None,
-    )?;
+    let final_ctx =
+        runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, &tx)?;
 
     super::persist_unpublish(&tx, slug, id, def)?;
 
@@ -259,14 +247,8 @@ pub fn delete_document(
         .data([("id".to_string(), serde_json::Value::String(id.to_string()))].into())
         .user(user)
         .build();
-    let final_ctx = runner.run_hooks_with_conn(
-        &def.hooks,
-        HookEvent::BeforeDelete,
-        hook_ctx,
-        &tx,
-        user,
-        None,
-    )?;
+    let final_ctx =
+        runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx)?;
     crate::db::query::delete(&tx, slug, id)?;
     crate::db::query::fts::fts_delete(&tx, slug, id)?;
 
@@ -275,14 +257,8 @@ pub fn delete_document(
         .context(final_ctx.context)
         .user(user)
         .build();
-    let after_result = runner.run_hooks_with_conn(
-        &def.hooks,
-        HookEvent::AfterDelete,
-        after_ctx,
-        &tx,
-        user,
-        None,
-    )?;
+    let after_result =
+        runner.run_hooks_with_conn(&def.hooks, HookEvent::AfterDelete, after_ctx, &tx)?;
 
     tx.commit().context("Commit transaction")?;
 

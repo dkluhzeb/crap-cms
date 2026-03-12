@@ -42,25 +42,27 @@ pub fn normalize_date_value(value: &str) -> String {
     }
 
     // Try date only: YYYY-MM-DD (10 chars)
-    if value.len() == 10 {
-        if let Ok(d) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
-            let noon = d.and_hms_opt(12, 0, 0).expect("12:00:00 is valid");
-            return noon.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        }
+    if value.len() == 10
+        && let Ok(d) = NaiveDate::parse_from_str(value, "%Y-%m-%d")
+    {
+        let noon = d.and_hms_opt(12, 0, 0).expect("12:00:00 is valid");
+        return noon.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     }
 
     // Try datetime-local format: YYYY-MM-DDTHH:MM (16 chars, no timezone)
-    if value.len() == 16 && value.contains('T') {
-        if let Ok(ndt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M") {
-            return ndt.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        }
+    if value.len() == 16
+        && value.contains('T')
+        && let Ok(ndt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M")
+    {
+        return ndt.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     }
 
     // Try datetime without timezone: YYYY-MM-DDTHH:MM:SS (19 chars)
-    if value.len() == 19 && value.contains('T') {
-        if let Ok(ndt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
-            return ndt.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        }
+    if value.len() == 19
+        && value.contains('T')
+        && let Ok(ndt) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
+    {
+        return ndt.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     }
 
     // Anything else: passthrough

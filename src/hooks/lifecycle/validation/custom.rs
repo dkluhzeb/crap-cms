@@ -31,12 +31,10 @@ pub(super) fn run_validate_function_inner(
     if let Some(user_doc) = lua
         .app_data_ref::<UserContext>()
         .and_then(|uc| uc.0.clone())
-    {
-        if let Ok(user_tbl) =
+        && let Ok(user_tbl) =
             crate::hooks::lifecycle::converters::document_to_lua_table(lua, &user_doc)
-        {
-            let _ = ctx_table.set("user", user_tbl);
-        }
+    {
+        let _ = ctx_table.set("user", user_tbl);
     }
     if let Some(ui_locale) = lua
         .app_data_ref::<UiLocaleContext>()

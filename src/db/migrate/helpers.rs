@@ -166,23 +166,24 @@ pub(super) fn sync_join_tables(
 
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
-                if let Some(ref rc) = field.relationship {
-                    if rc.has_many {
-                        let table_name = format!("{}_{}", collection_slug, field.name);
-                        if !table_exists(conn, &table_name)? {
-                            let poly_col = if rc.is_polymorphic() {
-                                "related_collection TEXT NOT NULL DEFAULT '', "
-                            } else {
-                                ""
-                            };
-                            let poly_pk = if rc.is_polymorphic() {
-                                ", related_collection"
-                            } else {
-                                ""
-                            };
-                            let sql = if has_locale_col {
-                                format!(
-                                    "CREATE TABLE {} (\
+                if let Some(ref rc) = field.relationship
+                    && rc.has_many
+                {
+                    let table_name = format!("{}_{}", collection_slug, field.name);
+                    if !table_exists(conn, &table_name)? {
+                        let poly_col = if rc.is_polymorphic() {
+                            "related_collection TEXT NOT NULL DEFAULT '', "
+                        } else {
+                            ""
+                        };
+                        let poly_pk = if rc.is_polymorphic() {
+                            ", related_collection"
+                        } else {
+                            ""
+                        };
+                        let sql = if has_locale_col {
+                            format!(
+                                "CREATE TABLE {} (\
                                         parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
                                         related_id TEXT NOT NULL, \
                                         {}\
@@ -190,45 +191,40 @@ pub(super) fn sync_join_tables(
                                         _locale TEXT NOT NULL DEFAULT '{}', \
                                         PRIMARY KEY (parent_id, related_id{}, _locale)\
                                     )",
-                                    table_name,
-                                    collection_slug,
-                                    poly_col,
-                                    sanitize_locale(&locale_config.default_locale),
-                                    poly_pk
-                                )
-                            } else {
-                                format!(
-                                    "CREATE TABLE {} (\
+                                table_name,
+                                collection_slug,
+                                poly_col,
+                                sanitize_locale(&locale_config.default_locale),
+                                poly_pk
+                            )
+                        } else {
+                            format!(
+                                "CREATE TABLE {} (\
                                         parent_id TEXT NOT NULL REFERENCES {}(id) ON DELETE CASCADE, \
                                         related_id TEXT NOT NULL, \
                                         {}\
                                         _order INTEGER NOT NULL DEFAULT 0, \
                                         PRIMARY KEY (parent_id, related_id{})\
                                     )",
-                                    table_name, collection_slug, poly_col, poly_pk
-                                )
-                            };
-                            tracing::info!("Creating junction table: {}", table_name);
-                            conn.execute(&sql, []).with_context(|| {
-                                format!("Failed to create junction table {}", table_name)
-                            })?;
-                        } else {
-                            if has_locale_col {
-                                ensure_locale_column(
-                                    conn,
-                                    &table_name,
-                                    &locale_config.default_locale,
-                                )?;
-                            }
-                            // Ensure related_collection column for polymorphic upgrades
-                            if rc.is_polymorphic() {
-                                ensure_column_exists(
-                                    conn,
-                                    &table_name,
-                                    "related_collection",
-                                    "TEXT NOT NULL DEFAULT ''",
-                                )?;
-                            }
+                                table_name, collection_slug, poly_col, poly_pk
+                            )
+                        };
+                        tracing::info!("Creating junction table: {}", table_name);
+                        conn.execute(&sql, []).with_context(|| {
+                            format!("Failed to create junction table {}", table_name)
+                        })?;
+                    } else {
+                        if has_locale_col {
+                            ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
+                        }
+                        // Ensure related_collection column for polymorphic upgrades
+                        if rc.is_polymorphic() {
+                            ensure_column_exists(
+                                conn,
+                                &table_name,
+                                "related_collection",
+                                "TEXT NOT NULL DEFAULT ''",
+                            )?;
                         }
                     }
                 }

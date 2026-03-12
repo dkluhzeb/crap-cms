@@ -13,15 +13,15 @@ pub(crate) fn check_email_format(
     if field.field_type != FieldType::Email || is_empty {
         return;
     }
-    if let Some(serde_json::Value::String(s)) = value {
-        if !is_valid_email_format(s) {
-            errors.push(FieldError::with_key(
-                data_key.to_owned(),
-                format!("{} is not a valid email address", field.name),
-                "validation.email",
-                HashMap::from([("field".to_string(), field.name.clone())]),
-            ));
-        }
+    if let Some(serde_json::Value::String(s)) = value
+        && !is_valid_email_format(s)
+    {
+        errors.push(FieldError::with_key(
+            data_key.to_owned(),
+            format!("{} is not a valid email address", field.name),
+            "validation.email",
+            HashMap::from([("field".to_string(), field.name.clone())]),
+        ));
     }
 }
 

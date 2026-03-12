@@ -87,24 +87,23 @@ pub fn read_resource(
             let mut config_json = serde_json::to_value(config).unwrap_or(Value::Null);
             if let Some(obj) = config_json.as_object_mut() {
                 // Redact auth secret
-                if let Some(auth) = obj.get_mut("auth").and_then(|a| a.as_object_mut()) {
-                    if auth.contains_key("secret") {
-                        auth.insert("secret".to_string(), Value::String("***".to_string()));
-                    }
+                if let Some(auth) = obj.get_mut("auth").and_then(|a| a.as_object_mut())
+                    && auth.contains_key("secret")
+                {
+                    auth.insert("secret".to_string(), Value::String("***".to_string()));
                 }
                 // Redact email password
-                if let Some(email) = obj.get_mut("email").and_then(|e| e.as_object_mut()) {
-                    if email.contains_key("smtp_pass") {
-                        email.insert("smtp_pass".to_string(), Value::String("***".to_string()));
-                    }
+                if let Some(email) = obj.get_mut("email").and_then(|e| e.as_object_mut())
+                    && email.contains_key("smtp_pass")
+                {
+                    email.insert("smtp_pass".to_string(), Value::String("***".to_string()));
                 }
                 // Redact MCP API key
-                if let Some(mcp) = obj.get_mut("mcp").and_then(|m| m.as_object_mut()) {
-                    if let Some(key) = mcp.get("api_key").and_then(|k| k.as_str()) {
-                        if !key.is_empty() {
-                            mcp.insert("api_key".to_string(), Value::String("***".to_string()));
-                        }
-                    }
+                if let Some(mcp) = obj.get_mut("mcp").and_then(|m| m.as_object_mut())
+                    && let Some(key) = mcp.get("api_key").and_then(|k| k.as_str())
+                    && !key.is_empty()
+                {
+                    mcp.insert("api_key".to_string(), Value::String("***".to_string()));
                 }
             }
             Some(ResourceContent {

@@ -124,10 +124,10 @@ pub(super) fn collect_join_data_from_snapshot(
                 }
             }
             _ => {
-                if !field.has_parent_column() {
-                    if let Some(v) = obj.get(&field.name) {
-                        join_data.insert(field.name.clone(), v.clone());
-                    }
+                if !field.has_parent_column()
+                    && let Some(v) = obj.get(&field.name)
+                {
+                    join_data.insert(field.name.clone(), v.clone());
                 }
             }
         }

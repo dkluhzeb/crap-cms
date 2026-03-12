@@ -122,10 +122,10 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
         }
     };
 
-    if let Some(desc) = description {
-        if let Some(obj) = schema.as_object_mut() {
-            obj.insert("description".to_string(), Value::String(desc.to_string()));
-        }
+    if let Some(desc) = description
+        && let Some(obj) = schema.as_object_mut()
+    {
+        obj.insert("description".to_string(), Value::String(desc.to_string()));
     }
 
     schema
@@ -187,14 +187,14 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
         CrudOp::Create => {
             let mut schema = fields_to_object_schema(&def.fields);
             // Auth collections get a password field
-            if def.is_auth_collection() {
-                if let Some(obj) = schema.as_object_mut() {
-                    if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-                        props.insert("password".to_string(), json!({ "type": "string" }));
-                    }
-                    if let Some(req) = obj.get_mut("required").and_then(|r| r.as_array_mut()) {
-                        req.push(Value::String("password".to_string()));
-                    }
+            if def.is_auth_collection()
+                && let Some(obj) = schema.as_object_mut()
+            {
+                if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
+                    props.insert("password".to_string(), json!({ "type": "string" }));
+                }
+                if let Some(req) = obj.get_mut("required").and_then(|r| r.as_array_mut()) {
+                    req.push(Value::String("password".to_string()));
                 }
             }
             schema
@@ -208,16 +208,16 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
                 }
                 obj.insert("required".to_string(), json!(["id"]));
                 // Auth collections can update password
-                if def.is_auth_collection() {
-                    if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
-                        props.insert(
-                            "password".to_string(),
-                            json!({
-                                "type": "string",
-                                "description": "Leave empty to keep current password"
-                            }),
-                        );
-                    }
+                if def.is_auth_collection()
+                    && let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut())
+                {
+                    props.insert(
+                        "password".to_string(),
+                        json!({
+                            "type": "string",
+                            "description": "Leave empty to keep current password"
+                        }),
+                    );
                 }
             }
             schema

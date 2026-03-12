@@ -180,19 +180,17 @@ async fn create_upload(
 
     // Strip field-level create-denied fields
     {
-        if let Ok(mut conn) = state.pool.get() {
-            if let Ok(tx) = conn.transaction() {
-                let denied = state.hook_runner.check_field_write_access(
-                    &def.fields,
-                    user_doc,
-                    "create",
-                    &tx,
-                );
-                // Read-only access check — commit result is irrelevant, rollback on drop is safe
-                let _ = tx.commit();
-                for name in &denied {
-                    form_data.remove(name);
-                }
+        if let Ok(mut conn) = state.pool.get()
+            && let Ok(tx) = conn.transaction()
+        {
+            let denied =
+                state
+                    .hook_runner
+                    .check_field_write_access(&def.fields, user_doc, "create", &tx);
+            // Read-only access check — commit result is irrelevant, rollback on drop is safe
+            let _ = tx.commit();
+            for name in &denied {
+                form_data.remove(name);
             }
         }
     }
@@ -243,14 +241,12 @@ async fn create_upload(
     match result {
         Ok(Ok((doc, _req_context))) => {
             // Enqueue deferred image conversions if any
-            if !queued_conversions.is_empty() {
-                if let Ok(conn) = state.pool.get() {
-                    if let Err(e) =
-                        upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions)
-                    {
-                        tracing::warn!("Failed to enqueue image conversions: {}", e);
-                    }
-                }
+            if !queued_conversions.is_empty()
+                && let Ok(conn) = state.pool.get()
+                && let Err(e) =
+                    upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions)
+            {
+                tracing::warn!("Failed to enqueue image conversions: {}", e);
             }
 
             let edited_by = auth_user
@@ -360,60 +356,56 @@ async fn update_upload(
 
     // Load old document to get file paths for cleanup
     let mut old_doc_fields: Option<HashMap<String, serde_json::Value>> = None;
-    if let Some(ref f) = file {
-        if !f.data.is_empty() {
-            if let Ok(conn) = state.pool.get() {
-                if let Ok(Some(old_doc)) = query::find_by_id(&conn, &slug, &def, &id, None) {
-                    old_doc_fields = Some(old_doc.fields.clone());
-                }
-            }
-        }
+    if let Some(ref f) = file
+        && !f.data.is_empty()
+        && let Ok(conn) = state.pool.get()
+        && let Ok(Some(old_doc)) = query::find_by_id(&conn, &slug, &def, &id, None)
+    {
+        old_doc_fields = Some(old_doc.fields.clone());
     }
 
     // Process upload if a new file was provided — runs on blocking thread
     let mut queued_conversions = Vec::new();
     let mut created_files: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(f) = file {
-        if let Some(upload_config) = def.upload.clone() {
-            let config_dir = state.config_dir.clone();
-            let slug_for_upload = slug.clone();
-            let global_max = state.config.upload.max_file_size;
-            match tokio::task::spawn_blocking(move || {
-                upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
-            })
-            .await
-            {
-                Ok(Ok(processed)) => {
-                    queued_conversions = processed.queued_conversions.clone();
-                    created_files = processed.created_files.clone();
-                    inject_upload_metadata(&mut form_data, &processed);
-                }
-                Ok(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
-                Err(e) => {
-                    return json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        &format!("Task error: {}", e),
-                    );
-                }
+    if let Some(f) = file
+        && let Some(upload_config) = def.upload.clone()
+    {
+        let config_dir = state.config_dir.clone();
+        let slug_for_upload = slug.clone();
+        let global_max = state.config.upload.max_file_size;
+        match tokio::task::spawn_blocking(move || {
+            upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+        })
+        .await
+        {
+            Ok(Ok(processed)) => {
+                queued_conversions = processed.queued_conversions.clone();
+                created_files = processed.created_files.clone();
+                inject_upload_metadata(&mut form_data, &processed);
+            }
+            Ok(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+            Err(e) => {
+                return json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("Task error: {}", e),
+                );
             }
         }
     }
 
     // Strip field-level update-denied fields
     {
-        if let Ok(mut conn) = state.pool.get() {
-            if let Ok(tx) = conn.transaction() {
-                let denied = state.hook_runner.check_field_write_access(
-                    &def.fields,
-                    user_doc,
-                    "update",
-                    &tx,
-                );
-                // Read-only access check — commit result is irrelevant, rollback on drop is safe
-                let _ = tx.commit();
-                for name in &denied {
-                    form_data.remove(name);
-                }
+        if let Ok(mut conn) = state.pool.get()
+            && let Ok(tx) = conn.transaction()
+        {
+            let denied =
+                state
+                    .hook_runner
+                    .check_field_write_access(&def.fields, user_doc, "update", &tx);
+            // Read-only access check — commit result is irrelevant, rollback on drop is safe
+            let _ = tx.commit();
+            for name in &denied {
+                form_data.remove(name);
             }
         }
     }
@@ -468,14 +460,11 @@ async fn update_upload(
             }
 
             // Enqueue deferred image conversions if any
-            if !queued_conversions.is_empty() {
-                if let Ok(conn) = state.pool.get() {
-                    if let Err(e) =
-                        upload::enqueue_conversions(&conn, &slug, &id, &queued_conversions)
-                    {
-                        tracing::warn!("Failed to enqueue image conversions: {}", e);
-                    }
-                }
+            if !queued_conversions.is_empty()
+                && let Ok(conn) = state.pool.get()
+                && let Err(e) = upload::enqueue_conversions(&conn, &slug, &id, &queued_conversions)
+            {
+                tracing::warn!("Failed to enqueue image conversions: {}", e);
             }
 
             let edited_by = auth_user

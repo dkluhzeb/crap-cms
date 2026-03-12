@@ -1,6 +1,7 @@
 use std::cmp::Ordering;
 
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
+use serde_json::Value;
 
 use super::as_f64;
 
@@ -25,12 +26,14 @@ impl HelperDef for CompareHelper {
             .partial_cmp(&b)
             .map(|o| self.0.contains(&o))
             .unwrap_or(false);
-        Ok(ScopedJson::Derived(serde_json::Value::Bool(result)))
+        Ok(ScopedJson::Derived(Value::Bool(result)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations =
@@ -45,21 +48,9 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (gt a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 10, "b": 5}))
-                .unwrap(),
-            "YES"
-        );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 5, "b": 10}))
-                .unwrap(),
-            "NO"
-        );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 5, "b": 5}))
-                .unwrap(),
-            "NO"
-        );
+        assert_eq!(hbs.render("t", &json!({"a": 10, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &json!({"a": 5, "b": 10})).unwrap(), "NO");
+        assert_eq!(hbs.render("t", &json!({"a": 5, "b": 5})).unwrap(), "NO");
     }
 
     #[test]
@@ -67,16 +58,8 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (lt a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 3, "b": 7}))
-                .unwrap(),
-            "YES"
-        );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 7, "b": 3}))
-                .unwrap(),
-            "NO"
-        );
+        assert_eq!(hbs.render("t", &json!({"a": 3, "b": 7})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &json!({"a": 7, "b": 3})).unwrap(), "NO");
     }
 
     #[test]
@@ -84,21 +67,9 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (gte a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 5, "b": 5}))
-                .unwrap(),
-            "YES"
-        );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 6, "b": 5}))
-                .unwrap(),
-            "YES"
-        );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 4, "b": 5}))
-                .unwrap(),
-            "NO"
-        );
+        assert_eq!(hbs.render("t", &json!({"a": 5, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &json!({"a": 6, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &json!({"a": 4, "b": 5})).unwrap(), "NO");
     }
 
     #[test]
@@ -106,21 +77,9 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (lte a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 5, "b": 5}))
-                .unwrap(),
-            "YES"
-        );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 4, "b": 5}))
-                .unwrap(),
-            "YES"
-        );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 6, "b": 5}))
-                .unwrap(),
-            "NO"
-        );
+        assert_eq!(hbs.render("t", &json!({"a": 5, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &json!({"a": 4, "b": 5})).unwrap(), "YES");
+        assert_eq!(hbs.render("t", &json!({"a": 6, "b": 5})).unwrap(), "NO");
     }
 
     #[test]
@@ -129,20 +88,18 @@ mod tests {
         hbs.register_template_string("gt_t", "{{#if (gt a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render("gt_t", &serde_json::json!({"a": "10", "b": "5"}))
-                .unwrap(),
+            hbs.render("gt_t", &json!({"a": "10", "b": "5"})).unwrap(),
             "YES"
         );
         assert_eq!(
-            hbs.render("gt_t", &serde_json::json!({"a": "3", "b": "7"}))
-                .unwrap(),
+            hbs.render("gt_t", &json!({"a": "3", "b": "7"})).unwrap(),
             "NO"
         );
 
         hbs.register_template_string("lt_t", "{{#if (lt a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render("lt_t", &serde_json::json!({"a": "2.5", "b": "3.5"}))
+            hbs.render("lt_t", &json!({"a": "2.5", "b": "3.5"}))
                 .unwrap(),
             "YES"
         );
@@ -154,8 +111,7 @@ mod tests {
         hbs.register_template_string("t", "{{#if (gte a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "5.0", "b": 5}))
-                .unwrap(),
+            hbs.render("t", &json!({"a": "5.0", "b": 5})).unwrap(),
             "YES"
         );
     }
@@ -166,8 +122,7 @@ mod tests {
         hbs.register_template_string("t", "{{#if (lte a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 5, "b": "5.0"}))
-                .unwrap(),
+            hbs.render("t", &json!({"a": 5, "b": "5.0"})).unwrap(),
             "YES"
         );
     }
@@ -178,14 +133,9 @@ mod tests {
         hbs.register_template_string("t", "{{#if (gt a b)}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": null, "b": null}))
-                .unwrap(),
+            hbs.render("t", &json!({"a": null, "b": null})).unwrap(),
             "NO"
         );
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": 1, "b": null}))
-                .unwrap(),
-            "YES"
-        );
+        assert_eq!(hbs.render("t", &json!({"a": 1, "b": null})).unwrap(), "YES");
     }
 }

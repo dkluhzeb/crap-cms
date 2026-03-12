@@ -282,19 +282,20 @@ pub(crate) fn locale_write_column(
     field: &FieldDefinition,
     locale_ctx: &Option<&LocaleContext>,
 ) -> String {
-    if let Some(ctx) = locale_ctx {
-        if field.localized && ctx.config.is_enabled() {
-            let req_locale = match &ctx.mode {
-                LocaleMode::Single(l) => l.as_str(),
-                _ => ctx.config.default_locale.as_str(),
-            };
-            let locale = if ctx.config.locales.iter().any(|l| l == req_locale) {
-                req_locale
-            } else {
-                ctx.config.default_locale.as_str()
-            };
-            return format!("{}__{}", field_name, sanitize_locale(locale));
-        }
+    if let Some(ctx) = locale_ctx
+        && field.localized
+        && ctx.config.is_enabled()
+    {
+        let req_locale = match &ctx.mode {
+            LocaleMode::Single(l) => l.as_str(),
+            _ => ctx.config.default_locale.as_str(),
+        };
+        let locale = if ctx.config.locales.iter().any(|l| l == req_locale) {
+            req_locale
+        } else {
+            ctx.config.default_locale.as_str()
+        };
+        return format!("{}__{}", field_name, sanitize_locale(locale));
     }
     field_name.to_string()
 }

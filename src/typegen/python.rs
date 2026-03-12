@@ -131,14 +131,13 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         return;
     }
     // Emit a comment for polymorphic relationships listing target collections
-    if field.field_type == FieldType::Relationship {
-        if let Some(rc) = &field.relationship {
-            if rc.is_polymorphic() {
-                let targets = rc.all_collections().join(", ");
-                writeln!(out, "    # Polymorphic relationship — targets: {}", targets)
-                    .expect("write to String");
-            }
-        }
+    if field.field_type == FieldType::Relationship
+        && let Some(rc) = &field.relationship
+        && rc.is_polymorphic()
+    {
+        let targets = rc.all_collections().join(", ");
+        writeln!(out, "    # Polymorphic relationship — targets: {}", targets)
+            .expect("write to String");
     }
     let py_type = field_to_py(field);
     if is_optional(field) {

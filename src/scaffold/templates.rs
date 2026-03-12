@@ -209,10 +209,11 @@ fn print_file_tree(files: &[(String, &[u8])]) {
 /// `verbose`: show full file tree instead of compact summary.
 pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
     // Validate filter
-    if let Some(f) = type_filter {
-        if f != "templates" && f != "static" {
-            anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
-        }
+    if let Some(f) = type_filter
+        && f != "templates"
+        && f != "static"
+    {
+        anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
     }
 
     let show_templates = type_filter.is_none() || type_filter == Some("templates");
@@ -278,10 +279,11 @@ pub fn templates_extract(
     force: bool,
 ) -> Result<()> {
     // Validate filter
-    if let Some(f) = type_filter {
-        if f != "templates" && f != "static" {
-            anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
-        }
+    if let Some(f) = type_filter
+        && f != "templates"
+        && f != "static"
+    {
+        anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
     }
 
     if !all && paths.is_empty() {

@@ -23,15 +23,15 @@ pub(crate) fn extract_join_data_from_form(
     for field in field_defs {
         match field.field_type {
             FieldType::Relationship => {
-                if let Some(ref rc) = field.relationship {
-                    if rc.has_many {
-                        // Has-many: comma-separated IDs in form value
-                        if let Some(val) = form.get(&field.name) {
-                            join_data.insert(field.name.clone(), Value::String(val.clone()));
-                        } else {
-                            // Empty selection — clear all
-                            join_data.insert(field.name.clone(), Value::String(String::new()));
-                        }
+                if let Some(ref rc) = field.relationship
+                    && rc.has_many
+                {
+                    // Has-many: comma-separated IDs in form value
+                    if let Some(val) = form.get(&field.name) {
+                        join_data.insert(field.name.clone(), Value::String(val.clone()));
+                    } else {
+                        // Empty selection — clear all
+                        join_data.insert(field.name.clone(), Value::String(String::new()));
                     }
                 }
             }
@@ -150,27 +150,27 @@ fn parse_composite_form_data(
     for (key, value) in form {
         if let Some(rest) = key.strip_prefix(&prefix) {
             // rest looks like "0][title]" or "0][items][1][caption]"
-            if let Some(bracket_pos) = rest.find(']') {
-                if let Ok(idx) = rest[..bracket_pos].parse::<usize>() {
-                    let after = &rest[bracket_pos + 1..];
-                    if let Some(remaining) = after.strip_prefix('[') {
-                        // remaining is "title]" or "items][1][caption]"
-                        // Find the first sub-field name
-                        if let Some(next_bracket) = remaining.find(']') {
-                            let sub_key = &remaining[..next_bracket];
-                            let tail = &remaining[next_bracket + 1..];
+            if let Some(bracket_pos) = rest.find(']')
+                && let Ok(idx) = rest[..bracket_pos].parse::<usize>()
+            {
+                let after = &rest[bracket_pos + 1..];
+                if let Some(remaining) = after.strip_prefix('[') {
+                    // remaining is "title]" or "items][1][caption]"
+                    // Find the first sub-field name
+                    if let Some(next_bracket) = remaining.find(']') {
+                        let sub_key = &remaining[..next_bracket];
+                        let tail = &remaining[next_bracket + 1..];
 
-                            if tail.is_empty() {
-                                // Leaf: simple key like "title]" → key="title", value=form value
-                                rows.entry(idx)
-                                    .or_default()
-                                    .push((sub_key.to_string(), value.clone()));
-                            } else {
-                                // Nested: "items][1][caption]" → reconstruct the deeper key
-                                // Store as sub_key + tail so we can re-parse recursively
-                                let deep_key = format!("{}{}", sub_key, tail);
-                                rows.entry(idx).or_default().push((deep_key, value.clone()));
-                            }
+                        if tail.is_empty() {
+                            // Leaf: simple key like "title]" → key="title", value=form value
+                            rows.entry(idx)
+                                .or_default()
+                                .push((sub_key.to_string(), value.clone()));
+                        } else {
+                            // Nested: "items][1][caption]" → reconstruct the deeper key
+                            // Store as sub_key + tail so we can re-parse recursively
+                            let deep_key = format!("{}{}", sub_key, tail);
+                            rows.entry(idx).or_default().push((deep_key, value.clone()));
                         }
                     }
                 }

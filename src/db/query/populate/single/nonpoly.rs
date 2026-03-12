@@ -52,10 +52,10 @@ pub(super) fn populate_nonpoly_has_many(
         } else {
             match fetched_map.remove(id) {
                 Some(mut related_doc) => {
-                    if let Some(ref uc) = rel_def.upload {
-                        if uc.enabled {
-                            crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
-                        }
+                    if let Some(ref uc) = rel_def.upload
+                        && uc.enabled
+                    {
+                        crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
                     }
                     populate_relationships_cached(
                         &PopulateContext {
@@ -118,10 +118,10 @@ pub(super) fn populate_nonpoly_has_one(
     } else if let Some(mut related_doc) =
         find_by_id(conn, rel_collection, rel_def, &id, locale_ctx)?
     {
-        if let Some(ref uc) = rel_def.upload {
-            if uc.enabled {
-                crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
-            }
+        if let Some(ref uc) = rel_def.upload
+            && uc.enabled
+        {
+            crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
         }
         populate_relationships_cached(
             &PopulateContext {

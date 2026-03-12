@@ -184,11 +184,11 @@ pub(super) fn register_find(
                     .map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
             }
             // Assemble sizes for upload collections
-            if let Some(ref upload_config) = def.upload {
-                if upload_config.enabled {
-                    for doc in &mut docs {
-                        upload::assemble_sizes_object(doc, upload_config);
-                    }
+            if let Some(ref upload_config) = def.upload
+                && upload_config.enabled
+            {
+                for doc in &mut docs {
+                    upload::assemble_sizes_object(doc, upload_config);
                 }
             }
 
@@ -425,10 +425,10 @@ pub(super) fn register_find_by_id(
                     query::populate_relationships(&pop_ctx, d, &mut visited, &pop_opts)
                         .map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
                 }
-                if let Some(ref upload_config) = def.upload {
-                    if upload_config.enabled {
-                        upload::assemble_sizes_object(d, upload_config);
-                    }
+                if let Some(ref upload_config) = def.upload
+                    && upload_config.enabled
+                {
+                    upload::assemble_sizes_object(d, upload_config);
                 }
                 if let Some(ref sel) = select {
                     query::apply_select_to_document(d, sel);
@@ -436,16 +436,13 @@ pub(super) fn register_find_by_id(
             }
 
             // Field-level read stripping when overrideAccess = false
-            if !override_access {
-                if let Some(ref mut d) = doc {
-                    let user_doc = lua
-                        .app_data_ref::<UserContext>()
-                        .and_then(|uc| uc.0.clone());
-                    let denied =
-                        check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
-                    for name in &denied {
-                        d.fields.remove(name);
-                    }
+            if !override_access && let Some(ref mut d) = doc {
+                let user_doc = lua
+                    .app_data_ref::<UserContext>()
+                    .and_then(|uc| uc.0.clone());
+                let denied = check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
+                for name in &denied {
+                    d.fields.remove(name);
                 }
             }
 

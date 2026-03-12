@@ -40,20 +40,20 @@ pub fn make_job(
     if let Some(sched) = schedule {
         config_lines.push(format!("    schedule = \"{}\",", sched));
     }
-    if let Some(q) = queue {
-        if q != "default" {
-            config_lines.push(format!("    queue = \"{}\",", q));
-        }
+    if let Some(q) = queue
+        && q != "default"
+    {
+        config_lines.push(format!("    queue = \"{}\",", q));
     }
-    if let Some(r) = retries {
-        if r > 0 {
-            config_lines.push(format!("    retries = {},", r));
-        }
+    if let Some(r) = retries
+        && r > 0
+    {
+        config_lines.push(format!("    retries = {},", r));
     }
-    if let Some(t) = timeout {
-        if t != 60 {
-            config_lines.push(format!("    timeout = {},", t));
-        }
+    if let Some(t) = timeout
+        && t != 60
+    {
+        config_lines.push(format!("    timeout = {},", t));
     }
     config_lines.push(format!("    labels = {{ singular = \"{}\" }},", label));
 

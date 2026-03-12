@@ -28,10 +28,10 @@ pub(super) fn populate_join_fields(
         if field.field_type != FieldType::Join {
             continue;
         }
-        if let Some(sel) = select {
-            if !sel.iter().any(|s| s == &field.name) {
-                continue;
-            }
+        if let Some(sel) = select
+            && !sel.iter().any(|s| s == &field.name)
+        {
+            continue;
         }
         let jc = match &field.join {
             Some(jc) => jc,
@@ -58,10 +58,10 @@ pub(super) fn populate_join_fields(
                     None,
                     locale_ctx,
                 )?;
-                if let Some(ref uc) = target_def.upload {
-                    if uc.enabled {
-                        crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
-                    }
+                if let Some(ref uc) = target_def.upload
+                    && uc.enabled
+                {
+                    crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
                 }
                 populate_relationships_cached(
                     &PopulateContext {

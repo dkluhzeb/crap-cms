@@ -120,14 +120,12 @@ fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<Auth
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if let Some(token) = extract_cookie(cookie_header, "crap_session") {
-        if let Ok(claims) = validate_token(token, &state.jwt_secret) {
-            if let Some(auth_user) =
-                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
-            {
-                return Some(auth_user);
-            }
-        }
+    if let Some(token) = extract_cookie(cookie_header, "crap_session")
+        && let Ok(claims) = validate_token(token, &state.jwt_secret)
+        && let Some(auth_user) =
+            load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+    {
+        return Some(auth_user);
     }
 
     // Try Bearer token
@@ -137,14 +135,12 @@ fn extract_auth_user(request: &Request<Body>, state: &AdminState) -> Option<Auth
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    if let Some(token) = auth_header.strip_prefix("Bearer ") {
-        if let Ok(claims) = validate_token(token, &state.jwt_secret) {
-            if let Some(auth_user) =
-                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
-            {
-                return Some(auth_user);
-            }
-        }
+    if let Some(token) = auth_header.strip_prefix("Bearer ")
+        && let Ok(claims) = validate_token(token, &state.jwt_secret)
+        && let Some(auth_user) =
+            load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+    {
+        return Some(auth_user);
     }
 
     None

@@ -6,20 +6,17 @@ pub mod server;
 pub mod templates;
 pub mod translations;
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use handlebars::Handlebars;
-
 use tokio_util::sync::CancellationToken;
 
-use crate::config::CrapConfig;
-use crate::core::Registry;
-use crate::core::email::EmailRenderer;
-use crate::core::event::EventBus;
-use crate::core::rate_limit::LoginRateLimiter;
-use crate::db::DbPool;
-use crate::hooks::lifecycle::HookRunner;
+use crate::{
+    config::CrapConfig,
+    core::{Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter},
+    db::DbPool,
+    hooks::lifecycle::HookRunner,
+};
 
 use self::translations::Translations;
 

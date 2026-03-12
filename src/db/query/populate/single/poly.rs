@@ -33,10 +33,10 @@ pub(super) fn populate_poly_has_many(
     // Group IDs by target collection for batch fetch
     let mut ids_by_collection: HashMap<String, Vec<String>> = HashMap::new();
     for item in &items {
-        if let Some((col, id)) = parse_poly_ref(item) {
-            if !visited.contains(&(col.clone(), id.clone())) {
-                ids_by_collection.entry(col).or_default().push(id);
-            }
+        if let Some((col, id)) = parse_poly_ref(item)
+            && !visited.contains(&(col.clone(), id.clone()))
+        {
+            ids_by_collection.entry(col).or_default().push(id);
         }
     }
 
@@ -64,10 +64,10 @@ pub(super) fn populate_poly_has_many(
                 if let Some(item_def) = registry.get_collection(&col) {
                     let item_def = item_def.clone();
                     if let Some(mut rd) = col_map.remove(&id) {
-                        if let Some(ref uc) = item_def.upload {
-                            if uc.enabled {
-                                crate::core::upload::assemble_sizes_object(&mut rd, uc);
-                            }
+                        if let Some(ref uc) = item_def.upload
+                            && uc.enabled
+                        {
+                            crate::core::upload::assemble_sizes_object(&mut rd, uc);
                         }
                         populate_relationships_cached(
                             &PopulateContext {
@@ -133,10 +133,10 @@ pub(super) fn populate_poly_has_one(
                     document_to_json(cached.value(), &col),
                 );
             } else if let Some(mut rd) = find_by_id(conn, &col, &item_def, &id, locale_ctx)? {
-                if let Some(ref uc) = item_def.upload {
-                    if uc.enabled {
-                        crate::core::upload::assemble_sizes_object(&mut rd, uc);
-                    }
+                if let Some(ref uc) = item_def.upload
+                    && uc.enabled
+                {
+                    crate::core::upload::assemble_sizes_object(&mut rd, uc);
                 }
                 populate_relationships_cached(
                     &PopulateContext {

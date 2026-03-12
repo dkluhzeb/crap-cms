@@ -70,40 +70,40 @@ pub async fn sse_handler(
         {
             let user_doc = auth_user.as_ref().map(|ext| &ext.0.user_doc);
 
-            if let Ok(mut conn) = state.pool.get() {
-                if let Ok(tx) = conn.transaction() {
-                    for (slug, def) in &state.registry.collections {
-                        match state.hook_runner.check_access(
-                            def.access.read.as_deref(),
-                            user_doc,
-                            None,
-                            None,
-                            &tx,
-                        ) {
-                            Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
-                                allowed_collections.insert(slug.clone());
-                            }
-                            _ => {}
+            if let Ok(mut conn) = state.pool.get()
+                && let Ok(tx) = conn.transaction()
+            {
+                for (slug, def) in &state.registry.collections {
+                    match state.hook_runner.check_access(
+                        def.access.read.as_deref(),
+                        user_doc,
+                        None,
+                        None,
+                        &tx,
+                    ) {
+                        Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
+                            allowed_collections.insert(slug.clone());
                         }
+                        _ => {}
                     }
-
-                    for (slug, def) in &state.registry.globals {
-                        match state.hook_runner.check_access(
-                            def.access.read.as_deref(),
-                            user_doc,
-                            None,
-                            None,
-                            &tx,
-                        ) {
-                            Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
-                                allowed_globals.insert(slug.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                    // Read-only access check — commit result is irrelevant, rollback on drop is safe
-                    let _ = tx.commit();
                 }
+
+                for (slug, def) in &state.registry.globals {
+                    match state.hook_runner.check_access(
+                        def.access.read.as_deref(),
+                        user_doc,
+                        None,
+                        None,
+                        &tx,
+                    ) {
+                        Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {
+                            allowed_globals.insert(slug.clone());
+                        }
+                        _ => {}
+                    }
+                }
+                // Read-only access check — commit result is irrelevant, rollback on drop is safe
+                let _ = tx.commit();
             }
         }
     }

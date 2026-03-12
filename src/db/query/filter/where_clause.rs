@@ -195,19 +195,19 @@ pub fn resolve_filter_column(
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
 ) -> String {
-    if let Some(ctx) = locale_ctx {
-        if ctx.config.is_enabled() {
-            for field in &def.fields {
-                if let Some(locale) = check_field_locale(field, field_name, ctx) {
-                    return format!("{}__{}", field_name, sanitize_locale(locale));
-                }
+    if let Some(ctx) = locale_ctx
+        && ctx.config.is_enabled()
+    {
+        for field in &def.fields {
+            if let Some(locale) = check_field_locale(field, field_name, ctx) {
+                return format!("{}__{}", field_name, sanitize_locale(locale));
             }
         }
     }
     field_name.to_string()
 }
 
-fn get_locale<'a>(ctx: &'a LocaleContext) -> &'a str {
+fn get_locale(ctx: &LocaleContext) -> &str {
     match &ctx.mode {
         LocaleMode::Single(l) => l.as_str(),
         _ => ctx.config.default_locale.as_str(),

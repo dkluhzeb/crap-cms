@@ -82,12 +82,11 @@ pub fn find_by_ids(
     let mut documents = Vec::new();
     for row in rows {
         let mut doc = row?;
-        if let Some(ctx) = locale_ctx {
-            if ctx.config.is_enabled() {
-                if let LocaleMode::All = ctx.mode {
-                    group_locale_fields(&mut doc, &def.fields, &ctx.config);
-                }
-            }
+        if let Some(ctx) = locale_ctx
+            && ctx.config.is_enabled()
+            && let LocaleMode::All = ctx.mode
+        {
+            group_locale_fields(&mut doc, &def.fields, &ctx.config);
         }
         super::super::hydrate_document(conn, slug, &def.fields, &mut doc, None, locale_ctx)?;
         documents.push(doc);
@@ -128,12 +127,11 @@ pub(crate) fn find_by_id_raw(
 
     match result {
         Ok(mut doc) => {
-            if let Some(ctx) = locale_ctx {
-                if ctx.config.is_enabled() {
-                    if let LocaleMode::All = ctx.mode {
-                        group_locale_fields(&mut doc, &def.fields, &ctx.config);
-                    }
-                }
+            if let Some(ctx) = locale_ctx
+                && ctx.config.is_enabled()
+                && let LocaleMode::All = ctx.mode
+            {
+                group_locale_fields(&mut doc, &def.fields, &ctx.config);
             }
             Ok(Some(doc))
         }

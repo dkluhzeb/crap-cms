@@ -101,10 +101,10 @@ pub fn hydrate_document(
 ) -> Result<()> {
     for field in fields {
         // Skip hydrating fields not in the select list
-        if let Some(sel) = select {
-            if !sel.iter().any(|s| s == &field.name) {
-                continue;
-            }
+        if let Some(sel) = select
+            && !sel.iter().any(|s| s == &field.name)
+        {
+            continue;
         }
         let locale = resolve_join_locale(field, locale_ctx);
         let locale_ref = locale.as_deref();
@@ -112,50 +112,37 @@ pub fn hydrate_document(
         let fallback_ref = fallback_locale.as_deref();
         match field.field_type {
             FieldType::Relationship | FieldType::Upload => {
-                if let Some(ref rc) = field.relationship {
-                    if rc.has_many {
-                        if rc.is_polymorphic() {
-                            let mut items = find_polymorphic_related(
+                if let Some(ref rc) = field.relationship
+                    && rc.has_many
+                {
+                    if rc.is_polymorphic() {
+                        let mut items =
+                            find_polymorphic_related(conn, slug, &field.name, &doc.id, locale_ref)?;
+                        if items.is_empty() && fallback_ref.is_some() {
+                            items = find_polymorphic_related(
                                 conn,
                                 slug,
                                 &field.name,
                                 &doc.id,
-                                locale_ref,
+                                fallback_ref,
                             )?;
-                            if items.is_empty() && fallback_ref.is_some() {
-                                items = find_polymorphic_related(
-                                    conn,
-                                    slug,
-                                    &field.name,
-                                    &doc.id,
-                                    fallback_ref,
-                                )?;
-                            }
-                            let json_items: Vec<serde_json::Value> = items
-                                .into_iter()
-                                .map(|(col, id)| {
-                                    serde_json::Value::String(format!("{}/{}", col, id))
-                                })
-                                .collect();
-                            doc.fields
-                                .insert(field.name.clone(), serde_json::Value::Array(json_items));
-                        } else {
-                            let mut ids =
-                                find_related_ids(conn, slug, &field.name, &doc.id, locale_ref)?;
-                            if ids.is_empty() && fallback_ref.is_some() {
-                                ids = find_related_ids(
-                                    conn,
-                                    slug,
-                                    &field.name,
-                                    &doc.id,
-                                    fallback_ref,
-                                )?;
-                            }
-                            let json_ids: Vec<serde_json::Value> =
-                                ids.into_iter().map(serde_json::Value::String).collect();
-                            doc.fields
-                                .insert(field.name.clone(), serde_json::Value::Array(json_ids));
                         }
+                        let json_items: Vec<serde_json::Value> = items
+                            .into_iter()
+                            .map(|(col, id)| serde_json::Value::String(format!("{}/{}", col, id)))
+                            .collect();
+                        doc.fields
+                            .insert(field.name.clone(), serde_json::Value::Array(json_items));
+                    } else {
+                        let mut ids =
+                            find_related_ids(conn, slug, &field.name, &doc.id, locale_ref)?;
+                        if ids.is_empty() && fallback_ref.is_some() {
+                            ids = find_related_ids(conn, slug, &field.name, &doc.id, fallback_ref)?;
+                        }
+                        let json_ids: Vec<serde_json::Value> =
+                            ids.into_iter().map(serde_json::Value::String).collect();
+                        doc.fields
+                            .insert(field.name.clone(), serde_json::Value::Array(json_ids));
                     }
                 }
             }

@@ -218,38 +218,38 @@ pub fn generate_tools(registry: &Registry, config: &McpConfig) -> Vec<ToolDefini
 pub fn parse_tool_name(name: &str, registry: &Registry) -> Option<ParsedTool> {
     // Try collection CRUD patterns
     for prefix in &["find_by_id_", "find_", "create_", "update_", "delete_"] {
-        if let Some(slug) = name.strip_prefix(prefix) {
-            if registry.collections.contains_key(slug) {
-                let op = match *prefix {
-                    "find_" => ToolOp::Find,
-                    "find_by_id_" => ToolOp::FindById,
-                    "create_" => ToolOp::Create,
-                    "update_" => ToolOp::Update,
-                    "delete_" => ToolOp::Delete,
-                    _ => unreachable!(),
-                };
-                return Some(ParsedTool {
-                    op,
-                    slug: slug.to_string(),
-                });
-            }
+        if let Some(slug) = name.strip_prefix(prefix)
+            && registry.collections.contains_key(slug)
+        {
+            let op = match *prefix {
+                "find_" => ToolOp::Find,
+                "find_by_id_" => ToolOp::FindById,
+                "create_" => ToolOp::Create,
+                "update_" => ToolOp::Update,
+                "delete_" => ToolOp::Delete,
+                _ => unreachable!(),
+            };
+            return Some(ParsedTool {
+                op,
+                slug: slug.to_string(),
+            });
         }
     }
 
     // Try global patterns (global_read_<slug>, global_update_<slug>)
     for prefix in &["global_read_", "global_update_"] {
-        if let Some(slug) = name.strip_prefix(prefix) {
-            if registry.globals.contains_key(slug) {
-                let op = match *prefix {
-                    "global_read_" => ToolOp::ReadGlobal,
-                    "global_update_" => ToolOp::UpdateGlobal,
-                    _ => unreachable!(),
-                };
-                return Some(ParsedTool {
-                    op,
-                    slug: slug.to_string(),
-                });
-            }
+        if let Some(slug) = name.strip_prefix(prefix)
+            && registry.globals.contains_key(slug)
+        {
+            let op = match *prefix {
+                "global_read_" => ToolOp::ReadGlobal,
+                "global_update_" => ToolOp::UpdateGlobal,
+                _ => unreachable!(),
+            };
+            return Some(ParsedTool {
+                op,
+                slug: slug.to_string(),
+            });
         }
     }
 

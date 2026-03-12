@@ -709,82 +709,82 @@ pub(super) fn enrich_upload(
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
-    if let Some(ref rc) = field_def.relationship {
-        if let Some(related_def) = reg.get_collection(&rc.collection) {
-            let title_field = related_def.title_field().map(|s| s.to_string());
-            let admin_thumbnail = related_def
-                .upload
-                .as_ref()
-                .and_then(|u| u.admin_thumbnail.as_ref().cloned());
+    if let Some(ref rc) = field_def.relationship
+        && let Some(related_def) = reg.get_collection(&rc.collection)
+    {
+        let title_field = related_def.title_field().map(|s| s.to_string());
+        let admin_thumbnail = related_def
+            .upload
+            .as_ref()
+            .and_then(|u| u.admin_thumbnail.as_ref().cloned());
 
-            if rc.has_many {
-                let selected_ids: Vec<String> = match doc_fields.get(&field_def.name) {
-                    Some(Value::Array(arr)) => arr
-                        .iter()
-                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                        .collect(),
-                    _ => Vec::new(),
-                };
-
-                let selected_items: Vec<_> = selected_ids
+        if rc.has_many {
+            let selected_ids: Vec<String> = match doc_fields.get(&field_def.name) {
+                Some(Value::Array(arr)) => arr
                     .iter()
-                    .filter_map(|id| {
-                        query::find_by_id(conn, &rc.collection, related_def, id, rel_locale_ctx)
-                            .ok()
-                            .flatten()
-                            .map(|mut doc| {
-                                if let Some(ref uc) = related_def.upload {
-                                    if uc.enabled {
-                                        upload::assemble_sizes_object(&mut doc, uc);
-                                    }
-                                }
-                                build_upload_item(&doc, &title_field, &admin_thumbnail, false)
-                            })
-                    })
-                    .collect();
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect(),
+                _ => Vec::new(),
+            };
 
-                ctx["selected_items"] = json!(selected_items);
-            } else {
-                let current_value = ctx
-                    .get("value")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-
-                if !current_value.is_empty() {
-                    if let Ok(Some(mut doc)) = query::find_by_id(
-                        conn,
-                        &rc.collection,
-                        related_def,
-                        &current_value,
-                        rel_locale_ctx,
-                    ) {
-                        if let Some(ref uc) = related_def.upload {
-                            if uc.enabled {
+            let selected_items: Vec<_> = selected_ids
+                .iter()
+                .filter_map(|id| {
+                    query::find_by_id(conn, &rc.collection, related_def, id, rel_locale_ctx)
+                        .ok()
+                        .flatten()
+                        .map(|mut doc| {
+                            if let Some(ref uc) = related_def.upload
+                                && uc.enabled
+                            {
                                 upload::assemble_sizes_object(&mut doc, uc);
                             }
-                        }
+                            build_upload_item(&doc, &title_field, &admin_thumbnail, false)
+                        })
+                })
+                .collect();
 
-                        let item = build_upload_item(&doc, &title_field, &admin_thumbnail, true);
-                        let label = item["label"].as_str().unwrap_or("").to_string();
-                        let thumb_url = item
-                            .get("thumbnail_url")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string());
+            ctx["selected_items"] = json!(selected_items);
+        } else {
+            let current_value = ctx
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
-                        ctx["selected_items"] = json!([item]);
-
-                        if let Some(url) = thumb_url {
-                            ctx["selected_preview_url"] = json!(url);
-                        }
-
-                        ctx["selected_filename"] = json!(label);
-                    } else {
-                        ctx["selected_items"] = json!([]);
+            if !current_value.is_empty() {
+                if let Ok(Some(mut doc)) = query::find_by_id(
+                    conn,
+                    &rc.collection,
+                    related_def,
+                    &current_value,
+                    rel_locale_ctx,
+                ) {
+                    if let Some(ref uc) = related_def.upload
+                        && uc.enabled
+                    {
+                        upload::assemble_sizes_object(&mut doc, uc);
                     }
+
+                    let item = build_upload_item(&doc, &title_field, &admin_thumbnail, true);
+                    let label = item["label"].as_str().unwrap_or("").to_string();
+                    let thumb_url = item
+                        .get("thumbnail_url")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    ctx["selected_items"] = json!([item]);
+
+                    if let Some(url) = thumb_url {
+                        ctx["selected_preview_url"] = json!(url);
+                    }
+
+                    ctx["selected_filename"] = json!(label);
                 } else {
                     ctx["selected_items"] = json!([]);
                 }
+            } else {
+                ctx["selected_items"] = json!([]);
             }
         }
     }
@@ -943,11 +943,9 @@ pub(super) fn enrich_blocks(
                 .blocks
                 .iter()
                 .find(|bd| bd.block_type == block_type)
+                && let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut())
             {
-                if let Some(sub_arr) = row_ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut())
-                {
-                    enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
-                }
+                enrich_nested_fields(sub_arr, &block_def.fields, conn, reg, rel_locale_ctx);
             }
         }
     }
@@ -973,35 +971,33 @@ pub(super) fn enrich_join(
     rel_locale_ctx: Option<&LocaleContext>,
     doc_id: Option<&str>,
 ) {
-    if let Some(ref jc) = field_def.join {
-        if let Some(doc_id_str) = doc_id {
-            if let Some(target_def) = reg.get_collection(&jc.collection) {
-                let title_field = target_def.title_field().map(|s| s.to_string());
+    if let Some(ref jc) = field_def.join
+        && let Some(doc_id_str) = doc_id
+        && let Some(target_def) = reg.get_collection(&jc.collection)
+    {
+        let title_field = target_def.title_field().map(|s| s.to_string());
 
-                let mut fq = query::FindQuery::new();
-                fq.filters = vec![query::FilterClause::Single(query::Filter {
-                    field: jc.on.clone(),
-                    op: query::FilterOp::Equals(doc_id_str.to_string()),
-                })];
+        let mut fq = query::FindQuery::new();
+        fq.filters = vec![query::FilterClause::Single(query::Filter {
+            field: jc.on.clone(),
+            op: query::FilterOp::Equals(doc_id_str.to_string()),
+        })];
 
-                if let Ok(docs) = query::find(conn, &jc.collection, target_def, &fq, rel_locale_ctx)
-                {
-                    let items: Vec<_> = docs
-                        .iter()
-                        .map(|doc| {
-                            let label = title_field
-                                .as_ref()
-                                .and_then(|f| doc.get_str(f))
-                                .unwrap_or(&doc.id)
-                                .to_string();
-                            json!({ "id": doc.id, "label": label })
-                        })
-                        .collect();
+        if let Ok(docs) = query::find(conn, &jc.collection, target_def, &fq, rel_locale_ctx) {
+            let items: Vec<_> = docs
+                .iter()
+                .map(|doc| {
+                    let label = title_field
+                        .as_ref()
+                        .and_then(|f| doc.get_str(f))
+                        .unwrap_or(&doc.id)
+                        .to_string();
+                    json!({ "id": doc.id, "label": label })
+                })
+                .collect();
 
-                    ctx["join_items"] = json!(items);
-                    ctx["join_count"] = json!(items.len());
-                }
-            }
+            ctx["join_items"] = json!(items);
+            ctx["join_count"] = json!(items.len());
         }
     }
 }

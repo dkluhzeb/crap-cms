@@ -110,15 +110,8 @@ pub(crate) fn run_after_change_hooks(
         builder = builder.locale(l);
     }
     let after_ctx = builder.build();
-    let after_result = runner.run_after_write(
-        hooks,
-        fields,
-        HookEvent::AfterChange,
-        after_ctx,
-        tx,
-        user,
-        ui_locale,
-    )?;
+    let after_result =
+        runner.run_after_write(hooks, fields, HookEvent::AfterChange, after_ctx, tx)?;
     Ok(after_result.context)
 }
 
@@ -138,10 +131,10 @@ pub fn persist_create(
     let doc = query::create(conn, slug, def, final_data, locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, locale_ctx)?;
 
-    if let Some(pw) = password {
-        if !pw.is_empty() {
-            query::update_password(conn, slug, &doc.id, pw)?;
-        }
+    if let Some(pw) = password
+        && !pw.is_empty()
+    {
+        query::update_password(conn, slug, &doc.id, pw)?;
     }
 
     if def.has_versions() {
@@ -177,10 +170,10 @@ pub fn persist_update(
     let doc = query::update(conn, slug, def, id, final_data, locale_ctx)?;
     query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, locale_ctx)?;
 
-    if let Some(pw) = password {
-        if !pw.is_empty() {
-            query::update_password(conn, slug, &doc.id, pw)?;
-        }
+    if let Some(pw) = password
+        && !pw.is_empty()
+    {
+        query::update_password(conn, slug, &doc.id, pw)?;
     }
 
     if def.has_versions() {

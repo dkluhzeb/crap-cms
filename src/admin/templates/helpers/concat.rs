@@ -1,4 +1,5 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
+use serde_json::Value;
 
 /// String concatenation helper: `{{concat a b c}}`.
 pub(super) struct ConcatHelper;
@@ -15,21 +16,23 @@ impl HelperDef for ConcatHelper {
         for i in 0.. {
             match h.param(i) {
                 Some(p) => match p.value() {
-                    serde_json::Value::String(s) => result.push_str(s),
-                    serde_json::Value::Number(n) => result.push_str(&n.to_string()),
-                    serde_json::Value::Bool(b) => result.push_str(&b.to_string()),
-                    serde_json::Value::Null => {}
+                    Value::String(s) => result.push_str(s),
+                    Value::Number(n) => result.push_str(&n.to_string()),
+                    Value::Bool(b) => result.push_str(&b.to_string()),
+                    Value::Null => {}
                     other => result.push_str(&other.to_string()),
                 },
                 None => break,
             }
         }
-        Ok(ScopedJson::Derived(serde_json::Value::String(result)))
+        Ok(ScopedJson::Derived(Value::String(result)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations =
@@ -45,11 +48,8 @@ mod tests {
         hbs.register_template_string("t", "{{concat a b c}}")
             .unwrap();
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"a": "hello", "b": " ", "c": "world"})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"a": "hello", "b": " ", "c": "world"}))
+                .unwrap(),
             "hello world"
         );
     }
@@ -59,8 +59,7 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{concat a b}}").unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "count:", "b": 42}))
-                .unwrap(),
+            hbs.render("t", &json!({"a": "count:", "b": 42})).unwrap(),
             "count:42"
         );
     }
@@ -70,8 +69,7 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{concat a b}}").unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "is:", "b": true}))
-                .unwrap(),
+            hbs.render("t", &json!({"a": "is:", "b": true})).unwrap(),
             "is:true"
         );
     }
@@ -82,11 +80,8 @@ mod tests {
         hbs.register_template_string("t", "{{concat a b c}}")
             .unwrap();
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"a": "hello", "b": null, "c": "world"})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"a": "hello", "b": null, "c": "world"}))
+                .unwrap(),
             "helloworld"
         );
     }
@@ -96,7 +91,7 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{concat a b}}").unwrap();
         let result = hbs
-            .render("t", &serde_json::json!({"a": "data:", "b": [1, 2]}))
+            .render("t", &json!({"a": "data:", "b": [1, 2]}))
             .unwrap();
         assert!(result.starts_with("data:"));
         assert!(result.contains("[1,2]"));
@@ -106,16 +101,13 @@ mod tests {
     fn concat_no_params() {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{concat}}").unwrap();
-        assert_eq!(hbs.render("t", &serde_json::json!({})).unwrap(), "");
+        assert_eq!(hbs.render("t", &json!({})).unwrap(), "");
     }
 
     #[test]
     fn concat_single_param() {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{concat a}}").unwrap();
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": "only"})).unwrap(),
-            "only"
-        );
+        assert_eq!(hbs.render("t", &json!({"a": "only"})).unwrap(), "only");
     }
 }

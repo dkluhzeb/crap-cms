@@ -125,10 +125,10 @@ pub async fn create_form(
     // Add upload context for upload collections
     if def.is_upload_collection() {
         let mut upload_ctx = json!({});
-        if let Some(ref u) = def.upload {
-            if !u.mime_types.is_empty() {
-                upload_ctx["accept"] = json!(u.mime_types.join(","));
-            }
+        if let Some(ref u) = def.upload
+            && !u.mime_types.is_empty()
+        {
+            upload_ctx["accept"] = json!(u.mime_types.join(","));
         }
         data["upload"] = upload_ctx;
     }

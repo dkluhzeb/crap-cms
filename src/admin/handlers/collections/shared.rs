@@ -558,56 +558,54 @@ pub(super) async fn do_update(
     let mut queued_conversions = Vec::new();
     let mut created_files: Vec<PathBuf> = Vec::new();
 
-    if let Some(f) = file {
-        if let Some(upload_config) = def.upload.clone() {
-            // Load old document to get old file paths for cleanup
-            if let Ok(conn) = state.pool.get() {
-                if let Ok(Some(old_doc)) =
-                    query::find_by_id(&conn, slug, &def, id, locale_ctx.as_ref())
-                {
-                    old_doc_fields = Some(old_doc.fields.clone());
-                }
+    if let Some(f) = file
+        && let Some(upload_config) = def.upload.clone()
+    {
+        // Load old document to get old file paths for cleanup
+        if let Ok(conn) = state.pool.get()
+            && let Ok(Some(old_doc)) = query::find_by_id(&conn, slug, &def, id, locale_ctx.as_ref())
+        {
+            old_doc_fields = Some(old_doc.fields.clone());
+        }
+
+        let config_dir = state.config_dir.clone();
+        let slug_for_upload = slug.to_string();
+        let global_max = state.config.upload.max_file_size;
+
+        let upload_result = task::spawn_blocking(move || {
+            process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+        })
+        .await;
+
+        match upload_result {
+            Ok(Ok(processed)) => {
+                queued_conversions = processed.queued_conversions.clone();
+                created_files = processed.created_files.clone();
+                inject_upload_metadata(&mut form_data, &processed);
             }
-
-            let config_dir = state.config_dir.clone();
-            let slug_for_upload = slug.to_string();
-            let global_max = state.config.upload.max_file_size;
-
-            let upload_result = task::spawn_blocking(move || {
-                process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
-            })
-            .await;
-
-            match upload_result {
-                Ok(Ok(processed)) => {
-                    queued_conversions = processed.queued_conversions.clone();
-                    created_files = processed.created_files.clone();
-                    inject_upload_metadata(&mut form_data, &processed);
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("Upload processing error: {}", e);
-                    return render_edit_upload_error(
-                        state,
-                        &def,
-                        &form_data,
-                        id,
-                        auth_user,
-                        &e.to_string(),
-                    )
-                    .into_response();
-                }
-                Err(e) => {
-                    tracing::error!("Upload task error: {}", e);
-                    return render_edit_upload_error(
-                        state,
-                        &def,
-                        &form_data,
-                        id,
-                        auth_user,
-                        &e.to_string(),
-                    )
-                    .into_response();
-                }
+            Ok(Err(e)) => {
+                tracing::error!("Upload processing error: {}", e);
+                return render_edit_upload_error(
+                    state,
+                    &def,
+                    &form_data,
+                    id,
+                    auth_user,
+                    &e.to_string(),
+                )
+                .into_response();
+            }
+            Err(e) => {
+                tracing::error!("Upload task error: {}", e);
+                return render_edit_upload_error(
+                    state,
+                    &def,
+                    &form_data,
+                    id,
+                    auth_user,
+                    &e.to_string(),
+                )
+                .into_response();
             }
         }
     }
@@ -653,13 +651,12 @@ pub(super) async fn do_update(
     };
 
     // Validate password against policy (update: empty password means "keep current")
-    if let Some(ref pw) = password {
-        if !pw.is_empty() {
-            if let Err(e) = state.config.auth.password_policy.validate(pw) {
-                return html_with_toast(state, "collections/edit_form", &json!({}), &e.to_string())
-                    .into_response();
-            }
-        }
+    if let Some(ref pw) = password
+        && !pw.is_empty()
+        && let Err(e) = state.config.auth.password_policy.validate(pw)
+    {
+        return html_with_toast(state, "collections/edit_form", &json!({}), &e.to_string())
+            .into_response();
     }
 
     // Convert comma-separated multi-select values to JSON arrays
@@ -717,16 +714,16 @@ pub(super) async fn do_update(
         };
 
         // Update lock status for auth collections (after successful update)
-        if result.is_ok() {
-            if let Some(locked_field) = locked_value {
-                let should_lock =
-                    locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
-                let conn = pool.get().context("DB connection for lock update")?;
-                if should_lock {
-                    query::auth::lock_user(&conn, &slug_owned, &id_owned)?;
-                } else {
-                    query::auth::unlock_user(&conn, &slug_owned, &id_owned)?;
-                }
+        if result.is_ok()
+            && let Some(locked_field) = locked_value
+        {
+            let should_lock =
+                locked_field.as_deref() == Some("on") || locked_field.as_deref() == Some("1");
+            let conn = pool.get().context("DB connection for lock update")?;
+            if should_lock {
+                query::auth::lock_user(&conn, &slug_owned, &id_owned)?;
+            } else {
+                query::auth::unlock_user(&conn, &slug_owned, &id_owned)?;
             }
         }
 
@@ -742,12 +739,11 @@ pub(super) async fn do_update(
             }
 
             // Enqueue deferred image conversions if any
-            if !queued_conversions.is_empty() {
-                if let Ok(conn) = state.pool.get() {
-                    if let Err(e) = enqueue_conversions(&conn, slug, id, &queued_conversions) {
-                        tracing::warn!("Failed to enqueue image conversions: {}", e);
-                    }
-                }
+            if !queued_conversions.is_empty()
+                && let Ok(conn) = state.pool.get()
+                && let Err(e) = enqueue_conversions(&conn, slug, id, &queued_conversions)
+            {
+                tracing::warn!("Failed to enqueue image conversions: {}", e);
             }
 
             state.hook_runner.publish_event(

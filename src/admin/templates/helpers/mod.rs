@@ -10,10 +10,10 @@ mod or;
 mod render_field;
 mod translation;
 
-use std::cmp::Ordering;
-use std::sync::Arc;
+use std::{cmp::Ordering, sync::Arc};
 
 use handlebars::Handlebars;
+use serde_json::Value;
 
 use crate::admin::translations::Translations;
 
@@ -54,78 +54,80 @@ pub(super) fn register_helpers(hbs: &mut Handlebars, translations: Arc<Translati
 }
 
 /// Check if a JSON value is "truthy" (not null, not false, not empty string, not 0).
-pub(super) fn is_truthy(val: &serde_json::Value) -> bool {
+pub(super) fn is_truthy(val: &Value) -> bool {
     match val {
-        serde_json::Value::Null => false,
-        serde_json::Value::Bool(b) => *b,
-        serde_json::Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
-        serde_json::Value::String(s) => !s.is_empty(),
-        serde_json::Value::Array(a) => !a.is_empty(),
-        serde_json::Value::Object(_) => true,
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::Number(n) => n.as_f64().map(|f| f != 0.0).unwrap_or(false),
+        Value::String(s) => !s.is_empty(),
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(_) => true,
     }
 }
 
 /// Try to extract a float from a JSON value.
-pub(super) fn as_f64(val: &serde_json::Value) -> Option<f64> {
+pub(super) fn as_f64(val: &Value) -> Option<f64> {
     match val {
-        serde_json::Value::Number(n) => n.as_f64(),
-        serde_json::Value::String(s) => s.parse::<f64>().ok(),
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse::<f64>().ok(),
         _ => None,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     // --- is_truthy tests ---
 
     #[test]
     fn is_truthy_edge_cases() {
-        assert!(!is_truthy(&serde_json::Value::Null));
-        assert!(!is_truthy(&serde_json::json!(false)));
-        assert!(is_truthy(&serde_json::json!(true)));
-        assert!(!is_truthy(&serde_json::json!(0)));
-        assert!(is_truthy(&serde_json::json!(1)));
-        assert!(is_truthy(&serde_json::json!(-1)));
-        assert!(!is_truthy(&serde_json::json!("")));
-        assert!(is_truthy(&serde_json::json!("hello")));
-        assert!(!is_truthy(&serde_json::json!([])));
-        assert!(is_truthy(&serde_json::json!([1])));
-        assert!(is_truthy(&serde_json::json!({})));
+        assert!(!is_truthy(&Value::Null));
+        assert!(!is_truthy(&json!(false)));
+        assert!(is_truthy(&json!(true)));
+        assert!(!is_truthy(&json!(0)));
+        assert!(is_truthy(&json!(1)));
+        assert!(is_truthy(&json!(-1)));
+        assert!(!is_truthy(&json!("")));
+        assert!(is_truthy(&json!("hello")));
+        assert!(!is_truthy(&json!([])));
+        assert!(is_truthy(&json!([1])));
+        assert!(is_truthy(&json!({})));
     }
 
     #[test]
     fn is_truthy_float_zero() {
-        assert!(!is_truthy(&serde_json::json!(0.0)));
-        assert!(is_truthy(&serde_json::json!(0.1)));
+        assert!(!is_truthy(&json!(0.0)));
+        assert!(is_truthy(&json!(0.1)));
     }
 
     // --- as_f64 tests ---
 
     #[test]
     fn as_f64_extracts_numbers() {
-        assert_eq!(as_f64(&serde_json::json!(42)), Some(42.0));
-        assert_eq!(as_f64(&serde_json::json!(3.14)), Some(3.14));
-        assert_eq!(as_f64(&serde_json::json!("2.5")), Some(2.5));
-        assert_eq!(as_f64(&serde_json::json!("not_a_number")), None);
-        assert_eq!(as_f64(&serde_json::json!(null)), None);
-        assert_eq!(as_f64(&serde_json::json!(true)), None);
+        assert_eq!(as_f64(&json!(42)), Some(42.0));
+        assert_eq!(as_f64(&json!(3.14)), Some(3.14));
+        assert_eq!(as_f64(&json!("2.5")), Some(2.5));
+        assert_eq!(as_f64(&json!("not_a_number")), None);
+        assert_eq!(as_f64(&json!(null)), None);
+        assert_eq!(as_f64(&json!(true)), None);
     }
 
     #[test]
     fn as_f64_with_array_returns_none() {
-        assert_eq!(as_f64(&serde_json::json!([1, 2, 3])), None);
+        assert_eq!(as_f64(&json!([1, 2, 3])), None);
     }
 
     #[test]
     fn as_f64_with_object_returns_none() {
-        assert_eq!(as_f64(&serde_json::json!({"a": 1})), None);
+        assert_eq!(as_f64(&json!({"a": 1})), None);
     }
 
     #[test]
     fn as_f64_with_negative_string() {
-        assert_eq!(as_f64(&serde_json::json!("-3.5")), Some(-3.5));
+        assert_eq!(as_f64(&json!("-3.5")), Some(-3.5));
     }
 
     // --- Composition tests (nested helpers) ---
@@ -144,12 +146,12 @@ mod tests {
         hbs.register_template_string("t", "{{#if (and (not a) (or b c))}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": false, "b": true, "c": false}))
+            hbs.render("t", &json!({"a": false, "b": true, "c": false}))
                 .unwrap(),
             "YES"
         );
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"a": true, "b": true, "c": true}))
+            hbs.render("t", &json!({"a": true, "b": true, "c": true}))
                 .unwrap(),
             "NO"
         );
@@ -166,7 +168,7 @@ mod tests {
         assert_eq!(
             hbs.render(
                 "t",
-                &serde_json::json!({"status": "active", "tags": ["vip", "premium"]})
+                &json!({"status": "active", "tags": ["vip", "premium"]})
             )
             .unwrap(),
             "YES"
@@ -174,17 +176,14 @@ mod tests {
         assert_eq!(
             hbs.render(
                 "t",
-                &serde_json::json!({"status": "inactive", "tags": ["vip", "premium"]})
+                &json!({"status": "inactive", "tags": ["vip", "premium"]})
             )
             .unwrap(),
             "NO"
         );
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"status": "active", "tags": ["basic"]})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"status": "active", "tags": ["basic"]}))
+                .unwrap(),
             "NO"
         );
     }
@@ -194,9 +193,6 @@ mod tests {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{#if (not (not val))}}TRUTHY{{else}}FALSY{{/if}}")
             .unwrap();
-        assert_eq!(
-            hbs.render("t", &serde_json::json!({"val": {}})).unwrap(),
-            "TRUTHY"
-        );
+        assert_eq!(hbs.render("t", &json!({"val": {}})).unwrap(), "TRUTHY");
     }
 }

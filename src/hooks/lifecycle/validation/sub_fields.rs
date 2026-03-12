@@ -42,68 +42,61 @@ pub(super) fn validate_sub_fields_inner(
             ));
         }
 
-        if sf.field_type == FieldType::Date && !sf_empty {
-            if let Some(serde_json::Value::String(s)) = sf_value {
-                if !is_valid_date_format(s) {
-                    errors.push(FieldError::with_key(
-                        qualified_name.clone(),
-                        format!("{} is not a valid date format", sf.name),
-                        "validation.invalid_date",
-                        HashMap::from([("field".to_string(), sf.name.clone())]),
-                    ));
+        if sf.field_type == FieldType::Date
+            && !sf_empty
+            && let Some(serde_json::Value::String(s)) = sf_value
+            && !is_valid_date_format(s)
+        {
+            errors.push(FieldError::with_key(
+                qualified_name.clone(),
+                format!("{} is not a valid date format", sf.name),
+                "validation.invalid_date",
+                HashMap::from([("field".to_string(), sf.name.clone())]),
+            ));
+        }
+
+        if let Some(ref validate_ref) = sf.validate
+            && let Some(val) = sf_value
+        {
+            match run_validate_function_inner(lua, validate_ref, val, &row_data, table, &sf.name) {
+                Ok(Some(err_msg)) => {
+                    errors.push(FieldError::new(qualified_name.clone(), err_msg));
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("Validate function '{}' error: {}", validate_ref, e);
                 }
             }
         }
 
-        if let Some(ref validate_ref) = sf.validate {
-            if let Some(val) = sf_value {
-                match run_validate_function_inner(
-                    lua,
-                    validate_ref,
-                    val,
-                    &row_data,
-                    table,
-                    &sf.name,
-                ) {
-                    Ok(Some(err_msg)) => {
-                        errors.push(FieldError::new(qualified_name.clone(), err_msg));
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!("Validate function '{}' error: {}", validate_ref, e);
-                    }
-                }
-            }
-        }
-
-        if matches!(sf.field_type, FieldType::Array | FieldType::Blocks) {
-            if let Some(serde_json::Value::Array(nested_rows)) = sf_value {
-                let nested_parent = format!("{}[{}][{}]", parent_name, idx, sf.name);
-                for (nested_idx, nested_row) in nested_rows.iter().enumerate() {
-                    if let Some(nested_obj) = nested_row.as_object() {
-                        let nested_sub_fields: &[FieldDefinition] =
-                            if sf.field_type == FieldType::Blocks {
-                                let bt = nested_obj
-                                    .get("_block_type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("");
-                                match sf.blocks.iter().find(|b| b.block_type == bt) {
-                                    Some(bd) => &bd.fields,
-                                    None => continue,
-                                }
-                            } else {
-                                &sf.fields
-                            };
-                        validate_sub_fields_inner(
-                            lua,
-                            nested_sub_fields,
-                            nested_obj,
-                            &nested_parent,
-                            nested_idx,
-                            table,
-                            errors,
-                        );
-                    }
+        if matches!(sf.field_type, FieldType::Array | FieldType::Blocks)
+            && let Some(serde_json::Value::Array(nested_rows)) = sf_value
+        {
+            let nested_parent = format!("{}[{}][{}]", parent_name, idx, sf.name);
+            for (nested_idx, nested_row) in nested_rows.iter().enumerate() {
+                if let Some(nested_obj) = nested_row.as_object() {
+                    let nested_sub_fields: &[FieldDefinition] =
+                        if sf.field_type == FieldType::Blocks {
+                            let bt = nested_obj
+                                .get("_block_type")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            match sf.blocks.iter().find(|b| b.block_type == bt) {
+                                Some(bd) => &bd.fields,
+                                None => continue,
+                            }
+                        } else {
+                            &sf.fields
+                        };
+                    validate_sub_fields_inner(
+                        lua,
+                        nested_sub_fields,
+                        nested_obj,
+                        &nested_parent,
+                        nested_idx,
+                        table,
+                        errors,
+                    );
                 }
             }
         }
@@ -206,30 +199,30 @@ fn validate_leaf_sub_field(
     }
 
     // 2. Date format check
-    if sf.field_type == FieldType::Date && !is_empty {
-        if let Some(serde_json::Value::String(s)) = value {
-            if !is_valid_date_format(s) {
-                errors.push(FieldError::with_key(
-                    qualified_name.to_owned(),
-                    format!("{} is not a valid date format", sf.name),
-                    "validation.invalid_date",
-                    HashMap::from([("field".to_string(), sf.name.clone())]),
-                ));
-            }
-        }
+    if sf.field_type == FieldType::Date
+        && !is_empty
+        && let Some(serde_json::Value::String(s)) = value
+        && !is_valid_date_format(s)
+    {
+        errors.push(FieldError::with_key(
+            qualified_name.to_owned(),
+            format!("{} is not a valid date format", sf.name),
+            "validation.invalid_date",
+            HashMap::from([("field".to_string(), sf.name.clone())]),
+        ));
     }
 
     // 3. Custom Lua validate function
-    if let Some(ref validate_ref) = sf.validate {
-        if let Some(val) = value {
-            match run_validate_function_inner(lua, validate_ref, val, row_data, table, &sf.name) {
-                Ok(Some(err_msg)) => {
-                    errors.push(FieldError::new(qualified_name.to_owned(), err_msg));
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::warn!("Validate function '{}' error: {}", validate_ref, e);
-                }
+    if let Some(ref validate_ref) = sf.validate
+        && let Some(val) = value
+    {
+        match run_validate_function_inner(lua, validate_ref, val, row_data, table, &sf.name) {
+            Ok(Some(err_msg)) => {
+                errors.push(FieldError::new(qualified_name.to_owned(), err_msg));
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!("Validate function '{}' error: {}", validate_ref, e);
             }
         }
     }

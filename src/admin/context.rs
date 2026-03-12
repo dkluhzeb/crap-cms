@@ -3,12 +3,19 @@
 //! Every admin page receives a structured context built through `ContextBuilder`.
 //! This replaces the ad-hoc `serde_json::json!()` calls in individual handlers.
 
+use axum::Extension;
 use serde_json::{Map, Value, json};
 
-use crate::admin::AdminState;
-use crate::core::auth::Claims;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::FieldDefinition;
+use crate::{
+    admin::AdminState,
+    config::LocaleConfig,
+    core::{
+        Document,
+        auth::{AuthUser, Claims},
+        collection::{CollectionDefinition, GlobalDefinition},
+        field::FieldDefinition,
+    },
+};
 
 /// Page type identifiers for template conditional logic.
 pub enum PageType {
@@ -179,11 +186,8 @@ impl ContextBuilder {
     }
 
     /// Set the locale from an optional auth user (convenience for handlers).
-    pub fn locale_from_auth(
-        self,
-        auth_user: &Option<axum::Extension<crate::core::auth::AuthUser>>,
-    ) -> Self {
-        if let Some(axum::Extension(au)) = auth_user {
+    pub fn locale_from_auth(self, auth_user: &Option<Extension<AuthUser>>) -> Self {
+        if let Some(Extension(au)) = auth_user {
             self.locale(&au.ui_locale)
         } else {
             self
@@ -209,7 +213,7 @@ impl ContextBuilder {
         let crumbs_json: Vec<Value> = crumbs
             .into_iter()
             .map(|c| {
-                let mut m = serde_json::Map::new();
+                let mut m = Map::new();
                 m.insert("label".into(), Value::String(c.label));
                 if let Some(url) = c.url {
                     m.insert("url".into(), Value::String(url));
@@ -248,7 +252,7 @@ impl ContextBuilder {
     }
 
     /// Set the document with explicit status (for edit pages before the document is fully loaded).
-    pub fn document_with_status(mut self, doc: &crate::core::Document, status: &str) -> Self {
+    pub fn document_with_status(mut self, doc: &Document, status: &str) -> Self {
         let mut doc_json = json!({
             "id": doc.id,
             "created_at": doc.created_at,
@@ -317,11 +321,7 @@ impl ContextBuilder {
     }
 
     /// Set editor locale context (content locales from config, not UI translation locales).
-    pub fn editor_locale(
-        mut self,
-        editor_locale: Option<&str>,
-        config: &crate::config::LocaleConfig,
-    ) -> Self {
+    pub fn editor_locale(mut self, editor_locale: Option<&str>, config: &LocaleConfig) -> Self {
         if !config.is_enabled() {
             return self;
         }
@@ -483,7 +483,15 @@ fn has_auth_collections(state: &AdminState) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+
+    use crate::core::{
+        collection::{GlobalDefinition, Labels},
+        document::DocumentBuilder,
+        field::{FieldAdmin, FieldType, LocalizedString},
+    };
 
     // --- PageType::as_str ---
 
@@ -527,17 +535,13 @@ mod tests {
     #[test]
     fn build_collection_context_includes_all_fields() {
         let mut def = CollectionDefinition::new("posts");
-        def.labels = crate::core::collection::Labels {
-            singular: Some(crate::core::field::LocalizedString::Plain(
-                "Post".to_string(),
-            )),
-            plural: Some(crate::core::field::LocalizedString::Plain(
-                "Posts".to_string(),
-            )),
+        def.labels = Labels {
+            singular: Some(LocalizedString::Plain("Post".to_string())),
+            plural: Some(LocalizedString::Plain("Posts".to_string())),
         };
         def.timestamps = true;
         def.fields = vec![
-            FieldDefinition::builder("title", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("title", FieldType::Text)
                 .required(true)
                 .build(),
         ];
@@ -559,16 +563,12 @@ mod tests {
 
     #[test]
     fn build_global_context_includes_all_fields() {
-        let mut def = crate::core::collection::GlobalDefinition::new("settings");
-        def.labels = crate::core::collection::Labels {
-            singular: Some(crate::core::field::LocalizedString::Plain(
-                "Settings".to_string(),
-            )),
+        let mut def = GlobalDefinition::new("settings");
+        def.labels = Labels {
+            singular: Some(LocalizedString::Plain("Settings".to_string())),
             plural: None,
         };
-        def.fields = vec![
-            FieldDefinition::builder("site_name", crate::core::field::FieldType::Text).build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
         let ctx = build_global_context(&def);
         assert_eq!(ctx["slug"], "settings");
         assert_eq!(ctx["display_name"], "Settings");
@@ -583,24 +583,18 @@ mod tests {
 
     #[test]
     fn build_fields_meta_includes_admin_info() {
-        let field = FieldDefinition::builder("title", crate::core::field::FieldType::Text)
+        let field = FieldDefinition::builder("title", FieldType::Text)
             .required(true)
             .unique(true)
             .localized(true)
             .admin(
-                crate::core::field::FieldAdmin::builder()
-                    .label(crate::core::field::LocalizedString::Plain(
-                        "Title".to_string(),
-                    ))
+                FieldAdmin::builder()
+                    .label(LocalizedString::Plain("Title".to_string()))
                     .hidden(false)
                     .readonly(true)
                     .width("50%")
-                    .description(crate::core::field::LocalizedString::Plain(
-                        "The title field".to_string(),
-                    ))
-                    .placeholder(crate::core::field::LocalizedString::Plain(
-                        "Enter title".to_string(),
-                    ))
+                    .description(LocalizedString::Plain("The title field".to_string()))
+                    .placeholder(LocalizedString::Plain("Enter title".to_string()))
                     .build(),
             )
             .build();
@@ -633,7 +627,7 @@ mod tests {
     fn context_builder_editor_locale_sets_data() {
         let data = Map::new();
         let builder = ContextBuilder { data };
-        let config = crate::config::LocaleConfig {
+        let config = LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: false,
@@ -653,7 +647,7 @@ mod tests {
     fn context_builder_editor_locale_disabled_noop() {
         let data = Map::new();
         let builder = ContextBuilder { data };
-        let config = crate::config::LocaleConfig::default(); // empty = disabled
+        let config = LocaleConfig::default(); // empty = disabled
         let result = builder.editor_locale(Some("de"), &config).build();
         assert!(result.get("has_editor_locales").is_none());
     }
@@ -662,7 +656,7 @@ mod tests {
     fn context_builder_editor_locale_defaults_to_default() {
         let data = Map::new();
         let builder = ContextBuilder { data };
-        let config = crate::config::LocaleConfig {
+        let config = LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: false,
@@ -814,12 +808,8 @@ mod tests {
 
     #[test]
     fn context_builder_document_with_status() {
-        use crate::core::document::DocumentBuilder;
         let doc = DocumentBuilder::new("doc1")
-            .fields(std::collections::HashMap::from([(
-                "title".to_string(),
-                json!("Hello"),
-            )]))
+            .fields(HashMap::from([("title".to_string(), json!("Hello"))]))
             .created_at("2026-01-01".to_string())
             .updated_at("2026-01-02".to_string())
             .build();

@@ -91,17 +91,17 @@ pub(super) fn apply_display_conditions(
     let results = hook_runner.call_display_conditions_batch(&conditions);
 
     for (ctx, field_def) in fields.iter_mut().zip(defs.iter()) {
-        if let Some(ref cond_ref) = field_def.admin.condition {
-            if let Some(result) = results.get(cond_ref.as_str()) {
-                match result {
-                    DisplayConditionResult::Bool(visible) => {
-                        ctx["condition_visible"] = json!(visible);
-                        ctx["condition_ref"] = json!(cond_ref);
-                    }
-                    DisplayConditionResult::Table { condition, visible } => {
-                        ctx["condition_visible"] = json!(visible);
-                        ctx["condition_json"] = condition.clone();
-                    }
+        if let Some(ref cond_ref) = field_def.admin.condition
+            && let Some(result) = results.get(cond_ref.as_str())
+        {
+            match result {
+                DisplayConditionResult::Bool(visible) => {
+                    ctx["condition_visible"] = json!(visible);
+                    ctx["condition_ref"] = json!(cond_ref);
+                }
+                DisplayConditionResult::Table { condition, visible } => {
+                    ctx["condition_visible"] = json!(visible);
+                    ctx["condition_json"] = condition.clone();
                 }
             }
         }

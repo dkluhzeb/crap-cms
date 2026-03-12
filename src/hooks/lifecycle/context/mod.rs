@@ -95,20 +95,18 @@ impl HookContext {
             let is_group = fields
                 .iter()
                 .any(|f| f.name == *k && f.field_type == FieldType::Group);
-            if is_group {
-                if let Some(obj) = v.as_object() {
-                    for (sub_key, sub_val) in obj {
-                        let flat_key = format!("{}__{}", k, sub_key);
-                        let flat_val = match sub_val {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
-                        };
-                        map.insert(flat_key, flat_val);
-                    }
-                    continue;
+            if is_group && let Some(obj) = v.as_object() {
+                for (sub_key, sub_val) in obj {
+                    let flat_key = format!("{}__{}", k, sub_key);
+                    let flat_val = match sub_val {
+                        serde_json::Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    map.insert(flat_key, flat_val);
                 }
-                // If the value is already a string (e.g. from form data), fall through
+                continue;
             }
+            // If the value is already a string (e.g. from form data), fall through
             map.insert(
                 k.clone(),
                 match v {

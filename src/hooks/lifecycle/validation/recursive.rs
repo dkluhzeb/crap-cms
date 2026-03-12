@@ -140,27 +140,28 @@ fn validate_scalar_field(
     checks::check_row_bounds(field, &data_key, value, is_draft, errors);
 
     // Validate sub-fields within Array/Blocks rows
-    if !is_draft && matches!(field.field_type, FieldType::Array | FieldType::Blocks) {
-        if let Some(serde_json::Value::Array(rows)) = value {
-            for (idx, row) in rows.iter().enumerate() {
-                let row_obj = match row.as_object() {
-                    Some(obj) => obj,
+    if !is_draft
+        && matches!(field.field_type, FieldType::Array | FieldType::Blocks)
+        && let Some(serde_json::Value::Array(rows)) = value
+    {
+        for (idx, row) in rows.iter().enumerate() {
+            let row_obj = match row.as_object() {
+                Some(obj) => obj,
+                None => continue,
+            };
+            let sub_fields: &[FieldDefinition] = if field.field_type == FieldType::Blocks {
+                let block_type = row_obj
+                    .get("_block_type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                match field.blocks.iter().find(|b| b.block_type == block_type) {
+                    Some(bd) => &bd.fields,
                     None => continue,
-                };
-                let sub_fields: &[FieldDefinition] = if field.field_type == FieldType::Blocks {
-                    let block_type = row_obj
-                        .get("_block_type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    match field.blocks.iter().find(|b| b.block_type == block_type) {
-                        Some(bd) => &bd.fields,
-                        None => continue,
-                    }
-                } else {
-                    &field.fields
-                };
-                validate_sub_fields_inner(lua, sub_fields, row_obj, &data_key, idx, table, errors);
-            }
+                }
+            } else {
+                &field.fields
+            };
+            validate_sub_fields_inner(lua, sub_fields, row_obj, &data_key, idx, table, errors);
         }
     }
 

@@ -73,11 +73,11 @@ impl std::ops::Deref for VmGuard<'_> {
 
 impl Drop for VmGuard<'_> {
     fn drop(&mut self) {
-        if let Some(vm) = self.vm.take() {
-            if let Ok(mut pool) = self.pool.vms.lock() {
-                pool.push(vm);
-                self.pool.available.notify_one();
-            }
+        if let Some(vm) = self.vm.take()
+            && let Ok(mut pool) = self.pool.vms.lock()
+        {
+            pool.push(vm);
+            self.pool.available.notify_one();
         }
     }
 }

@@ -45,24 +45,22 @@ pub fn assemble_sizes_object(doc: &mut crate::core::Document, upload: &Collectio
 
             let mut formats = serde_json::Map::new();
 
-            if upload.format_options.webp.is_some() {
-                if let Some(serde_json::Value::String(webp_url)) =
+            if upload.format_options.webp.is_some()
+                && let Some(serde_json::Value::String(webp_url)) =
                     doc.fields.remove(&format!("{}_webp_url", name))
-                {
-                    let mut fmt = serde_json::Map::new();
-                    fmt.insert("url".to_string(), serde_json::Value::String(webp_url));
-                    formats.insert("webp".to_string(), serde_json::Value::Object(fmt));
-                }
+            {
+                let mut fmt = serde_json::Map::new();
+                fmt.insert("url".to_string(), serde_json::Value::String(webp_url));
+                formats.insert("webp".to_string(), serde_json::Value::Object(fmt));
             }
 
-            if upload.format_options.avif.is_some() {
-                if let Some(serde_json::Value::String(avif_url)) =
+            if upload.format_options.avif.is_some()
+                && let Some(serde_json::Value::String(avif_url)) =
                     doc.fields.remove(&format!("{}_avif_url", name))
-                {
-                    let mut fmt = serde_json::Map::new();
-                    fmt.insert("url".to_string(), serde_json::Value::String(avif_url));
-                    formats.insert("avif".to_string(), serde_json::Value::Object(fmt));
-                }
+            {
+                let mut fmt = serde_json::Map::new();
+                fmt.insert("url".to_string(), serde_json::Value::String(avif_url));
+                formats.insert("avif".to_string(), serde_json::Value::Object(fmt));
             }
 
             if !formats.is_empty() {
@@ -117,17 +115,17 @@ pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, serde
     // Collect all URL fields that point to upload files
     // These are: url, {size}_url, {size}_webp_url, {size}_avif_url
     for (key, value) in doc_fields {
-        if (key == "url" || key.ends_with("_url")) && !key.contains("image") {
-            if let serde_json::Value::String(url) = value {
-                if url.starts_with("/uploads/") {
-                    let rel_path = url.strip_prefix('/').unwrap_or(url);
-                    let file_path = config_dir.join(rel_path);
-                    if file_path.exists() {
-                        if let Err(e) = std::fs::remove_file(&file_path) {
-                            tracing::warn!("Failed to delete file {}: {}", file_path.display(), e);
-                        }
-                    }
-                }
+        if (key == "url" || key.ends_with("_url"))
+            && !key.contains("image")
+            && let serde_json::Value::String(url) = value
+            && url.starts_with("/uploads/")
+        {
+            let rel_path = url.strip_prefix('/').unwrap_or(url);
+            let file_path = config_dir.join(rel_path);
+            if file_path.exists()
+                && let Err(e) = std::fs::remove_file(&file_path)
+            {
+                tracing::warn!("Failed to delete file {}: {}", file_path.display(), e);
             }
         }
     }

@@ -56,17 +56,16 @@ pub fn find(
     }
 
     // FTS5 full-text search filter
-    if let Some(ref search_term) = query.search {
-        if let Some((fts_clause, sanitized)) =
+    if let Some(ref search_term) = query.search
+        && let Some((fts_clause, sanitized)) =
             super::super::fts::fts_where_clause(conn, slug, search_term)
-        {
-            if where_clause.is_empty() {
-                sql.push_str(&format!(" WHERE {}", fts_clause));
-            } else {
-                sql.push_str(&format!(" AND {}", fts_clause));
-            }
-            params.push(Box::new(sanitized));
+    {
+        if where_clause.is_empty() {
+            sql.push_str(&format!(" WHERE {}", fts_clause));
+        } else {
+            sql.push_str(&format!(" AND {}", fts_clause));
         }
+        params.push(Box::new(sanitized));
     }
 
     // Cursor + offset mutual exclusion
@@ -185,12 +184,11 @@ pub fn find(
     let mut documents = Vec::new();
     for row in rows {
         let mut doc = row?;
-        if let Some(ctx) = locale_ctx {
-            if ctx.config.is_enabled() {
-                if let LocaleMode::All = ctx.mode {
-                    group_locale_fields(&mut doc, &def.fields, &ctx.config);
-                }
-            }
+        if let Some(ctx) = locale_ctx
+            && ctx.config.is_enabled()
+            && let LocaleMode::All = ctx.mode
+        {
+            group_locale_fields(&mut doc, &def.fields, &ctx.config);
         }
         documents.push(doc);
     }

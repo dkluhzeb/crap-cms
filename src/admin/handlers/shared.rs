@@ -357,15 +357,15 @@ pub(crate) fn compute_row_label(
     hook_runner: &HookRunner,
 ) -> Option<String> {
     // 1. Try row_label Lua function
-    if let Some(ref func_ref) = admin.row_label {
-        if let Some(row) = row_data {
-            let json_val = Value::Object(row.clone());
+    if let Some(ref func_ref) = admin.row_label
+        && let Some(row) = row_data
+    {
+        let json_val = Value::Object(row.clone());
 
-            if let Some(label) = hook_runner.call_row_label(func_ref, &json_val) {
-                if !label.is_empty() {
-                    return Some(label);
-                }
-            }
+        if let Some(label) = hook_runner.call_row_label(func_ref, &json_val)
+            && !label.is_empty()
+        {
+            return Some(label);
         }
     }
 
@@ -445,10 +445,10 @@ pub(crate) fn do_unpublish(
 
     query::create_version(tx, table_name, parent_id, "draft", &snapshot)?;
 
-    if let Some(vc) = versions_config {
-        if vc.max_versions > 0 {
-            query::prune_versions(tx, table_name, parent_id, vc.max_versions)?;
-        }
+    if let Some(vc) = versions_config
+        && vc.max_versions > 0
+    {
+        query::prune_versions(tx, table_name, parent_id, vc.max_versions)?;
     }
 
     Ok(())

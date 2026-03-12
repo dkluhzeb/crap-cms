@@ -54,10 +54,10 @@ impl ContentService {
         };
 
         // Validate password against policy
-        if let Some(ref pw) = password {
-            if let Err(e) = self.password_policy.validate(pw) {
-                return Err(Status::invalid_argument(e.to_string()));
-            }
+        if let Some(ref pw) = password
+            && let Err(e) = self.password_policy.validate(pw)
+        {
+            return Err(Status::invalid_argument(e.to_string()));
         }
 
         let locale_ctx =
@@ -139,18 +139,18 @@ impl ContentService {
             );
 
             // Auto-send verification email for auth collections with verify_email
-            if should_verify {
-                if let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str()) {
-                    crate::service::send_verification_email(
-                        self.pool.clone(),
-                        self.email_config.clone(),
-                        self.email_renderer.clone(),
-                        self.server_config.clone(),
-                        req.collection.clone(),
-                        doc.id.clone(),
-                        user_email.to_string(),
-                    );
-                }
+            if should_verify
+                && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
+            {
+                crate::service::send_verification_email(
+                    self.pool.clone(),
+                    self.email_config.clone(),
+                    self.email_renderer.clone(),
+                    self.server_config.clone(),
+                    req.collection.clone(),
+                    doc.id.clone(),
+                    user_email.to_string(),
+                );
             }
         }
 
@@ -202,12 +202,11 @@ impl ContentService {
         };
 
         // Validate password against policy (only if non-empty)
-        if let Some(ref pw) = password {
-            if !pw.is_empty() {
-                if let Err(e) = self.password_policy.validate(pw) {
-                    return Err(Status::invalid_argument(e.to_string()));
-                }
-            }
+        if let Some(ref pw) = password
+            && !pw.is_empty()
+            && let Err(e) = self.password_policy.validate(pw)
+        {
+            return Err(Status::invalid_argument(e.to_string()));
         }
 
         let locale_ctx =

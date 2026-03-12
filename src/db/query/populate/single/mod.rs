@@ -44,10 +44,10 @@ pub fn populate_relationships_cached(
             continue;
         }
         // Skip populating fields not in the select list
-        if let Some(sel) = select {
-            if !sel.iter().any(|s| s == &field.name) {
-                continue;
-            }
+        if let Some(sel) = select
+            && !sel.iter().any(|s| s == &field.name)
+        {
+            continue;
         }
         let rel = match &field.relationship {
             Some(rc) => rc,

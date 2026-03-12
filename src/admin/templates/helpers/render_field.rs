@@ -1,4 +1,5 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
+use serde_json::Value;
 
 /// Handlebars helper that renders the appropriate field partial.
 /// Usage: {{render_field field_context}}
@@ -36,12 +37,14 @@ impl HelperDef for RenderFieldHelper {
             r.render("fields/text", field_data).unwrap_or_default()
         });
 
-        Ok(ScopedJson::Derived(serde_json::Value::String(rendered)))
+        Ok(ScopedJson::Derived(Value::String(rendered)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn test_hbs() -> Handlebars<'static> {
@@ -63,7 +66,7 @@ mod tests {
         let result = hbs
             .render(
                 "t",
-                &serde_json::json!({"ctx": {"field_type": "text", "name": "title"}}),
+                &json!({"ctx": {"field_type": "text", "name": "title"}}),
             )
             .unwrap();
         assert_eq!(result, "TEXT:title");
@@ -79,7 +82,7 @@ mod tests {
         let result = hbs
             .render(
                 "t",
-                &serde_json::json!({"ctx": {"field_type": "unknown_type", "name": "my_field"}}),
+                &json!({"ctx": {"field_type": "unknown_type", "name": "my_field"}}),
             )
             .unwrap();
         assert_eq!(result, "FALLBACK:my_field");
@@ -93,7 +96,7 @@ mod tests {
         hbs.register_template_string("t", "{{{render_field ctx}}}")
             .unwrap();
         let result = hbs
-            .render("t", &serde_json::json!({"ctx": {"name": "untitled"}}))
+            .render("t", &json!({"ctx": {"name": "untitled"}}))
             .unwrap();
         assert_eq!(result, "DEFAULT_TEXT:untitled");
     }
@@ -108,7 +111,7 @@ mod tests {
         let result = hbs
             .render(
                 "t",
-                &serde_json::json!({"ctx": {"field_type": "select", "name": "status"}}),
+                &json!({"ctx": {"field_type": "select", "name": "status"}}),
             )
             .unwrap();
         assert_eq!(result, "SELECT:status");
@@ -124,7 +127,7 @@ mod tests {
         let result = hbs
             .render(
                 "t",
-                &serde_json::json!({"ctx": {"field_type": "checkbox", "name": "active"}}),
+                &json!({"ctx": {"field_type": "checkbox", "name": "active"}}),
             )
             .unwrap();
         assert_eq!(result, "CHECKBOX:active");

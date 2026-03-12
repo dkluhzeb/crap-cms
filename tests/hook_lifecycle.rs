@@ -93,8 +93,6 @@ fn before_change_hook_modifies_data() {
             crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
             ctx,
             &tx,
-            None,
-            None,
         )
         .expect("Hook execution failed");
 
@@ -136,8 +134,6 @@ fn before_validate_trims_title() {
             crap_cms::hooks::lifecycle::HookEvent::BeforeValidate,
             ctx,
             &tx,
-            None,
-            None,
         )
         .expect("Hook execution failed");
 
@@ -211,8 +207,6 @@ fn registered_hook_fires_for_all_collections() {
             crap_cms::hooks::lifecycle::HookEvent::BeforeChange,
             ctx,
             &tx,
-            None,
-            None,
         )
         .expect("Hook execution failed");
 
@@ -273,18 +267,7 @@ fn run_before_write_full_lifecycle() {
     let tx = conn.transaction().expect("Start transaction");
 
     let result = runner
-        .run_before_write(
-            &def.hooks,
-            &def.fields,
-            ctx,
-            &tx,
-            "articles",
-            None,
-            None,
-            false,
-            None,
-            None,
-        )
+        .run_before_write(&def.hooks, &def.fields, ctx, &tx, "articles", None, None)
         .expect("run_before_write failed");
 
     // Title should be trimmed (before_validate hook)
@@ -334,18 +317,7 @@ fn run_before_write_fails_on_validation_error() {
     let mut conn = pool.get().expect("DB connection");
     let tx = conn.transaction().expect("Start transaction");
 
-    let result = runner.run_before_write(
-        &def.hooks,
-        &def.fields,
-        ctx,
-        &tx,
-        "articles",
-        None,
-        None,
-        false,
-        None,
-        None,
-    );
+    let result = runner.run_before_write(&def.hooks, &def.fields, ctx, &tx, "articles", None, None);
     assert!(
         result.is_err(),
         "run_before_write should fail when validation fails"

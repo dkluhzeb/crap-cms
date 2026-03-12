@@ -1,4 +1,5 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
+use serde_json::Value;
 
 /// JSON serialization helper: `{{{json value}}}`.
 pub(super) struct JsonHelper;
@@ -11,17 +12,16 @@ impl HelperDef for JsonHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let val = h
-            .param(0)
-            .map(|p| p.value())
-            .unwrap_or(&serde_json::Value::Null);
+        let val = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
         let json_str = serde_json::to_string(val).unwrap_or_default();
-        Ok(ScopedJson::Derived(serde_json::Value::String(json_str)))
+        Ok(ScopedJson::Derived(Value::String(json_str)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations =
@@ -35,9 +35,7 @@ mod tests {
     fn json_object() {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{{json val}}}").unwrap();
-        let result = hbs
-            .render("t", &serde_json::json!({"val": {"key": "value"}}))
-            .unwrap();
+        let result = hbs.render("t", &json!({"val": {"key": "value"}})).unwrap();
         assert!(result.contains("\"key\""));
         assert!(result.contains("\"value\""));
     }
@@ -46,7 +44,7 @@ mod tests {
     fn json_null() {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{{json val}}}").unwrap();
-        let result = hbs.render("t", &serde_json::json!({"val": null})).unwrap();
+        let result = hbs.render("t", &json!({"val": null})).unwrap();
         assert_eq!(result, "null");
     }
 
@@ -54,9 +52,7 @@ mod tests {
     fn json_array() {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{{json val}}}").unwrap();
-        let result = hbs
-            .render("t", &serde_json::json!({"val": [1, "two", true]}))
-            .unwrap();
+        let result = hbs.render("t", &json!({"val": [1, "two", true]})).unwrap();
         assert_eq!(result, r#"[1,"two",true]"#);
     }
 
@@ -64,9 +60,7 @@ mod tests {
     fn json_string() {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{{json val}}}").unwrap();
-        let result = hbs
-            .render("t", &serde_json::json!({"val": "hello"}))
-            .unwrap();
+        let result = hbs.render("t", &json!({"val": "hello"})).unwrap();
         assert_eq!(result, "\"hello\"");
     }
 
@@ -74,7 +68,7 @@ mod tests {
     fn json_no_param() {
         let mut hbs = test_hbs();
         hbs.register_template_string("t", "{{{json}}}").unwrap();
-        let result = hbs.render("t", &serde_json::json!({})).unwrap();
+        let result = hbs.render("t", &json!({})).unwrap();
         assert_eq!(result, "null");
     }
 }

@@ -94,17 +94,17 @@ pub(super) fn build_node_searchable_map<'a>(
             && field.admin.richtext_format.as_deref() == Some("json")
         {
             for node_name in &field.admin.nodes {
-                if let Some(node_def) = registry.get_richtext_node(node_name) {
-                    if !node_def.searchable_attrs.is_empty() {
-                        map.insert(
-                            node_def.name.as_str(),
-                            node_def
-                                .searchable_attrs
-                                .iter()
-                                .map(|s| s.as_str())
-                                .collect(),
-                        );
-                    }
+                if let Some(node_def) = registry.get_richtext_node(node_name)
+                    && !node_def.searchable_attrs.is_empty()
+                {
+                    map.insert(
+                        node_def.name.as_str(),
+                        node_def
+                            .searchable_attrs
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect(),
+                    );
                 }
             }
         }

@@ -27,22 +27,18 @@ impl Translations {
 
         // Overlay with config dir translations/*.json if they exist
         let translations_dir = config_dir.join("translations");
-        if translations_dir.exists() {
-            if let Ok(entries) = std::fs::read_dir(&translations_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().is_some_and(|ext| ext == "json") {
-                        if let Some(locale) = path.file_stem().and_then(|s| s.to_str()) {
-                            if let Ok(content) = std::fs::read_to_string(&path) {
-                                if let Ok(overrides) =
-                                    serde_json::from_str::<HashMap<String, String>>(&content)
-                                {
-                                    let map = locales.entry(locale.to_string()).or_default();
-                                    map.extend(overrides);
-                                }
-                            }
-                        }
-                    }
+        if translations_dir.exists()
+            && let Ok(entries) = std::fs::read_dir(&translations_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "json")
+                    && let Some(locale) = path.file_stem().and_then(|s| s.to_str())
+                    && let Ok(content) = std::fs::read_to_string(&path)
+                    && let Ok(overrides) = serde_json::from_str::<HashMap<String, String>>(&content)
+                {
+                    let map = locales.entry(locale.to_string()).or_default();
+                    map.extend(overrides);
                 }
             }
         }
@@ -54,19 +50,20 @@ impl Translations {
     /// Falls back to "en" locale, then to the key itself.
     pub fn get<'a>(&'a self, locale: &str, key: &'a str) -> &'a str {
         // Try requested locale
-        if let Some(strings) = self.locales.get(locale) {
-            if let Some(val) = strings.get(key) {
-                return val.as_str();
-            }
+        if let Some(strings) = self.locales.get(locale)
+            && let Some(val) = strings.get(key)
+        {
+            return val.as_str();
         }
+
         // Fallback to English
-        if locale != "en" {
-            if let Some(strings) = self.locales.get("en") {
-                if let Some(val) = strings.get(key) {
-                    return val.as_str();
-                }
-            }
+        if locale != "en"
+            && let Some(strings) = self.locales.get("en")
+            && let Some(val) = strings.get(key)
+        {
+            return val.as_str();
         }
+
         // Return key itself
         key
     }

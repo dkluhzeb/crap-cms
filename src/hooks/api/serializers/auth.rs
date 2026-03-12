@@ -8,39 +8,39 @@ pub(super) fn collection_auth_to_lua(
     tbl: &Table,
     def: &crate::core::CollectionDefinition,
 ) -> mlua::Result<()> {
-    if let Some(ref auth) = def.auth {
-        if auth.enabled {
-            if auth.strategies.is_empty()
-                && !auth.disable_local
-                && !auth.verify_email
-                && auth.forgot_password
-                && auth.token_expiry == 7200
-            {
-                tbl.set("auth", true)?;
-            } else {
-                let auth_tbl = lua.create_table()?;
-                auth_tbl.set("token_expiry", auth.token_expiry)?;
-                if auth.disable_local {
-                    auth_tbl.set("disable_local", true)?;
-                }
-                if auth.verify_email {
-                    auth_tbl.set("verify_email", true)?;
-                }
-                if !auth.forgot_password {
-                    auth_tbl.set("forgot_password", false)?;
-                }
-                if !auth.strategies.is_empty() {
-                    let strats = lua.create_table()?;
-                    for (i, s) in auth.strategies.iter().enumerate() {
-                        let st = lua.create_table()?;
-                        st.set("name", s.name.as_str())?;
-                        st.set("authenticate", s.authenticate.as_str())?;
-                        strats.set(i + 1, st)?;
-                    }
-                    auth_tbl.set("strategies", strats)?;
-                }
-                tbl.set("auth", auth_tbl)?;
+    if let Some(ref auth) = def.auth
+        && auth.enabled
+    {
+        if auth.strategies.is_empty()
+            && !auth.disable_local
+            && !auth.verify_email
+            && auth.forgot_password
+            && auth.token_expiry == 7200
+        {
+            tbl.set("auth", true)?;
+        } else {
+            let auth_tbl = lua.create_table()?;
+            auth_tbl.set("token_expiry", auth.token_expiry)?;
+            if auth.disable_local {
+                auth_tbl.set("disable_local", true)?;
             }
+            if auth.verify_email {
+                auth_tbl.set("verify_email", true)?;
+            }
+            if !auth.forgot_password {
+                auth_tbl.set("forgot_password", false)?;
+            }
+            if !auth.strategies.is_empty() {
+                let strats = lua.create_table()?;
+                for (i, s) in auth.strategies.iter().enumerate() {
+                    let st = lua.create_table()?;
+                    st.set("name", s.name.as_str())?;
+                    st.set("authenticate", s.authenticate.as_str())?;
+                    strats.set(i + 1, st)?;
+                }
+                auth_tbl.set("strategies", strats)?;
+            }
+            tbl.set("auth", auth_tbl)?;
         }
     }
     Ok(())

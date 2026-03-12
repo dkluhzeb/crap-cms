@@ -46,12 +46,13 @@ pub fn apply_select_filter(
         }
 
         // Check group prefix: if select contains "seo" and name is "seo__title"
-        if let Some(prefix) = name.split("__").next() {
-            if group_names.contains(prefix) && select.iter().any(|s| s == prefix) {
-                out_exprs.push(expr);
-                out_names.push(name);
-                continue;
-            }
+        if let Some(prefix) = name.split("__").next()
+            && group_names.contains(prefix)
+            && select.iter().any(|s| s == prefix)
+        {
+            out_exprs.push(expr);
+            out_names.push(name);
+            continue;
         }
 
         // Check locale suffix
@@ -73,10 +74,11 @@ pub fn apply_select_to_document(doc: &mut Document, select: &[String]) {
         if select.iter().any(|s| s == key) {
             return true;
         }
-        if let Some(prefix) = key.split("__").next() {
-            if prefix != key && select.iter().any(|s| s == prefix) {
-                return true;
-            }
+        if let Some(prefix) = key.split("__").next()
+            && prefix != key
+            && select.iter().any(|s| s == prefix)
+        {
+            return true;
         }
         false
     });

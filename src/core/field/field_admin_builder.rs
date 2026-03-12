@@ -9,6 +9,12 @@ pub struct FieldAdminBuilder {
     inner: FieldAdmin,
 }
 
+impl Default for FieldAdminBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FieldAdminBuilder {
     /// Create a new `FieldAdminBuilder`.
     pub fn new() -> Self {

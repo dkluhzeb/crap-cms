@@ -17,10 +17,10 @@ pub fn list_migration_files(migrations_dir: &std::path::Path) -> Result<Vec<Stri
     {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "lua") {
-            if let Some(name) = path.file_name() {
-                files.push(name.to_string_lossy().to_string());
-            }
+        if path.extension().is_some_and(|ext| ext == "lua")
+            && let Some(name) = path.file_name()
+        {
+            files.push(name.to_string_lossy().to_string());
         }
     }
     files.sort();

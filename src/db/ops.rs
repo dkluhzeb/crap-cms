@@ -76,14 +76,13 @@ pub fn find_by_id_full(
 ) -> Result<Option<Document>> {
     // Draft snapshot check first — if the latest version is a draft, use it directly.
     // The snapshot contains all fields including blocks/arrays, so no hydration needed.
-    if use_draft && def.has_drafts() {
-        if let Some(version) = query::find_latest_version(conn, slug, id)? {
-            if version.status == "draft" {
-                if let Some(doc) = document_from_snapshot(id, &version.snapshot) {
-                    return Ok(Some(doc));
-                }
-            }
-        }
+    if use_draft
+        && def.has_drafts()
+        && let Some(version) = query::find_latest_version(conn, slug, id)?
+        && version.status == "draft"
+        && let Some(doc) = document_from_snapshot(id, &version.snapshot)
+    {
+        return Ok(Some(doc));
     }
 
     // Find from main table (with or without access constraints)

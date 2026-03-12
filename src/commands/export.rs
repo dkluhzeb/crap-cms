@@ -183,10 +183,10 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
                     }
                 } else {
                     // Join table fields (array, blocks, has-many relationship)
-                    if let Some(val) = doc_obj.get(&field.name) {
-                        if !val.is_null() {
-                            join_data.insert(field.name.clone(), val.clone());
-                        }
+                    if let Some(val) = doc_obj.get(&field.name)
+                        && !val.is_null()
+                    {
+                        join_data.insert(field.name.clone(), val.clone());
                     }
                 }
 

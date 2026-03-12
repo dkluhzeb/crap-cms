@@ -86,43 +86,31 @@ pub async fn create_action(
     // Process upload if file present — runs on blocking thread
     let mut queued_conversions = Vec::new();
     let mut created_files: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(f) = file {
-        if let Some(upload_config) = def.upload.clone() {
-            let config_dir = state.config_dir.clone();
-            let slug_for_upload = slug.clone();
-            let global_max = state.config.upload.max_file_size;
-            let upload_result = tokio::task::spawn_blocking(move || {
-                upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
-            })
-            .await;
+    if let Some(f) = file
+        && let Some(upload_config) = def.upload.clone()
+    {
+        let config_dir = state.config_dir.clone();
+        let slug_for_upload = slug.clone();
+        let global_max = state.config.upload.max_file_size;
+        let upload_result = tokio::task::spawn_blocking(move || {
+            upload::process_upload(f, &upload_config, &config_dir, &slug_for_upload, global_max)
+        })
+        .await;
 
-            match upload_result {
-                Ok(Ok(processed)) => {
-                    queued_conversions = processed.queued_conversions.clone();
-                    created_files = processed.created_files.clone();
+        match upload_result {
+            Ok(Ok(processed)) => {
+                queued_conversions = processed.queued_conversions.clone();
+                created_files = processed.created_files.clone();
 
-                    upload::inject_upload_metadata(&mut form_data, &processed);
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("Upload processing error: {}", e);
-                    return render_upload_error(
-                        &state,
-                        &def,
-                        &form_data,
-                        &auth_user,
-                        &e.to_string(),
-                    );
-                }
-                Err(e) => {
-                    tracing::error!("Upload task error: {}", e);
-                    return render_upload_error(
-                        &state,
-                        &def,
-                        &form_data,
-                        &auth_user,
-                        &e.to_string(),
-                    );
-                }
+                upload::inject_upload_metadata(&mut form_data, &processed);
+            }
+            Ok(Err(e)) => {
+                tracing::error!("Upload processing error: {}", e);
+                return render_upload_error(&state, &def, &form_data, &auth_user, &e.to_string());
+            }
+            Err(e) => {
+                tracing::error!("Upload task error: {}", e);
+                return render_upload_error(&state, &def, &form_data, &auth_user, &e.to_string());
             }
         }
     }
@@ -168,17 +156,16 @@ pub async fn create_action(
     };
 
     // Validate password against policy (create requires a password for auth collections)
-    if let Some(ref pw) = password {
-        if !pw.is_empty() {
-            if let Err(e) = state.config.auth.password_policy.validate(pw) {
-                return html_with_toast(
-                    &state,
-                    "collections/edit_form",
-                    &serde_json::json!({}),
-                    &e.to_string(),
-                );
-            }
-        }
+    if let Some(ref pw) = password
+        && !pw.is_empty()
+        && let Err(e) = state.config.auth.password_policy.validate(pw)
+    {
+        return html_with_toast(
+            &state,
+            "collections/edit_form",
+            &serde_json::json!({}),
+            &e.to_string(),
+        );
     }
 
     // Convert comma-separated multi-select values to JSON arrays
@@ -231,14 +218,12 @@ pub async fn create_action(
     match result {
         Ok(Ok((doc, _req_context))) => {
             // Enqueue deferred image conversions if any
-            if !queued_conversions.is_empty() {
-                if let Ok(conn) = state.pool.get() {
-                    if let Err(e) =
-                        upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions)
-                    {
-                        tracing::warn!("Failed to enqueue image conversions: {}", e);
-                    }
-                }
+            if !queued_conversions.is_empty()
+                && let Ok(conn) = state.pool.get()
+                && let Err(e) =
+                    upload::enqueue_conversions(&conn, &slug, &doc.id, &queued_conversions)
+            {
+                tracing::warn!("Failed to enqueue image conversions: {}", e);
             }
 
             state.hook_runner.publish_event(
@@ -254,18 +239,19 @@ pub async fn create_action(
             );
 
             // Auto-send verification email for auth collections with verify_email enabled
-            if def.is_auth_collection() && def.auth.as_ref().is_some_and(|a| a.verify_email) {
-                if let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str()) {
-                    service::send_verification_email(
-                        state.pool.clone(),
-                        state.config.email.clone(),
-                        state.email_renderer.clone(),
-                        state.config.server.clone(),
-                        slug.clone(),
-                        doc.id.clone(),
-                        user_email.to_string(),
-                    );
-                }
+            if def.is_auth_collection()
+                && def.auth.as_ref().is_some_and(|a| a.verify_email)
+                && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
+            {
+                service::send_verification_email(
+                    state.pool.clone(),
+                    state.config.email.clone(),
+                    state.email_renderer.clone(),
+                    state.config.server.clone(),
+                    slug.clone(),
+                    doc.id.clone(),
+                    user_email.to_string(),
+                );
             }
 
             htmx_redirect(&format!("/admin/collections/{}", slug))

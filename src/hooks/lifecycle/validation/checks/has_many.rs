@@ -17,107 +17,107 @@ pub(crate) fn check_has_many_elements(
     {
         return;
     }
-    if let Some(serde_json::Value::String(s)) = value {
-        if let Ok(values) = serde_json::from_str::<Vec<String>>(s) {
-            // Validate count with min_rows/max_rows
-            if let Some(min_rows) = field.min_rows {
-                if values.len() < min_rows {
+    if let Some(serde_json::Value::String(s)) = value
+        && let Ok(values) = serde_json::from_str::<Vec<String>>(s)
+    {
+        // Validate count with min_rows/max_rows
+        if let Some(min_rows) = field.min_rows
+            && values.len() < min_rows
+        {
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must have at least {} values", field.name, min_rows),
+                "validation.has_many_min_rows",
+                HashMap::from([
+                    ("field".to_string(), field.name.clone()),
+                    ("min".to_string(), min_rows.to_string()),
+                ]),
+            ));
+        }
+        if let Some(max_rows) = field.max_rows
+            && values.len() > max_rows
+        {
+            errors.push(FieldError::with_key(
+                data_key.to_owned(),
+                format!("{} must have at most {} values", field.name, max_rows),
+                "validation.has_many_max_rows",
+                HashMap::from([
+                    ("field".to_string(), field.name.clone()),
+                    ("max".to_string(), max_rows.to_string()),
+                ]),
+            ));
+        }
+        // Validate each value
+        for v in &values {
+            if field.field_type == FieldType::Text {
+                if let Some(min_len) = field.min_length
+                    && v.len() < min_len
+                {
                     errors.push(FieldError::with_key(
                         data_key.to_owned(),
-                        format!("{} must have at least {} values", field.name, min_rows),
-                        "validation.has_many_min_rows",
+                        format!(
+                            "{}: '{}' must be at least {} characters",
+                            field.name, v, min_len
+                        ),
+                        "validation.has_many_min_length",
                         HashMap::from([
                             ("field".to_string(), field.name.clone()),
-                            ("min".to_string(), min_rows.to_string()),
+                            ("value".to_string(), v.clone()),
+                            ("min".to_string(), min_len.to_string()),
                         ]),
                     ));
+                    break;
                 }
-            }
-            if let Some(max_rows) = field.max_rows {
-                if values.len() > max_rows {
+                if let Some(max_len) = field.max_length
+                    && v.len() > max_len
+                {
                     errors.push(FieldError::with_key(
                         data_key.to_owned(),
-                        format!("{} must have at most {} values", field.name, max_rows),
-                        "validation.has_many_max_rows",
+                        format!(
+                            "{}: '{}' must be at most {} characters",
+                            field.name, v, max_len
+                        ),
+                        "validation.has_many_max_length",
                         HashMap::from([
                             ("field".to_string(), field.name.clone()),
-                            ("max".to_string(), max_rows.to_string()),
+                            ("value".to_string(), v.clone()),
+                            ("max".to_string(), max_len.to_string()),
                         ]),
                     ));
+                    break;
                 }
-            }
-            // Validate each value
-            for v in &values {
-                if field.field_type == FieldType::Text {
-                    if let Some(min_len) = field.min_length {
-                        if v.len() < min_len {
-                            errors.push(FieldError::with_key(
-                                data_key.to_owned(),
-                                format!(
-                                    "{}: '{}' must be at least {} characters",
-                                    field.name, v, min_len
-                                ),
-                                "validation.has_many_min_length",
-                                HashMap::from([
-                                    ("field".to_string(), field.name.clone()),
-                                    ("value".to_string(), v.clone()),
-                                    ("min".to_string(), min_len.to_string()),
-                                ]),
-                            ));
-                            break;
-                        }
-                    }
-                    if let Some(max_len) = field.max_length {
-                        if v.len() > max_len {
-                            errors.push(FieldError::with_key(
-                                data_key.to_owned(),
-                                format!(
-                                    "{}: '{}' must be at most {} characters",
-                                    field.name, v, max_len
-                                ),
-                                "validation.has_many_max_length",
-                                HashMap::from([
-                                    ("field".to_string(), field.name.clone()),
-                                    ("value".to_string(), v.clone()),
-                                    ("max".to_string(), max_len.to_string()),
-                                ]),
-                            ));
-                            break;
-                        }
-                    }
-                } else if field.field_type == FieldType::Number {
-                    if let Ok(num) = v.parse::<f64>() {
-                        if let Some(min_val) = field.min {
-                            if num < min_val {
-                                errors.push(FieldError::with_key(
-                                    data_key.to_owned(),
-                                    format!("{}: {} must be at least {}", field.name, v, min_val),
-                                    "validation.has_many_min_value",
-                                    HashMap::from([
-                                        ("field".to_string(), field.name.clone()),
-                                        ("value".to_string(), v.clone()),
-                                        ("min".to_string(), min_val.to_string()),
-                                    ]),
-                                ));
-                                break;
-                            }
-                        }
-                        if let Some(max_val) = field.max {
-                            if num > max_val {
-                                errors.push(FieldError::with_key(
-                                    data_key.to_owned(),
-                                    format!("{}: {} must be at most {}", field.name, v, max_val),
-                                    "validation.has_many_max_value",
-                                    HashMap::from([
-                                        ("field".to_string(), field.name.clone()),
-                                        ("value".to_string(), v.clone()),
-                                        ("max".to_string(), max_val.to_string()),
-                                    ]),
-                                ));
-                                break;
-                            }
-                        }
-                    }
+            } else if field.field_type == FieldType::Number
+                && let Ok(num) = v.parse::<f64>()
+            {
+                if let Some(min_val) = field.min
+                    && num < min_val
+                {
+                    errors.push(FieldError::with_key(
+                        data_key.to_owned(),
+                        format!("{}: {} must be at least {}", field.name, v, min_val),
+                        "validation.has_many_min_value",
+                        HashMap::from([
+                            ("field".to_string(), field.name.clone()),
+                            ("value".to_string(), v.clone()),
+                            ("min".to_string(), min_val.to_string()),
+                        ]),
+                    ));
+                    break;
+                }
+                if let Some(max_val) = field.max
+                    && num > max_val
+                {
+                    errors.push(FieldError::with_key(
+                        data_key.to_owned(),
+                        format!("{}: {} must be at most {}", field.name, v, max_val),
+                        "validation.has_many_max_value",
+                        HashMap::from([
+                            ("field".to_string(), field.name.clone()),
+                            ("value".to_string(), v.clone()),
+                            ("max".to_string(), max_val.to_string()),
+                        ]),
+                    ));
+                    break;
                 }
             }
         }

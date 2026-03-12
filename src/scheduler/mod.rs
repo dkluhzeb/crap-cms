@@ -92,17 +92,15 @@ pub async fn start(
 
                 // Auto-purge old jobs periodically (every 10 cron intervals)
                 purge_counter += 1;
-                if purge_counter.is_multiple_of(10) {
-                    if let Some(secs) = auto_purge_secs {
-                        if let Ok(conn) = pool.get() {
+                if purge_counter.is_multiple_of(10)
+                    && let Some(secs) = auto_purge_secs
+                        && let Ok(conn) = pool.get() {
                             match job_query::purge_old_jobs(&conn, secs) {
                                 Ok(n) if n > 0 => tracing::info!("Auto-purged {} old job run(s)", n),
                                 Ok(_) => {}
                                 Err(e) => tracing::warn!("Auto-purge error: {}", e),
                             }
                         }
-                    }
-                }
             }
             _ = heartbeat_ticker.tick() => {
                 // Update heartbeats for all running jobs
@@ -110,15 +108,14 @@ pub async fn start(
                     .map(|guard| guard.clone())
                     .unwrap_or_default();
 
-                if !ids.is_empty() {
-                    if let Ok(conn) = pool.get() {
+                if !ids.is_empty()
+                    && let Ok(conn) = pool.get() {
                         for id in &ids {
                             if let Err(e) = job_query::update_heartbeat(&conn, id) {
                                 tracing::warn!("Heartbeat update error for {}: {}", id, e);
                             }
                         }
                     }
-                }
             }
             _ = image_ticker.tick() => {
                 // Process pending image format conversions

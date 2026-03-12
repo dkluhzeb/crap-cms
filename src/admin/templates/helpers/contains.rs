@@ -1,4 +1,5 @@
 use handlebars::{Handlebars, Helper, HelperDef, RenderContext, RenderError, ScopedJson};
+use serde_json::Value;
 
 /// String/array contains helper: `{{#if (contains arr val)}}`.
 pub(super) struct ContainsHelper;
@@ -11,25 +12,21 @@ impl HelperDef for ContainsHelper {
         _ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
-        let haystack = h
-            .param(0)
-            .map(|p| p.value())
-            .unwrap_or(&serde_json::Value::Null);
-        let needle = h
-            .param(1)
-            .map(|p| p.value())
-            .unwrap_or(&serde_json::Value::Null);
+        let haystack = h.param(0).map(|p| p.value()).unwrap_or(&Value::Null);
+        let needle = h.param(1).map(|p| p.value()).unwrap_or(&Value::Null);
         let result = match haystack {
-            serde_json::Value::String(s) => needle.as_str().map(|n| s.contains(n)).unwrap_or(false),
-            serde_json::Value::Array(arr) => arr.contains(needle),
+            Value::String(s) => needle.as_str().map(|n| s.contains(n)).unwrap_or(false),
+            Value::Array(arr) => arr.contains(needle),
             _ => false,
         };
-        Ok(ScopedJson::Derived(serde_json::Value::Bool(result)))
+        Ok(ScopedJson::Derived(Value::Bool(result)))
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     fn test_hbs() -> handlebars::Handlebars<'static> {
         let tmp = tempfile::tempdir().expect("tempdir");
         let translations =
@@ -48,19 +45,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"haystack": "hello world", "needle": "world"})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"haystack": "hello world", "needle": "world"}))
+                .unwrap(),
             "YES"
         );
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"haystack": "hello world", "needle": "xyz"})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"haystack": "hello world", "needle": "xyz"}))
+                .unwrap(),
             "NO"
         );
     }
@@ -71,19 +62,13 @@ mod tests {
         hbs.register_template_string("t", "{{#if (contains arr val)}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"arr": ["a", "b", "c"], "val": "b"})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"arr": ["a", "b", "c"], "val": "b"}))
+                .unwrap(),
             "YES"
         );
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"arr": ["a", "b", "c"], "val": "d"})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"arr": ["a", "b", "c"], "val": "d"}))
+                .unwrap(),
             "NO"
         );
     }
@@ -97,26 +82,23 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"haystack": 42, "needle": "4"}))
+            hbs.render("t", &json!({"haystack": 42, "needle": "4"}))
                 .unwrap(),
             "NO"
         );
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"haystack": true, "needle": "t"}))
+            hbs.render("t", &json!({"haystack": true, "needle": "t"}))
                 .unwrap(),
             "NO"
         );
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"haystack": null, "needle": "x"}))
+            hbs.render("t", &json!({"haystack": null, "needle": "x"}))
                 .unwrap(),
             "NO"
         );
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"haystack": {"a": 1}, "needle": "a"})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"haystack": {"a": 1}, "needle": "a"}))
+                .unwrap(),
             "NO"
         );
     }
@@ -130,11 +112,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            hbs.render(
-                "t",
-                &serde_json::json!({"haystack": "hello 42 world", "needle": 42})
-            )
-            .unwrap(),
+            hbs.render("t", &json!({"haystack": "hello 42 world", "needle": 42}))
+                .unwrap(),
             "NO"
         );
     }
@@ -145,12 +124,12 @@ mod tests {
         hbs.register_template_string("t", "{{#if (contains arr val)}}YES{{else}}NO{{/if}}")
             .unwrap();
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"arr": [1, 2, 3], "val": 2}))
+            hbs.render("t", &json!({"arr": [1, 2, 3], "val": 2}))
                 .unwrap(),
             "YES"
         );
         assert_eq!(
-            hbs.render("t", &serde_json::json!({"arr": [1, 2, 3], "val": 4}))
+            hbs.render("t", &json!({"arr": [1, 2, 3], "val": 4}))
                 .unwrap(),
             "NO"
         );

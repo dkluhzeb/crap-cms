@@ -744,12 +744,11 @@ fn extract_ref_ids(val: Option<&serde_json::Value>, is_polymorphic: bool) -> Vec
         }
         Some(serde_json::Value::Array(arr)) => {
             for item in arr {
-                if let Some(s) = item.as_str() {
-                    if !s.is_empty() {
-                        if let Some((col, id)) = parse_ref_id(s, is_polymorphic) {
-                            ids.push((col, id));
-                        }
-                    }
+                if let Some(s) = item.as_str()
+                    && !s.is_empty()
+                    && let Some((col, id)) = parse_ref_id(s, is_polymorphic)
+                {
+                    ids.push((col, id));
                 }
             }
         }

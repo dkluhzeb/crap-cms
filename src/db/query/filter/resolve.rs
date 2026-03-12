@@ -39,10 +39,10 @@ fn normalize_field_name(field: &mut String, fields: &[FieldDefinition]) {
         Some(s) => s,
         None => return,
     };
-    if let Some(fd) = fields.iter().find(|f| f.name == first_segment) {
-        if fd.field_type == FieldType::Group {
-            *field = field.replace('.', "__");
-        }
+    if let Some(fd) = fields.iter().find(|f| f.name == first_segment)
+        && fd.field_type == FieldType::Group
+    {
+        *field = field.replace('.', "__");
     }
 }
 

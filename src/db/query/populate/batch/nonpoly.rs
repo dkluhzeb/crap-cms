@@ -27,10 +27,10 @@ pub(super) fn batch_nonpoly_has_many(
     for doc in docs.iter() {
         if let Some(serde_json::Value::Array(arr)) = doc.fields.get(field_name) {
             for v in arr {
-                if let Some(s) = v.as_str() {
-                    if !visited.contains(&(rel_collection.to_string(), s.to_string())) {
-                        all_ids.push(s.to_string());
-                    }
+                if let Some(s) = v.as_str()
+                    && !visited.contains(&(rel_collection.to_string(), s.to_string()))
+                {
+                    all_ids.push(s.to_string());
                 }
             }
         }
@@ -87,10 +87,11 @@ pub(super) fn batch_nonpoly_has_one(
 ) -> Result<()> {
     let mut all_ids: Vec<String> = Vec::new();
     for doc in docs.iter() {
-        if let Some(serde_json::Value::String(s)) = doc.fields.get(field_name) {
-            if !s.is_empty() && !visited.contains(&(rel_collection.to_string(), s.clone())) {
-                all_ids.push(s.clone());
-            }
+        if let Some(serde_json::Value::String(s)) = doc.fields.get(field_name)
+            && !s.is_empty()
+            && !visited.contains(&(rel_collection.to_string(), s.clone()))
+        {
+            all_ids.push(s.clone());
         }
     }
     all_ids.sort();
@@ -148,10 +149,10 @@ pub(super) fn batch_fetch_single_collection(
     if !uncached_ids.is_empty() {
         let mut fetched = find_by_ids(conn, collection, rel_def, &uncached_ids, locale_ctx)?;
         for d in &mut fetched {
-            if let Some(ref uc) = rel_def.upload {
-                if uc.enabled {
-                    crate::core::upload::assemble_sizes_object(d, uc);
-                }
+            if let Some(ref uc) = rel_def.upload
+                && uc.enabled
+            {
+                crate::core::upload::assemble_sizes_object(d, uc);
             }
         }
         if effective_depth - 1 > 0 {

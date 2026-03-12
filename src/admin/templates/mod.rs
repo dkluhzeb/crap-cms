@@ -2,11 +2,11 @@
 
 mod helpers;
 
+use std::{path::Path, sync::Arc};
+
 use anyhow::{Context as _, Result};
 use handlebars::Handlebars;
 use include_dir::{Dir, include_dir};
-use std::path::Path;
-use std::sync::Arc;
 
 use super::translations::Translations;
 
@@ -95,6 +95,8 @@ fn register_dir_recursive(hbs: &mut Handlebars, base: &Path, dir: &Path) -> Resu
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -104,7 +106,7 @@ mod tests {
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
         let result = hbs.render(
             "auth/login",
-            &serde_json::json!({
+            &json!({
                 "title": "Login",
                 "collections": [],
             }),
@@ -125,7 +127,7 @@ mod tests {
 
         let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
-        let result = hbs.render("auth/login", &serde_json::json!({})).unwrap();
+        let result = hbs.render("auth/login", &json!({})).unwrap();
         assert_eq!(result, "CUSTOM_LOGIN_PAGE");
     }
 
@@ -138,9 +140,7 @@ mod tests {
 
         let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
-        let result = hbs
-            .render("custom/deep/page", &serde_json::json!({}))
-            .unwrap();
+        let result = hbs.render("custom/deep/page", &json!({})).unwrap();
         assert_eq!(result, "DEEP_NESTED");
     }
 
@@ -154,8 +154,8 @@ mod tests {
 
         let translations = Arc::new(Translations::load(tmp.path()));
         let hbs = create_handlebars(tmp.path(), false, translations).expect("create_handlebars");
-        assert!(hbs.render("custom", &serde_json::json!({})).is_ok());
-        assert!(hbs.render("notes", &serde_json::json!({})).is_err());
+        assert!(hbs.render("custom", &json!({})).is_ok());
+        assert!(hbs.render("notes", &json!({})).is_err());
     }
 
     #[test]
@@ -181,7 +181,7 @@ mod tests {
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         let result = hbs.render(
             "dashboard/index",
-            &serde_json::json!({
+            &json!({
                 "title": "Dashboard",
                 "collections": [],
                 "globals": [],
@@ -201,7 +201,7 @@ mod tests {
         let hbs = create_handlebars(tmp.path(), false, translations).expect("hbs");
         let result = hbs.render(
             "fields/text",
-            &serde_json::json!({
+            &json!({
                 "name": "test",
                 "label": "Test",
                 "value": "hello",

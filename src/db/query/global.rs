@@ -37,12 +37,11 @@ pub fn get_global(
         .query_row(&sql, [], |row| row_to_document(row, &result_names))
         .with_context(|| format!("Failed to get global '{}'", slug))?;
 
-    if let Some(ctx) = locale_ctx {
-        if ctx.config.is_enabled() {
-            if let LocaleMode::All = ctx.mode {
-                group_locale_fields(&mut doc, &def.fields, &ctx.config);
-            }
-        }
+    if let Some(ctx) = locale_ctx
+        && ctx.config.is_enabled()
+        && let LocaleMode::All = ctx.mode
+    {
+        group_locale_fields(&mut doc, &def.fields, &ctx.config);
     }
 
     // Hydrate join table data (arrays, blocks, has-many relationships)
