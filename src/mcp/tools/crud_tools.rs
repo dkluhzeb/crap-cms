@@ -173,17 +173,8 @@ pub(super) fn exec_find(
     let total = query::count(&conn, slug, def, &fq.filters, None)?;
 
     if depth > 0 {
-        let pop_ctx = query::PopulateContext {
-            conn: &conn,
-            registry,
-            collection_slug: slug,
-            def,
-        };
-        let pop_opts = query::PopulateOpts {
-            depth,
-            select: None,
-            locale_ctx: None,
-        };
+        let pop_ctx = query::PopulateContext::new(&conn, registry, slug, def);
+        let pop_opts = query::PopulateOpts::new(depth);
         query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)?;
     }
 
@@ -227,17 +218,8 @@ pub(super) fn exec_find_by_id(
 
     if depth > 0 {
         let mut visited = std::collections::HashSet::new();
-        let pop_ctx = query::PopulateContext {
-            conn: &conn,
-            registry,
-            collection_slug: slug,
-            def,
-        };
-        let pop_opts = query::PopulateOpts {
-            depth,
-            select: None,
-            locale_ctx: None,
-        };
+        let pop_ctx = query::PopulateContext::new(&conn, registry, slug, def);
+        let pop_opts = query::PopulateOpts::new(depth);
         query::populate_relationships(&pop_ctx, &mut doc, &mut visited, &pop_opts)?;
     }
 

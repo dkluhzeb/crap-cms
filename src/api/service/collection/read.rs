@@ -194,17 +194,15 @@ impl ContentService {
                         &local_cache
                     }
                 };
-                let pop_ctx = query::PopulateContext {
-                    conn: &conn,
-                    registry: &registry,
-                    collection_slug: &collection,
-                    def: &def_owned,
-                };
-                let pop_opts = query::PopulateOpts {
-                    depth,
-                    select: select_slice,
-                    locale_ctx: locale_ctx.as_ref(),
-                };
+                let pop_ctx =
+                    query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
+                let mut pop_opts = query::PopulateOpts::new(depth);
+                if let Some(s) = select_slice {
+                    pop_opts = pop_opts.select(s);
+                }
+                if let Some(ref lc) = locale_ctx {
+                    pop_opts = pop_opts.locale_ctx(lc);
+                }
                 query::populate_relationships_batch_cached(
                     &pop_ctx, &mut docs, &pop_opts, cache_ref,
                 )?;
@@ -343,17 +341,15 @@ impl ContentService {
                         &local_cache
                     }
                 };
-                let pop_ctx = query::PopulateContext {
-                    conn: &conn,
-                    registry: &registry,
-                    collection_slug: &collection,
-                    def: &def_owned,
-                };
-                let pop_opts = query::PopulateOpts {
-                    depth,
-                    select: select_slice,
-                    locale_ctx: locale_ctx.as_ref(),
-                };
+                let pop_ctx =
+                    query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
+                let mut pop_opts = query::PopulateOpts::new(depth);
+                if let Some(s) = select_slice {
+                    pop_opts = pop_opts.select(s);
+                }
+                if let Some(ref lc) = locale_ctx {
+                    pop_opts = pop_opts.locale_ctx(lc);
+                }
                 query::populate_relationships_cached(
                     &pop_ctx,
                     d,

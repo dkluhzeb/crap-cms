@@ -178,17 +178,14 @@ pub(super) fn register_find(
                 let r = reg
                     .read()
                     .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                let pop_ctx = query::PopulateContext {
-                    conn,
-                    registry: &r,
-                    collection_slug: &collection,
-                    def: &def,
-                };
-                let pop_opts = query::PopulateOpts {
-                    depth,
-                    select: select_slice,
-                    locale_ctx: locale_ctx.as_ref(),
-                };
+                let pop_ctx = query::PopulateContext::new(conn, &r, &collection, &def);
+                let mut pop_opts = query::PopulateOpts::new(depth);
+                if let Some(s) = select_slice {
+                    pop_opts = pop_opts.select(s);
+                }
+                if let Some(ref lc) = locale_ctx {
+                    pop_opts = pop_opts.locale_ctx(lc);
+                }
                 query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)
                     .map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
             }
@@ -421,17 +418,14 @@ pub(super) fn register_find_by_id(
                         .read()
                         .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
                     let mut visited = HashSet::new();
-                    let pop_ctx = query::PopulateContext {
-                        conn,
-                        registry: &r,
-                        collection_slug: &collection,
-                        def: &def,
-                    };
-                    let pop_opts = query::PopulateOpts {
-                        depth,
-                        select: select_slice,
-                        locale_ctx: locale_ctx.as_ref(),
-                    };
+                    let pop_ctx = query::PopulateContext::new(conn, &r, &collection, &def);
+                    let mut pop_opts = query::PopulateOpts::new(depth);
+                    if let Some(s) = select_slice {
+                        pop_opts = pop_opts.select(s);
+                    }
+                    if let Some(ref lc) = locale_ctx {
+                        pop_opts = pop_opts.locale_ctx(lc);
+                    }
                     query::populate_relationships(&pop_ctx, d, &mut visited, &pop_opts)
                         .map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
                 }

@@ -1,5 +1,6 @@
 //! DB-access enrichment for field contexts (relationship options, array rows, upload thumbnails).
 
+mod enrich_types;
 mod field_types;
 
 use crate::{
@@ -522,7 +523,7 @@ pub fn enrich_field_contexts(
     for (ctx, field_def) in fields.iter_mut().zip(defs_iter) {
         match field_def.field_type {
             FieldType::Relationship => {
-                field_types::enrich_relationship(
+                enrich_types::enrich_relationship(
                     ctx,
                     field_def,
                     doc_fields,
@@ -532,10 +533,10 @@ pub fn enrich_field_contexts(
                 );
             }
             FieldType::Array => {
-                field_types::enrich_array(ctx, field_def, doc_fields, &enrich_ctx);
+                enrich_types::enrich_array(ctx, field_def, doc_fields, &enrich_ctx);
             }
             FieldType::Upload => {
-                field_types::enrich_upload(
+                enrich_types::enrich_upload(
                     ctx,
                     field_def,
                     doc_fields,
@@ -545,7 +546,7 @@ pub fn enrich_field_contexts(
                 );
             }
             FieldType::Blocks => {
-                field_types::enrich_blocks(ctx, field_def, doc_fields, &enrich_ctx);
+                enrich_types::enrich_blocks(ctx, field_def, doc_fields, &enrich_ctx);
             }
             FieldType::Row | FieldType::Collapsible => {
                 if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
@@ -581,7 +582,7 @@ pub fn enrich_field_contexts(
                 }
             }
             FieldType::Join => {
-                field_types::enrich_join(
+                enrich_types::enrich_join(
                     ctx,
                     field_def,
                     &conn,
@@ -591,7 +592,7 @@ pub fn enrich_field_contexts(
                 );
             }
             FieldType::Richtext => {
-                field_types::enrich_richtext(ctx, reg);
+                enrich_types::enrich_richtext(ctx, reg);
             }
             _ => {}
         }

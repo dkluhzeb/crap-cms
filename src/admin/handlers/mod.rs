@@ -9,6 +9,7 @@ pub mod events;
 pub mod field_context;
 /// Global document handlers (view/edit).
 pub mod globals;
+mod query_utils;
 pub mod shared;
 pub mod static_assets;
 /// File upload handlers.

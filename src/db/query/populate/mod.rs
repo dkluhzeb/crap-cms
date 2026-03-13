@@ -32,17 +32,53 @@ pub(crate) struct PopulateCtx<'a> {
 
 /// Collection and registry context for population.
 pub struct PopulateContext<'a> {
-    pub conn: &'a rusqlite::Connection,
-    pub registry: &'a Registry,
-    pub collection_slug: &'a str,
-    pub def: &'a CollectionDefinition,
+    pub(crate) conn: &'a rusqlite::Connection,
+    pub(crate) registry: &'a Registry,
+    pub(crate) collection_slug: &'a str,
+    pub(crate) def: &'a CollectionDefinition,
+}
+
+impl<'a> PopulateContext<'a> {
+    pub fn new(
+        conn: &'a rusqlite::Connection,
+        registry: &'a Registry,
+        collection_slug: &'a str,
+        def: &'a CollectionDefinition,
+    ) -> Self {
+        Self {
+            conn,
+            registry,
+            collection_slug,
+            def,
+        }
+    }
 }
 
 /// Options controlling population behavior.
 pub struct PopulateOpts<'a> {
-    pub depth: i32,
-    pub select: Option<&'a [String]>,
-    pub locale_ctx: Option<&'a super::LocaleContext>,
+    pub(crate) depth: i32,
+    pub(crate) select: Option<&'a [String]>,
+    pub(crate) locale_ctx: Option<&'a super::LocaleContext>,
+}
+
+impl<'a> PopulateOpts<'a> {
+    pub fn new(depth: i32) -> Self {
+        Self {
+            depth,
+            select: None,
+            locale_ctx: None,
+        }
+    }
+
+    pub fn select(mut self, select: &'a [String]) -> Self {
+        self.select = Some(select);
+        self
+    }
+
+    pub fn locale_ctx(mut self, ctx: &'a super::LocaleContext) -> Self {
+        self.locale_ctx = Some(ctx);
+        self
+    }
 }
 
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.

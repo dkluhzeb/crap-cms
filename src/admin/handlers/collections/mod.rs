@@ -10,6 +10,7 @@ pub mod item;
 pub mod items;
 /// Handler for listing available collections.
 pub mod list_collections;
+mod list_helpers;
 /// Shared collection handler utilities.
 pub mod shared;
 
