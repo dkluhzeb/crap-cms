@@ -2,8 +2,10 @@
 
 use std::collections::HashSet;
 
-use crate::core::CollectionDefinition;
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{
+    CollectionDefinition,
+    field::{FieldDefinition, FieldType},
+};
 
 use super::locale::LocaleContext;
 
@@ -11,6 +13,7 @@ use super::locale::LocaleContext;
 pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     let mut names = vec!["id".to_string()];
     collect_column_names(&def.fields, &mut names);
+
     if def.has_drafts() {
         names.push("_status".to_string());
     }
@@ -67,6 +70,7 @@ pub(crate) fn get_valid_filter_columns(
     let mut valid = HashSet::new();
     valid.insert("id".to_string());
     collect_valid_filter_names(&def.fields, &mut valid, "");
+
     if def.has_drafts() {
         valid.insert("_status".to_string());
     }

@@ -3,11 +3,15 @@
 use std::collections::HashMap;
 
 use mlua::Value;
+use serde_json::Value as JsonValue;
 
-use crate::hooks::lifecycle::execution::{
-    call_display_condition_with_lua, has_registered_hooks, resolve_hook_function,
+use crate::hooks::{
+    api,
+    lifecycle::{
+        execution::{call_display_condition_with_lua, has_registered_hooks, resolve_hook_function},
+        types::DisplayConditionResult,
+    },
 };
-use crate::hooks::lifecycle::types::DisplayConditionResult;
 
 use super::HookRunner;
 
@@ -15,10 +19,10 @@ impl HookRunner {
     /// Call a Lua function to compute a row label for an array/blocks row.
     /// Returns None if the function errors or returns nil.
     /// No CRUD access — pure formatting function.
-    pub fn call_row_label(&self, func_ref: &str, row_data: &serde_json::Value) -> Option<String> {
+    pub fn call_row_label(&self, func_ref: &str, row_data: &JsonValue) -> Option<String> {
         let lua = self.pool.acquire().ok()?;
         let func = resolve_hook_function(&lua, func_ref).ok()?;
-        let row_lua = crate::hooks::api::json_to_lua(&lua, row_data).ok()?;
+        let row_lua = api::json_to_lua(&lua, row_data).ok()?;
         match func.call::<Value>(row_lua) {
             Ok(Value::String(s)) => s.to_str().ok().map(|s| s.to_string()),
             _ => None,
@@ -32,7 +36,7 @@ impl HookRunner {
     pub fn call_display_condition(
         &self,
         func_ref: &str,
-        form_data: &serde_json::Value,
+        form_data: &JsonValue,
     ) -> Option<DisplayConditionResult> {
         let lua = self.pool.acquire().ok()?;
         call_display_condition_with_lua(&lua, func_ref, form_data)
@@ -42,7 +46,7 @@ impl HookRunner {
     /// Returns a map from func_ref to the evaluation result.
     pub fn call_display_conditions_batch(
         &self,
-        conditions: &[(&str, &serde_json::Value)],
+        conditions: &[(&str, &JsonValue)],
     ) -> HashMap<String, DisplayConditionResult> {
         if conditions.is_empty() {
             return HashMap::new();
@@ -64,7 +68,7 @@ impl HookRunner {
     /// Global registered `before_render` hooks receive the full template context as a
     /// Lua table and return the (potentially modified) context. No CRUD access.
     /// On error: logs warning, returns original context unmodified.
-    pub fn run_before_render(&self, mut context: serde_json::Value) -> serde_json::Value {
+    pub fn run_before_render(&self, mut context: JsonValue) -> JsonValue {
         // Skip VM acquisition entirely when no before_render hooks are registered
         if !self.has_registered_hooks_for("before_render") {
             return context;
@@ -74,6 +78,7 @@ impl HookRunner {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!("VM pool error in run_before_render: {}", e);
+
                 return context;
             }
         };
@@ -99,26 +104,25 @@ impl HookRunner {
                 Err(_) => continue,
             };
 
-            let ctx_lua = match crate::hooks::api::json_to_lua(&lua, &context) {
+            let ctx_lua = match api::json_to_lua(&lua, &context) {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!("before_render: failed to convert context to Lua: {}", e);
+
                     return context;
                 }
             };
 
             match func.call::<Value>(ctx_lua) {
-                Ok(Value::Table(tbl)) => {
-                    match crate::hooks::api::lua_to_json(&lua, &Value::Table(tbl)) {
-                        Ok(new_ctx) => context = new_ctx,
-                        Err(e) => {
-                            tracing::warn!(
-                                "before_render: failed to convert Lua result to JSON: {}",
-                                e
-                            );
-                        }
+                Ok(Value::Table(tbl)) => match api::lua_to_json(&lua, &Value::Table(tbl)) {
+                    Ok(new_ctx) => context = new_ctx,
+                    Err(e) => {
+                        tracing::warn!(
+                            "before_render: failed to convert Lua result to JSON: {}",
+                            e
+                        );
                     }
-                }
+                },
                 Ok(Value::Nil) => {
                     // Hook returned nil — keep context unchanged
                 }

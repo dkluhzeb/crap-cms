@@ -1,13 +1,16 @@
 //! Pool-based read-only wrappers around `query::*` functions for convenience.
 
 use anyhow::{Context as _, Result};
+use serde_json::Value;
 use std::collections::HashMap;
 
-use super::DbPool;
-use super::query::{self, Filter, FilterClause, FilterOp, FindQuery, LocaleContext};
-use crate::core::collection::GlobalDefinition;
-use crate::core::document::DocumentBuilder;
-use crate::core::{CollectionDefinition, Document};
+use super::{
+    DbPool,
+    query::{self, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
+};
+use crate::core::{
+    CollectionDefinition, Document, collection::GlobalDefinition, document::DocumentBuilder,
+};
 
 /// Find documents (read-only, no transaction needed).
 pub fn find_documents(
@@ -111,7 +114,7 @@ pub fn find_by_id_full(
 }
 
 /// Reconstruct a Document from a version snapshot JSON object.
-fn document_from_snapshot(id: &str, snapshot: &serde_json::Value) -> Option<Document> {
+fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
     let obj = snapshot.as_object()?;
     let mut fields = HashMap::new();
     for (k, v) in obj {
@@ -120,6 +123,7 @@ fn document_from_snapshot(id: &str, snapshot: &serde_json::Value) -> Option<Docu
         }
     }
     let mut builder = DocumentBuilder::new(id).fields(fields);
+
     if let Some(ts) = obj.get("created_at").and_then(|v| v.as_str()) {
         builder = builder.created_at(ts);
     }

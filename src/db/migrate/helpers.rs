@@ -3,7 +3,10 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 
-use crate::config::LocaleConfig;
+use crate::{
+    config::LocaleConfig,
+    core::field::{FieldDefinition, FieldType, flatten_array_sub_fields},
+};
 
 pub fn table_exists(conn: &rusqlite::Connection, name: &str) -> Result<bool> {
     let count: i64 = conn.query_row(
@@ -32,6 +35,7 @@ pub(super) fn ensure_locale_column(
     default_locale: &str,
 ) -> Result<()> {
     let existing = get_table_columns(conn, table_name)?;
+
     if !existing.contains("_locale") {
         let sql = format!(
             "ALTER TABLE {} ADD COLUMN _locale TEXT NOT NULL DEFAULT '{}'",
@@ -53,6 +57,7 @@ pub(super) fn ensure_column_exists(
     col_type: &str,
 ) -> Result<()> {
     let existing = get_table_columns(conn, table_name)?;
+
     if !existing.contains(column) {
         let sql = format!(
             "ALTER TABLE {} ADD COLUMN {} {}",
@@ -71,7 +76,7 @@ pub(super) struct ColumnSpec<'a> {
     /// The column name (e.g., "title", "social__github")
     pub col_name: String,
     /// The field definition this column comes from (used for type, constraints)
-    pub field: &'a crate::core::field::FieldDefinition,
+    pub field: &'a FieldDefinition,
     /// Whether this column is localized (needs per-locale columns)
     pub is_localized: bool,
 }
@@ -79,7 +84,7 @@ pub(super) struct ColumnSpec<'a> {
 /// Recursively collect column specifications from a field tree.
 /// Handles arbitrary nesting of Group, Row, Collapsible, Tabs.
 pub(super) fn collect_column_specs<'a>(
-    fields: &'a [crate::core::field::FieldDefinition],
+    fields: &'a [FieldDefinition],
     locale_config: &LocaleConfig,
 ) -> Vec<ColumnSpec<'a>> {
     let mut specs = Vec::new();
@@ -88,14 +93,12 @@ pub(super) fn collect_column_specs<'a>(
 }
 
 fn collect_column_specs_inner<'a>(
-    fields: &'a [crate::core::field::FieldDefinition],
+    fields: &'a [FieldDefinition],
     specs: &mut Vec<ColumnSpec<'a>>,
     locale_config: &LocaleConfig,
     prefix: &str,
     inherited_localized: bool,
 ) {
-    use crate::core::field::FieldType;
-
     for field in fields {
         match field.field_type {
             FieldType::Group => {
@@ -156,11 +159,9 @@ fn collect_column_specs_inner<'a>(
 pub(super) fn sync_join_tables(
     conn: &rusqlite::Connection,
     collection_slug: &str,
-    fields: &[crate::core::field::FieldDefinition],
+    fields: &[FieldDefinition],
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    use crate::core::field::FieldType;
-
     for field in fields {
         let has_locale_col = field.localized && locale_config.is_enabled();
 
@@ -170,6 +171,7 @@ pub(super) fn sync_join_tables(
                     && rc.has_many
                 {
                     let table_name = format!("{}_{}", collection_slug, field.name);
+
                     if !table_exists(conn, &table_name)? {
                         let poly_col = if rc.is_polymorphic() {
                             "related_collection TEXT NOT NULL DEFAULT '', "
@@ -231,7 +233,8 @@ pub(super) fn sync_join_tables(
             }
             FieldType::Array => {
                 let table_name = format!("{}_{}", collection_slug, field.name);
-                let flat_subs = crate::core::field::flatten_array_sub_fields(&field.fields);
+                let flat_subs = flatten_array_sub_fields(&field.fields);
+
                 if !table_exists(conn, &table_name)? {
                     let mut columns = vec![
                         "id TEXT PRIMARY KEY".to_string(),
@@ -241,6 +244,7 @@ pub(super) fn sync_join_tables(
                         ),
                         "_order INTEGER NOT NULL DEFAULT 0".to_string(),
                     ];
+
                     if has_locale_col {
                         columns.push(format!(
                             "_locale TEXT NOT NULL DEFAULT '{}'",
@@ -282,6 +286,7 @@ pub(super) fn sync_join_tables(
             }
             FieldType::Blocks => {
                 let table_name = format!("{}_{}", collection_slug, field.name);
+
                 if !table_exists(conn, &table_name)? {
                     let locale_col = if has_locale_col {
                         format!(
@@ -327,6 +332,7 @@ pub(super) fn sync_join_tables(
 /// Create or verify the `_versions_{slug}` table for document version history.
 pub(super) fn sync_versions_table(conn: &rusqlite::Connection, slug: &str) -> Result<()> {
     let table_name = format!("_versions_{}", slug);
+
     if !table_exists(conn, &table_name)? {
         let sql = format!(
             "CREATE TABLE {} (\

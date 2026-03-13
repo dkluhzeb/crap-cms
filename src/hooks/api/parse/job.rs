@@ -2,18 +2,17 @@
 
 use std::str::FromStr;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use mlua::Table;
 
-use crate::core::job::JobDefinitionBuilder;
-use crate::core::job::{JobDefinition, JobLabels};
+use crate::core::job::{JobDefinition, JobDefinitionBuilder, JobLabels};
 
 use super::helpers::*;
 
 /// Parse a Lua table into a `JobDefinition`.
 pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition> {
     let handler = get_string(config, "handler")
-        .ok_or_else(|| anyhow::anyhow!("Job '{}' missing required 'handler' field", slug))?;
+        .ok_or_else(|| anyhow!("Job '{}' missing required 'handler' field", slug))?;
 
     let schedule = get_string(config, "schedule");
 
@@ -22,14 +21,16 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition>
     if let Some(ref expr) = schedule {
         let normalized = {
             let fields: Vec<&str> = expr.split_whitespace().collect();
+
             if fields.len() == 5 {
                 format!("0 {}", expr)
             } else {
                 expr.clone()
             }
         };
+
         if cron::Schedule::from_str(&normalized).is_err() {
-            anyhow::bail!("Job '{}' has invalid cron expression '{}'", slug, expr);
+            bail!("Job '{}' has invalid cron expression '{}'", slug, expr);
         }
     }
 
@@ -67,6 +68,7 @@ pub fn parse_job_definition(slug: &str, config: &Table) -> Result<JobDefinition>
         .concurrency(concurrency)
         .skip_if_running(skip_if_running)
         .labels(labels);
+
     if let Some(s) = schedule {
         builder = builder.schedule(s);
     }

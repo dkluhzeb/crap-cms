@@ -2,12 +2,18 @@
 
 use anyhow::{Result, bail};
 
-use super::super::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode};
-use super::super::{is_valid_identifier, sanitize_locale};
-use super::operators::{build_filter_condition, build_op_condition};
-use super::resolve::{ResolvedFilter, SubqueryCondition, resolve_filter};
-use crate::core::CollectionDefinition;
-use crate::core::field::{FieldDefinition, FieldType};
+use super::{
+    super::{
+        Filter, FilterClause, FilterOp, LocaleContext, LocaleMode, is_valid_identifier,
+        sanitize_locale,
+    },
+    operators::{build_filter_condition, build_op_condition},
+    resolve::{ResolvedFilter, SubqueryCondition, resolve_filter},
+};
+use crate::core::{
+    CollectionDefinition,
+    field::{FieldDefinition, FieldType},
+};
 
 // ── Subquery SQL generation ──────────────────────────────────────────────
 
@@ -248,6 +254,7 @@ fn check_group_locale<'a>(
     ctx: &'a LocaleContext,
 ) -> Option<&'a str> {
     let prefix = format!("{}__{}", field.name, "");
+
     if field_name.starts_with(&prefix) {
         let sub_name = &field_name[prefix.len()..];
         for sub in &field.fields {

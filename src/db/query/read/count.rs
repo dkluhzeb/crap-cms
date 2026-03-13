@@ -3,8 +3,11 @@
 use anyhow::{Context as _, Result, bail};
 use rusqlite::params_from_iter;
 
-use super::super::filter::{build_where_clause, resolve_filters};
-use super::super::{FilterClause, LocaleContext, is_valid_identifier};
+use super::super::{
+    FilterClause, LocaleContext,
+    filter::{build_where_clause, resolve_filters},
+    is_valid_identifier,
+};
 use crate::core::CollectionDefinition;
 
 /// Count documents in a collection.
@@ -48,6 +51,7 @@ pub fn count_with_search(
 
     let resolved_filters = resolve_filters(filters, def, locale_ctx);
     let where_clause = build_where_clause(&resolved_filters, slug, &def.fields, &mut params)?;
+
     if !where_clause.is_empty() {
         sql.push_str(&where_clause);
     }

@@ -1,13 +1,14 @@
 //! Update operation and its helper.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
-use super::super::read::find_by_id_raw;
-use super::super::{LocaleContext, coerce_value, locale_write_column};
-use crate::core::field::FieldType;
-use crate::core::{CollectionDefinition, Document};
+use super::super::{LocaleContext, coerce_value, locale_write_column, read::find_by_id_raw};
+use crate::core::{
+    CollectionDefinition, Document,
+    field::{FieldDefinition, FieldType},
+};
 
 /// Update a document by ID. Returns the updated document.
 pub fn update(
@@ -44,7 +45,7 @@ pub fn update(
 
     if set_clauses.is_empty() {
         return find_by_id_raw(conn, slug, def, id, locale_ctx)?
-            .ok_or_else(|| anyhow::anyhow!("Document not found"));
+            .ok_or_else(|| anyhow!("Document not found"));
     }
 
     let sql = format!(
@@ -61,13 +62,13 @@ pub fn update(
         .with_context(|| format!("Failed to update document {} in '{}'", id, slug))?;
 
     find_by_id_raw(conn, slug, def, id, locale_ctx)?
-        .ok_or_else(|| anyhow::anyhow!("Document not found after update"))
+        .ok_or_else(|| anyhow!("Document not found after update"))
 }
 
 /// Recursively collect SET clauses + params for UPDATE.
 /// Handles arbitrary nesting: Group (prefixed), Row/Collapsible/Tabs (promoted flat).
 pub(super) fn collect_update_params(
-    fields: &[crate::core::field::FieldDefinition],
+    fields: &[FieldDefinition],
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
     set_clauses: &mut Vec<String>,
@@ -127,6 +128,7 @@ pub(super) fn collect_update_params(
                     format!("{}__{}", prefix, field.name)
                 };
                 let col_name = locale_write_column(&data_key, field, locale_ctx);
+
                 if let Some(value) = data.get(&data_key) {
                     set_clauses.push(format!("{} = ?{}", col_name, *idx));
                     params.push(coerce_value(&field.field_type, value));

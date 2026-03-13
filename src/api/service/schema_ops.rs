@@ -2,20 +2,37 @@
 //! DescribeCollection, Subscribe, ListVersions, RestoreVersion, ListJobs,
 //! TriggerJob, GetJobRun, ListJobRuns.
 
-use anyhow::Context as _;
-use std::collections::{BTreeMap, HashMap, HashSet};
-use std::pin::Pin;
+use anyhow::{Context as _, anyhow};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet},
+    pin::Pin,
+};
+
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
 use tonic::{Request, Response, Status};
 
-use crate::api::content;
-use crate::db::query::{AccessResult, LocaleContext};
-use crate::db::{ops, query};
+use crate::{
+    admin::server::load_auth_user,
+    api::content,
+    core::{
+        auth::validate_token,
+        event::{EventOperation, EventTarget},
+        job::JobRun,
+    },
+    db::{
+        ops,
+        query::{self, AccessResult, LocaleContext, jobs},
+    },
+    hooks::lifecycle::AfterReadCtx,
+    service::{self, WriteInput},
+};
 
-use super::ContentService;
-use super::convert::{
-    document_to_proto, field_def_to_proto, json_to_prost_value, prost_struct_to_hashmap,
-    prost_struct_to_json_map,
+use super::{
+    ContentService,
+    convert::{
+        document_to_proto, field_def_to_proto, json_to_prost_value, prost_struct_to_hashmap,
+        prost_struct_to_json_map,
+    },
 };
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
@@ -35,6 +52,7 @@ impl ContentService {
         // Check read access
         let access_result =
             self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Read access denied"));
         }
@@ -51,7 +69,7 @@ impl ContentService {
         let doc = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &slug, "get_global", HashMap::new())?;
             let doc = ops::get_global(&pool, &slug, &def, locale_ctx.as_ref())?;
-            let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+            let ar_ctx = AfterReadCtx {
                 hooks: &hooks,
                 fields: &fields,
                 collection: &slug,
@@ -93,6 +111,7 @@ impl ContentService {
         // Check update access
         let access_result =
             self.require_access(def.access.update.as_deref(), &auth_user, None, None)?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Update access denied"));
         }
@@ -140,12 +159,12 @@ impl ContentService {
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
         let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
         let (doc, _req_context) = tokio::task::spawn_blocking(move || {
-            crate::service::update_global_document(
+            service::update_global_document(
                 &pool,
                 &runner,
                 &slug,
                 &def_owned,
-                crate::service::WriteInput {
+                WriteInput {
                     data,
                     join_data: &join_data,
                     password: None,
@@ -181,8 +200,8 @@ impl ContentService {
                 &self.event_bus,
                 &hooks,
                 live.as_ref(),
-                crate::core::event::EventTarget::Global,
-                crate::core::event::EventOperation::Update,
+                EventTarget::Global,
+                EventOperation::Update,
                 req.slug.clone(),
                 doc.id.clone(),
                 doc.fields.clone(),
@@ -319,13 +338,13 @@ impl ContentService {
 
         // Authenticate subscriber
         let auth_user = if !req.token.is_empty() {
-            let claims = crate::core::auth::validate_token(&req.token, &self.jwt_secret)
+            let claims = validate_token(&req.token, &self.jwt_secret)
                 .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
             let pool = self.pool.clone();
             let registry = self.registry.clone();
             let locale_config = self.locale_config.clone();
             tokio::task::spawn_blocking(move || {
-                crate::admin::server::load_auth_user(&pool, &registry, &claims, &locale_config)
+                load_auth_user(&pool, &registry, &claims, &locale_config)
             })
             .await
             .map_err(|e| {
@@ -422,23 +441,21 @@ impl ContentService {
                 Ok(event) => {
                     // Filter by target type + collection access
                     let allowed = match event.target {
-                        crate::core::event::EventTarget::Collection => {
-                            allowed_collections.contains(&event.collection)
-                        }
-                        crate::core::event::EventTarget::Global => {
-                            allowed_globals.contains(&event.collection)
-                        }
+                        EventTarget::Collection => allowed_collections.contains(&event.collection),
+                        EventTarget::Global => allowed_globals.contains(&event.collection),
                     };
+
                     if !allowed {
                         return None;
                     }
 
                     // Filter by operation
                     let op_str = match event.operation {
-                        crate::core::event::EventOperation::Create => "create",
-                        crate::core::event::EventOperation::Update => "update",
-                        crate::core::event::EventOperation::Delete => "delete",
+                        EventOperation::Create => "create",
+                        EventOperation::Update => "update",
+                        EventOperation::Delete => "delete",
                     };
+
                     if !requested_ops.contains(op_str) {
                         return None;
                     }
@@ -451,8 +468,8 @@ impl ContentService {
                         .collect();
 
                     let target_str = match event.target {
-                        crate::core::event::EventTarget::Collection => "collection",
-                        crate::core::event::EventTarget::Global => "global",
+                        EventTarget::Collection => "collection",
+                        EventTarget::Global => "global",
                     };
 
                     Some(Ok(content::MutationEvent {
@@ -495,6 +512,7 @@ impl ContentService {
         // Check read access
         let access_result =
             self.require_access(def.access.read.as_deref(), &auth_user, Some(&req.id), None)?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Read access denied"));
         }
@@ -557,6 +575,7 @@ impl ContentService {
             Some(&req.document_id),
             None,
         )?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Update access denied"));
         }
@@ -570,7 +589,7 @@ impl ContentService {
         let doc = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             let version = query::find_version_by_id(&conn, &collection, &version_id)?
-                .ok_or_else(|| anyhow::anyhow!("Version '{}' not found", version_id))?;
+                .ok_or_else(|| anyhow!("Version '{}' not found", version_id))?;
             query::restore_version(
                 &conn,
                 &collection,
@@ -609,6 +628,7 @@ impl ContentService {
     ) -> Result<Response<content::ListJobsResponse>, Status> {
         let metadata = request.metadata().clone();
         let auth_user = self.extract_auth_user(&metadata);
+
         if auth_user.is_none() {
             return Err(Status::unauthenticated("Authentication required"));
         }
@@ -640,6 +660,7 @@ impl ContentService {
     ) -> Result<Response<content::TriggerJobResponse>, Status> {
         let metadata = request.metadata().clone();
         let auth_user = self.extract_auth_user(&metadata);
+
         if auth_user.is_none() {
             return Err(Status::unauthenticated("Authentication required"));
         }
@@ -655,6 +676,7 @@ impl ContentService {
         // Check access if defined
         if let Some(ref access_ref) = job_def.access {
             let result = self.require_access(Some(access_ref), &auth_user, None, None)?;
+
             if matches!(result, AccessResult::Denied) {
                 return Err(Status::permission_denied("Trigger access denied"));
             }
@@ -666,7 +688,7 @@ impl ContentService {
             .get()
             .map_err(|_| Status::internal("Database connection error"))?;
 
-        let job_run = crate::db::query::jobs::insert_job(
+        let job_run = jobs::insert_job(
             &conn,
             &req.slug,
             &data_json,
@@ -691,6 +713,7 @@ impl ContentService {
     ) -> Result<Response<content::GetJobRunResponse>, Status> {
         let metadata = request.metadata().clone();
         let auth_user = self.extract_auth_user(&metadata);
+
         if auth_user.is_none() {
             return Err(Status::unauthenticated("Authentication required"));
         }
@@ -701,7 +724,7 @@ impl ContentService {
             .get()
             .map_err(|_| Status::internal("Database connection error"))?;
 
-        let run = crate::db::query::jobs::get_job_run(&conn, &req.id)
+        let run = jobs::get_job_run(&conn, &req.id)
             .map_err(|e| Status::internal(format!("Query error: {}", e)))?
             .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", req.id)))?;
 
@@ -715,6 +738,7 @@ impl ContentService {
     ) -> Result<Response<content::ListJobRunsResponse>, Status> {
         let metadata = request.metadata().clone();
         let auth_user = self.extract_auth_user(&metadata);
+
         if auth_user.is_none() {
             return Err(Status::unauthenticated("Authentication required"));
         }
@@ -728,7 +752,7 @@ impl ContentService {
         let limit = req.limit.unwrap_or(50);
         let offset = req.offset.unwrap_or(0);
 
-        let runs = crate::db::query::jobs::list_job_runs(
+        let runs = jobs::list_job_runs(
             &conn,
             req.slug.as_deref(),
             req.status.as_deref(),
@@ -748,7 +772,7 @@ impl ContentService {
 
 /// Convert a JobRun to gRPC response.
 #[cfg(not(tarpaulin_include))]
-fn job_run_to_proto(run: &crate::core::job::JobRun) -> content::GetJobRunResponse {
+fn job_run_to_proto(run: &JobRun) -> content::GetJobRunResponse {
     content::GetJobRunResponse {
         id: run.id.clone(),
         slug: run.slug.clone(),

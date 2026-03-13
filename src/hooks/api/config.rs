@@ -1,6 +1,6 @@
 //! `crap.config` and `crap.locale` namespaces — read-only config access.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use mlua::{Lua, Table, Value};
 
 use crate::config::CrapConfig;
@@ -10,8 +10,8 @@ use super::json_to_lua;
 /// Register `crap.config` — read-only config access with dot notation.
 pub(super) fn register_config(lua: &Lua, crap: &Table, config: &CrapConfig) -> Result<()> {
     let config_table = lua.create_table()?;
-    let config_json = serde_json::to_value(config)
-        .map_err(|e| anyhow::anyhow!("Failed to serialize config: {}", e))?;
+    let config_json =
+        serde_json::to_value(config).map_err(|e| anyhow!("Failed to serialize config: {}", e))?;
     let config_lua = json_to_lua(lua, &config_json)?;
     lua.globals().set("_crap_config", config_lua)?;
 

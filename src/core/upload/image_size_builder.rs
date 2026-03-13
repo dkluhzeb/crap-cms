@@ -1,5 +1,4 @@
-use super::image_fit::ImageFit;
-use super::image_size::ImageSize;
+use super::{image_fit::ImageFit, image_size::ImageSize};
 
 /// Builder for [`ImageSize`].
 ///

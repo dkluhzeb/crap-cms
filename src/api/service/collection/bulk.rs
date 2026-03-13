@@ -1,15 +1,20 @@
 //! Bulk collection RPC handlers: UpdateMany, DeleteMany.
 
-use anyhow::Context as _;
+use anyhow::{Context as _, bail};
 use tonic::{Request, Response, Status};
 
-use crate::api::content;
-use crate::api::service::ContentService;
-use crate::api::service::convert::{prost_struct_to_hashmap, prost_struct_to_json_map};
-use crate::db::query::{self, AccessResult, FindQuery, LocaleContext};
+use crate::{
+    api::{
+        content,
+        service::{
+            ContentService,
+            convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
+        },
+    },
+    db::query::{self, AccessResult, FindQuery, LocaleContext},
+};
 
-use super::filter_builder::FilterBuilder;
-use super::helpers::map_db_error;
+use super::{filter_builder::FilterBuilder, helpers::map_db_error};
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.
@@ -28,6 +33,7 @@ impl ContentService {
         // Check read access first (to find matching docs)
         let read_access =
             self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+
         if matches!(read_access, AccessResult::Denied) {
             return Err(Status::permission_denied("Read access denied"));
         }
@@ -81,8 +87,9 @@ impl ContentService {
                         None,
                         &tx,
                     )?;
+
                     if matches!(result, AccessResult::Denied) {
-                        anyhow::bail!("Update access denied for document {}", doc.id);
+                        bail!("Update access denied for document {}", doc.id);
                     }
                 }
             }
@@ -146,6 +153,7 @@ impl ContentService {
         // Check read access first (to find matching docs)
         let read_access =
             self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+
         if matches!(read_access, AccessResult::Denied) {
             return Err(Status::permission_denied("Read access denied"));
         }
@@ -180,8 +188,9 @@ impl ContentService {
                         None,
                         &tx,
                     )?;
+
                     if matches!(result, AccessResult::Denied) {
-                        anyhow::bail!("Delete access denied for document {}", doc.id);
+                        bail!("Delete access denied for document {}", doc.id);
                     }
                 }
             }

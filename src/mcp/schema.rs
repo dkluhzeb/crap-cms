@@ -1,9 +1,11 @@
 //! JSON Schema generation from `FieldDefinition` and `CollectionDefinition`.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{
+    collection::{CollectionDefinition, GlobalDefinition},
+    field::{FieldDefinition, FieldType},
+};
 
 /// CRUD operation type, determines which fields are included/required in the schema.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -70,6 +72,7 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
                 .as_ref()
                 .map(|r| r.has_many)
                 .unwrap_or(field.has_many);
+
             if has_many {
                 json!({ "type": "array", "items": { "type": "string" } })
             } else {
@@ -88,7 +91,7 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
                     .blocks
                     .iter()
                     .map(|b| {
-                        let mut props = serde_json::Map::new();
+                        let mut props = Map::new();
                         props.insert(
                             "blockType".to_string(),
                             json!({ "type": "string", "const": b.block_type }),
@@ -133,7 +136,7 @@ pub fn field_to_json_schema(field: &FieldDefinition) -> Value {
 
 /// Convert a list of `FieldDefinition`s to a JSON Schema `object` with `properties` and `required`.
 fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
-    let mut props = serde_json::Map::new();
+    let mut props = Map::new();
     let mut required = Vec::new();
 
     for field in fields {
@@ -142,6 +145,7 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
             FieldType::Row | FieldType::Collapsible => {
                 for sf in &field.fields {
                     props.insert(sf.name.clone(), field_to_json_schema(sf));
+
                     if sf.required {
                         required.push(Value::String(sf.name.clone()));
                     }
@@ -151,6 +155,7 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
                 for tab in &field.tabs {
                     for sf in &tab.fields {
                         props.insert(sf.name.clone(), field_to_json_schema(sf));
+
                         if sf.required {
                             required.push(Value::String(sf.name.clone()));
                         }
@@ -161,6 +166,7 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
             FieldType::Join => {}
             _ => {
                 props.insert(field.name.clone(), field_to_json_schema(field));
+
                 if field.required {
                     required.push(Value::String(field.name.clone()));
                 }
@@ -172,6 +178,7 @@ fn fields_to_object_schema(fields: &[FieldDefinition]) -> Value {
         "type": "object",
         "properties": props,
     });
+
     if !required.is_empty() {
         schema
             .as_object_mut()
@@ -201,6 +208,7 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
         }
         CrudOp::Update => {
             let mut schema = fields_to_object_schema(&def.fields);
+
             if let Some(obj) = schema.as_object_mut() {
                 // Add required id field
                 if let Some(props) = obj.get_mut("properties").and_then(|p| p.as_object_mut()) {
@@ -275,8 +283,13 @@ pub fn global_input_schema(def: &GlobalDefinition, op: CrudOp) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::LocalizedString;
-    use crate::core::field::{FieldAdmin, McpFieldConfig, SelectOption};
+    use crate::core::{
+        collection::{Auth, CollectionDefinition, GlobalDefinition},
+        field::{
+            BlockDefinition, FieldAdmin, FieldTab, LocalizedString, McpFieldConfig,
+            RelationshipConfig, SelectOption,
+        },
+    };
 
     fn text_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text).build()
@@ -333,7 +346,7 @@ mod tests {
     #[test]
     fn relationship_has_many() {
         let f = FieldDefinition::builder("tags", FieldType::Relationship)
-            .relationship(crate::core::field::RelationshipConfig::new("tags", true))
+            .relationship(RelationshipConfig::new("tags", true))
             .build();
         let s = field_to_json_schema(&f);
         assert_eq!(s["type"], "array");
@@ -552,7 +565,7 @@ mod tests {
     #[test]
     fn upload_field_has_many() {
         let f = FieldDefinition::builder("images", FieldType::Upload)
-            .relationship(crate::core::field::RelationshipConfig::new("media", true))
+            .relationship(RelationshipConfig::new("media", true))
             .build();
         let s = field_to_json_schema(&f);
         assert_eq!(s["type"], "array");
@@ -624,7 +637,6 @@ mod tests {
 
     #[test]
     fn blocks_with_variants_schema() {
-        use crate::core::field::BlockDefinition;
         let f = FieldDefinition::builder("layout", FieldType::Blocks)
             .blocks(vec![
                 BlockDefinition::new("hero", vec![required_text("heading")]),
@@ -652,7 +664,6 @@ mod tests {
 
     #[test]
     fn tabs_fields_flattened_in_object_schema() {
-        use crate::core::field::FieldTab;
         let tabs = FieldDefinition::builder("tabs", FieldType::Tabs)
             .tabs(vec![
                 FieldTab::new(
@@ -710,7 +721,6 @@ mod tests {
 
     #[test]
     fn auth_collection_create_adds_password_field() {
-        use crate::core::collection::Auth;
         // Use a required field so the "required" array is already present in the schema,
         // allowing the auth code path to push "password" into it.
         let mut def = CollectionDefinition::new("users");
@@ -728,7 +738,6 @@ mod tests {
 
     #[test]
     fn auth_collection_update_adds_optional_password_field() {
-        use crate::core::collection::Auth;
         let mut def = CollectionDefinition::new("users");
         def.fields = vec![text_field("name")];
         def.auth = Some(Auth {

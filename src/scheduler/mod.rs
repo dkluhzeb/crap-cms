@@ -1,18 +1,29 @@
 //! Background job scheduler: polls for pending jobs, evaluates cron schedules,
 //! executes Lua handlers, and manages heartbeats and stale recovery.
 
-use anyhow::{Context as _, Result};
-use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{
+    cmp::max,
+    collections::HashMap,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
-use crate::config::JobsConfig;
-use crate::core::SharedRegistry;
-use crate::core::job::JobDefinition;
-use crate::db::DbPool;
-use crate::db::query::images as image_query;
-use crate::db::query::jobs as job_query;
-use crate::hooks::lifecycle::HookRunner;
+use anyhow::{Context as _, Result, anyhow};
+
+use crate::{
+    config::JobsConfig,
+    core::{
+        SharedRegistry,
+        job::{JobDefinition, JobRun},
+        upload,
+    },
+    db::{
+        DbPool,
+        query::{images as image_query, jobs as job_query},
+    },
+    hooks::lifecycle::HookRunner,
+};
 
 /// Start the scheduler background loop. Runs until the task is cancelled.
 // Untestable: infinite async loop with tokio timers and spawn.
@@ -51,8 +62,7 @@ pub async fn start(
     let mut image_ticker = tokio::time::interval(poll_interval);
 
     // Track running job IDs for heartbeat updates
-    let running_jobs: Arc<std::sync::Mutex<Vec<String>>> =
-        Arc::new(std::sync::Mutex::new(Vec::new()));
+    let running_jobs: Arc<std::sync::Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     // Track last cron check time to avoid duplicate firing
     let mut last_cron_check = chrono::Utc::now();
@@ -85,6 +95,7 @@ pub async fn start(
             _ = cron_ticker.tick() => {
                 // Check cron schedules and insert pending jobs for due schedules
                 let now = chrono::Utc::now();
+
                 if let Err(e) = check_cron_schedules(&pool, &registry, last_cron_check, now) {
                     tracing::error!("Scheduler cron error: {}", e);
                 }
@@ -92,6 +103,7 @@ pub async fn start(
 
                 // Auto-purge old jobs periodically (every 10 cron intervals)
                 purge_counter += 1;
+
                 if purge_counter.is_multiple_of(10)
                     && let Some(secs) = auto_purge_secs
                         && let Ok(conn) = pool.get() {
@@ -147,7 +159,7 @@ async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
         // Process in a blocking task (image encoding is CPU-bound)
         let result = tokio::task::spawn_blocking(move || {
             let pool = pool_inner;
-            crate::core::upload::process_image_entry(
+            upload::process_image_entry(
                 &entry.source_path,
                 &entry.target_path,
                 &entry.format,
@@ -201,12 +213,13 @@ async fn poll_and_execute(
     hook_runner: &HookRunner,
     registry: &SharedRegistry,
     max_concurrent: usize,
-    running_jobs: &Arc<std::sync::Mutex<Vec<String>>>,
+    running_jobs: &Arc<Mutex<Vec<String>>>,
 ) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
 
     // Check global concurrency
     let total_running = job_query::count_running(&conn, None)?;
+
     if total_running as usize >= max_concurrent {
         return Ok(());
     }
@@ -218,7 +231,7 @@ async fn poll_and_execute(
     let job_concurrency = {
         let reg = registry
             .read()
-            .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
         reg.jobs
             .iter()
             .map(|(slug, def)| (slug.clone(), def.concurrency))
@@ -233,7 +246,7 @@ async fn poll_and_execute(
         let job_def = {
             let reg = registry
                 .read()
-                .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
             match reg.get_job(&job_run.slug) {
                 Some(def) => def.clone(),
                 None => {
@@ -241,6 +254,7 @@ async fn poll_and_execute(
                         "Job definition '{}' not found, marking as failed",
                         job_run.slug
                     );
+
                     if let Ok(c) = pool.get() {
                         let _ =
                             job_query::fail_job(&c, &job_run.id, "job definition not found", false);
@@ -293,10 +307,10 @@ pub fn execute_job(
     pool: &DbPool,
     hook_runner: &HookRunner,
     job_def: &JobDefinition,
-    job_run: &crate::core::job::JobRun,
+    job_run: &JobRun,
 ) -> Result<()> {
-    let timeout = std::time::Duration::from_secs(job_def.timeout);
-    let start = std::time::Instant::now();
+    let timeout = Duration::from_secs(job_def.timeout);
+    let start = Instant::now();
 
     tracing::info!(
         "Executing job {} ({}) attempt {}/{}",
@@ -349,6 +363,7 @@ pub fn execute_job(
                 .get()
                 .context("Failed to get DB connection for failure")?;
             job_query::fail_job(&c, &job_run.id, &error_msg, should_retry)?;
+
             if should_retry {
                 tracing::warn!(
                     "Job {} ({}) failed (attempt {}/{}), will retry: {}",
@@ -381,7 +396,7 @@ pub fn check_cron_schedules(
 ) -> Result<()> {
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let conn = pool.get().context("Failed to get DB connection for cron")?;
 
@@ -421,6 +436,7 @@ pub fn check_cron_schedules(
         // Check skip_if_running
         if def.skip_if_running {
             let running = job_query::count_running(&conn, Some(slug))?;
+
             if running > 0 {
                 tracing::debug!("Skipping cron job '{}' — still running", slug);
                 continue;
@@ -439,14 +455,14 @@ pub fn check_cron_schedules(
 pub fn recover_stale_jobs(conn: &rusqlite::Connection, registry: &SharedRegistry) -> Result<()> {
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     // Find all running jobs — on startup, these are stale (server was restarted)
     let stale = job_query::find_stale_jobs(conn, 0)?;
 
     for job in &stale {
         let timeout = reg.jobs.get(&job.slug).map(|d| d.timeout).unwrap_or(60);
-        let threshold = std::cmp::max(timeout * 2, 300);
+        let threshold = max(timeout * 2, 300);
 
         // Any job that was running when we started is stale
         let error = format!(
@@ -469,6 +485,7 @@ pub fn recover_stale_jobs(conn: &rusqlite::Connection, registry: &SharedRegistry
 /// If the expression has exactly 5 fields, prepend "0" for seconds.
 pub(crate) fn normalize_cron(expr: &str) -> String {
     let fields: Vec<&str> = expr.split_whitespace().collect();
+
     if fields.len() == 5 {
         format!("0 {}", expr)
     } else {
@@ -479,6 +496,7 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{Registry, job::JobStatus};
 
     // ── normalize_cron ──────────────────────────────────────────────────
 
@@ -590,7 +608,7 @@ mod tests {
     }
 
     fn make_registry_with_jobs(jobs: Vec<JobDefinition>) -> SharedRegistry {
-        let registry = crate::core::Registry::shared();
+        let registry = Registry::shared();
         {
             let mut reg = registry.write().unwrap();
             for job in jobs {
@@ -781,7 +799,7 @@ mod tests {
         let conn = pool.get().unwrap();
         let jobs = job_query::list_job_runs(&conn, Some("cron_job"), None, 100, 0).unwrap();
         assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].status, crate::core::job::JobStatus::Pending);
+        assert_eq!(jobs[0].status, JobStatus::Pending);
         assert_eq!(jobs[0].scheduled_by.as_deref(), Some("cron"));
     }
 

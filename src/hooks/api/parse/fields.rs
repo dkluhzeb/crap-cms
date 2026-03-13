@@ -1,14 +1,22 @@
 //! Parsing functions for field definitions from Lua tables.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow, bail};
 use mlua::{Table, Value};
+use serde_json::{Number as JsonNumber, Value as JsonValue};
 
-use crate::core::field::{FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType};
+use crate::{
+    core::field::{
+        FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldType, JoinConfig, McpFieldConfig,
+    },
+    db::query,
+};
 
-use super::admin::parse_field_admin;
-use super::blocks::{parse_block_definitions, parse_tab_definitions};
-use super::helpers::*;
-use super::relationship::parse_field_relationship;
+use super::{
+    admin::parse_field_admin,
+    blocks::{parse_block_definitions, parse_tab_definitions},
+    helpers::*,
+    relationship::parse_field_relationship,
+};
 
 /// Parse a Lua sequence of field tables into a `Vec<FieldDefinition>`.
 pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
@@ -16,11 +24,11 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
 
     for pair in fields_tbl.clone().sequence_values::<Table>() {
         let field_tbl = pair?;
-        let name: String = get_string_val(&field_tbl, "name")
-            .map_err(|_| anyhow::anyhow!("Field missing 'name'"))?;
+        let name: String =
+            get_string_val(&field_tbl, "name").map_err(|_| anyhow!("Field missing 'name'"))?;
 
-        if !crate::db::query::is_valid_identifier(&name) {
-            anyhow::bail!(
+        if !query::is_valid_identifier(&name) {
+            bail!(
                 "Invalid field name '{}' — use alphanumeric and underscores only",
                 name
             );
@@ -39,10 +47,10 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             let val: Value = field_tbl.get("default_value").unwrap_or(Value::Nil);
             match val {
                 Value::Nil => None,
-                Value::Boolean(b) => Some(serde_json::Value::Bool(b)),
-                Value::Integer(i) => Some(serde_json::Value::Number(serde_json::Number::from(i))),
-                Value::Number(n) => serde_json::Number::from_f64(n).map(serde_json::Value::Number),
-                Value::String(s) => Some(serde_json::Value::String(s.to_str()?.to_string())),
+                Value::Boolean(b) => Some(JsonValue::Bool(b)),
+                Value::Integer(i) => Some(JsonValue::Number(JsonNumber::from(i))),
+                Value::Number(n) => JsonNumber::from_f64(n).map(JsonValue::Number),
+                Value::String(s) => Some(JsonValue::String(s.to_str()?.to_string())),
                 _ => None,
             }
         };
@@ -124,14 +132,14 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         let max_rows = field_tbl.get::<Option<usize>>("max_rows").ok().flatten();
         let min_length = field_tbl.get::<Option<usize>>("min_length").ok().flatten();
         let max_length = field_tbl.get::<Option<usize>>("max_length").ok().flatten();
-        let min = match field_tbl.get::<mlua::Value>("min") {
-            Ok(mlua::Value::Number(n)) => Some(n),
-            Ok(mlua::Value::Integer(i)) => Some(i as f64),
+        let min = match field_tbl.get::<Value>("min") {
+            Ok(Value::Number(n)) => Some(n),
+            Ok(Value::Integer(i)) => Some(i as f64),
             _ => None,
         };
-        let max = match field_tbl.get::<mlua::Value>("max") {
-            Ok(mlua::Value::Number(n)) => Some(n),
-            Ok(mlua::Value::Integer(i)) => Some(i as f64),
+        let max = match field_tbl.get::<Value>("max") {
+            Ok(Value::Number(n)) => Some(n),
+            Ok(Value::Integer(i)) => Some(i as f64),
             _ => None,
         };
 
@@ -143,14 +151,14 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         let join = if field_type == FieldType::Join {
             let collection = get_string(&field_tbl, "collection").unwrap_or_default();
             let on = get_string(&field_tbl, "on").unwrap_or_default();
-            Some(crate::core::field::JoinConfig::new(collection, on))
+            Some(JoinConfig::new(collection, on))
         } else {
             None
         };
 
         // Parse MCP config for field
         let mcp = if let Ok(mcp_tbl) = get_table(&field_tbl, "mcp") {
-            crate::core::field::McpFieldConfig {
+            McpFieldConfig {
                 description: get_string(&mcp_tbl, "description"),
             }
         } else {
@@ -171,6 +179,7 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             .localized(localized)
             .has_many(has_many)
             .options(options);
+
         if let Some(v) = validate {
             fd_builder = fd_builder.validate(v);
         }
@@ -285,7 +294,7 @@ mod tests {
         field.set("default_value", true).unwrap();
         fields_tbl.set(1, field).unwrap();
         let fields = parse_fields(&fields_tbl).unwrap();
-        assert_eq!(fields[0].default_value, Some(serde_json::Value::Bool(true)));
+        assert_eq!(fields[0].default_value, Some(JsonValue::Bool(true)));
     }
 
     #[test]
@@ -298,10 +307,7 @@ mod tests {
         field.set("default_value", 42i64).unwrap();
         fields_tbl.set(1, field).unwrap();
         let fields = parse_fields(&fields_tbl).unwrap();
-        assert_eq!(
-            fields[0].default_value,
-            Some(serde_json::Value::Number(42.into()))
-        );
+        assert_eq!(fields[0].default_value, Some(JsonValue::Number(42.into())));
     }
 
     #[test]

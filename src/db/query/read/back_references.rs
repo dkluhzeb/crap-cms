@@ -1,11 +1,20 @@
 //! Scan all collections and globals for documents that reference a given target document.
 //! Also: check version snapshots for missing (deleted) relationship targets.
 
-use crate::config::LocaleConfig;
-use crate::core::Registry;
-use crate::core::field::{FieldDefinition, FieldType, to_title_case};
 use serde::Serialize;
+use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+
+use crate::{
+    config::LocaleConfig,
+    core::{
+        Registry,
+        field::{
+            BlockDefinition, FieldDefinition, FieldType, RelationshipConfig,
+            flatten_array_sub_fields, to_title_case,
+        },
+    },
+};
 
 /// A group of documents in one collection/global that reference a target via one field.
 #[derive(Debug, Clone, Serialize)]
@@ -192,6 +201,7 @@ fn scan_fields(
                         owner_slug,
                         is_global,
                     );
+
                     if !ids.is_empty() {
                         results.push(BackReference::new(
                             owner_slug.to_string(),
@@ -212,6 +222,7 @@ fn scan_fields(
                         target_id,
                         rc.is_polymorphic(),
                     );
+
                     if !ids.is_empty() {
                         results.push(BackReference::new(
                             owner_slug.to_string(),
@@ -281,6 +292,7 @@ fn query_has_one(
             .iter()
             .map(|l| format!("{}__{}", col, l))
             .collect();
+
         if locale_cols.is_empty() {
             return Vec::new();
         }
@@ -356,6 +368,7 @@ fn query_has_many(
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("Back-ref scan skipping {}: {}", junction_table, e);
+
             return Vec::new();
         }
     };
@@ -390,7 +403,7 @@ fn scan_array_sub_fields(
     array_field_name: &str,
     results: &mut Vec<BackReference>,
 ) {
-    let flat = crate::core::field::flatten_array_sub_fields(fields);
+    let flat = flatten_array_sub_fields(fields);
     for sub in flat {
         match sub.field_type {
             FieldType::Relationship | FieldType::Upload => {
@@ -416,6 +429,7 @@ fn scan_array_sub_fields(
                     array_table, sub.name
                 );
                 let ids = query_ids_simple(conn, &sql, &match_value);
+
                 if !ids.is_empty() {
                     let label = format!(
                         "{} > {}",
@@ -441,7 +455,7 @@ fn scan_array_sub_fields(
 #[allow(clippy::too_many_arguments)]
 fn scan_blocks(
     conn: &rusqlite::Connection,
-    blocks: &[crate::core::field::BlockDefinition],
+    blocks: &[BlockDefinition],
     blocks_table: &str,
     owner_label: &str,
     target_collection: &str,
@@ -452,7 +466,7 @@ fn scan_blocks(
     results: &mut Vec<BackReference>,
 ) {
     for block in blocks {
-        let flat = crate::core::field::flatten_array_sub_fields(&block.fields);
+        let flat = flatten_array_sub_fields(&block.fields);
         for sub in &flat {
             match sub.field_type {
                 FieldType::Relationship | FieldType::Upload => {
@@ -478,6 +492,7 @@ fn scan_blocks(
                     );
                     let ids =
                         query_ids_blocks(conn, &sql, &block.block_type, &json_path, &match_value);
+
                     if !ids.is_empty() {
                         let label = format!(
                             "{} > {} > {}",
@@ -529,6 +544,7 @@ fn query_ids(
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("Back-ref scan query failed: {}", e);
+
             return Vec::new();
         }
     };
@@ -536,6 +552,7 @@ fn query_ids(
         Ok(r) => r,
         Err(e) => {
             tracing::debug!("Back-ref scan query failed: {}", e);
+
             return Vec::new();
         }
     };
@@ -551,6 +568,7 @@ fn query_ids_simple(conn: &rusqlite::Connection, sql: &str, value: &str) -> Vec<
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("Back-ref scan query failed: {}", e);
+
             return Vec::new();
         }
     };
@@ -573,6 +591,7 @@ fn query_ids_blocks(
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("Back-ref scan query failed: {}", e);
+
             return Vec::new();
         }
     };
@@ -619,7 +638,7 @@ impl MissingRelation {
 pub fn find_missing_relations(
     conn: &rusqlite::Connection,
     registry: &Registry,
-    snapshot: &serde_json::Value,
+    snapshot: &Value,
     fields: &[FieldDefinition],
 ) -> Vec<MissingRelation> {
     let obj = match snapshot.as_object() {
@@ -635,7 +654,7 @@ pub fn find_missing_relations(
 fn collect_missing_fields(
     conn: &rusqlite::Connection,
     registry: &Registry,
-    obj: &serde_json::Map<String, serde_json::Value>,
+    obj: &Map<String, Value>,
     fields: &[FieldDefinition],
     prefix: &str,
     results: &mut Vec<MissingRelation>,
@@ -689,10 +708,12 @@ fn collect_missing_fields(
                 };
                 let val = obj.get(&key).or_else(|| obj.get(&field.name));
                 let ids = extract_ref_ids(val, rc.is_polymorphic());
+
                 if ids.is_empty() {
                     continue;
                 }
                 let missing = check_ids_exist(conn, registry, &ids, rc);
+
                 if !missing.is_empty() {
                     let label = field_display_label(field);
                     let total = ids.len();
@@ -734,15 +755,15 @@ fn collect_missing_fields(
 }
 
 /// Extract referenced IDs from a snapshot value.
-fn extract_ref_ids(val: Option<&serde_json::Value>, is_polymorphic: bool) -> Vec<(String, String)> {
+fn extract_ref_ids(val: Option<&Value>, is_polymorphic: bool) -> Vec<(String, String)> {
     let mut ids = Vec::new();
     match val {
-        Some(serde_json::Value::String(s)) if !s.is_empty() => {
+        Some(Value::String(s)) if !s.is_empty() => {
             if let Some((col, id)) = parse_ref_id(s, is_polymorphic) {
                 ids.push((col, id));
             }
         }
-        Some(serde_json::Value::Array(arr)) => {
+        Some(Value::Array(arr)) => {
             for item in arr {
                 if let Some(s) = item.as_str()
                     && !s.is_empty()
@@ -761,6 +782,7 @@ fn extract_ref_ids(val: Option<&serde_json::Value>, is_polymorphic: bool) -> Vec
 fn parse_ref_id(s: &str, is_polymorphic: bool) -> Option<(String, String)> {
     if is_polymorphic {
         let parts: Vec<&str> = s.splitn(2, '/').collect();
+
         if parts.len() == 2 {
             Some((parts[0].to_string(), parts[1].to_string()))
         } else {
@@ -777,7 +799,7 @@ fn check_ids_exist(
     conn: &rusqlite::Connection,
     registry: &Registry,
     ids: &[(String, String)],
-    rc: &crate::core::field::RelationshipConfig,
+    rc: &RelationshipConfig,
 ) -> HashSet<String> {
     // Group IDs by target collection
     let mut by_collection: HashMap<String, Vec<String>> = HashMap::new();
@@ -839,6 +861,7 @@ fn query_existing_ids(
         Ok(s) => s,
         Err(e) => {
             tracing::debug!("Missing relations check skipping {}: {}", collection, e);
+
             return HashSet::new();
         }
     };
@@ -857,12 +880,12 @@ fn query_existing_ids(
 fn collect_missing_in_array(
     conn: &rusqlite::Connection,
     registry: &Registry,
-    rows: &[serde_json::Value],
+    rows: &[Value],
     fields: &[FieldDefinition],
     array_name: &str,
     results: &mut Vec<MissingRelation>,
 ) {
-    let flat = crate::core::field::flatten_array_sub_fields(fields);
+    let flat = flatten_array_sub_fields(fields);
     for sub in flat {
         match sub.field_type {
             FieldType::Relationship | FieldType::Upload => {
@@ -881,6 +904,7 @@ fn collect_missing_in_array(
                     continue;
                 }
                 let missing = check_ids_exist(conn, registry, &all_ids, rc);
+
                 if !missing.is_empty() {
                     let label = format!(
                         "{} > {}",
@@ -904,13 +928,13 @@ fn collect_missing_in_array(
 fn collect_missing_in_blocks(
     conn: &rusqlite::Connection,
     registry: &Registry,
-    rows: &[serde_json::Value],
-    blocks: &[crate::core::field::BlockDefinition],
+    rows: &[Value],
+    blocks: &[BlockDefinition],
     blocks_name: &str,
     results: &mut Vec<MissingRelation>,
 ) {
     for block in blocks {
-        let flat = crate::core::field::flatten_array_sub_fields(&block.fields);
+        let flat = flatten_array_sub_fields(&block.fields);
         for sub in &flat {
             match sub.field_type {
                 FieldType::Relationship | FieldType::Upload => {
@@ -925,6 +949,7 @@ fn collect_missing_in_blocks(
                                 .get("_block_type")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
+
                             if bt == block.block_type {
                                 let val = obj.get(&sub.name);
                                 all_ids.extend(extract_ref_ids(val, rc.is_polymorphic()));
@@ -935,6 +960,7 @@ fn collect_missing_in_blocks(
                         continue;
                     }
                     let missing = check_ids_exist(conn, registry, &all_ids, rc);
+
                     if !missing.is_empty() {
                         let label = format!(
                             "{} > {} > {}",
@@ -962,12 +988,14 @@ fn collect_missing_in_blocks(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
     use crate::core::Registry;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use crate::db::{migrate, pool};
+    use crate::db::{DbPool, migrate, pool};
 
     fn no_locale() -> LocaleConfig {
         LocaleConfig::default()
@@ -985,10 +1013,10 @@ mod tests {
         collections: &[CollectionDefinition],
         globals: &[GlobalDefinition],
         locale: &LocaleConfig,
-    ) -> (tempfile::TempDir, crate::db::DbPool, Registry) {
+    ) -> (tempfile::TempDir, DbPool, Registry) {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let config = crate::config::CrapConfig {
-            database: crate::config::DatabaseConfig {
+        let config = CrapConfig {
+            database: DatabaseConfig {
                 path: "test.db".to_string(),
                 ..Default::default()
             },
@@ -1399,7 +1427,7 @@ mod tests {
         let conn = pool.get().unwrap();
         insert_doc(&conn, "media", "m1");
 
-        let snapshot = serde_json::json!({"title": "Hello", "image": "m_deleted"});
+        let snapshot = json!({"title": "Hello", "image": "m_deleted"});
         let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "image");
@@ -1423,7 +1451,7 @@ mod tests {
         let conn = pool.get().unwrap();
         insert_doc(&conn, "media", "m1");
 
-        let snapshot = serde_json::json!({"image": "m1"});
+        let snapshot = json!({"image": "m1"});
         let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
         assert!(missing.is_empty());
     }
@@ -1443,7 +1471,7 @@ mod tests {
         let conn = pool.get().unwrap();
         insert_doc(&conn, "tags", "t1");
 
-        let snapshot = serde_json::json!({"tags": ["t1", "t2"]});
+        let snapshot = json!({"tags": ["t1", "t2"]});
         let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "tags");
@@ -1472,7 +1500,7 @@ mod tests {
         let (_tmp, pool, registry) = setup_db(&[media, pages, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
 
-        let snapshot = serde_json::json!({"featured": "media/m1"});
+        let snapshot = json!({"featured": "media/m1"});
         let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
         assert_eq!(missing.len(), 1);
         assert!(missing[0].missing_ids.contains(&"media/m1".to_string()));
@@ -1496,7 +1524,7 @@ mod tests {
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
 
-        let snapshot = serde_json::json!({"meta__hero": "m_gone"});
+        let snapshot = json!({"meta__hero": "m_gone"});
         let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
         assert_eq!(missing.len(), 1);
         assert_eq!(missing[0].field_name, "hero");
@@ -1521,7 +1549,7 @@ mod tests {
         let conn = pool.get().unwrap();
         insert_doc(&conn, "media", "m1");
 
-        let snapshot = serde_json::json!({
+        let snapshot = json!({
             "slides": [
                 {"image": "m1"},
                 {"image": "m_deleted"}
@@ -1555,7 +1583,7 @@ mod tests {
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
 
-        let snapshot = serde_json::json!({
+        let snapshot = json!({
             "content": [
                 {"_block_type": "hero", "bg_image": "m_gone"}
             ]
@@ -1579,7 +1607,7 @@ mod tests {
         let (_tmp, pool, registry) = setup_db(&[media, posts], &[], &no_locale());
         let conn = pool.get().unwrap();
 
-        let snapshot = serde_json::json!({});
+        let snapshot = json!({});
         let missing = find_missing_relations(&conn, &registry, &snapshot, &fields);
         assert!(missing.is_empty());
     }

@@ -1,24 +1,29 @@
 //! Join table data persistence (save operations).
 
 use anyhow::Result;
+use serde_json::Value;
 use std::collections::HashMap;
 
-use super::super::super::LocaleContext;
-use super::super::arrays::set_array_rows;
-use super::super::blocks::set_block_rows;
-use super::super::relationships::{set_polymorphic_related, set_related_ids};
-use super::resolve_join_locale;
+use super::{
+    super::{
+        super::LocaleContext,
+        arrays::set_array_rows,
+        blocks::set_block_rows,
+        relationships::{set_polymorphic_related, set_related_ids},
+    },
+    resolve_join_locale,
+};
 use crate::core::field::{FieldDefinition, FieldType};
 
 /// Parse polymorphic relationship values from form data.
 /// Accepts "collection/id" composite strings from either a JSON array or comma-separated string.
-fn parse_polymorphic_values(val: &serde_json::Value) -> Vec<(String, String)> {
+fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
     let raw_items: Vec<String> = match val {
-        serde_json::Value::Array(arr) => arr
+        Value::Array(arr) => arr
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),
-        serde_json::Value::String(s) => {
+        Value::String(s) => {
             if s.is_empty() {
                 Vec::new()
             } else {
@@ -37,6 +42,7 @@ fn parse_polymorphic_values(val: &serde_json::Value) -> Vec<(String, String)> {
             if let Some(pos) = item.find('/') {
                 let col = item[..pos].to_string();
                 let id = item[pos + 1..].to_string();
+
                 if !col.is_empty() && !id.is_empty() {
                     return Some((col, id));
                 }
@@ -54,7 +60,7 @@ pub fn save_join_table_data(
     slug: &str,
     fields: &[FieldDefinition],
     parent_id: &str,
-    data: &HashMap<String, serde_json::Value>,
+    data: &HashMap<String, Value>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<()> {
     for field in fields {
@@ -80,11 +86,11 @@ pub fn save_join_table_data(
                             )?;
                         } else {
                             let ids = match val {
-                                serde_json::Value::Array(arr) => arr
+                                Value::Array(arr) => arr
                                     .iter()
                                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                                     .collect(),
-                                serde_json::Value::String(s) => {
+                                Value::String(s) => {
                                     if s.is_empty() {
                                         Vec::new()
                                     } else {
@@ -104,15 +110,15 @@ pub fn save_join_table_data(
             FieldType::Array => {
                 if let Some(val) = data.get(&field.name) {
                     let rows = match val {
-                        serde_json::Value::Array(arr) => arr
+                        Value::Array(arr) => arr
                             .iter()
                             .filter_map(|v| {
-                                if let serde_json::Value::Object(map) = v {
+                                if let Value::Object(map) = v {
                                     let row: HashMap<String, String> = map
                                         .iter()
                                         .map(|(k, v)| {
                                             let s = match v {
-                                                serde_json::Value::String(s) => s.clone(),
+                                                Value::String(s) => s.clone(),
                                                 other => other.to_string(),
                                             };
                                             (k.clone(), s)
@@ -140,7 +146,7 @@ pub fn save_join_table_data(
             FieldType::Blocks => {
                 if let Some(val) = data.get(&field.name) {
                     let rows = match val {
-                        serde_json::Value::Array(arr) => arr.clone(),
+                        Value::Array(arr) => arr.clone(),
                         _ => Vec::new(),
                     };
                     set_block_rows(conn, slug, &field.name, parent_id, &rows, locale_ref)?;
@@ -162,6 +168,8 @@ pub fn save_join_table_data(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::super::blocks::find_block_rows;
     use super::super::super::relationships::{
         find_polymorphic_related, find_related_ids, set_related_ids,
@@ -177,7 +185,7 @@ mod tests {
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
-        data.insert("tags".to_string(), serde_json::json!("t1, t2, t3"));
+        data.insert("tags".to_string(), json!("t1, t2, t3"));
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
@@ -191,7 +199,7 @@ mod tests {
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
-        data.insert("tags".to_string(), serde_json::json!(["t1", "t2"]));
+        data.insert("tags".to_string(), json!(["t1", "t2"]));
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
@@ -207,7 +215,7 @@ mod tests {
         set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string()], None).unwrap();
 
         let mut data = HashMap::new();
-        data.insert("tags".to_string(), serde_json::json!(""));
+        data.insert("tags".to_string(), json!(""));
 
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
@@ -223,7 +231,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "content".to_string(),
-            serde_json::json!([
+            json!([
                 {"_block_type": "paragraph", "text": "Hello"},
                 {"_block_type": "image", "url": "/img.jpg"},
             ]),
@@ -262,7 +270,7 @@ mod tests {
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
-        data.insert("content".to_string(), serde_json::json!("not an array"));
+        data.insert("content".to_string(), json!("not an array"));
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
         let found = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
@@ -275,7 +283,7 @@ mod tests {
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
-        data.insert("tags".to_string(), serde_json::json!(42));
+        data.insert("tags".to_string(), json!(42));
         save_join_table_data(&conn, "posts", &def.fields, "p1", &data, None).unwrap();
 
         let found = find_related_ids(&conn, "posts", "tags", "p1", None).unwrap();
@@ -307,10 +315,7 @@ mod tests {
         ];
 
         let mut data = HashMap::new();
-        data.insert(
-            "refs".to_string(),
-            serde_json::json!("articles/a1,pages/pg1"),
-        );
+        data.insert("refs".to_string(), json!("articles/a1,pages/pg1"));
 
         save_join_table_data(&conn, "posts", &fields, "p1", &data, None).unwrap();
 
@@ -326,7 +331,7 @@ mod tests {
 
     #[test]
     fn parse_polymorphic_values_from_json_array() {
-        let val = serde_json::json!(["articles/a1", "pages/pg1"]);
+        let val = json!(["articles/a1", "pages/pg1"]);
         let items = parse_polymorphic_values(&val);
         assert_eq!(
             items,
@@ -339,7 +344,7 @@ mod tests {
 
     #[test]
     fn parse_polymorphic_values_from_comma_string() {
-        let val = serde_json::json!("articles/a1,pages/pg1");
+        let val = json!("articles/a1,pages/pg1");
         let items = parse_polymorphic_values(&val);
         assert_eq!(
             items,
@@ -352,7 +357,7 @@ mod tests {
 
     #[test]
     fn parse_polymorphic_values_skips_invalid() {
-        let val = serde_json::json!(["articles/a1", "no_slash", "", "pages/"]);
+        let val = json!(["articles/a1", "no_slash", "", "pages/"]);
         let items = parse_polymorphic_values(&val);
         assert_eq!(
             items,
@@ -363,28 +368,28 @@ mod tests {
 
     #[test]
     fn parse_polymorphic_values_from_null() {
-        let val = serde_json::Value::Null;
+        let val = Value::Null;
         let items = parse_polymorphic_values(&val);
         assert!(items.is_empty(), "null input should yield no items");
     }
 
     #[test]
     fn parse_polymorphic_values_from_number() {
-        let val = serde_json::json!(42);
+        let val = json!(42);
         let items = parse_polymorphic_values(&val);
         assert!(items.is_empty(), "number input should yield no items");
     }
 
     #[test]
     fn parse_polymorphic_values_empty_string() {
-        let val = serde_json::json!("");
+        let val = json!("");
         let items = parse_polymorphic_values(&val);
         assert!(items.is_empty(), "empty string should yield no items");
     }
 
     #[test]
     fn parse_polymorphic_values_slash_prefix_only() {
-        let val = serde_json::json!(["articles/"]);
+        let val = json!(["articles/"]);
         let items = parse_polymorphic_values(&val);
         assert!(items.is_empty(), "/id empty should be skipped");
     }

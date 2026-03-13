@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use super::node_attr_builder::NodeAttrBuilder;
 use crate::core::field::SelectOption;
@@ -44,7 +45,7 @@ pub struct NodeAttr {
     pub label: String,
     pub required: bool,
     #[serde(default)]
-    pub default_value: Option<serde_json::Value>,
+    pub default_value: Option<Value>,
     #[serde(default)]
     pub options: Vec<SelectOption>,
 }

@@ -3,12 +3,14 @@
 use anyhow::Result;
 use mlua::{Lua, Value};
 
-use crate::config::LocaleConfig;
-use crate::core::SharedRegistry;
-use crate::db::query::{self, LocaleContext};
+use crate::{
+    config::LocaleConfig,
+    core::SharedRegistry,
+    db::query::{self, LocaleContext},
+    hooks::{api, lifecycle::converters::*},
+};
 
 use super::get_tx_conn;
-use crate::hooks::lifecycle::converters::*;
 
 /// Register `crap.globals.get(slug, opts?)`.
 #[cfg(not(tarpaulin_include))]
@@ -112,14 +114,14 @@ pub(super) fn register_jobs_queue(
 
             let data_json = match data {
                 Some(tbl) => {
-                    let json_val = crate::hooks::api::lua_to_json(lua, &Value::Table(tbl))?;
+                    let json_val = api::lua_to_json(lua, &Value::Table(tbl))?;
                     serde_json::to_string(&json_val)
                         .map_err(|e| mlua::Error::RuntimeError(format!("JSON error: {}", e)))?
                 }
                 None => "{}".to_string(),
             };
 
-            let job_run = crate::db::query::jobs::insert_job(
+            let job_run = query::jobs::insert_job(
                 conn,
                 &slug,
                 &data_json,

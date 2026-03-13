@@ -2,8 +2,7 @@
 
 use std::collections::HashSet;
 
-use crate::core::field::FieldType;
-use crate::core::{CollectionDefinition, Document};
+use crate::core::{CollectionDefinition, Document, field::FieldType};
 
 /// Filter SELECT columns based on a `select` list. If `select` is None or empty,
 /// returns all columns (backward compat). Always includes `id`, `created_at`, `updated_at`.
@@ -57,6 +56,7 @@ pub fn apply_select_filter(
 
         // Check locale suffix
         let base = name.split("__").next().unwrap_or(&name);
+
         if base != name && !group_names.contains(base) && select.iter().any(|s| s == base) {
             out_exprs.push(expr);
             out_names.push(name);
@@ -82,6 +82,7 @@ pub fn apply_select_to_document(doc: &mut Document, select: &[String]) {
         }
         false
     });
+
     if !select.iter().any(|s| s == "created_at") {
         doc.created_at = None;
     }
@@ -92,6 +93,8 @@ pub fn apply_select_to_document(doc: &mut Document, select: &[String]) {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::*;
@@ -183,12 +186,9 @@ mod tests {
     #[test]
     fn apply_select_to_document_keeps_selected() {
         let mut doc = Document::new("abc".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("status".to_string(), serde_json::json!("draft"));
-        doc.fields
-            .insert("body".to_string(), serde_json::json!("Some content"));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("status".to_string(), json!("draft"));
+        doc.fields.insert("body".to_string(), json!("Some content"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-02".to_string());
 
@@ -211,11 +211,10 @@ mod tests {
     fn apply_select_to_document_prefix_match() {
         let mut doc = Document::new("x".to_string());
         doc.fields
-            .insert("seo__title".to_string(), serde_json::json!("SEO Title"));
+            .insert("seo__title".to_string(), json!("SEO Title"));
         doc.fields
-            .insert("seo__desc".to_string(), serde_json::json!("SEO Desc"));
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Main Title"));
+            .insert("seo__desc".to_string(), json!("SEO Desc"));
+        doc.fields.insert("title".to_string(), json!("Main Title"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-01".to_string());
 

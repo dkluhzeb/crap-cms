@@ -1,5 +1,6 @@
-use crate::core::field::FieldDefinition;
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{field::FieldDefinition, validate::FieldError};
 use std::collections::HashMap;
 
 /// Validate min_length / max_length for text/textarea fields.
@@ -7,15 +8,16 @@ use std::collections::HashMap;
 pub(crate) fn check_length_bounds(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
     if is_empty || field.has_many || (field.min_length.is_none() && field.max_length.is_none()) {
         return;
     }
-    if let Some(serde_json::Value::String(s)) = value {
+    if let Some(Value::String(s)) = value {
         let len = s.len();
+
         if let Some(min_len) = field.min_length
             && len < min_len
         {
@@ -47,7 +49,7 @@ pub(crate) fn check_length_bounds(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::field::FieldDefinition;
+    use crate::core::field::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
@@ -59,7 +61,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .min_length(5)
                 .build(),
         ];
@@ -92,7 +94,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .min_length(3)
                 .build(),
         ];
@@ -120,7 +122,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .max_length(5)
                 .build(),
         ];
@@ -153,7 +155,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .max_length(10)
                 .build(),
         ];
@@ -181,7 +183,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .min_length(5)
                 .build(),
         ];

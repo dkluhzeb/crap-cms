@@ -4,12 +4,13 @@ use std::collections::HashSet;
 
 use anyhow::{Result, bail};
 
-use crate::core::CollectionDefinition;
-use crate::core::field::FieldType;
+use crate::core::{CollectionDefinition, field::FieldType};
 
-use super::columns::get_valid_filter_columns;
-use super::locale::LocaleContext;
-use super::types::{FilterClause, FindQuery};
+use super::{
+    columns::get_valid_filter_columns,
+    locale::LocaleContext,
+    types::{FilterClause, FindQuery},
+};
 
 /// Check that a string is a safe SQL identifier (alphanumeric + underscore).
 pub fn is_valid_identifier(s: &str) -> bool {
@@ -139,6 +140,7 @@ pub(crate) fn validate_filter_field(
     // Dot notation — check if the first segment is a valid prefix root
     if let Some(dot_pos) = field.find('.') {
         let root = &field[..dot_pos];
+
         if prefix_roots.contains(root) {
             return Ok(());
         }

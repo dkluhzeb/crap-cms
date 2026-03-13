@@ -4,12 +4,18 @@ use anyhow::Context as _;
 use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 
-use crate::api::content;
-use crate::api::service::ContentService;
-use crate::api::service::convert::{
-    document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map,
+use crate::{
+    api::{
+        content,
+        service::{
+            ContentService,
+            convert::{document_to_proto, prost_struct_to_hashmap, prost_struct_to_json_map},
+        },
+    },
+    core::event::{EventOperation, EventTarget},
+    db::query::{AccessResult, LocaleContext},
+    service::{self, WriteInput},
 };
-use crate::db::query::{AccessResult, LocaleContext};
 
 use super::helpers::map_db_error;
 
@@ -30,6 +36,7 @@ impl ContentService {
         // Check create access
         let access_result =
             self.require_access(def.access.create.as_deref(), &auth_user, None, None)?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Create access denied"));
         }
@@ -88,12 +95,12 @@ impl ContentService {
                 }
             }
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-            crate::service::create_document(
+            service::create_document(
                 &pool,
                 &runner,
                 &collection,
                 &def_owned,
-                crate::service::WriteInput {
+                WriteInput {
                     data,
                     join_data: &join_data,
                     password: password.as_deref(),
@@ -130,8 +137,8 @@ impl ContentService {
                 &self.event_bus,
                 &hooks,
                 live.as_ref(),
-                crate::core::event::EventTarget::Collection,
-                crate::core::event::EventOperation::Create,
+                EventTarget::Collection,
+                EventOperation::Create,
                 req.collection.clone(),
                 doc.id.clone(),
                 doc.fields.clone(),
@@ -142,7 +149,7 @@ impl ContentService {
             if should_verify
                 && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
             {
-                crate::service::send_verification_email(
+                service::send_verification_email(
                     self.pool.clone(),
                     self.email_config.clone(),
                     self.email_renderer.clone(),
@@ -179,6 +186,7 @@ impl ContentService {
             Some(&req.id),
             None,
         )?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Update access denied"));
         }
@@ -222,7 +230,7 @@ impl ContentService {
             let def_owned = def;
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let doc = tokio::task::spawn_blocking(move || {
-                crate::service::unpublish_document(
+                service::unpublish_document(
                     &pool,
                     &runner,
                     &collection,
@@ -252,8 +260,8 @@ impl ContentService {
                     .ok()
                     .and_then(|d| d.live.clone())
                     .as_ref(),
-                crate::core::event::EventTarget::Collection,
-                crate::core::event::EventOperation::Update,
+                EventTarget::Collection,
+                EventOperation::Update,
                 req.collection.clone(),
                 req.id.clone(),
                 doc.fields.clone(),
@@ -294,13 +302,13 @@ impl ContentService {
                 }
             }
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-            crate::service::update_document(
+            service::update_document(
                 &pool,
                 &runner,
                 &collection,
                 &id,
                 &def_owned,
-                crate::service::WriteInput {
+                WriteInput {
                     data,
                     join_data: &join_data,
                     password: password.as_deref(),
@@ -333,8 +341,8 @@ impl ContentService {
                 &self.event_bus,
                 &hooks,
                 live.as_ref(),
-                crate::core::event::EventTarget::Collection,
-                crate::core::event::EventOperation::Update,
+                EventTarget::Collection,
+                EventOperation::Update,
                 req.collection.clone(),
                 req.id.clone(),
                 doc.fields.clone(),
@@ -367,6 +375,7 @@ impl ContentService {
             Some(&req.id),
             None,
         )?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Delete access denied"));
         }
@@ -379,7 +388,7 @@ impl ContentService {
         let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
         let config_dir = self.config_dir.clone();
         let _req_context = tokio::task::spawn_blocking(move || {
-            crate::service::delete_document(
+            service::delete_document(
                 &pool,
                 &runner,
                 &collection,
@@ -404,8 +413,8 @@ impl ContentService {
             &self.event_bus,
             &def.hooks,
             def.live.as_ref(),
-            crate::core::event::EventTarget::Collection,
-            crate::core::event::EventOperation::Delete,
+            EventTarget::Collection,
+            EventOperation::Delete,
             req.collection.clone(),
             req.id.clone(),
             HashMap::new(),

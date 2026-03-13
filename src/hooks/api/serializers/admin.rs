@@ -1,15 +1,16 @@
 //! Lua table serializer for field admin configuration.
 
-use super::helpers::localized_string_to_lua;
 use mlua::{Lua, Table};
 
+use crate::core::field::FieldAdmin;
+
+use super::helpers::localized_string_to_lua;
+
 /// Convert a `FieldAdmin` to a Lua table. Returns `None` if no properties are set.
-pub(super) fn field_admin_to_lua(
-    lua: &Lua,
-    admin: &crate::core::field::FieldAdmin,
-) -> mlua::Result<Option<Table>> {
+pub(super) fn field_admin_to_lua(lua: &Lua, admin: &FieldAdmin) -> mlua::Result<Option<Table>> {
     let tbl = lua.create_table()?;
     let mut has_any = false;
+
     if let Some(ref l) = admin.label {
         tbl.set("label", localized_string_to_lua(lua, l)?)?;
         has_any = true;
@@ -49,6 +50,7 @@ pub(super) fn field_admin_to_lua(
     if let Some(ref ls) = admin.labels_singular {
         let labels = lua.create_table()?;
         labels.set("singular", localized_string_to_lua(lua, ls)?)?;
+
         if let Some(ref lp) = admin.labels_plural {
             labels.set("plural", localized_string_to_lua(lua, lp)?)?;
         }
@@ -110,11 +112,12 @@ pub(super) fn field_admin_to_lua(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::field::{FieldAdmin, LocalizedString};
 
     #[test]
     fn test_field_admin_to_lua_empty_returns_none() {
         let lua = mlua::Lua::new();
-        let admin = crate::core::field::FieldAdmin::default();
+        let admin = FieldAdmin::default();
         let result = field_admin_to_lua(&lua, &admin).unwrap();
         assert!(result.is_none());
     }
@@ -122,10 +125,8 @@ mod tests {
     #[test]
     fn test_field_admin_to_lua_with_properties() {
         let lua = mlua::Lua::new();
-        let admin = crate::core::field::FieldAdmin::builder()
-            .label(crate::core::field::LocalizedString::Plain(
-                "Title".to_string(),
-            ))
+        let admin = FieldAdmin::builder()
+            .label(LocalizedString::Plain("Title".to_string()))
             .hidden(true)
             .build();
         let result = field_admin_to_lua(&lua, &admin).unwrap();

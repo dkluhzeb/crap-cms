@@ -3,8 +3,7 @@
 use anyhow::Result;
 use mlua::{Lua, Table, Value};
 
-use super::parse::parse_global_definition;
-use super::serializers::global_config_to_lua;
+use super::{parse::parse_global_definition, serializers::global_config_to_lua};
 use crate::core::SharedRegistry;
 
 pub(super) fn register_globals(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {

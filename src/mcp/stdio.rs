@@ -24,6 +24,7 @@ pub async fn run_stdio(server: McpServer) {
 
     while let Ok(Some(line)) = lines.next_line().await {
         let line = line.trim().to_string();
+
         if line.is_empty() {
             continue;
         }
@@ -70,6 +71,7 @@ pub async fn run_stdio(server: McpServer) {
         match serde_json::to_string(&response) {
             Ok(resp_json) => {
                 debug!("MCP send: {}", &resp_json[..resp_json.len().min(200)]);
+
                 if stdout.write_all(resp_json.as_bytes()).await.is_err() {
                     break;
                 }

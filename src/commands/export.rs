@@ -1,8 +1,13 @@
 //! `export` and `import` commands — collection data import/export as JSON.
 
-use anyhow::{Context as _, Result};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use anyhow::{Context as _, Result, anyhow, bail};
+use serde_json::{Map, Value, json};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+};
+
+use crate::{config::CrapConfig, core::field::FieldType, db::query};
 
 /// Export collection data to JSON.
 // Excluded from coverage: requires full Lua + DB setup via load_config_and_sync.
@@ -17,15 +22,15 @@ pub fn export(
 
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let conn = pool.get().context("Failed to get database connection")?;
 
-    let mut collections_data = serde_json::Map::new();
+    let mut collections_data = Map::new();
 
     let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
         if reg.get_collection(slug).is_none() {
-            anyhow::bail!("Collection '{}' not found", slug);
+            bail!("Collection '{}' not found", slug);
         }
         vec![slug.clone()]
     } else {
@@ -37,23 +42,23 @@ pub fn export(
     for slug in &slugs {
         let def = &reg.collections[slug];
 
-        let query = crate::db::query::FindQuery::default();
+        let find_query = query::FindQuery::default();
 
-        let mut docs = crate::db::query::find(&conn, slug, def, &query, None)?;
+        let mut docs = query::find(&conn, slug, def, &find_query, None)?;
 
         for doc in &mut docs {
-            crate::db::query::hydrate_document(&conn, slug, &def.fields, doc, None, None)?;
+            query::hydrate_document(&conn, slug, &def.fields, doc, None, None)?;
         }
 
-        let docs_json: Vec<serde_json::Value> = docs
+        let docs_json: Vec<Value> = docs
             .into_iter()
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()?;
 
-        collections_data.insert(slug.clone(), serde_json::Value::Array(docs_json));
+        collections_data.insert(slug.clone(), Value::Array(docs_json));
     }
 
-    let output_json = serde_json::json!({
+    let output_json = json!({
         "crap_version": env!("CARGO_PKG_VERSION"),
         "exported_at": chrono::Utc::now().to_rfc3339(),
         "collections": collections_data,
@@ -87,14 +92,13 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
 
     let content = std::fs::read_to_string(file)
         .with_context(|| format!("Failed to read {}", file.display()))?;
-    let data: serde_json::Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
+    let data: Value = serde_json::from_str(&content).context("Failed to parse JSON")?;
 
     // Check version compatibility
     if let Some(export_version) = data.get("crap_version").and_then(|v| v.as_str()) {
         let current = env!("CARGO_PKG_VERSION");
-        if let Some(warning) =
-            crate::config::CrapConfig::check_version_against(Some(export_version), current)
-        {
+
+        if let Some(warning) = CrapConfig::check_version_against(Some(export_version), current) {
             eprintln!(
                 "Warning: {}",
                 warning.replace("config requires", "export file was created with")
@@ -105,15 +109,15 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
     let collections_obj = data
         .get("collections")
         .and_then(|v| v.as_object())
-        .ok_or_else(|| anyhow::anyhow!("Expected top-level \"collections\" object in JSON"))?;
+        .ok_or_else(|| anyhow!("Expected top-level \"collections\" object in JSON"))?;
 
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let slugs: Vec<String> = if let Some(ref slug) = collection_filter {
         if !collections_obj.contains_key(slug) {
-            anyhow::bail!("Collection '{}' not found in import file", slug);
+            bail!("Collection '{}' not found in import file", slug);
         }
         vec![slug.clone()]
     } else {
@@ -124,7 +128,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
 
     for slug in &slugs {
         let def = reg.get_collection(slug).ok_or_else(|| {
-            anyhow::anyhow!(
+            anyhow!(
                 "Collection '{}' exists in import file but not in schema",
                 slug
             )
@@ -133,7 +137,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         let docs_array = collections_obj
             .get(slug)
             .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow::anyhow!("Expected array for collection '{}'", slug))?;
+            .ok_or_else(|| anyhow!("Expected array for collection '{}'", slug))?;
 
         let mut conn = pool.get().context("Failed to get database connection")?;
         let tx = conn.transaction().context("Failed to begin transaction")?;
@@ -141,17 +145,17 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
         for doc_val in docs_array {
             let doc_obj = doc_val
                 .as_object()
-                .ok_or_else(|| anyhow::anyhow!("Expected document object in '{}'", slug))?;
+                .ok_or_else(|| anyhow!("Expected document object in '{}'", slug))?;
 
             let id = doc_obj
                 .get("id")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| anyhow::anyhow!("Document missing 'id' in '{}'", slug))?;
+                .ok_or_else(|| anyhow!("Document missing 'id' in '{}'", slug))?;
 
             // Separate parent-column fields from join-table fields
             let mut parent_cols: Vec<String> = vec!["id".to_string()];
             let mut parent_vals: Vec<String> = vec![id.to_string()];
-            let mut join_data: HashMap<String, serde_json::Value> = HashMap::new();
+            let mut join_data: HashMap<String, Value> = HashMap::new();
 
             // Handle timestamps
             if def.timestamps {
@@ -167,15 +171,15 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
 
             for field in &def.fields {
                 if field.has_parent_column() {
-                    if field.field_type == crate::core::field::FieldType::Group {
+                    if field.field_type == FieldType::Group {
                         // Group fields have prefixed columns: group__sub
                         continue; // handled below
                     }
                     // Try direct key first, then flattened
                     if let Some(val) = doc_obj.get(&field.name) {
                         let str_val = match val {
-                            serde_json::Value::String(s) => s.clone(),
-                            serde_json::Value::Null => continue,
+                            Value::String(s) => s.clone(),
+                            Value::Null => continue,
                             other => other.to_string(),
                         };
                         parent_cols.push(field.name.clone());
@@ -191,7 +195,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
                 }
 
                 // Handle group sub-fields (they use parent columns with prefix)
-                if field.field_type == crate::core::field::FieldType::Group {
+                if field.field_type == FieldType::Group {
                     for sub in &field.fields {
                         let col_name = format!("{}__{}", field.name, sub.name);
                         // Try nested object first (hydrated export format)
@@ -203,8 +207,8 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
 
                         if let Some(val) = val {
                             let str_val = match val {
-                                serde_json::Value::String(s) => s.clone(),
-                                serde_json::Value::Null => continue,
+                                Value::String(s) => s.clone(),
+                                Value::Null => continue,
                                 other => other.to_string(),
                             };
                             parent_cols.push(col_name);
@@ -214,14 +218,13 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
                 }
 
                 // Handle row/collapsible sub-fields (they use parent columns with no prefix)
-                if field.field_type == crate::core::field::FieldType::Row
-                    || field.field_type == crate::core::field::FieldType::Collapsible
+                if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible
                 {
                     for sub in &field.fields {
                         if let Some(val) = doc_obj.get(&sub.name) {
                             let str_val = match val {
-                                serde_json::Value::String(s) => s.clone(),
-                                serde_json::Value::Null => continue,
+                                Value::String(s) => s.clone(),
+                                Value::Null => continue,
                                 other => other.to_string(),
                             };
                             parent_cols.push(sub.name.clone());
@@ -231,13 +234,13 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
                 }
 
                 // Handle tabs sub-fields (they use parent columns with no prefix, across all tabs)
-                if field.field_type == crate::core::field::FieldType::Tabs {
+                if field.field_type == FieldType::Tabs {
                     for tab in &field.tabs {
                         for sub in &tab.fields {
                             if let Some(val) = doc_obj.get(&sub.name) {
                                 let str_val = match val {
-                                    serde_json::Value::String(s) => s.clone(),
-                                    serde_json::Value::Null => continue,
+                                    Value::String(s) => s.clone(),
+                                    Value::Null => continue,
                                     other => other.to_string(),
                                 };
                                 parent_cols.push(sub.name.clone());
@@ -275,14 +278,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
 
             // Save join table data
             if !join_data.is_empty() {
-                crate::db::query::save_join_table_data(
-                    &tx,
-                    slug,
-                    &def.fields,
-                    id,
-                    &join_data,
-                    None,
-                )?;
+                query::save_join_table_data(&tx, slug, &def.fields, id, &join_data, None)?;
             }
 
             total_imported += 1;

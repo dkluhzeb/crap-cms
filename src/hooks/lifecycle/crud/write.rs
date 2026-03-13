@@ -1,20 +1,27 @@
 //! Registration of `crap.collections.create` and `crap.collections.update` Lua functions.
 
-use anyhow::Result;
-use mlua::Lua;
 use std::collections::HashMap;
 
-use crate::config::LocaleConfig;
-use crate::core::SharedRegistry;
-use crate::db::query::{self, AccessResult, LocaleContext};
+use anyhow::Result;
+use mlua::Lua;
+use serde_json::Value;
+
+use crate::{
+    config::LocaleConfig,
+    core::SharedRegistry,
+    db::query::{self, AccessResult, LocaleContext},
+    hooks::lifecycle::{
+        FieldHookEvent, HookContext, HookDepth, HookEvent, MaxHookDepth, UiLocaleContext,
+        UserContext,
+        access::{check_access_with_lua, check_field_write_access_with_lua},
+        converters::*,
+        execution::{run_field_hooks_inner, run_hooks_inner},
+        validation::{ValidationCtx, validate_fields_inner},
+    },
+    service::{self, PersistOptions},
+};
 
 use super::get_tx_conn;
-use crate::hooks::lifecycle::access::{check_access_with_lua, check_field_write_access_with_lua};
-use crate::hooks::lifecycle::converters::*;
-use crate::hooks::lifecycle::execution::{run_field_hooks_inner, run_hooks_inner};
-use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
-use crate::hooks::lifecycle::{FieldHookEvent, HookContext, HookEvent};
-use crate::hooks::lifecycle::{HookDepth, MaxHookDepth, UiLocaleContext, UserContext};
 
 /// Register `crap.collections.create(collection, data, opts?)`.
 #[cfg(not(tarpaulin_include))]
@@ -85,6 +92,7 @@ pub(super) fn register_create(
                     None,
                 )
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+
                 if matches!(result, AccessResult::Denied) {
                     return Err(mlua::Error::RuntimeError("Create access denied".into()));
                 }
@@ -111,9 +119,9 @@ pub(super) fn register_create(
             }
 
             // Build hook data (JSON values for hooks to see)
-            let mut hook_data: HashMap<String, serde_json::Value> = data
+            let mut hook_data: HashMap<String, Value> = data
                 .iter()
-                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
                 .collect();
             let join_data = lua_table_to_json_map(lua, &data_table)?;
             for (k, v) in &join_data {
@@ -163,6 +171,7 @@ pub(super) fn register_create(
                     .draft(is_draft)
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref());
+
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -207,6 +216,7 @@ pub(super) fn register_create(
                     .draft(is_draft)
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref());
+
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -224,12 +234,12 @@ pub(super) fn register_create(
                 .build()
                 .to_string_map(&def.fields);
 
-            let persist_opts = crate::service::PersistOptions {
+            let persist_opts = PersistOptions {
                 password: password.as_deref(),
                 locale_ctx: locale_ctx.as_ref(),
                 is_draft,
             };
-            let doc = crate::service::persist_create(
+            let doc = service::persist_create(
                 conn,
                 &collection,
                 &def,
@@ -259,6 +269,7 @@ pub(super) fn register_create(
                     .draft(is_draft)
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref());
+
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -370,6 +381,7 @@ pub(super) fn register_update(
                     None,
                 )
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+
                 if matches!(result, AccessResult::Denied) {
                     return Err(mlua::Error::RuntimeError("Update access denied".into()));
                 }
@@ -417,6 +429,7 @@ pub(super) fn register_update(
                         .draft(false)
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref());
+
                     if let Some(ref l) = locale_str {
                         builder = builder.locale(l.clone());
                     }
@@ -426,7 +439,7 @@ pub(super) fn register_update(
                     )?;
                 }
 
-                crate::service::persist_unpublish(conn, &collection, &id, &def)
+                service::persist_unpublish(conn, &collection, &id, &def)
                     .map_err(|e| mlua::Error::RuntimeError(format!("unpublish error: {}", e)))?;
 
                 if hooks_enabled {
@@ -435,6 +448,7 @@ pub(super) fn register_update(
                         .draft(false)
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref());
+
                     if let Some(ref l) = locale_str {
                         builder = builder.locale(l.clone());
                     }
@@ -449,9 +463,9 @@ pub(super) fn register_update(
             }
 
             // Build hook data (JSON values for hooks to see)
-            let mut hook_data: HashMap<String, serde_json::Value> = data
+            let mut hook_data: HashMap<String, Value> = data
                 .iter()
-                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
                 .collect();
             let join_data = lua_table_to_json_map(lua, &data_table)?;
             for (k, v) in &join_data {
@@ -498,6 +512,7 @@ pub(super) fn register_update(
                     .draft(is_draft)
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref());
+
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -539,6 +554,7 @@ pub(super) fn register_update(
                     .draft(is_draft)
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref());
+
                 if let Some(ref l) = locale_str {
                     builder = builder.locale(l.clone());
                 }
@@ -556,7 +572,7 @@ pub(super) fn register_update(
                 .to_string_map(&def.fields);
 
             if is_draft && def.has_versions() {
-                let existing_doc = crate::service::persist_draft_version(
+                let existing_doc = service::persist_draft_version(
                     conn,
                     &collection,
                     &id,
@@ -572,6 +588,7 @@ pub(super) fn register_update(
                         .draft(is_draft)
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref());
+
                     if let Some(ref l) = locale_str {
                         builder = builder.locale(l.clone());
                     }
@@ -595,7 +612,7 @@ pub(super) fn register_update(
 
                 document_to_lua_table(lua, &existing_doc)
             } else {
-                let doc = crate::service::persist_update(
+                let doc = service::persist_update(
                     conn,
                     &collection,
                     &id,
@@ -626,6 +643,7 @@ pub(super) fn register_update(
                         .draft(is_draft)
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref());
+
                     if let Some(ref l) = locale_str {
                         builder = builder.locale(l.clone());
                     }

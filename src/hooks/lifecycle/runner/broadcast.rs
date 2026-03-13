@@ -4,15 +4,25 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use mlua::Value;
+use serde_json::Value as JsonValue;
 
-use crate::core::collection::{Hooks, LiveSetting};
-use crate::core::event::{EventBus, EventOperation, EventTarget, EventUser};
-use crate::hooks::lifecycle::context::HookContext;
-use crate::hooks::lifecycle::execution::{
-    call_before_broadcast_hook, call_registered_before_broadcast, get_hook_refs,
-    resolve_hook_function,
+use crate::{
+    core::{
+        collection::{Hooks, LiveSetting},
+        event::{EventBus, EventOperation, EventTarget, EventUser},
+    },
+    hooks::{
+        api,
+        lifecycle::{
+            context::HookContext,
+            execution::{
+                call_before_broadcast_hook, call_registered_before_broadcast, get_hook_refs,
+                resolve_hook_function,
+            },
+            types::HookEvent,
+        },
+    },
 };
-use crate::hooks::lifecycle::types::HookEvent;
 
 use super::HookRunner;
 
@@ -25,8 +35,8 @@ impl HookRunner {
         hooks: &Hooks,
         collection: &str,
         operation: &str,
-        data: HashMap<String, serde_json::Value>,
-    ) -> Result<Option<HashMap<String, serde_json::Value>>> {
+        data: HashMap<String, JsonValue>,
+    ) -> Result<Option<HashMap<String, JsonValue>>> {
         let hook_refs = get_hook_refs(hooks, &HookEvent::BeforeBroadcast);
 
         // Skip VM acquisition entirely when no work to do
@@ -70,7 +80,7 @@ impl HookRunner {
         live: Option<&LiveSetting>,
         collection: &str,
         operation: &str,
-        data: &HashMap<String, serde_json::Value>,
+        data: &HashMap<String, JsonValue>,
     ) -> Result<bool> {
         match live {
             None => Ok(true), // absent = broadcast all
@@ -85,7 +95,7 @@ impl HookRunner {
                 ctx_table.set("operation", operation)?;
                 let data_table = lua.create_table()?;
                 for (k, v) in data {
-                    data_table.set(k.as_str(), crate::hooks::api::json_to_lua(&lua, v)?)?;
+                    data_table.set(k.as_str(), api::json_to_lua(&lua, v)?)?;
                 }
                 ctx_table.set("data", data_table)?;
 
@@ -113,7 +123,7 @@ impl HookRunner {
         operation: EventOperation,
         collection: String,
         document_id: String,
-        data: HashMap<String, serde_json::Value>,
+        data: HashMap<String, JsonValue>,
         edited_by: Option<EventUser>,
     ) {
         let bus = match event_bus {
@@ -137,6 +147,7 @@ impl HookRunner {
                 Ok(false) => return,
                 Err(e) => {
                     tracing::warn!("live setting check error for {}: {}", collection, e);
+
                     return;
                 }
                 Ok(true) => {}
@@ -149,6 +160,7 @@ impl HookRunner {
                     Ok(None) => return, // suppressed
                     Err(e) => {
                         tracing::warn!("before_broadcast hook error for {}: {}", collection, e);
+
                         return;
                     }
                 };

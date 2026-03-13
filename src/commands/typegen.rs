@@ -1,6 +1,6 @@
 //! `typegen` and `proto` commands.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use std::path::Path;
 
 /// Handle the `typegen` subcommand — loads the Lua registry and generates types.
@@ -15,7 +15,7 @@ pub fn run(config_dir: &Path, lang_str: &str, output_dir: Option<&Path>) -> Resu
         crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     if lang_str == "all" {
         for lang in crate::typegen::Language::all() {
@@ -25,7 +25,7 @@ pub fn run(config_dir: &Path, lang_str: &str, output_dir: Option<&Path>) -> Resu
         }
     } else {
         let lang = crate::typegen::Language::from_name(lang_str).ok_or_else(|| {
-            anyhow::anyhow!(
+            anyhow!(
                 "Unknown language '{}'. Valid: lua, ts, go, py, rs, all",
                 lang_str
             )

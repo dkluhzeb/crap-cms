@@ -1,12 +1,16 @@
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{
+    field::{FieldDefinition, FieldType},
+    validate::FieldError,
+};
 use std::collections::HashMap;
 
 /// Validate that Select/Radio value exists in the options list.
 pub(crate) fn check_option_valid(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
@@ -16,7 +20,7 @@ pub(crate) fn check_option_valid(
     {
         return;
     }
-    if let Some(serde_json::Value::String(s)) = value {
+    if let Some(Value::String(s)) = value {
         if field.has_many {
             // has_many select: value is a JSON array string like '["val1","val2"]'
             if let Ok(values) = serde_json::from_str::<Vec<String>>(s) {

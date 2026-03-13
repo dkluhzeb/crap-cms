@@ -20,6 +20,7 @@ pub(super) fn parse_field_admin(admin_tbl: &Table) -> mlua::Result<FieldAdmin> {
         .collapsed(get_bool(admin_tbl, "collapsed", true))
         .hidden(get_bool(admin_tbl, "hidden", false))
         .readonly(get_bool(admin_tbl, "readonly", false));
+
     if let Some(v) = get_localized_string(admin_tbl, "label") {
         builder = builder.label(v);
     }

@@ -11,9 +11,12 @@ pub use checks::evaluate_condition_table;
 
 use std::collections::HashMap;
 
-use crate::core::field::FieldDefinition;
-use crate::core::validate::ValidationError;
-use crate::db::query::LocaleContext;
+use serde_json::Value;
+
+use crate::{
+    core::{field::FieldDefinition, validate::ValidationError},
+    db::query::LocaleContext,
+};
 
 /// Context for field validation, bundling database and request parameters.
 pub struct ValidationCtx<'a> {
@@ -29,7 +32,7 @@ pub struct ValidationCtx<'a> {
 pub(crate) fn validate_fields_inner(
     lua: &mlua::Lua,
     fields: &[FieldDefinition],
-    data: &HashMap<String, serde_json::Value>,
+    data: &HashMap<String, Value>,
     ctx: &ValidationCtx,
 ) -> Result<(), ValidationError> {
     let mut errors = Vec::new();
@@ -46,6 +49,7 @@ pub(crate) fn validate_fields_inner(
         false,
         &mut errors,
     );
+
     if errors.is_empty() {
         Ok(())
     } else {

@@ -4,7 +4,7 @@
 //! - Group fields (`seo.meta_title`) → flat columns (`seo__meta_title`)
 //! - Array/Blocks/Relationship sub-fields → EXISTS subquery descriptors
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 
 use super::super::{FilterClause, is_valid_identifier};
 use crate::core::field::{BlockDefinition, FieldDefinition, FieldType};
@@ -39,6 +39,7 @@ fn normalize_field_name(field: &mut String, fields: &[FieldDefinition]) {
         Some(s) => s,
         None => return,
     };
+
     if let Some(fd) = fields.iter().find(|f| f.name == first_segment)
         && fd.field_type == FieldType::Group
     {
@@ -104,7 +105,7 @@ pub(super) fn resolve_filter(
     let field_def = fields
         .iter()
         .find(|f| f.name == root)
-        .ok_or_else(|| anyhow::anyhow!("Unknown field '{}' in filter path '{}'", root, field))?;
+        .ok_or_else(|| anyhow!("Unknown field '{}' in filter path '{}'", root, field))?;
 
     let join_table = format!("{}_{}", slug, root);
 
@@ -277,13 +278,14 @@ pub(super) fn walk_block_fields(
                 bail!("_block_type must be the last segment in a filter path");
             }
             let expr = build_block_type_expr(&each_joins, &mut json_path_parts, join_table);
+
             return Ok((each_joins, expr));
         }
 
         let field_def = current_fields
             .iter()
             .find(|f| f.name == seg)
-            .ok_or_else(|| anyhow::anyhow!("Unknown field '{}' in block filter path", seg))?;
+            .ok_or_else(|| anyhow!("Unknown field '{}' in block filter path", seg))?;
 
         match field_def.field_type {
             FieldType::Blocks => {
@@ -334,6 +336,7 @@ pub(super) fn walk_block_fields(
                 } else {
                     format!("json_extract(data, '$.{}')", json_path_parts.join("."))
                 };
+
                 return Ok((each_joins, expr));
             }
         }
@@ -349,6 +352,7 @@ fn build_block_type_expr(
 ) -> String {
     if !each_joins.is_empty() {
         let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
+
         if json_path_parts.is_empty() {
             format!("json_extract({}.value, '$._block_type')", last_alias)
         } else {

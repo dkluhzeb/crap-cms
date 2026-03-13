@@ -5,13 +5,18 @@ mod save;
 pub use save::save_join_table_data;
 
 use anyhow::Result;
+use serde_json::{Map, Value};
 
-use super::super::{LocaleContext, LocaleMode};
-use super::arrays::find_array_rows;
-use super::blocks::find_block_rows;
-use super::relationships::{find_polymorphic_related, find_related_ids};
-use crate::core::Document;
-use crate::core::field::{FieldDefinition, FieldType};
+use super::{
+    super::{LocaleContext, LocaleMode},
+    arrays::find_array_rows,
+    blocks::find_block_rows,
+    relationships::{find_polymorphic_related, find_related_ids},
+};
+use crate::core::{
+    Document,
+    field::{FieldDefinition, FieldType},
+};
 
 /// Resolve the effective locale string for a join table operation.
 /// Returns Some("en") when the field is localized and locale is enabled,
@@ -21,6 +26,7 @@ pub(super) fn resolve_join_locale(
     locale_ctx: Option<&LocaleContext>,
 ) -> Option<String> {
     let ctx = locale_ctx?;
+
     if !field.localized || !ctx.config.is_enabled() {
         return None;
     }
@@ -38,6 +44,7 @@ pub(super) fn resolve_join_fallback_locale(
     locale_ctx: Option<&LocaleContext>,
 ) -> Option<String> {
     let ctx = locale_ctx?;
+
     if !field.localized || !ctx.config.is_enabled() || !ctx.config.fallback {
         return None;
     }
@@ -55,17 +62,18 @@ fn reconstruct_group_fields(
     fields: &[FieldDefinition],
     prefix: &str,
     doc: &mut Document,
-    group_obj: &mut serde_json::Map<String, serde_json::Value>,
+    group_obj: &mut Map<String, Value>,
 ) {
     for sub in fields {
         match sub.field_type {
             FieldType::Group => {
                 // Nested group: collect sub-group's fields into a nested object
                 let new_prefix = format!("{}__{}", prefix, sub.name);
-                let mut sub_obj = serde_json::Map::new();
+                let mut sub_obj = Map::new();
                 reconstruct_group_fields(&sub.fields, &new_prefix, doc, &mut sub_obj);
+
                 if !sub_obj.is_empty() {
-                    group_obj.insert(sub.name.clone(), serde_json::Value::Object(sub_obj));
+                    group_obj.insert(sub.name.clone(), Value::Object(sub_obj));
                 }
             }
             FieldType::Row | FieldType::Collapsible => {
@@ -79,6 +87,7 @@ fn reconstruct_group_fields(
             }
             _ => {
                 let col_name = format!("{}__{}", prefix, sub.name);
+
                 if let Some(val) = doc.fields.remove(&col_name) {
                     group_obj.insert(sub.name.clone(), val);
                 }
@@ -118,6 +127,7 @@ pub fn hydrate_document(
                     if rc.is_polymorphic() {
                         let mut items =
                             find_polymorphic_related(conn, slug, &field.name, &doc.id, locale_ref)?;
+
                         if items.is_empty() && fallback_ref.is_some() {
                             items = find_polymorphic_related(
                                 conn,
@@ -127,28 +137,29 @@ pub fn hydrate_document(
                                 fallback_ref,
                             )?;
                         }
-                        let json_items: Vec<serde_json::Value> = items
+                        let json_items: Vec<Value> = items
                             .into_iter()
-                            .map(|(col, id)| serde_json::Value::String(format!("{}/{}", col, id)))
+                            .map(|(col, id)| Value::String(format!("{}/{}", col, id)))
                             .collect();
                         doc.fields
-                            .insert(field.name.clone(), serde_json::Value::Array(json_items));
+                            .insert(field.name.clone(), Value::Array(json_items));
                     } else {
                         let mut ids =
                             find_related_ids(conn, slug, &field.name, &doc.id, locale_ref)?;
+
                         if ids.is_empty() && fallback_ref.is_some() {
                             ids = find_related_ids(conn, slug, &field.name, &doc.id, fallback_ref)?;
                         }
-                        let json_ids: Vec<serde_json::Value> =
-                            ids.into_iter().map(serde_json::Value::String).collect();
+                        let json_ids: Vec<Value> = ids.into_iter().map(Value::String).collect();
                         doc.fields
-                            .insert(field.name.clone(), serde_json::Value::Array(json_ids));
+                            .insert(field.name.clone(), Value::Array(json_ids));
                     }
                 }
             }
             FieldType::Array => {
                 let mut rows =
                     find_array_rows(conn, slug, &field.name, &doc.id, &field.fields, locale_ref)?;
+
                 if rows.is_empty() && fallback_ref.is_some() {
                     rows = find_array_rows(
                         conn,
@@ -159,17 +170,17 @@ pub fn hydrate_document(
                         fallback_ref,
                     )?;
                 }
-                doc.fields
-                    .insert(field.name.clone(), serde_json::Value::Array(rows));
+                doc.fields.insert(field.name.clone(), Value::Array(rows));
             }
             FieldType::Group => {
                 // Reconstruct nested object from prefixed columns: seo__title → { seo: { title: val } }
-                let mut group_obj = serde_json::Map::new();
+                let mut group_obj = Map::new();
                 let prefix = &field.name;
                 reconstruct_group_fields(&field.fields, prefix, doc, &mut group_obj);
+
                 if !group_obj.is_empty() {
                     doc.fields
-                        .insert(field.name.clone(), serde_json::Value::Object(group_obj));
+                        .insert(field.name.clone(), Value::Object(group_obj));
                 }
             }
             FieldType::Row | FieldType::Collapsible => {
@@ -183,11 +194,11 @@ pub fn hydrate_document(
             }
             FieldType::Blocks => {
                 let mut rows = find_block_rows(conn, slug, &field.name, &doc.id, locale_ref)?;
+
                 if rows.is_empty() && fallback_ref.is_some() {
                     rows = find_block_rows(conn, slug, &field.name, &doc.id, fallback_ref)?;
                 }
-                doc.fields
-                    .insert(field.name.clone(), serde_json::Value::Array(rows));
+                doc.fields.insert(field.name.clone(), Value::Array(rows));
             }
             _ => {}
         }
@@ -262,12 +273,14 @@ pub(super) mod test_helpers {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::arrays::{find_array_rows, set_array_rows};
     use super::super::blocks::{find_block_rows, set_block_rows};
     use super::super::relationships::{set_polymorphic_related, set_related_ids};
     use super::test_helpers::{array_sub_fields, posts_def_with_joins, setup_join_db};
     use super::*;
-    use crate::core::field::*;
+    use crate::core::{Document, field::*};
     use rusqlite::Connection;
     use std::collections::HashMap;
 
@@ -288,12 +301,11 @@ mod tests {
         ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
 
-        let blocks = vec![serde_json::json!({"_block_type": "text", "body": "Hello"})];
+        let blocks = vec![json!({"_block_type": "text", "body": "Hello"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks, None).unwrap();
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Post 1"));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), json!("Post 1"));
 
         hydrate_document(&conn, "posts", &def.fields, &mut doc, None, None).unwrap();
 
@@ -337,9 +349,8 @@ mod tests {
         ])];
         set_array_rows(&conn, "posts", "items", "p1", &rows, &sub, None).unwrap();
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Post 1"));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), json!("Post 1"));
 
         let select = vec!["tags".to_string(), "title".to_string()];
         hydrate_document(&conn, "posts", &def.fields, &mut doc, Some(&select), None).unwrap();
@@ -383,14 +394,11 @@ mod tests {
         ];
 
         let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), json!("Test"));
         doc.fields
-            .insert("title".to_string(), serde_json::json!("Test"));
-        doc.fields.insert(
-            "seo__meta_title".to_string(),
-            serde_json::json!("SEO Title"),
-        );
+            .insert("seo__meta_title".to_string(), json!("SEO Title"));
         doc.fields
-            .insert("seo__meta_desc".to_string(), serde_json::json!("SEO Desc"));
+            .insert("seo__meta_desc".to_string(), json!("SEO Desc"));
 
         hydrate_document(&conn, "posts", &fields, &mut doc, None, None).unwrap();
 
@@ -429,10 +437,8 @@ mod tests {
             .build();
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields.insert(
-            "seo__social__og_title".to_string(),
-            serde_json::json!("OG Title Value"),
-        );
+        doc.fields
+            .insert("seo__social__og_title".to_string(), json!("OG Title Value"));
 
         hydrate_document(&conn, "posts", &[outer_group], &mut doc, None, None).unwrap();
 
@@ -465,10 +471,8 @@ mod tests {
             .build();
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("layout__col_a".to_string(), serde_json::json!("A"));
-        doc.fields
-            .insert("layout__col_b".to_string(), serde_json::json!("B"));
+        doc.fields.insert("layout__col_a".to_string(), json!("A"));
+        doc.fields.insert("layout__col_b".to_string(), json!("B"));
 
         hydrate_document(&conn, "posts", &[outer_group], &mut doc, None, None).unwrap();
 
@@ -510,9 +514,9 @@ mod tests {
 
         let mut doc = Document::new("p1".to_string());
         doc.fields
-            .insert("settings__field_a".to_string(), serde_json::json!("val_a"));
+            .insert("settings__field_a".to_string(), json!("val_a"));
         doc.fields
-            .insert("settings__field_b".to_string(), serde_json::json!("val_b"));
+            .insert("settings__field_b".to_string(), json!("val_b"));
 
         hydrate_document(&conn, "posts", &[outer_group], &mut doc, None, None).unwrap();
 
@@ -593,7 +597,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "content".to_string(),
-            serde_json::json!([
+            json!([
                 {"_block_type": "hero", "heading": "Welcome"},
                 {"_block_type": "text", "body": "Hello world"},
             ]),
@@ -606,8 +610,7 @@ mod tests {
         assert_eq!(rows[1]["_block_type"], "text");
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Post 1"));
+        doc.fields.insert("title".to_string(), json!("Post 1"));
         hydrate_document(&conn, "posts", &fields, &mut doc, None, None).unwrap();
 
         let content = doc
@@ -640,7 +643,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "items".to_string(),
-            serde_json::json!([
+            json!([
                 {"label": "First", "value": "1"},
                 {"label": "Second", "value": "2"},
             ]),
@@ -684,7 +687,7 @@ mod tests {
         let mut data = HashMap::new();
         data.insert(
             "content".to_string(),
-            serde_json::json!([
+            json!([
                 {"_block_type": "cta", "heading": "Buy now"},
             ]),
         );

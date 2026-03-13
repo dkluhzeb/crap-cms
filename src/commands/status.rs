@@ -1,7 +1,13 @@
 //! `status` command — show project status (collections, globals, migrations, jobs, uploads).
 
-use anyhow::{Context as _, Result};
-use std::path::Path;
+use anyhow::{Context as _, Result, anyhow};
+use std::{fs, path::Path};
+
+use crate::{
+    config::CrapConfig,
+    db::{migrate, pool, query},
+    hooks,
+};
 
 /// Format a byte count as a human-readable string (e.g., "1.5 MB").
 fn format_bytes(bytes: u64) -> String {
@@ -26,9 +32,11 @@ fn dir_size(path: &Path) -> u64 {
         return 0;
     }
     let mut total = 0u64;
-    if let Ok(entries) = std::fs::read_dir(path) {
+
+    if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
             let meta = entry.metadata();
+
             if let Ok(m) = meta {
                 if m.is_dir() {
                     total += dir_size(&entry.path());
@@ -47,25 +55,22 @@ pub fn run(config_dir: &Path) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
-    let registry =
-        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
-    let pool = crate::db::pool::create_pool(&config_dir, &cfg)
-        .context("Failed to create database pool")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
+    let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
-    crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
-        .context("Failed to sync database schema")?;
+    migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     // Config dir
     println!("Config:  {}", config_dir.display());
 
     // DB file + size
     let db_path = cfg.db_path(&config_dir);
-    let db_size = std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+    let db_size = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
     println!(
         "Database: {} ({})",
         db_path.display(),
@@ -74,6 +79,7 @@ pub fn run(config_dir: &Path) -> Result<()> {
 
     // Uploads size
     let uploads_dir = config_dir.join("uploads");
+
     if uploads_dir.is_dir() {
         let uploads_size = dir_size(&uploads_dir);
         let file_count: usize = walkdir_count(&uploads_dir);
@@ -110,8 +116,9 @@ pub fn run(config_dir: &Path) -> Result<()> {
         slugs.sort();
         for slug in slugs {
             let def = &reg.collections[slug];
-            let count = crate::db::query::count(&conn, slug, def, &[], None).unwrap_or(0);
+            let count = query::count(&conn, slug, def, &[], None).unwrap_or(0);
             let mut tags = Vec::new();
+
             if def.is_auth_collection() {
                 tags.push("auth");
             }
@@ -146,8 +153,8 @@ pub fn run(config_dir: &Path) -> Result<()> {
 
     // Migrations
     let migrations_dir = config_dir.join("migrations");
-    let all_files = crate::db::migrate::list_migration_files(&migrations_dir).unwrap_or_default();
-    let applied = crate::db::migrate::get_applied_migrations(&pool).unwrap_or_default();
+    let all_files = migrate::list_migration_files(&migrations_dir).unwrap_or_default();
+    let applied = migrate::get_applied_migrations(&pool).unwrap_or_default();
     let pending = all_files.iter().filter(|f| !applied.contains(*f)).count();
 
     println!(
@@ -159,6 +166,7 @@ pub fn run(config_dir: &Path) -> Result<()> {
 
     // Jobs summary
     let jobs_dir = config_dir.join("jobs");
+
     if jobs_dir.is_dir() {
         let defined = reg.jobs.len();
         let running: i64 = conn
@@ -168,12 +176,13 @@ pub fn run(config_dir: &Path) -> Result<()> {
                 |row| row.get(0),
             )
             .unwrap_or(0);
-        let failed_24h = crate::db::query::jobs::count_failed_since(
+        let failed_24h = query::jobs::count_failed_since(
             &conn, 86400, // 24 hours in seconds
         )
         .unwrap_or(0);
 
         let mut job_parts = vec![format!("{} defined", defined)];
+
         if running > 0 {
             job_parts.push(format!("{} running", running));
         }
@@ -189,7 +198,8 @@ pub fn run(config_dir: &Path) -> Result<()> {
 /// Count files (non-directories) in a directory recursively.
 fn walkdir_count(path: &Path) -> usize {
     let mut count = 0;
-    if let Ok(entries) = std::fs::read_dir(path) {
+
+    if let Ok(entries) = fs::read_dir(path) {
         for entry in entries.flatten() {
             if let Ok(m) = entry.metadata() {
                 if m.is_dir() {
@@ -226,17 +236,17 @@ mod tests {
     #[test]
     fn dir_size_with_files() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.txt"), "hello").unwrap();
-        std::fs::write(tmp.path().join("b.txt"), "world!").unwrap();
+        fs::write(tmp.path().join("a.txt"), "hello").unwrap();
+        fs::write(tmp.path().join("b.txt"), "world!").unwrap();
         assert_eq!(dir_size(tmp.path()), 11); // 5 + 6
     }
 
     #[test]
     fn dir_size_nested() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
-        std::fs::write(tmp.path().join("a.txt"), "abc").unwrap();
-        std::fs::write(tmp.path().join("sub/b.txt"), "defg").unwrap();
+        fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("a.txt"), "abc").unwrap();
+        fs::write(tmp.path().join("sub/b.txt"), "defg").unwrap();
         assert_eq!(dir_size(tmp.path()), 7); // 3 + 4
     }
 
@@ -254,9 +264,9 @@ mod tests {
     #[test]
     fn walkdir_count_with_files() {
         let tmp = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(tmp.path().join("sub")).unwrap();
-        std::fs::write(tmp.path().join("a.txt"), "").unwrap();
-        std::fs::write(tmp.path().join("sub/b.txt"), "").unwrap();
+        fs::create_dir_all(tmp.path().join("sub")).unwrap();
+        fs::write(tmp.path().join("a.txt"), "").unwrap();
+        fs::write(tmp.path().join("sub/b.txt"), "").unwrap();
         assert_eq!(walkdir_count(tmp.path()), 2);
     }
 }

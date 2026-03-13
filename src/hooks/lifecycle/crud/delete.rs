@@ -1,20 +1,23 @@
 //! Registration of `crap.collections.delete`, `update_many`, and `delete_many` Lua functions.
 
-use crate::config::LocaleConfig;
-use crate::core::SharedRegistry;
-use crate::db::query::filter::normalize_filter_fields;
-use crate::db::query::{
-    self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
-};
 use anyhow::Result;
 use mlua::Lua;
+use serde_json::Value;
+
+use crate::{
+    config::LocaleConfig,
+    core::SharedRegistry,
+    db::query::{
+        self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
+        filter::normalize_filter_fields,
+    },
+    hooks::lifecycle::{
+        HookContext, HookDepth, HookEvent, MaxHookDepth, UiLocaleContext, UserContext,
+        access::check_access_with_lua, converters::*, execution::run_hooks_inner,
+    },
+};
 
 use super::get_tx_conn;
-use crate::hooks::lifecycle::access::check_access_with_lua;
-use crate::hooks::lifecycle::converters::*;
-use crate::hooks::lifecycle::execution::run_hooks_inner;
-use crate::hooks::lifecycle::{HookContext, HookEvent};
-use crate::hooks::lifecycle::{HookDepth, MaxHookDepth, UiLocaleContext, UserContext};
 
 /// Register `crap.collections.delete(collection, id, opts?)`.
 #[cfg(not(tarpaulin_include))]
@@ -68,6 +71,7 @@ pub(super) fn register_delete(
                     None,
                 )
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+
                 if matches!(result, AccessResult::Denied) {
                     return Err(mlua::Error::RuntimeError("Delete access denied".into()));
                 }
@@ -91,7 +95,7 @@ pub(super) fn register_delete(
                 lua.set_app_data(HookDepth(current_depth + 1));
 
                 let hook_ctx = HookContext::builder(&collection, "delete")
-                    .data([("id".to_string(), serde_json::Value::String(id.clone()))].into())
+                    .data([("id".to_string(), Value::String(id.clone()))].into())
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
@@ -109,7 +113,7 @@ pub(super) fn register_delete(
 
             if hooks_enabled {
                 let after_ctx = HookContext::builder(&collection, "delete")
-                    .data([("id".to_string(), serde_json::Value::String(id.clone()))].into())
+                    .data([("id".to_string(), Value::String(id.clone()))].into())
                     .user(hook_user.as_ref())
                     .ui_locale(hook_ui_locale.as_deref())
                     .build();
@@ -222,6 +226,7 @@ pub(super) fn register_update_many(
                         None,
                     )
                     .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+
                     if matches!(result, AccessResult::Denied) {
                         return Err(mlua::Error::RuntimeError(format!(
                             "Update access denied for document {}",
@@ -351,6 +356,7 @@ pub(super) fn register_delete_many(
                         None,
                     )
                     .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+
                     if matches!(result, AccessResult::Denied) {
                         return Err(mlua::Error::RuntimeError(format!(
                             "Delete access denied for document {}",

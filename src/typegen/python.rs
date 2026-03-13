@@ -2,9 +2,11 @@
 
 use std::fmt::Write;
 
-use crate::core::Registry;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{
+    Registry,
+    collection::{CollectionDefinition, GlobalDefinition},
+    field::{FieldDefinition, FieldType},
+};
 
 use super::{
     is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
@@ -59,6 +61,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let comment = field_options_comment(col);
     writeln!(out, "@dataclass").expect("write to String");
     writeln!(out, "class {}:", pascal).expect("write to String");
+
     if !comment.is_empty() {
         writeln!(out, "    \"\"\"{}\"\"\"", comment).expect("write to String");
     }
@@ -140,6 +143,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
             .expect("write to String");
     }
     let py_type = field_to_py(field);
+
     if is_optional(field) {
         writeln!(out, "    {}: Optional[{}] = None", field.name, py_type).expect("write to String");
     } else {
@@ -227,6 +231,7 @@ fn field_options_comment(col: &CollectionDefinition) -> String {
             format!("{}: {}", f.name, opts)
         })
         .collect();
+
     if selects.is_empty() {
         String::new()
     } else {
@@ -520,7 +525,7 @@ mod tests {
 
     #[test]
     fn python_global_output() {
-        let mut global = crate::core::collection::GlobalDefinition::new("site_settings");
+        let mut global = GlobalDefinition::new("site_settings");
         global.fields = vec![text_field("site_name", true), text_field("tagline", false)];
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -536,7 +541,7 @@ mod tests {
     fn python_full_render() {
         let mut registry = Registry::new();
         registry.register_collection(make_col("posts", vec![text_field("title", true)]));
-        let mut settings = crate::core::collection::GlobalDefinition::new("settings");
+        let mut settings = GlobalDefinition::new("settings");
         settings.fields = vec![text_field("name", true)];
         registry.register_global(settings);
         let out = render(&registry);

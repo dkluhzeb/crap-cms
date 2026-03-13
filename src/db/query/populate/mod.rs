@@ -8,9 +8,10 @@ pub use single::populate_relationships_cached;
 
 use anyhow::Result;
 use dashmap::DashMap;
+use serde_json::{Map, Value};
 use std::collections::HashSet;
 
-use crate::core::{CollectionDefinition, Document};
+use crate::core::{CollectionDefinition, Document, Registry};
 
 /// Shared cache for populated documents. Key is (collection_slug, document_id).
 /// Uses DashMap for concurrent cross-request sharing with interior mutability.
@@ -23,7 +24,7 @@ pub type PopulateCache = DashMap<(String, String), Document>;
 /// (doc/docs, field_name, rel_collection, rel_def, visited) stay as regular args.
 pub(crate) struct PopulateCtx<'a> {
     pub conn: &'a rusqlite::Connection,
-    pub registry: &'a crate::core::Registry,
+    pub registry: &'a Registry,
     pub effective_depth: i32,
     pub locale_ctx: Option<&'a super::LocaleContext>,
     pub cache: &'a PopulateCache,
@@ -32,7 +33,7 @@ pub(crate) struct PopulateCtx<'a> {
 /// Collection and registry context for population.
 pub struct PopulateContext<'a> {
     pub conn: &'a rusqlite::Connection,
-    pub registry: &'a crate::core::Registry,
+    pub registry: &'a Registry,
     pub collection_slug: &'a str,
     pub def: &'a CollectionDefinition,
 }
@@ -49,36 +50,31 @@ pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
     let pos = s.find('/')?;
     let col = &s[..pos];
     let id = &s[pos + 1..];
+
     if col.is_empty() || id.is_empty() {
         return None;
     }
     Some((col.to_string(), id.to_string()))
 }
 
-/// Convert a Document into a serde_json::Value for embedding in a parent's fields.
-pub(crate) fn document_to_json(doc: &Document, collection: &str) -> serde_json::Value {
-    let mut map = serde_json::Map::new();
-    map.insert("id".to_string(), serde_json::Value::String(doc.id.clone()));
+/// Convert a Document into a JSON Value for embedding in a parent's fields.
+pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
+    let mut map = Map::new();
+    map.insert("id".to_string(), Value::String(doc.id.clone()));
     map.insert(
         "collection".to_string(),
-        serde_json::Value::String(collection.to_string()),
+        Value::String(collection.to_string()),
     );
     for (k, v) in &doc.fields {
         map.insert(k.clone(), v.clone());
     }
     if let Some(ref ts) = doc.created_at {
-        map.insert(
-            "created_at".to_string(),
-            serde_json::Value::String(ts.clone()),
-        );
+        map.insert("created_at".to_string(), Value::String(ts.clone()));
     }
     if let Some(ref ts) = doc.updated_at {
-        map.insert(
-            "updated_at".to_string(),
-            serde_json::Value::String(ts.clone()),
-        );
+        map.insert("updated_at".to_string(), Value::String(ts.clone()));
     }
-    serde_json::Value::Object(map)
+    Value::Object(map)
 }
 
 /// Recursively populate relationship fields with full document objects.
@@ -280,6 +276,8 @@ pub(crate) mod test_helpers {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     // ── document_to_json tests ────────────────────────────────────────────────
@@ -287,10 +285,8 @@ mod tests {
     #[test]
     fn document_to_json_basic() {
         let mut doc = Document::new("doc1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello World"));
-        doc.fields
-            .insert("count".to_string(), serde_json::json!(42));
+        doc.fields.insert("title".to_string(), json!("Hello World"));
+        doc.fields.insert("count".to_string(), json!(42));
         doc.created_at = Some("2024-01-01T00:00:00Z".to_string());
         doc.updated_at = Some("2024-01-02T00:00:00Z".to_string());
 
@@ -321,7 +317,7 @@ mod tests {
     fn document_to_json_no_timestamps() {
         let mut doc = Document::new("doc2".to_string());
         doc.fields
-            .insert("title".to_string(), serde_json::json!("No Timestamps"));
+            .insert("title".to_string(), json!("No Timestamps"));
         // created_at and updated_at are None by default
 
         let json = document_to_json(&doc, "pages");
@@ -349,7 +345,7 @@ mod tests {
     #[test]
     fn document_to_json_with_nested() {
         let mut doc = Document::new("doc3".to_string());
-        let nested = serde_json::json!({
+        let nested = json!({
             "meta": {
                 "keywords": ["rust", "cms"],
                 "score": 9.5

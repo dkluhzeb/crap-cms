@@ -3,8 +3,7 @@
 use anyhow::{Context as _, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use std::path::Path;
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use crate::config::CrapConfig;
 

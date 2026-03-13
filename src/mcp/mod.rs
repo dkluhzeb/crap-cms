@@ -10,15 +10,11 @@ pub mod schema;
 pub mod stdio;
 pub mod tools;
 
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use serde_json::{Value, json};
 
-use crate::config::CrapConfig;
-use crate::core::Registry;
-use crate::db::DbPool;
-use crate::hooks::lifecycle::HookRunner;
+use crate::{config::CrapConfig, core::Registry, db::DbPool, hooks::lifecycle::HookRunner};
 
 use protocol::{
     INTERNAL_ERROR, INVALID_PARAMS, InitializeParams, JsonRpcRequest, JsonRpcResponse,

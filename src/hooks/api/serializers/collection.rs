@@ -1,20 +1,27 @@
 //! Serializers for CollectionDefinition and GlobalDefinition to Lua tables.
 
-use super::auth::collection_auth_to_lua;
-use super::fields::field_config_to_lua;
-use super::helpers::localized_string_to_lua;
-use super::upload::collection_upload_to_lua;
 use mlua::{Lua, Table};
+
+use crate::core::{
+    CollectionDefinition,
+    collection::{GlobalDefinition, Hooks, LiveSetting},
+};
+
+use super::{
+    auth::collection_auth_to_lua, fields::field_config_to_lua, helpers::localized_string_to_lua,
+    upload::collection_upload_to_lua,
+};
 
 /// Convert a CollectionDefinition to a full Lua table compatible with parse_collection_definition().
 pub(crate) fn collection_config_to_lua(
     lua: &Lua,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
 ) -> mlua::Result<Table> {
     let tbl = lua.create_table()?;
 
     // labels
     let labels = lua.create_table()?;
+
     if let Some(ref s) = def.labels.singular {
         labels.set("singular", localized_string_to_lua(lua, s)?)?;
     }
@@ -27,6 +34,7 @@ pub(crate) fn collection_config_to_lua(
 
     // admin
     let admin = lua.create_table()?;
+
     if let Some(ref s) = def.admin.use_as_title {
         admin.set("use_as_title", s.as_str())?;
     }
@@ -58,6 +66,7 @@ pub(crate) fn collection_config_to_lua(
 
     // access
     let access = lua.create_table()?;
+
     if let Some(ref s) = def.access.read {
         access.set("read", s.as_str())?;
     }
@@ -90,10 +99,10 @@ pub(crate) fn collection_config_to_lua(
         None => {
             tbl.set("live", true)?;
         }
-        Some(crate::core::collection::LiveSetting::Disabled) => {
+        Some(LiveSetting::Disabled) => {
             tbl.set("live", false)?;
         }
-        Some(crate::core::collection::LiveSetting::Function(s)) => {
+        Some(LiveSetting::Function(s)) => {
             tbl.set("live", s.as_str())?;
         }
     }
@@ -105,6 +114,7 @@ pub(crate) fn collection_config_to_lua(
         } else {
             let vt = lua.create_table()?;
             vt.set("drafts", v.drafts)?;
+
             if v.max_versions > 0 {
                 vt.set("max_versions", v.max_versions)?;
             }
@@ -116,14 +126,12 @@ pub(crate) fn collection_config_to_lua(
 }
 
 /// Convert a GlobalDefinition to a full Lua table compatible with parse_global_definition().
-pub(crate) fn global_config_to_lua(
-    lua: &Lua,
-    def: &crate::core::collection::GlobalDefinition,
-) -> mlua::Result<Table> {
+pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> mlua::Result<Table> {
     let tbl = lua.create_table()?;
 
     // labels
     let labels = lua.create_table()?;
+
     if let Some(ref s) = def.labels.singular {
         labels.set("singular", localized_string_to_lua(lua, s)?)?;
     }
@@ -144,6 +152,7 @@ pub(crate) fn global_config_to_lua(
 
     // access
     let access = lua.create_table()?;
+
     if let Some(ref s) = def.access.read {
         access.set("read", s.as_str())?;
     }
@@ -170,10 +179,10 @@ pub(crate) fn global_config_to_lua(
         None => {
             tbl.set("live", true)?;
         }
-        Some(crate::core::collection::LiveSetting::Disabled) => {
+        Some(LiveSetting::Disabled) => {
             tbl.set("live", false)?;
         }
-        Some(crate::core::collection::LiveSetting::Function(s)) => {
+        Some(LiveSetting::Function(s)) => {
             tbl.set("live", s.as_str())?;
         }
     }
@@ -182,10 +191,7 @@ pub(crate) fn global_config_to_lua(
 }
 
 /// Convert collection-level hooks to a Lua table.
-fn collection_hooks_to_lua(
-    lua: &Lua,
-    hooks: &crate::core::collection::Hooks,
-) -> mlua::Result<Table> {
+fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> mlua::Result<Table> {
     let tbl = lua.create_table()?;
     let pairs: &[(&str, &[String])] = &[
         ("before_validate", &hooks.before_validate),
@@ -212,28 +218,29 @@ fn collection_hooks_to_lua(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{
+        CollectionDefinition,
+        collection::{
+            Access, AdminConfig, GlobalDefinition, Hooks, Labels, LiveSetting, McpConfig,
+            VersionsConfig,
+        },
+        field::{FieldDefinition, FieldType, LocalizedString},
+    };
     use mlua::{self, Lua, Value};
 
     #[test]
     fn test_collection_config_to_lua_basic() {
         let lua = Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("posts");
-        def.labels = crate::core::collection::Labels {
-            singular: Some(crate::core::field::LocalizedString::Plain(
-                "Post".to_string(),
-            )),
-            plural: Some(crate::core::field::LocalizedString::Plain(
-                "Posts".to_string(),
-            )),
+        let mut def = CollectionDefinition::new("posts");
+        def.labels = Labels {
+            singular: Some(LocalizedString::Plain("Post".to_string())),
+            plural: Some(LocalizedString::Plain("Posts".to_string())),
         };
         def.timestamps = true;
         def.fields = vec![
-            crate::core::field::FieldDefinition::builder(
-                "title",
-                crate::core::field::FieldType::Text,
-            )
-            .required(true)
-            .build(),
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
         ];
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let labels: mlua::Table = tbl.get("labels").unwrap();
@@ -252,21 +259,19 @@ mod tests {
         let lua = Lua::new();
 
         // live = None -> true
-        let def_none_live = crate::core::CollectionDefinition::new("t");
+        let def_none_live = CollectionDefinition::new("t");
         let tbl = collection_config_to_lua(&lua, &def_none_live).unwrap();
         assert_eq!(tbl.get::<bool>("live").unwrap(), true);
 
         // live = Disabled -> false
-        let mut def_disabled = crate::core::CollectionDefinition::new("t");
-        def_disabled.live = Some(crate::core::collection::LiveSetting::Disabled);
+        let mut def_disabled = CollectionDefinition::new("t");
+        def_disabled.live = Some(LiveSetting::Disabled);
         let tbl = collection_config_to_lua(&lua, &def_disabled).unwrap();
         assert_eq!(tbl.get::<bool>("live").unwrap(), false);
 
         // live = Function -> string
-        let mut def_func = crate::core::CollectionDefinition::new("t");
-        def_func.live = Some(crate::core::collection::LiveSetting::Function(
-            "hooks.live.filter".to_string(),
-        ));
+        let mut def_func = CollectionDefinition::new("t");
+        def_func.live = Some(LiveSetting::Function("hooks.live.filter".to_string()));
         let tbl = collection_config_to_lua(&lua, &def_func).unwrap();
         assert_eq!(tbl.get::<String>("live").unwrap(), "hooks.live.filter");
     }
@@ -276,14 +281,14 @@ mod tests {
         let lua = Lua::new();
 
         // versions simple (drafts=true, max=0) -> true
-        let mut def = crate::core::CollectionDefinition::new("t");
-        def.versions = Some(crate::core::collection::VersionsConfig::new(true, 0));
+        let mut def = CollectionDefinition::new("t");
+        def.versions = Some(VersionsConfig::new(true, 0));
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         assert_eq!(tbl.get::<bool>("versions").unwrap(), true);
 
         // versions table
-        let mut def2 = crate::core::CollectionDefinition::new("t");
-        def2.versions = Some(crate::core::collection::VersionsConfig::new(false, 100));
+        let mut def2 = CollectionDefinition::new("t");
+        def2.versions = Some(VersionsConfig::new(false, 100));
         let tbl = collection_config_to_lua(&lua, &def2).unwrap();
         let v: mlua::Table = tbl.get("versions").unwrap();
         assert_eq!(v.get::<bool>("drafts").unwrap(), false);
@@ -293,20 +298,12 @@ mod tests {
     #[test]
     fn test_global_config_to_lua_basic() {
         let lua = Lua::new();
-        let mut def = crate::core::collection::GlobalDefinition::new("settings");
-        def.labels = crate::core::collection::Labels {
-            singular: Some(crate::core::field::LocalizedString::Plain(
-                "Settings".to_string(),
-            )),
+        let mut def = GlobalDefinition::new("settings");
+        def.labels = Labels {
+            singular: Some(LocalizedString::Plain("Settings".to_string())),
             plural: None,
         };
-        def.fields = vec![
-            crate::core::field::FieldDefinition::builder(
-                "site_name",
-                crate::core::field::FieldType::Text,
-            )
-            .build(),
-        ];
+        def.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
         let tbl = global_config_to_lua(&lua, &def).unwrap();
         let labels: mlua::Table = tbl.get("labels").unwrap();
         let singular: String = labels.get("singular").unwrap();
@@ -319,12 +316,12 @@ mod tests {
     #[test]
     fn test_global_config_to_lua_with_live() {
         let lua = Lua::new();
-        let mut def = crate::core::collection::GlobalDefinition::new("settings");
-        def.access = crate::core::collection::Access {
+        let mut def = GlobalDefinition::new("settings");
+        def.access = Access {
             read: Some("hooks.access.allow".to_string()),
             ..Default::default()
         };
-        def.live = Some(crate::core::collection::LiveSetting::Disabled);
+        def.live = Some(LiveSetting::Disabled);
         let tbl = global_config_to_lua(&lua, &def).unwrap();
         assert_eq!(tbl.get::<bool>("live").unwrap(), false);
         let access: mlua::Table = tbl.get("access").unwrap();
@@ -334,7 +331,7 @@ mod tests {
     #[test]
     fn test_collection_hooks_to_lua() {
         let lua = Lua::new();
-        let hooks = crate::core::collection::Hooks {
+        let hooks = Hooks {
             before_validate: vec!["hooks.v".to_string()],
             before_change: vec!["hooks.c1".to_string(), "hooks.c2".to_string()],
             after_change: Vec::new(),
@@ -359,9 +356,9 @@ mod tests {
     #[test]
     fn test_collection_config_to_lua_with_admin() {
         let lua = Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("posts");
+        let mut def = CollectionDefinition::new("posts");
         def.timestamps = true;
-        def.admin = crate::core::collection::AdminConfig {
+        def.admin = AdminConfig {
             use_as_title: Some("title".to_string()),
             default_sort: Some("-created_at".to_string()),
             hidden: true,
@@ -379,9 +376,9 @@ mod tests {
     #[test]
     fn test_collection_config_to_lua_mcp_description() {
         let lua = Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("posts");
+        let mut def = CollectionDefinition::new("posts");
         def.timestamps = false;
-        def.mcp = crate::core::collection::McpConfig {
+        def.mcp = McpConfig {
             description: Some("Manages blog posts".to_string()),
         };
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
@@ -395,8 +392,8 @@ mod tests {
     #[test]
     fn test_global_config_to_lua_mcp_description() {
         let lua = Lua::new();
-        let mut def = crate::core::collection::GlobalDefinition::new("settings");
-        def.mcp = crate::core::collection::McpConfig {
+        let mut def = GlobalDefinition::new("settings");
+        def.mcp = McpConfig {
             description: Some("Global site settings".to_string()),
         };
         let tbl = global_config_to_lua(&lua, &def).unwrap();
@@ -410,10 +407,8 @@ mod tests {
     #[test]
     fn test_global_config_to_lua_live_function() {
         let lua = Lua::new();
-        let mut def = crate::core::collection::GlobalDefinition::new("settings");
-        def.live = Some(crate::core::collection::LiveSetting::Function(
-            "hooks.live.settings".to_string(),
-        ));
+        let mut def = GlobalDefinition::new("settings");
+        def.live = Some(LiveSetting::Function("hooks.live.settings".to_string()));
         let tbl = global_config_to_lua(&lua, &def).unwrap();
         assert_eq!(tbl.get::<String>("live").unwrap(), "hooks.live.settings");
     }

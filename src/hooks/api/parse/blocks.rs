@@ -1,19 +1,18 @@
 //! Parsing functions for block and tab definitions.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use mlua::Table;
 
-use super::fields::parse_fields;
-use super::helpers::*;
+use crate::core::field::{BlockDefinition, FieldTab};
 
-pub(super) fn parse_block_definitions(
-    blocks_tbl: &Table,
-) -> Result<Vec<crate::core::field::BlockDefinition>> {
+use super::{fields::parse_fields, helpers::*};
+
+pub(super) fn parse_block_definitions(blocks_tbl: &Table) -> Result<Vec<BlockDefinition>> {
     let mut blocks = Vec::new();
     for entry in blocks_tbl.clone().sequence_values::<Table>() {
         let block_tbl = entry?;
         let block_type: String = get_string_val(&block_tbl, "type")
-            .map_err(|_| anyhow::anyhow!("Block definition missing 'type'"))?;
+            .map_err(|_| anyhow!("Block definition missing 'type'"))?;
         let label = get_localized_string(&block_tbl, "label");
         let label_field = get_string(&block_tbl, "label_field");
         let group = get_string(&block_tbl, "group");
@@ -23,7 +22,7 @@ pub(super) fn parse_block_definitions(
         } else {
             Vec::new()
         };
-        let mut block = crate::core::field::BlockDefinition::new(block_type, fields);
+        let mut block = BlockDefinition::new(block_type, fields);
         block.label = label;
         block.label_field = label_field;
         block.group = group;
@@ -33,7 +32,7 @@ pub(super) fn parse_block_definitions(
     Ok(blocks)
 }
 
-pub(super) fn parse_tab_definitions(tabs_tbl: &Table) -> Result<Vec<crate::core::field::FieldTab>> {
+pub(super) fn parse_tab_definitions(tabs_tbl: &Table) -> Result<Vec<FieldTab>> {
     let mut tabs = Vec::new();
     for entry in tabs_tbl.clone().sequence_values::<Table>() {
         let tab_tbl = entry?;
@@ -44,7 +43,7 @@ pub(super) fn parse_tab_definitions(tabs_tbl: &Table) -> Result<Vec<crate::core:
         } else {
             Vec::new()
         };
-        let mut tab = crate::core::field::FieldTab::new(label, fields);
+        let mut tab = FieldTab::new(label, fields);
         tab.description = description;
         tabs.push(tab);
     }

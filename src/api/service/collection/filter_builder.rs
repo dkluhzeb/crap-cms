@@ -2,10 +2,11 @@
 
 use tonic::Status;
 
-use crate::api::service::convert::parse_where_json;
-use crate::core::field::FieldDefinition;
-use crate::db::query::filter::normalize_filter_fields;
-use crate::db::query::{AccessResult, Filter, FilterClause, FilterOp};
+use crate::{
+    api::service::convert::parse_where_json,
+    core::field::FieldDefinition,
+    db::query::{AccessResult, Filter, FilterClause, FilterOp, filter::normalize_filter_fields},
+};
 
 /// Builder for constructing filter clauses from a gRPC request's `where` JSON,
 /// access constraints, and draft filtering. Deduplicates the pattern used across

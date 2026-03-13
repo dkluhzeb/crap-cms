@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use super::{NodeAttr, NodeAttrType};
 use crate::core::field::SelectOption;
 
@@ -9,7 +11,7 @@ pub struct NodeAttrBuilder {
     attr_type: NodeAttrType,
     label: String,
     required: bool,
-    default_value: Option<serde_json::Value>,
+    default_value: Option<Value>,
     options: Vec<SelectOption>,
 }
 
@@ -35,7 +37,7 @@ impl NodeAttrBuilder {
         self
     }
 
-    pub fn default_value(mut self, v: serde_json::Value) -> Self {
+    pub fn default_value(mut self, v: Value) -> Self {
         self.default_value = Some(v);
         self
     }
@@ -59,6 +61,8 @@ impl NodeAttrBuilder {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::core::richtext::NodeAttrType;
 
@@ -78,10 +82,10 @@ mod tests {
         let attr = NodeAttrBuilder::new("size", "Size")
             .attr_type(NodeAttrType::Select)
             .required(true)
-            .default_value(serde_json::json!("medium"))
+            .default_value(json!("medium"))
             .build();
         assert_eq!(attr.attr_type, NodeAttrType::Select);
         assert!(attr.required);
-        assert_eq!(attr.default_value, Some(serde_json::json!("medium")));
+        assert_eq!(attr.default_value, Some(json!("medium")));
     }
 }

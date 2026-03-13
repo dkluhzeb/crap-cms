@@ -1,6 +1,6 @@
 //! Feature configuration: email, depth, pagination, uploads, locale, jobs, live, hooks, access, MCP.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::parsing::{serde_duration, serde_duration_option, serde_filesize};
@@ -211,13 +211,13 @@ impl LocaleConfig {
 
     fn validate_locale_code(code: &str) -> Result<()> {
         if code.is_empty() {
-            anyhow::bail!("Locale code must not be empty");
+            bail!("Locale code must not be empty");
         }
         if !code
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         {
-            anyhow::bail!(
+            bail!(
                 "Invalid locale code '{}': only ASCII alphanumeric, hyphens, and underscores allowed",
                 code
             );

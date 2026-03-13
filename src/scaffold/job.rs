@@ -1,8 +1,7 @@
 //! `make job` command — generate job Lua files.
 
-use anyhow::{Context as _, Result};
-use std::fs;
-use std::path::Path;
+use anyhow::{Context as _, Result, bail};
+use std::{fs, path::Path};
 
 use crate::typegen::to_pascal_case;
 
@@ -24,8 +23,9 @@ pub fn make_job(
     fs::create_dir_all(&jobs_dir).context("Failed to create jobs/ directory")?;
 
     let file_path = jobs_dir.join(format!("{}.lua", slug));
+
     if file_path.exists() && !force {
-        anyhow::bail!(
+        bail!(
             "File '{}' already exists — use --force to overwrite",
             file_path.display()
         );
@@ -37,6 +37,7 @@ pub fn make_job(
     // Build optional config lines
     let mut config_lines = Vec::new();
     config_lines.push(format!("    handler = \"{}\",", handler_ref));
+
     if let Some(sched) = schedule {
         config_lines.push(format!("    schedule = \"{}\",", sched));
     }
@@ -79,6 +80,7 @@ function M.run(context)
     -- local data = context.data
 
     -- TODO: implement
+
     return nil
 end
 

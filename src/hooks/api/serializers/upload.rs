@@ -2,11 +2,13 @@
 
 use mlua::{Lua, Table};
 
+use crate::core::{CollectionDefinition, upload::ImageFit};
+
 /// Serialize the upload section of a CollectionDefinition into the Lua table.
 pub(super) fn collection_upload_to_lua(
     lua: &Lua,
     tbl: &Table,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
 ) -> mlua::Result<()> {
     if let Some(ref upload) = def.upload
         && upload.enabled
@@ -21,6 +23,7 @@ pub(super) fn collection_upload_to_lua(
             tbl.set("upload", true)?;
         } else {
             let u = lua.create_table()?;
+
             if !upload.mime_types.is_empty() {
                 let mt = lua.create_table()?;
                 for (i, m) in upload.mime_types.iter().enumerate() {
@@ -39,10 +42,10 @@ pub(super) fn collection_upload_to_lua(
                     st.set("width", s.width)?;
                     st.set("height", s.height)?;
                     let fit_str = match s.fit {
-                        crate::core::upload::ImageFit::Cover => "cover",
-                        crate::core::upload::ImageFit::Contain => "contain",
-                        crate::core::upload::ImageFit::Inside => "inside",
-                        crate::core::upload::ImageFit::Fill => "fill",
+                        ImageFit::Cover => "cover",
+                        ImageFit::Contain => "contain",
+                        ImageFit::Inside => "inside",
+                        ImageFit::Fill => "fill",
                     };
                     st.set("fit", fit_str)?;
                     sizes.set(i + 1, st)?;
@@ -54,6 +57,7 @@ pub(super) fn collection_upload_to_lua(
             }
             if upload.format_options.webp.is_some() || upload.format_options.avif.is_some() {
                 let fo = lua.create_table()?;
+
                 if let Some(ref webp) = upload.format_options.webp {
                     let w = lua.create_table()?;
                     w.set("quality", webp.quality)?;
@@ -75,28 +79,31 @@ pub(super) fn collection_upload_to_lua(
 #[cfg(test)]
 mod tests {
     use super::super::collection::collection_config_to_lua;
+    use crate::core::{
+        CollectionDefinition,
+        upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit, ImageSizeBuilder},
+    };
     use mlua::{self, Value};
 
     #[test]
     fn test_collection_config_to_lua_with_upload() {
         let lua = mlua::Lua::new();
-        use crate::core::upload::ImageSizeBuilder;
-        let mut def = crate::core::CollectionDefinition::new("media");
+        let mut def = CollectionDefinition::new("media");
         def.timestamps = true;
         {
-            let mut upload = crate::core::upload::CollectionUpload::new();
+            let mut upload = CollectionUpload::new();
             upload.mime_types = vec!["image/png".to_string()];
             upload.max_file_size = Some(1000000);
             upload.image_sizes = vec![
                 ImageSizeBuilder::new("thumb")
                     .width(200)
                     .height(200)
-                    .fit(crate::core::upload::ImageFit::Cover)
+                    .fit(ImageFit::Cover)
                     .build(),
             ];
             upload.admin_thumbnail = Some("thumb".to_string());
-            upload.format_options = crate::core::upload::FormatOptions {
-                webp: Some(crate::core::upload::FormatQuality::new(80, false)),
+            upload.format_options = FormatOptions {
+                webp: Some(FormatQuality::new(80, false)),
                 avif: None,
             };
             def.upload = Some(upload);
@@ -119,9 +126,9 @@ mod tests {
     #[test]
     fn test_collection_config_to_lua_upload_simple_true() {
         let lua = mlua::Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("media");
+        let mut def = CollectionDefinition::new("media");
         def.timestamps = false;
-        def.upload = Some(crate::core::upload::CollectionUpload::new());
+        def.upload = Some(CollectionUpload::new());
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let upload_val: bool = tbl.get("upload").unwrap();
         assert!(upload_val, "Simple upload should serialize as true");
@@ -130,13 +137,13 @@ mod tests {
     #[test]
     fn test_collection_config_to_lua_upload_avif_only() {
         let lua = mlua::Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("media");
+        let mut def = CollectionDefinition::new("media");
         def.timestamps = false;
         {
-            let mut upload = crate::core::upload::CollectionUpload::new();
-            upload.format_options = crate::core::upload::FormatOptions {
+            let mut upload = CollectionUpload::new();
+            upload.format_options = FormatOptions {
                 webp: None,
-                avif: Some(crate::core::upload::FormatQuality::new(60, false)),
+                avif: Some(FormatQuality::new(60, false)),
             };
             def.upload = Some(upload);
         }
@@ -151,7 +158,6 @@ mod tests {
 
     #[test]
     fn test_collection_config_to_lua_image_fit_variants() {
-        use crate::core::upload::{CollectionUpload, ImageFit};
         let lua = mlua::Lua::new();
 
         let fits = [
@@ -161,8 +167,7 @@ mod tests {
         ];
 
         for (fit, expected_str) in fits {
-            use crate::core::upload::ImageSizeBuilder;
-            let mut def = crate::core::CollectionDefinition::new("media");
+            let mut def = CollectionDefinition::new("media");
             def.timestamps = false;
             let mut upload = CollectionUpload::new();
             upload.image_sizes = vec![

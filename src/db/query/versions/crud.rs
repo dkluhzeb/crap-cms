@@ -1,6 +1,7 @@
 //! Version CRUD operations and document status management.
 
 use anyhow::{Context as _, Result};
+use serde_json::Value;
 
 use crate::core::document::VersionSnapshot;
 
@@ -10,7 +11,7 @@ pub fn create_version(
     slug: &str,
     parent_id: &str,
     status: &str,
-    snapshot: &serde_json::Value,
+    snapshot: &Value,
 ) -> Result<VersionSnapshot> {
     let table = format!("_versions_{}", slug);
     let id = nanoid::nanoid!();
@@ -75,7 +76,7 @@ pub fn find_latest_version(
             .version(row.get(2)?)
             .status(row.get::<_, String>(3)?)
             .latest(row.get::<_, i32>(4)? != 0)
-            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(serde_json::Value::Null))
+            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
             .build())
     });
 
@@ -123,7 +124,7 @@ pub fn list_versions(
             .version(row.get(2)?)
             .status(row.get::<_, String>(3)?)
             .latest(row.get::<_, i32>(4)? != 0)
-            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(serde_json::Value::Null))
+            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
             .build())
     })?;
     let mut versions = Vec::new();
@@ -153,7 +154,7 @@ pub fn find_version_by_id(
             .version(row.get(2)?)
             .status(row.get::<_, String>(3)?)
             .latest(row.get::<_, i32>(4)? != 0)
-            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(serde_json::Value::Null))
+            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
             .build())
     });
 
@@ -227,6 +228,8 @@ pub fn get_document_status(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn setup_versions_db() -> rusqlite::Connection {
@@ -258,7 +261,7 @@ mod tests {
     #[test]
     fn create_and_find_latest_version() {
         let conn = setup_versions_db();
-        let snapshot = serde_json::json!({"title": "Hello"});
+        let snapshot = json!({"title": "Hello"});
 
         let v = create_version(&conn, "posts", "p1", "published", &snapshot).unwrap();
         assert_eq!(v.parent, "p1");
@@ -278,24 +281,11 @@ mod tests {
     fn create_multiple_versions_latest_flag() {
         let conn = setup_versions_db();
 
-        let v1 = create_version(
-            &conn,
-            "posts",
-            "p1",
-            "published",
-            &serde_json::json!({"title": "V1"}),
-        )
-        .unwrap();
+        let v1 =
+            create_version(&conn, "posts", "p1", "published", &json!({"title": "V1"})).unwrap();
         assert_eq!(v1.version, 1);
 
-        let v2 = create_version(
-            &conn,
-            "posts",
-            "p1",
-            "draft",
-            &serde_json::json!({"title": "V2"}),
-        )
-        .unwrap();
+        let v2 = create_version(&conn, "posts", "p1", "draft", &json!({"title": "V2"})).unwrap();
         assert_eq!(v2.version, 2);
         assert!(v2.latest);
 
@@ -319,10 +309,10 @@ mod tests {
         let conn = setup_versions_db();
         assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 0);
 
-        create_version(&conn, "posts", "p1", "published", &serde_json::json!({})).unwrap();
+        create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
         assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 1);
 
-        create_version(&conn, "posts", "p1", "draft", &serde_json::json!({})).unwrap();
+        create_version(&conn, "posts", "p1", "draft", &json!({})).unwrap();
         assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 2);
     }
 
@@ -330,14 +320,7 @@ mod tests {
     fn list_versions_order_and_pagination() {
         let conn = setup_versions_db();
         for i in 0..5 {
-            create_version(
-                &conn,
-                "posts",
-                "p1",
-                "published",
-                &serde_json::json!({"v": i}),
-            )
-            .unwrap();
+            create_version(&conn, "posts", "p1", "published", &json!({"v": i})).unwrap();
         }
 
         // List all, newest first
@@ -362,14 +345,8 @@ mod tests {
     #[test]
     fn find_version_by_id_found_and_not_found() {
         let conn = setup_versions_db();
-        let v = create_version(
-            &conn,
-            "posts",
-            "p1",
-            "published",
-            &serde_json::json!({"title": "Test"}),
-        )
-        .unwrap();
+        let v =
+            create_version(&conn, "posts", "p1", "published", &json!({"title": "Test"})).unwrap();
 
         let found = find_version_by_id(&conn, "posts", &v.id).unwrap();
         assert!(found.is_some());
@@ -402,7 +379,7 @@ mod tests {
     fn prune_versions_unlimited() {
         let conn = setup_versions_db();
         for _ in 0..5 {
-            create_version(&conn, "posts", "p1", "published", &serde_json::json!({})).unwrap();
+            create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
         }
         // max_versions = 0 means unlimited -- should not delete anything
         prune_versions(&conn, "posts", "p1", 0).unwrap();
@@ -413,7 +390,7 @@ mod tests {
     fn prune_versions_caps() {
         let conn = setup_versions_db();
         for _ in 0..5 {
-            create_version(&conn, "posts", "p1", "published", &serde_json::json!({})).unwrap();
+            create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
         }
         prune_versions(&conn, "posts", "p1", 3).unwrap();
         assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 3);

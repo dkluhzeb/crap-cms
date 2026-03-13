@@ -1,17 +1,25 @@
 //! Standalone hook execution functions (inner implementations and helpers).
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 use mlua::{Lua, Value};
+use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
-use crate::core::Document;
-use crate::core::collection::Hooks;
-use crate::core::document::DocumentBuilder;
-use crate::core::field::{FieldDefinition, FieldHooks};
+use crate::{
+    core::{
+        Document,
+        collection::Hooks,
+        document::DocumentBuilder,
+        field::{FieldDefinition, FieldHooks},
+    },
+    hooks::api,
+};
 
-use super::context::HookContext;
-use super::types::{DisplayConditionResult, FieldHookEvent, HookEvent};
-use super::validation::evaluate_condition_table;
+use super::{
+    context::HookContext,
+    types::{DisplayConditionResult, FieldHookEvent, HookEvent},
+    validation::evaluate_condition_table,
+};
 
 /// Context for after-read hook execution, bundling the shared parameters.
 pub struct AfterReadCtx<'a> {
@@ -36,19 +44,14 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
         return doc;
     }
 
-    let mut data: HashMap<String, serde_json::Value> = doc.fields.clone();
-    data.insert("id".to_string(), serde_json::Value::String(doc.id.clone()));
+    let mut data: HashMap<String, JsonValue> = doc.fields.clone();
+    data.insert("id".to_string(), JsonValue::String(doc.id.clone()));
+
     if let Some(ref ts) = doc.created_at {
-        data.insert(
-            "created_at".to_string(),
-            serde_json::Value::String(ts.clone()),
-        );
+        data.insert("created_at".to_string(), JsonValue::String(ts.clone()));
     }
     if let Some(ref ts) = doc.updated_at {
-        data.insert(
-            "updated_at".to_string(),
-            serde_json::Value::String(ts.clone()),
-        );
+        data.insert("updated_at".to_string(), JsonValue::String(ts.clone()));
     }
 
     // Run field-level after_read hooks first
@@ -63,6 +66,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
         )
     {
         tracing::warn!("field after_read hook error for {}: {}", ctx.collection, e);
+
         return doc;
     }
 
@@ -97,6 +101,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
                 .or(doc.updated_at.clone());
 
             let mut builder = DocumentBuilder::new(doc.id).fields(fields);
+
             if let Some(ts) = created_at {
                 builder = builder.created_at(ts);
             }
@@ -170,14 +175,14 @@ pub(crate) fn has_registered_hooks(lua: &Lua, event: &str) -> bool {
 pub(crate) fn call_display_condition_with_lua(
     lua: &Lua,
     func_ref: &str,
-    form_data: &serde_json::Value,
+    form_data: &JsonValue,
 ) -> Option<DisplayConditionResult> {
     let func = resolve_hook_function(lua, func_ref).ok()?;
-    let data_lua = crate::hooks::api::json_to_lua(lua, form_data).ok()?;
+    let data_lua = api::json_to_lua(lua, form_data).ok()?;
     match func.call::<Value>(data_lua) {
         Ok(Value::Boolean(b)) => Some(DisplayConditionResult::Bool(b)),
         Ok(val @ Value::Table(_)) => {
-            let json = crate::hooks::api::lua_to_json(lua, &val).ok()?;
+            let json = api::lua_to_json(lua, &val).ok()?;
             let visible = evaluate_condition_table(&json, form_data);
             Some(DisplayConditionResult::Table {
                 condition: json,
@@ -238,11 +243,12 @@ pub(crate) fn call_before_broadcast_hook(
         Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
             let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
                 for pair in data_tbl.pairs::<String, Value>() {
                     let (k, v) = pair?;
-                    new_data.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
+                    new_data.insert(k, api::lua_to_json(lua, &v)?);
                 }
                 let mut ctx = context;
                 ctx.data = new_data;
@@ -273,6 +279,7 @@ pub(crate) fn call_registered_before_broadcast(
     };
 
     let len = list.raw_len();
+
     if len == 0 {
         return Ok(Some(context));
     }
@@ -293,11 +300,12 @@ pub(crate) fn call_registered_before_broadcast(
             Value::Boolean(false) | Value::Nil => return Ok(None),
             Value::Table(tbl) => {
                 let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+
                 if let Ok(data_tbl) = data_result {
                     let mut new_data = HashMap::new();
                     for pair in data_tbl.pairs::<String, Value>() {
                         let (k, v) = pair?;
-                        new_data.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
+                        new_data.insert(k, api::lua_to_json(lua, &v)?);
                     }
                     context.data = new_data;
                 }
@@ -329,6 +337,7 @@ pub(crate) fn call_registered_hooks(
     };
 
     let len = list.raw_len();
+
     if len == 0 {
         return Ok(context);
     }
@@ -348,13 +357,15 @@ pub(crate) fn call_registered_hooks(
         let ctx_table = context.to_lua_table(lua)?;
 
         let result: Value = func.call(ctx_table)?;
+
         if let Value::Table(tbl) = result {
             let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
                 for pair in data_tbl.pairs::<String, Value>() {
                     let (k, v) = pair?;
-                    new_data.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
+                    new_data.insert(k, api::lua_to_json(lua, &v)?);
                 }
                 context.data = new_data;
             }
@@ -371,21 +382,19 @@ pub(crate) fn run_field_hooks_inner(
     lua: &Lua,
     fields: &[FieldDefinition],
     event: &FieldHookEvent,
-    data: &mut HashMap<String, serde_json::Value>,
+    data: &mut HashMap<String, JsonValue>,
     collection: &str,
     operation: &str,
 ) -> Result<()> {
     for field in fields {
         let hook_refs = get_field_hook_refs(&field.hooks, event);
+
         if hook_refs.is_empty() {
             continue;
         }
 
         let was_present = data.contains_key(&field.name);
-        let value = data
-            .get(&field.name)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let value = data.get(&field.name).cloned().unwrap_or(JsonValue::Null);
 
         let mut current = value;
         for hook_ref in hook_refs {
@@ -436,16 +445,16 @@ pub(crate) fn get_field_hook_refs<'a>(
 pub(crate) fn call_field_hook_ref(
     lua: &Lua,
     hook_ref: &str,
-    value: serde_json::Value,
+    value: JsonValue,
     field_name: &str,
     collection: &str,
     operation: &str,
-    data: &HashMap<String, serde_json::Value>,
-) -> Result<serde_json::Value> {
+    data: &HashMap<String, JsonValue>,
+) -> Result<JsonValue> {
     let func = resolve_hook_function(lua, hook_ref)?;
 
     // Convert the field value to Lua
-    let lua_value = crate::hooks::api::json_to_lua(lua, &value)?;
+    let lua_value = api::json_to_lua(lua, &value)?;
 
     // Build context table
     let ctx_table = lua.create_table()?;
@@ -454,7 +463,7 @@ pub(crate) fn call_field_hook_ref(
     ctx_table.set("operation", operation)?;
     let data_table = lua.create_table()?;
     for (k, v) in data {
-        data_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
+        data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
     }
     ctx_table.set("data", data_table)?;
 
@@ -462,8 +471,8 @@ pub(crate) fn call_field_hook_ref(
     let result: Value = func.call((lua_value, ctx_table))?;
 
     // Convert result back to JSON
-    crate::hooks::api::lua_to_json(lua, &result)
-        .map_err(|e| anyhow::anyhow!("Field hook '{}' returned invalid value: {}", hook_ref, e))
+    api::lua_to_json(lua, &result)
+        .map_err(|e| anyhow!("Field hook '{}' returned invalid value: {}", hook_ref, e))
 }
 
 /// Resolve a hook reference to a Lua function.
@@ -480,8 +489,9 @@ pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::F
 
     // Fallback: module.function pattern
     let parts: Vec<&str> = hook_ref.split('.').collect();
+
     if parts.len() < 2 {
-        anyhow::bail!("Hook ref '{}' must be module.function format", hook_ref);
+        bail!("Hook ref '{}' must be module.function format", hook_ref);
     }
     let module_path = parts[..parts.len() - 1].join(".");
     let func_name = parts[parts.len() - 1];
@@ -518,11 +528,12 @@ pub(crate) fn call_hook_ref(
         Value::Table(tbl) => {
             let mut new_ctx = context;
             let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
                 for pair in data_tbl.pairs::<String, Value>() {
                     let (k, v) = pair?;
-                    new_data.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
+                    new_data.insert(k, api::lua_to_json(lua, &v)?);
                 }
                 new_ctx.data = new_data;
             }
@@ -546,7 +557,7 @@ mod tests {
         lua.load("_crap_event_hooks = {}").exec().unwrap();
         let hooks = Hooks::default();
         let fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
-        let mut doc = crate::core::Document::new("doc1".to_string());
+        let mut doc = Document::new("doc1".to_string());
         doc.fields.insert("title".to_string(), json!("Hello"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-02".to_string());
@@ -638,9 +649,12 @@ mod tests {
         lua.load(
             r#"
             package.loaded["hooks.upper"] = function(value, context)
+
                 if type(value) == "string" then
+
                     return value:upper()
                 end
+
                 return value
             end
         "#,
@@ -648,7 +662,7 @@ mod tests {
         .exec()
         .unwrap();
 
-        let data: HashMap<String, serde_json::Value> = [("title".to_string(), json!("hello"))]
+        let data: HashMap<String, JsonValue> = [("title".to_string(), json!("hello"))]
             .into_iter()
             .collect();
 
@@ -672,9 +686,12 @@ mod tests {
         lua.load(
             r#"
             package.loaded["hooks.trim"] = function(value, context)
+
                 if type(value) == "string" then
+
                     return value:match("^%s*(.-)%s*$")
                 end
+
                 return value
             end
         "#,
@@ -682,12 +699,12 @@ mod tests {
         .exec()
         .unwrap();
 
-        let data: HashMap<String, serde_json::Value> = HashMap::new();
+        let data: HashMap<String, JsonValue> = HashMap::new();
 
         let result = call_field_hook_ref(
             &lua,
             "hooks.trim",
-            serde_json::Value::Null,
+            JsonValue::Null,
             "title",
             "posts",
             "update",
@@ -695,7 +712,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result, serde_json::Value::Null);
+        assert_eq!(result, JsonValue::Null);
     }
 
     #[test]
@@ -704,6 +721,7 @@ mod tests {
         lua.load(
             r#"
             package.loaded["hooks.noop"] = function(value, context)
+
                 return value
             end
         "#,
@@ -720,7 +738,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut data: HashMap<String, JsonValue> = HashMap::new();
         data.insert("content".to_string(), json!("updated"));
 
         run_field_hooks_inner(
@@ -746,9 +764,12 @@ mod tests {
         lua.load(
             r#"
             package.loaded["hooks.default_val"] = function(value, context)
+
                 if value == nil then
+
                     return "generated"
                 end
+
                 return value
             end
         "#,
@@ -765,7 +786,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut data: HashMap<String, serde_json::Value> = HashMap::new();
+        let mut data: HashMap<String, JsonValue> = HashMap::new();
         data.insert("title".to_string(), json!("Hello"));
 
         run_field_hooks_inner(
@@ -787,6 +808,7 @@ mod tests {
         lua.load(
             r#"
             package.loaded["hooks.inspect_ctx"] = function(value, context)
+
                 return context.collection .. ":" .. context.field_name .. ":" .. context.operation
             end
         "#,
@@ -794,7 +816,7 @@ mod tests {
         .exec()
         .unwrap();
 
-        let data: HashMap<String, serde_json::Value> = [("title".to_string(), json!("hello"))]
+        let data: HashMap<String, JsonValue> = [("title".to_string(), json!("hello"))]
             .into_iter()
             .collect();
 

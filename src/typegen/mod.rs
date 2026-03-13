@@ -15,8 +15,10 @@ mod typescript;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::core::Registry;
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{
+    Registry,
+    field::{FieldDefinition, FieldType},
+};
 
 /// Embedded Lua API type definitions — kept in sync with the CMS binary version.
 const LUA_API_TYPES: &str = include_str!("../../types/crap.lua");
@@ -164,7 +166,7 @@ pub(crate) fn sorted_global_slugs(registry: &Registry) -> Vec<&String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::FieldDefinition;
+    use crate::core::{collection::GlobalDefinition, field::FieldDefinition};
 
     #[test]
     fn to_pascal_case_single_word() {
@@ -194,7 +196,7 @@ mod tests {
     #[test]
     fn rel_has_many_with_has_many_config() {
         use crate::core::field::RelationshipConfig;
-        let f = FieldDefinition::builder("", crate::core::field::FieldType::Upload)
+        let f = FieldDefinition::builder("", FieldType::Upload)
             .relationship(RelationshipConfig::new("media", true))
             .build();
         assert!(rel_has_many(&f));
@@ -203,7 +205,7 @@ mod tests {
     #[test]
     fn rel_has_many_with_has_one_config() {
         use crate::core::field::RelationshipConfig;
-        let f = FieldDefinition::builder("", crate::core::field::FieldType::Upload)
+        let f = FieldDefinition::builder("", FieldType::Upload)
             .relationship(RelationshipConfig::new("media", false))
             .build();
         assert!(!rel_has_many(&f));
@@ -211,7 +213,7 @@ mod tests {
 
     #[test]
     fn rel_has_many_with_no_config() {
-        let f = FieldDefinition::builder("", crate::core::field::FieldType::Upload).build();
+        let f = FieldDefinition::builder("", FieldType::Upload).build();
         assert!(!rel_has_many(&f));
     }
 
@@ -297,8 +299,8 @@ mod tests {
         crate::core::CollectionDefinition::new(slug)
     }
 
-    fn make_global(slug: &str) -> crate::core::collection::GlobalDefinition {
-        crate::core::collection::GlobalDefinition::new(slug)
+    fn make_global(slug: &str) -> GlobalDefinition {
+        GlobalDefinition::new(slug)
     }
 
     #[test]

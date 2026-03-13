@@ -1,16 +1,23 @@
-use std::collections::HashMap;
-use std::path::Path;
+use std::{collections::HashMap, fs, path::Path};
 
-use super::collection_upload::CollectionUpload;
-use super::processed_upload::ProcessedUpload;
-use super::queued_conversion::QueuedConversion;
+use anyhow::Result;
+use serde_json::{Map, Value, json};
+
+use super::{
+    collection_upload::CollectionUpload, processed_upload::ProcessedUpload,
+    queued_conversion::QueuedConversion,
+};
+use crate::{
+    core::Document,
+    db::query::images::{NewImageEntry, insert_image_queue_entry},
+};
 
 /// Assemble per-size typed columns into a structured `sizes` object on the document.
 /// Reads `{name}_url`, `{name}_width`, `{name}_height`, `{name}_webp_url`, `{name}_avif_url`
 /// from document fields, builds a nested PayloadCMS-style object, inserts as `sizes`,
 /// and removes the individual per-size columns.
-pub fn assemble_sizes_object(doc: &mut crate::core::Document, upload: &CollectionUpload) {
-    let mut sizes = serde_json::Map::new();
+pub fn assemble_sizes_object(doc: &mut Document, upload: &CollectionUpload) {
+    let mut sizes = Map::new();
 
     for size_def in &upload.image_sizes {
         let name = &size_def.name;
@@ -19,7 +26,7 @@ pub fn assemble_sizes_object(doc: &mut crate::core::Document, upload: &Collectio
             .fields
             .remove(&format!("{}_url", name))
             .and_then(|v| match v {
-                serde_json::Value::String(s) => Some(s),
+                Value::String(s) => Some(s),
                 _ => None,
             });
         let width = doc
@@ -34,40 +41,41 @@ pub fn assemble_sizes_object(doc: &mut crate::core::Document, upload: &Collectio
             .map(|v| v as u32);
 
         if let Some(url) = url {
-            let mut size_obj = serde_json::Map::new();
-            size_obj.insert("url".to_string(), serde_json::Value::String(url));
+            let mut size_obj = Map::new();
+            size_obj.insert("url".to_string(), Value::String(url));
+
             if let Some(w) = width {
-                size_obj.insert("width".to_string(), serde_json::json!(w));
+                size_obj.insert("width".to_string(), json!(w));
             }
             if let Some(h) = height {
-                size_obj.insert("height".to_string(), serde_json::json!(h));
+                size_obj.insert("height".to_string(), json!(h));
             }
 
-            let mut formats = serde_json::Map::new();
+            let mut formats = Map::new();
 
             if upload.format_options.webp.is_some()
-                && let Some(serde_json::Value::String(webp_url)) =
+                && let Some(Value::String(webp_url)) =
                     doc.fields.remove(&format!("{}_webp_url", name))
             {
-                let mut fmt = serde_json::Map::new();
-                fmt.insert("url".to_string(), serde_json::Value::String(webp_url));
-                formats.insert("webp".to_string(), serde_json::Value::Object(fmt));
+                let mut fmt = Map::new();
+                fmt.insert("url".to_string(), Value::String(webp_url));
+                formats.insert("webp".to_string(), Value::Object(fmt));
             }
 
             if upload.format_options.avif.is_some()
-                && let Some(serde_json::Value::String(avif_url)) =
+                && let Some(Value::String(avif_url)) =
                     doc.fields.remove(&format!("{}_avif_url", name))
             {
-                let mut fmt = serde_json::Map::new();
-                fmt.insert("url".to_string(), serde_json::Value::String(avif_url));
-                formats.insert("avif".to_string(), serde_json::Value::Object(fmt));
+                let mut fmt = Map::new();
+                fmt.insert("url".to_string(), Value::String(avif_url));
+                formats.insert("avif".to_string(), Value::Object(fmt));
             }
 
             if !formats.is_empty() {
-                size_obj.insert("formats".to_string(), serde_json::Value::Object(formats));
+                size_obj.insert("formats".to_string(), Value::Object(formats));
             }
 
-            sizes.insert(name.clone(), serde_json::Value::Object(size_obj));
+            sizes.insert(name.clone(), Value::Object(size_obj));
         } else {
             // Still remove format columns even if there's no URL
             doc.fields.remove(&format!("{}_webp_url", name));
@@ -76,8 +84,7 @@ pub fn assemble_sizes_object(doc: &mut crate::core::Document, upload: &Collectio
     }
 
     if !sizes.is_empty() {
-        doc.fields
-            .insert("sizes".to_string(), serde_json::Value::Object(sizes));
+        doc.fields.insert("sizes".to_string(), Value::Object(sizes));
     }
 }
 
@@ -90,6 +97,7 @@ pub fn inject_upload_metadata(
     form_data.insert("filename".into(), processed.filename.clone());
     form_data.insert("mime_type".into(), processed.mime_type.clone());
     form_data.insert("filesize".into(), processed.filesize.to_string());
+
     if let Some(w) = processed.width {
         form_data.insert("width".into(), w.to_string());
     }
@@ -111,19 +119,20 @@ pub fn inject_upload_metadata(
 
 /// Delete all files associated with an upload document.
 /// Reads the url and per-size url fields to determine which files to remove.
-pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, serde_json::Value>) {
+pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, Value>) {
     // Collect all URL fields that point to upload files
     // These are: url, {size}_url, {size}_webp_url, {size}_avif_url
     for (key, value) in doc_fields {
         if (key == "url" || key.ends_with("_url"))
             && !key.contains("image")
-            && let serde_json::Value::String(url) = value
+            && let Value::String(url) = value
             && url.starts_with("/uploads/")
         {
             let rel_path = url.strip_prefix('/').unwrap_or(url);
             let file_path = config_dir.join(rel_path);
+
             if file_path.exists()
-                && let Err(e) = std::fs::remove_file(&file_path)
+                && let Err(e) = fs::remove_file(&file_path)
             {
                 tracing::warn!("Failed to delete file {}: {}", file_path.display(), e);
             }
@@ -138,8 +147,7 @@ pub fn enqueue_conversions(
     collection: &str,
     document_id: &str,
     conversions: &[QueuedConversion],
-) -> anyhow::Result<()> {
-    use crate::db::query::images::{NewImageEntry, insert_image_queue_entry};
+) -> Result<()> {
     for c in conversions {
         let entry = NewImageEntry {
             collection,
@@ -158,16 +166,19 @@ pub fn enqueue_conversions(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
-    use crate::core::upload::{
-        FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUploadBuilder,
-        SizeResultBuilder,
+    use crate::core::{
+        Document,
+        upload::{
+            FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUploadBuilder,
+            SizeResultBuilder,
+        },
     };
 
     #[test]
     fn assemble_sizes_builds_structured_object() {
-        use crate::core::Document;
-
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumbnail")
@@ -183,31 +194,21 @@ mod tests {
 
         let mut doc = Document::new("test-id".into());
         doc.fields
-            .insert("url".into(), serde_json::json!("/uploads/media/orig.png"));
-        doc.fields.insert(
-            "thumbnail_url".into(),
-            serde_json::json!("/uploads/media/thumb.png"),
-        );
+            .insert("url".into(), json!("/uploads/media/orig.png"));
         doc.fields
-            .insert("thumbnail_width".into(), serde_json::json!(300));
-        doc.fields
-            .insert("thumbnail_height".into(), serde_json::json!(300));
+            .insert("thumbnail_url".into(), json!("/uploads/media/thumb.png"));
+        doc.fields.insert("thumbnail_width".into(), json!(300));
+        doc.fields.insert("thumbnail_height".into(), json!(300));
         doc.fields.insert(
             "thumbnail_webp_url".into(),
-            serde_json::json!("/uploads/media/thumb.webp"),
-        );
-        doc.fields.insert(
-            "card_url".into(),
-            serde_json::json!("/uploads/media/card.png"),
+            json!("/uploads/media/thumb.webp"),
         );
         doc.fields
-            .insert("card_width".into(), serde_json::json!(640));
+            .insert("card_url".into(), json!("/uploads/media/card.png"));
+        doc.fields.insert("card_width".into(), json!(640));
+        doc.fields.insert("card_height".into(), json!(480));
         doc.fields
-            .insert("card_height".into(), serde_json::json!(480));
-        doc.fields.insert(
-            "card_webp_url".into(),
-            serde_json::json!("/uploads/media/card.webp"),
-        );
+            .insert("card_webp_url".into(), json!("/uploads/media/card.webp"));
 
         assemble_sizes_object(&mut doc, &upload);
 
@@ -253,8 +254,6 @@ mod tests {
 
     #[test]
     fn assemble_sizes_empty_when_no_size_columns() {
-        use crate::core::Document;
-
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumbnail")
@@ -265,7 +264,7 @@ mod tests {
 
         let mut doc = Document::new("test-id".into());
         doc.fields
-            .insert("url".into(), serde_json::json!("/uploads/media/orig.pdf"));
+            .insert("url".into(), json!("/uploads/media/orig.pdf"));
 
         assemble_sizes_object(&mut doc, &upload);
 
@@ -277,8 +276,6 @@ mod tests {
 
     #[test]
     fn assemble_sizes_with_avif_format() {
-        use crate::core::Document;
-
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")
@@ -293,15 +290,11 @@ mod tests {
 
         let mut doc = Document::new("id1".into());
         doc.fields
-            .insert("thumb_url".into(), serde_json::json!("/uploads/m/t.png"));
+            .insert("thumb_url".into(), json!("/uploads/m/t.png"));
+        doc.fields.insert("thumb_width".into(), json!(100));
+        doc.fields.insert("thumb_height".into(), json!(100));
         doc.fields
-            .insert("thumb_width".into(), serde_json::json!(100));
-        doc.fields
-            .insert("thumb_height".into(), serde_json::json!(100));
-        doc.fields.insert(
-            "thumb_avif_url".into(),
-            serde_json::json!("/uploads/m/t.avif"),
-        );
+            .insert("thumb_avif_url".into(), json!("/uploads/m/t.avif"));
 
         assemble_sizes_object(&mut doc, &upload);
 
@@ -328,8 +321,6 @@ mod tests {
 
     #[test]
     fn assemble_sizes_missing_url_cleans_format_columns() {
-        use crate::core::Document;
-
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")
@@ -344,14 +335,10 @@ mod tests {
 
         let mut doc = Document::new("id1".into());
         // No thumb_url, but format columns exist (edge case: orphaned format columns)
-        doc.fields.insert(
-            "thumb_webp_url".into(),
-            serde_json::json!("/uploads/m/t.webp"),
-        );
-        doc.fields.insert(
-            "thumb_avif_url".into(),
-            serde_json::json!("/uploads/m/t.avif"),
-        );
+        doc.fields
+            .insert("thumb_webp_url".into(), json!("/uploads/m/t.webp"));
+        doc.fields
+            .insert("thumb_avif_url".into(), json!("/uploads/m/t.avif"));
 
         assemble_sizes_object(&mut doc, &upload);
 
@@ -372,8 +359,6 @@ mod tests {
 
     #[test]
     fn assemble_sizes_partial_dimensions() {
-        use crate::core::Document;
-
         let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")
@@ -384,10 +369,9 @@ mod tests {
 
         let mut doc = Document::new("id1".into());
         doc.fields
-            .insert("thumb_url".into(), serde_json::json!("/uploads/m/t.png"));
+            .insert("thumb_url".into(), json!("/uploads/m/t.png"));
         // Only width, no height
-        doc.fields
-            .insert("thumb_width".into(), serde_json::json!(100));
+        doc.fields.insert("thumb_width".into(), json!(100));
 
         assemble_sizes_object(&mut doc, &upload);
 
@@ -476,12 +460,12 @@ mod tests {
     fn delete_upload_files_removes_existing() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let uploads_dir = tmp.path().join("uploads/media");
-        std::fs::create_dir_all(&uploads_dir).unwrap();
+        fs::create_dir_all(&uploads_dir).unwrap();
         let file_path = uploads_dir.join("test.png");
-        std::fs::write(&file_path, b"fake image data").unwrap();
+        fs::write(&file_path, b"fake image data").unwrap();
 
         let mut doc_fields = HashMap::new();
-        doc_fields.insert("url".into(), serde_json::json!("/uploads/media/test.png"));
+        doc_fields.insert("url".into(), json!("/uploads/media/test.png"));
 
         delete_upload_files(tmp.path(), &doc_fields);
         assert!(!file_path.exists(), "File should be deleted");
@@ -491,10 +475,7 @@ mod tests {
     fn delete_upload_files_handles_missing_file() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut doc_fields = HashMap::new();
-        doc_fields.insert(
-            "url".into(),
-            serde_json::json!("/uploads/media/nonexistent.png"),
-        );
+        doc_fields.insert("url".into(), json!("/uploads/media/nonexistent.png"));
 
         // Should not panic even if file doesn't exist
         delete_upload_files(tmp.path(), &doc_fields);
@@ -504,14 +485,8 @@ mod tests {
     fn delete_upload_files_skips_non_upload_urls() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut doc_fields = HashMap::new();
-        doc_fields.insert(
-            "url".into(),
-            serde_json::json!("https://external.com/image.png"),
-        );
-        doc_fields.insert(
-            "website_url".into(),
-            serde_json::json!("https://example.com"),
-        );
+        doc_fields.insert("url".into(), json!("https://external.com/image.png"));
+        doc_fields.insert("website_url".into(), json!("https://example.com"));
 
         // Should not panic and not try to delete external URLs
         delete_upload_files(tmp.path(), &doc_fields);
@@ -521,24 +496,21 @@ mod tests {
     fn delete_upload_files_removes_size_and_format_files() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let uploads_dir = tmp.path().join("uploads/media");
-        std::fs::create_dir_all(&uploads_dir).unwrap();
+        fs::create_dir_all(&uploads_dir).unwrap();
 
         let orig_path = uploads_dir.join("orig.png");
         let thumb_path = uploads_dir.join("orig_thumb.png");
         let webp_path = uploads_dir.join("orig_thumb.webp");
-        std::fs::write(&orig_path, b"orig").unwrap();
-        std::fs::write(&thumb_path, b"thumb").unwrap();
-        std::fs::write(&webp_path, b"webp").unwrap();
+        fs::write(&orig_path, b"orig").unwrap();
+        fs::write(&thumb_path, b"thumb").unwrap();
+        fs::write(&webp_path, b"webp").unwrap();
 
         let mut doc_fields = HashMap::new();
-        doc_fields.insert("url".into(), serde_json::json!("/uploads/media/orig.png"));
-        doc_fields.insert(
-            "thumb_url".into(),
-            serde_json::json!("/uploads/media/orig_thumb.png"),
-        );
+        doc_fields.insert("url".into(), json!("/uploads/media/orig.png"));
+        doc_fields.insert("thumb_url".into(), json!("/uploads/media/orig_thumb.png"));
         doc_fields.insert(
             "thumb_webp_url".into(),
-            serde_json::json!("/uploads/media/orig_thumb.webp"),
+            json!("/uploads/media/orig_thumb.webp"),
         );
 
         delete_upload_files(tmp.path(), &doc_fields);
@@ -552,15 +524,12 @@ mod tests {
         // Fields containing "image" in the key should be skipped
         let tmp = tempfile::tempdir().expect("tempdir");
         let uploads_dir = tmp.path().join("uploads/media");
-        std::fs::create_dir_all(&uploads_dir).unwrap();
+        fs::create_dir_all(&uploads_dir).unwrap();
         let file_path = uploads_dir.join("keep.png");
-        std::fs::write(&file_path, b"keep me").unwrap();
+        fs::write(&file_path, b"keep me").unwrap();
 
         let mut doc_fields = HashMap::new();
-        doc_fields.insert(
-            "image_url".into(),
-            serde_json::json!("/uploads/media/keep.png"),
-        );
+        doc_fields.insert("image_url".into(), json!("/uploads/media/keep.png"));
 
         delete_upload_files(tmp.path(), &doc_fields);
         assert!(file_path.exists(), "image_url fields should be skipped");
@@ -570,8 +539,8 @@ mod tests {
     fn delete_upload_files_skips_non_string_values() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let mut doc_fields = HashMap::new();
-        doc_fields.insert("url".into(), serde_json::json!(42));
-        doc_fields.insert("thumb_url".into(), serde_json::json!(null));
+        doc_fields.insert("url".into(), json!(42));
+        doc_fields.insert("thumb_url".into(), json!(null));
 
         // Should not panic on non-string values
         delete_upload_files(tmp.path(), &doc_fields);

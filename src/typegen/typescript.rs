@@ -2,9 +2,11 @@
 
 use std::fmt::Write;
 
-use crate::core::Registry;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{
+    Registry,
+    collection::{CollectionDefinition, GlobalDefinition},
+    field::{FieldDefinition, FieldType},
+};
 
 use super::{
     is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
@@ -60,6 +62,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     )
     .expect("write to String");
     writeln!(out, "  id: string;").expect("write to String");
+
     if col.timestamps {
         writeln!(out, "  created_at?: string;").expect("write to String");
         writeln!(out, "  updated_at?: string;").expect("write to String");
@@ -92,6 +95,7 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
 
 fn render_collection_slug_type(out: &mut String, registry: &Registry) {
     let slugs = sorted_collection_slugs(registry);
+
     if slugs.is_empty() {
         return;
     }
@@ -213,6 +217,7 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
                     .collect::<Vec<_>>()
                     .join(" | ")
             };
+
             if field.has_many {
                 if field.options.is_empty() {
                     "string[]".to_string()

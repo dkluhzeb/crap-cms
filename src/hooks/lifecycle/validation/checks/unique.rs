@@ -1,6 +1,9 @@
-use crate::core::field::FieldDefinition;
-use crate::core::validate::FieldError;
-use crate::db::query;
+use serde_json::Value;
+
+use crate::{
+    core::{field::FieldDefinition, validate::FieldError},
+    db::query,
+};
 use std::collections::HashMap;
 
 use super::super::ValidationCtx;
@@ -11,7 +14,7 @@ pub(crate) fn check_unique(
     field: &FieldDefinition,
     data_key: &str,
     col_name: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     ctx: &ValidationCtx,
     errors: &mut Vec<FieldError>,
@@ -20,7 +23,7 @@ pub(crate) fn check_unique(
         return;
     }
     let value_str = match value {
-        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(Value::String(s)) => s.clone(),
         Some(other) => other.to_string(),
         None => String::new(),
     };
@@ -42,7 +45,9 @@ pub(crate) fn check_unique(
 
 #[cfg(test)]
 mod tests {
+    use crate::config::LocaleConfig;
     use crate::core::field::{FieldDefinition, FieldType};
+    use crate::db::query::LocaleContext;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
@@ -225,13 +230,12 @@ mod tests {
                 .localized(true)
                 .build(),
         ];
-        let locale_cfg = crate::config::LocaleConfig {
+        let locale_cfg = LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: true,
         };
-        let locale_ctx =
-            crate::db::query::LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
+        let locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
 
         // Duplicate value in the en column should fail
         let mut data = HashMap::new();
@@ -295,13 +299,12 @@ mod tests {
                 ])
                 .build(),
         ];
-        let locale_cfg = crate::config::LocaleConfig {
+        let locale_cfg = LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: true,
         };
-        let locale_ctx =
-            crate::db::query::LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
+        let locale_ctx = LocaleContext::from_locale_string(Some("en"), &locale_cfg).unwrap();
 
         let mut data = HashMap::new();
         data.insert("seo__slug".to_string(), json!("taken"));

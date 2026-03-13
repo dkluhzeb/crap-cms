@@ -1,7 +1,9 @@
 //! Per-IP gRPC rate limiting as a tower Layer/Service.
 
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::{
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use tower::{Layer, Service};
 
@@ -70,6 +72,7 @@ where
         if !self.limiter.check_and_record(&ip) {
             let status = tonic::Status::resource_exhausted("rate limit exceeded");
             let response = status.into_http();
+
             return Box::pin(async move { Ok(response) });
         }
 

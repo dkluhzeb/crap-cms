@@ -1,15 +1,15 @@
 //! Shared helpers for Lua table serializers.
 
 use mlua::{Lua, Value};
+use serde_json::{Map as JsonMap, Number as JsonNumber, Value as JsonValue};
+
+use crate::core::field::LocalizedString;
 
 /// Convert a LocalizedString to a Lua value (string or locale table).
-pub(super) fn localized_string_to_lua(
-    lua: &Lua,
-    ls: &crate::core::field::LocalizedString,
-) -> mlua::Result<Value> {
+pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::Result<Value> {
     match ls {
-        crate::core::field::LocalizedString::Plain(s) => Ok(Value::String(lua.create_string(s)?)),
-        crate::core::field::LocalizedString::Localized(map) => {
+        LocalizedString::Plain(s) => Ok(Value::String(lua.create_string(s)?)),
+        LocalizedString::Localized(map) => {
             let tbl = lua.create_table()?;
             for (k, v) in map {
                 tbl.set(k.as_str(), v.as_str())?;
@@ -19,44 +19,45 @@ pub(super) fn localized_string_to_lua(
     }
 }
 
-/// Convert a Lua value to a serde_json::Value.
-pub fn lua_to_json(_lua: &Lua, value: &Value) -> mlua::Result<serde_json::Value> {
+/// Convert a Lua value to a JSON value.
+pub fn lua_to_json(_lua: &Lua, value: &Value) -> mlua::Result<JsonValue> {
     match value {
-        Value::Nil => Ok(serde_json::Value::Null),
-        Value::Boolean(b) => Ok(serde_json::Value::Bool(*b)),
-        Value::Integer(i) => Ok(serde_json::Value::Number((*i).into())),
-        Value::Number(n) => serde_json::Number::from_f64(*n)
-            .map(serde_json::Value::Number)
+        Value::Nil => Ok(JsonValue::Null),
+        Value::Boolean(b) => Ok(JsonValue::Bool(*b)),
+        Value::Integer(i) => Ok(JsonValue::Number((*i).into())),
+        Value::Number(n) => JsonNumber::from_f64(*n)
+            .map(JsonValue::Number)
             .ok_or_else(|| mlua::Error::RuntimeError("Invalid float value".into())),
-        Value::String(s) => Ok(serde_json::Value::String(s.to_str()?.to_string())),
+        Value::String(s) => Ok(JsonValue::String(s.to_str()?.to_string())),
         Value::Table(t) => {
             let len = t.raw_len();
+
             if len > 0 {
                 let mut arr = Vec::new();
                 for i in 1..=len {
                     let v: Value = t.raw_get(i)?;
                     arr.push(lua_to_json(_lua, &v)?);
                 }
-                Ok(serde_json::Value::Array(arr))
+                Ok(JsonValue::Array(arr))
             } else {
-                let mut map = serde_json::Map::new();
+                let mut map = JsonMap::new();
                 for pair in t.clone().pairs::<String, Value>() {
                     let (k, v) = pair?;
                     map.insert(k, lua_to_json(_lua, &v)?);
                 }
-                Ok(serde_json::Value::Object(map))
+                Ok(JsonValue::Object(map))
             }
         }
-        _ => Ok(serde_json::Value::Null),
+        _ => Ok(JsonValue::Null),
     }
 }
 
-/// Convert a serde_json::Value to a Lua value.
-pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> {
+/// Convert a JSON value to a Lua value.
+pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
     match value {
-        serde_json::Value::Null => Ok(Value::Nil),
-        serde_json::Value::Bool(b) => Ok(Value::Boolean(*b)),
-        serde_json::Value::Number(n) => {
+        JsonValue::Null => Ok(Value::Nil),
+        JsonValue::Bool(b) => Ok(Value::Boolean(*b)),
+        JsonValue::Number(n) => {
             if let Some(i) = n.as_i64() {
                 Ok(Value::Integer(i))
             } else if let Some(f) = n.as_f64() {
@@ -65,15 +66,15 @@ pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> 
                 Ok(Value::Nil)
             }
         }
-        serde_json::Value::String(s) => Ok(Value::String(lua.create_string(s)?)),
-        serde_json::Value::Array(arr) => {
+        JsonValue::String(s) => Ok(Value::String(lua.create_string(s)?)),
+        JsonValue::Array(arr) => {
             let tbl = lua.create_table()?;
             for (i, v) in arr.iter().enumerate() {
                 tbl.set(i + 1, json_to_lua(lua, v)?)?;
             }
             Ok(Value::Table(tbl))
         }
-        serde_json::Value::Object(map) => {
+        JsonValue::Object(map) => {
             let tbl = lua.create_table()?;
             for (k, v) in map {
                 tbl.set(k.as_str(), json_to_lua(lua, v)?)?;
@@ -86,13 +87,15 @@ pub fn json_to_lua(lua: &Lua, value: &serde_json::Value) -> mlua::Result<Value> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::field::LocalizedString;
     use mlua::Lua;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn test_localized_string_plain() {
         let lua = Lua::new();
-        let ls = crate::core::field::LocalizedString::Plain("Hello".to_string());
+        let ls = LocalizedString::Plain("Hello".to_string());
         let result = localized_string_to_lua(&lua, &ls).unwrap();
         match result {
             Value::String(s) => assert_eq!(s.to_str().unwrap(), "Hello"),
@@ -103,10 +106,10 @@ mod tests {
     #[test]
     fn test_localized_string_localized() {
         let lua = Lua::new();
-        let mut map = std::collections::HashMap::new();
+        let mut map = HashMap::new();
         map.insert("en".to_string(), "Hello".to_string());
         map.insert("de".to_string(), "Hallo".to_string());
-        let ls = crate::core::field::LocalizedString::Localized(map);
+        let ls = LocalizedString::Localized(map);
         let result = localized_string_to_lua(&lua, &ls).unwrap();
         match result {
             Value::Table(tbl) => {

@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 
+use serde_json::Value;
+
 use crate::core::Document;
 
 use super::HookContext;
@@ -10,10 +12,10 @@ use super::HookContext;
 pub struct HookContextBuilder {
     collection: String,
     operation: String,
-    data: HashMap<String, serde_json::Value>,
+    data: HashMap<String, Value>,
     locale: Option<String>,
     draft: Option<bool>,
-    context: HashMap<String, serde_json::Value>,
+    context: HashMap<String, Value>,
     user: Option<Document>,
     ui_locale: Option<String>,
 }
@@ -32,7 +34,7 @@ impl HookContextBuilder {
         }
     }
 
-    pub fn data(mut self, data: HashMap<String, serde_json::Value>) -> Self {
+    pub fn data(mut self, data: HashMap<String, Value>) -> Self {
         self.data = data;
         self
     }
@@ -47,7 +49,7 @@ impl HookContextBuilder {
         self
     }
 
-    pub fn context(mut self, context: HashMap<String, serde_json::Value>) -> Self {
+    pub fn context(mut self, context: HashMap<String, Value>) -> Self {
         self.context = context;
         self
     }

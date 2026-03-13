@@ -4,16 +4,22 @@ use anyhow::Context as _;
 use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 
-use crate::api::content;
-use crate::api::service::ContentService;
-use crate::api::service::convert::document_to_proto;
-use crate::core::upload;
-use crate::db::query::{AccessResult, FindQuery, LocaleContext};
-use crate::db::{ops, query};
+use crate::{
+    api::{
+        content,
+        service::{ContentService, convert::document_to_proto},
+    },
+    core::upload,
+    db::{
+        ops,
+        query::{self, AccessResult, FindQuery, LocaleContext},
+    },
+    hooks::lifecycle::AfterReadCtx,
+};
 
-use super::filter_builder::FilterBuilder;
-use super::helpers::map_db_error;
-use super::pagination_builder::PaginationBuilder;
+use super::{
+    filter_builder::FilterBuilder, helpers::map_db_error, pagination_builder::PaginationBuilder,
+};
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.
@@ -32,6 +38,7 @@ impl ContentService {
         // Check read access
         let access_result =
             self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Read access denied"));
         }
@@ -167,7 +174,7 @@ impl ContentService {
                     upload::assemble_sizes_object(doc, upload_config);
                 }
             }
-            let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+            let ar_ctx = AfterReadCtx {
                 hooks: &hooks,
                 fields: &fields,
                 collection: &collection,
@@ -201,6 +208,7 @@ impl ContentService {
                 query::populate_relationships_batch_cached(
                     &pop_ctx, &mut docs, &pop_opts, cache_ref,
                 )?;
+
                 return Ok((docs, total));
             }
             Ok::<_, anyhow::Error>((docs, total))
@@ -253,6 +261,7 @@ impl ContentService {
         // Check read access
         let access_result =
             self.require_access(def.access.read.as_deref(), &auth_user, Some(&req.id), None)?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Read access denied"));
         }
@@ -311,7 +320,7 @@ impl ContentService {
             {
                 upload::assemble_sizes_object(d, upload_config);
             }
-            let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+            let ar_ctx = AfterReadCtx {
                 hooks: &hooks,
                 fields: &fields,
                 collection: &collection,
@@ -393,6 +402,7 @@ impl ContentService {
         // Check read access
         let access_result =
             self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
+
         if matches!(access_result, AccessResult::Denied) {
             return Err(Status::permission_denied("Read access denied"));
         }

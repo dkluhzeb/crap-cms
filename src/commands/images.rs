@@ -1,6 +1,11 @@
 //! `images` command — manage the image processing queue.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
+
+use crate::{
+    config::{CrapConfig, parse_duration_string},
+    db::{pool, query},
+};
 
 /// Handle the `images` subcommand.
 // Excluded from coverage: requires full Lua + DB setup for each variant.
@@ -13,16 +18,16 @@ pub fn run(action: super::ImagesAction) -> Result<()> {
             limit,
         } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
             let status_filter = status.as_deref();
-            let entries =
-                crate::db::query::images::list_image_entries(&conn, status_filter, limit)?;
+            let entries = query::images::list_image_entries(&conn, status_filter, limit)?;
 
             if entries.is_empty() {
                 println!("No queue entries found.");
+
                 return Ok(());
             }
 
@@ -55,18 +60,15 @@ pub fn run(action: super::ImagesAction) -> Result<()> {
         }
         super::ImagesAction::Stats { config } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
 
-            let pending =
-                crate::db::query::images::count_image_entries_by_status(&conn, "pending")?;
-            let processing =
-                crate::db::query::images::count_image_entries_by_status(&conn, "processing")?;
-            let completed =
-                crate::db::query::images::count_image_entries_by_status(&conn, "completed")?;
-            let failed = crate::db::query::images::count_image_entries_by_status(&conn, "failed")?;
+            let pending = query::images::count_image_entries_by_status(&conn, "pending")?;
+            let processing = query::images::count_image_entries_by_status(&conn, "processing")?;
+            let completed = query::images::count_image_entries_by_status(&conn, "completed")?;
+            let failed = query::images::count_image_entries_by_status(&conn, "failed")?;
 
             println!("Image processing queue:");
             println!("  Pending:    {}", pending);
@@ -87,43 +89,44 @@ pub fn run(action: super::ImagesAction) -> Result<()> {
             confirm,
         } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
 
             if all {
                 if !confirm {
-                    anyhow::bail!("Use -y to confirm retrying all failed entries");
+                    bail!("Use -y to confirm retrying all failed entries");
                 }
-                let count = crate::db::query::images::retry_all_failed_images(&conn)?;
+                let count = query::images::retry_all_failed_images(&conn)?;
                 println!("Reset {} failed entry/entries to pending", count);
             } else if let Some(entry_id) = id {
-                let found = crate::db::query::images::retry_image_entry(&conn, &entry_id)?;
+                let found = query::images::retry_image_entry(&conn, &entry_id)?;
+
                 if found {
                     println!("Reset entry {} to pending", entry_id);
                 } else {
-                    anyhow::bail!("Entry '{}' not found or not in 'failed' status", entry_id);
+                    bail!("Entry '{}' not found or not in 'failed' status", entry_id);
                 }
             } else {
-                anyhow::bail!("Specify --id <id> or --all -y");
+                bail!("Specify --id <id> or --all -y");
             }
 
             Ok(())
         }
         super::ImagesAction::Purge { config, older_than } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
 
-            let secs = crate::config::parse_duration_string(&older_than)
-                .ok_or_else(|| anyhow::anyhow!(
+            let secs = parse_duration_string(&older_than)
+                .ok_or_else(|| anyhow!(
                     "Invalid duration '{}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)",
                     older_than
                 ))?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
-            let deleted = crate::db::query::images::purge_old_image_entries(&conn, secs)?;
+            let deleted = query::images::purge_old_image_entries(&conn, secs)?;
             println!("Purged {} old queue entry/entries", deleted);
 
             Ok(())

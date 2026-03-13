@@ -5,10 +5,16 @@ mod builder;
 pub use builder::HookContextBuilder;
 
 use mlua::{Lua, Value};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::core::Document;
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::{
+    core::{
+        Document,
+        field::{FieldDefinition, FieldType},
+    },
+    hooks::{api, lifecycle::converters::document_to_lua_table},
+};
 
 use super::HookDepth;
 
@@ -17,14 +23,14 @@ use super::HookDepth;
 pub struct HookContext {
     pub collection: String,
     pub operation: String,
-    pub data: HashMap<String, serde_json::Value>,
+    pub data: HashMap<String, JsonValue>,
     pub locale: Option<String>,
     /// Whether this operation is a draft save (`true` = draft, `false`/`None` = publish).
     pub draft: Option<bool>,
     /// Request-scoped shared table that flows from before_validate through after_change.
     /// Hooks can read/write this to share state within one request lifecycle.
     /// Only JSON-compatible values survive (no functions, userdata, etc.).
-    pub context: HashMap<String, serde_json::Value>,
+    pub context: HashMap<String, JsonValue>,
     /// Authenticated user document, if any. Exposed as `ctx.user` in Lua hooks.
     pub user: Option<Document>,
     /// Admin UI locale (e.g. "en", "de"). Exposed as `ctx.ui_locale` in Lua hooks.
@@ -45,6 +51,7 @@ impl HookContext {
         let ctx_table = lua.create_table()?;
         ctx_table.set("collection", self.collection.as_str())?;
         ctx_table.set("operation", self.operation.as_str())?;
+
         if let Some(ref locale) = self.locale {
             ctx_table.set("locale", locale.as_str())?;
         }
@@ -53,14 +60,14 @@ impl HookContext {
         }
         let data_table = lua.create_table()?;
         for (k, v) in &self.data {
-            data_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
+            data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
         }
         ctx_table.set("data", data_table)?;
 
         // Request-scoped shared context table
         let context_table = lua.create_table()?;
         for (k, v) in &self.context {
-            context_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
+            context_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
         }
         ctx_table.set("context", context_table)?;
 
@@ -70,8 +77,7 @@ impl HookContext {
 
         // Authenticated user document
         if let Some(ref user_doc) = self.user {
-            let user_tbl =
-                crate::hooks::lifecycle::converters::document_to_lua_table(lua, user_doc)?;
+            let user_tbl = document_to_lua_table(lua, user_doc)?;
             ctx_table.set("user", user_tbl)?;
         }
 
@@ -95,11 +101,12 @@ impl HookContext {
             let is_group = fields
                 .iter()
                 .any(|f| f.name == *k && f.field_type == FieldType::Group);
+
             if is_group && let Some(obj) = v.as_object() {
                 for (sub_key, sub_val) in obj {
                     let flat_key = format!("{}__{}", k, sub_key);
                     let flat_val = match sub_val {
-                        serde_json::Value::String(s) => s.clone(),
+                        JsonValue::String(s) => s.clone(),
                         other => other.to_string(),
                     };
                     map.insert(flat_key, flat_val);
@@ -110,7 +117,7 @@ impl HookContext {
             map.insert(
                 k.clone(),
                 match v {
-                    serde_json::Value::String(s) => s.clone(),
+                    JsonValue::String(s) => s.clone(),
                     other => other.to_string(),
                 },
             );
@@ -123,7 +130,7 @@ impl HookContext {
         if let Ok(context_tbl) = tbl.get::<mlua::Table>("context") {
             self.context.clear();
             for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
-                if let Ok(json_val) = crate::hooks::api::lua_to_json(lua, &v) {
+                if let Ok(json_val) = api::lua_to_json(lua, &v) {
                     self.context.insert(k, json_val);
                 }
             }

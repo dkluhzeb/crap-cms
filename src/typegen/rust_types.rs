@@ -2,9 +2,11 @@
 
 use std::fmt::Write;
 
-use crate::core::Registry;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{
+    Registry,
+    collection::{CollectionDefinition, GlobalDefinition},
+    field::{FieldDefinition, FieldType},
+};
 
 use super::{
     is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
@@ -136,6 +138,7 @@ fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pa
         .expect("write to String");
     }
     let rust_type = field_to_rust(field, parent_pascal);
+
     if is_optional(field) {
         writeln!(
             out,
@@ -466,7 +469,7 @@ mod tests {
 
     #[test]
     fn rust_global_output() {
-        let mut global = crate::core::collection::GlobalDefinition::new("site_settings");
+        let mut global = GlobalDefinition::new("site_settings");
         global.fields = vec![text_field("site_name", true)];
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -480,7 +483,7 @@ mod tests {
     fn rust_full_render() {
         let mut registry = Registry::new();
         registry.register_collection(make_col("posts", vec![text_field("title", true)]));
-        let mut settings = crate::core::collection::GlobalDefinition::new("settings");
+        let mut settings = GlobalDefinition::new("settings");
         settings.fields = vec![text_field("name", true)];
         registry.register_global(settings);
         let out = render(&registry);

@@ -3,16 +3,23 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde_json::Value;
 
-use crate::core::Document;
-use crate::core::collection::Hooks;
-use crate::core::field::FieldDefinition;
-use crate::core::validate::{FieldError, ValidationError};
-use crate::db::query::LocaleContext;
-use crate::hooks::lifecycle::context::HookContext;
-use crate::hooks::lifecycle::execution::{AfterReadCtx, apply_after_read_inner};
-use crate::hooks::lifecycle::types::{FieldHookEvent, HookEvent};
-use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
+use crate::{
+    core::{
+        Document,
+        collection::Hooks,
+        field::FieldDefinition,
+        validate::{FieldError, ValidationError},
+    },
+    db::query::LocaleContext,
+    hooks::lifecycle::{
+        context::HookContext,
+        execution::{AfterReadCtx, apply_after_read_inner},
+        types::{FieldHookEvent, HookEvent},
+        validation::{ValidationCtx, validate_fields_inner},
+    },
+};
 
 use super::HookRunner;
 
@@ -25,7 +32,7 @@ impl HookRunner {
         hooks: &Hooks,
         collection: &str,
         operation: &str,
-        data: HashMap<String, serde_json::Value>,
+        data: HashMap<String, Value>,
     ) -> Result<()> {
         let ctx = HookContext::builder(collection, operation)
             .data(data)
@@ -42,6 +49,7 @@ impl HookRunner {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!("VM pool error in apply_after_read: {}", e);
+
                 return doc;
             }
         };
@@ -64,6 +72,7 @@ impl HookRunner {
             Ok(l) => l,
             Err(e) => {
                 tracing::warn!("VM pool error in apply_after_read_many: {}", e);
+
                 return docs;
             }
         };
@@ -147,6 +156,7 @@ impl HookRunner {
         // Run field-level after_change hooks (with CRUD access)
         if matches!(event, HookEvent::AfterChange) {
             let has_field_hooks = fields.iter().any(|f| !f.hooks.after_change.is_empty());
+
             if has_field_hooks {
                 let mut data = ctx.data.clone();
                 self.run_field_hooks_with_conn(
@@ -172,7 +182,7 @@ impl HookRunner {
     pub fn validate_fields(
         &self,
         fields: &[FieldDefinition],
-        data: &HashMap<String, serde_json::Value>,
+        data: &HashMap<String, Value>,
         ctx: &ValidationCtx,
     ) -> Result<(), ValidationError> {
         let lua = self

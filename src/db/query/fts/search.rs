@@ -50,6 +50,7 @@ pub fn fts_search(
     limit: i64,
 ) -> Result<Vec<String>> {
     let sanitized = sanitize_fts_query(query);
+
     if sanitized.is_empty() {
         return Ok(Vec::new());
     }
@@ -89,6 +90,7 @@ pub fn fts_where_clause(
     search: &str,
 ) -> Option<(String, String)> {
     let sanitized = sanitize_fts_query(search);
+
     if sanitized.is_empty() {
         return None;
     }

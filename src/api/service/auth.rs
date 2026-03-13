@@ -1,16 +1,19 @@
 //! Auth RPCs: login, me, forgot_password, reset_password, verify_email.
 
-use anyhow::Context as _;
+use anyhow::{Context as _, anyhow};
+use serde_json::json;
 use tonic::{Request, Response, Status};
 
-use crate::api::content;
-use crate::core::auth;
-use crate::core::auth::ClaimsBuilder;
-use crate::core::email;
-use crate::db::query;
+use crate::{
+    api::content,
+    core::{
+        auth::{self, ClaimsBuilder},
+        email,
+    },
+    db::query,
+};
 
-use super::ContentService;
-use super::convert::document_to_proto;
+use super::{ContentService, convert::document_to_proto};
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/grpc_integration.rs.
@@ -52,6 +55,7 @@ impl ContentService {
                 Some(d) => d,
                 None => {
                     auth::dummy_verify();
+
                     return Ok(None);
                 }
             };
@@ -60,9 +64,11 @@ impl ContentService {
                 Some(h) => h,
                 None => {
                     auth::dummy_verify();
+
                     return Ok(None);
                 }
             };
+
             if !auth::verify_password(&password, &hash)? {
                 return Ok(None);
             }
@@ -82,6 +88,7 @@ impl ContentService {
             Some(u) => u,
             None => {
                 self.login_limiter.record_failure(&req.email);
+
                 return Err(Status::unauthenticated("Invalid email or password"));
             }
         };
@@ -246,6 +253,7 @@ impl ContentService {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::error!("DB connection for forgot password: {}", e);
+
                     return;
                 }
             };
@@ -255,6 +263,7 @@ impl ContentService {
                 Ok(None) => return,
                 Err(e) => {
                     tracing::error!("Forgot password lookup: {}", e);
+
                     return;
                 }
             };
@@ -264,6 +273,7 @@ impl ContentService {
 
             if let Err(e) = query::set_reset_token(&conn, &slug, &user.id, &token, exp) {
                 tracing::error!("Failed to set reset token: {}", e);
+
                 return;
             }
 
@@ -276,7 +286,7 @@ impl ContentService {
 
             let html = match email_renderer.render(
                 "password_reset",
-                &serde_json::json!({
+                &json!({
                     "reset_url": reset_url,
                     "expiry_minutes": reset_expiry / 60,
                     "from_name": email_config.from_name,
@@ -285,6 +295,7 @@ impl ContentService {
                 Ok(h) => h,
                 Err(e) => {
                     tracing::error!("Failed to render reset email: {}", e);
+
                     return;
                 }
             };
@@ -333,11 +344,12 @@ impl ContentService {
         tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             let (user, exp) = query::find_by_reset_token(&conn, &slug, &def_owned, &token)?
-                .ok_or_else(|| anyhow::anyhow!("Invalid reset token"))?;
+                .ok_or_else(|| anyhow!("Invalid reset token"))?;
 
             if chrono::Utc::now().timestamp() >= exp {
                 query::clear_reset_token(&conn, &slug, &user.id)?;
-                return Err(anyhow::anyhow!("Reset token has expired"));
+
+                return Err(anyhow!("Reset token has expired"));
             }
 
             query::update_password(&conn, &slug, &user.id, &password)?;
@@ -351,6 +363,7 @@ impl ContentService {
         })?
         .map_err(|e| {
             let msg = e.to_string();
+
             if msg.contains("Invalid reset token") || msg.contains("expired") {
                 Status::invalid_argument(msg)
             } else {

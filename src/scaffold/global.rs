@@ -1,8 +1,7 @@
 //! `make global` command — generate global Lua files.
 
-use anyhow::{Context as _, Result};
-use std::fs;
-use std::path::Path;
+use anyhow::{Context as _, Result, bail};
+use std::{fs, path::Path};
 
 /// Generate a global Lua file at `<config_dir>/globals/<slug>.lua`.
 ///
@@ -19,8 +18,9 @@ pub fn make_global(
     fs::create_dir_all(&globals_dir).context("Failed to create globals/ directory")?;
 
     let file_path = globals_dir.join(format!("{}.lua", slug));
+
     if file_path.exists() && !force {
-        anyhow::bail!(
+        bail!(
             "File '{}' already exists — use --force to overwrite",
             file_path.display()
         );
@@ -48,6 +48,7 @@ pub fn make_global(
     for field in &fields {
         lua.push_str(&format!("        crap.fields.{}({{\n", field.field_type));
         lua.push_str(&format!("            name = \"{}\",\n", field.name));
+
         if field.required {
             lua.push_str("            required = true,\n");
         }

@@ -1,14 +1,17 @@
 //! FTS5 index synchronization, upsert, and delete operations.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 
-use crate::config::LocaleConfig;
-use crate::core::CollectionDefinition;
-use crate::core::Document;
+use crate::{
+    config::LocaleConfig,
+    core::{CollectionDefinition, Document, Registry},
+};
 
-use super::fields::{build_node_searchable_map, get_fts_columns, json_richtext_columns};
-use super::prosemirror::{extract_prosemirror_text, extract_prosemirror_text_with_nodes};
-use super::search::{fts_table_name, table_exists};
+use super::{
+    fields::{build_node_searchable_map, get_fts_columns, json_richtext_columns},
+    prosemirror::{extract_prosemirror_text, extract_prosemirror_text_with_nodes},
+    search::{fts_table_name, table_exists},
+};
 
 /// Get column names from the FTS table (excludes `id`).
 ///
@@ -57,7 +60,7 @@ pub fn sync_fts_table(
     // Validate field names (defense against injection — they come from Lua config)
     for f in &fts_fields {
         if !super::super::is_valid_identifier(f) {
-            anyhow::bail!(
+            bail!(
                 "Invalid FTS field name '{}': must be alphanumeric/underscore",
                 f
             );
@@ -197,7 +200,7 @@ pub fn fts_upsert_with_registry(
     slug: &str,
     doc: &Document,
     def: Option<&CollectionDefinition>,
-    registry: Option<&crate::core::Registry>,
+    registry: Option<&Registry>,
 ) -> Result<()> {
     let fts_table = fts_table_name(slug);
 
@@ -284,6 +287,8 @@ pub fn fts_delete(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::config::LocaleConfig;
     use crate::core::collection::*;
@@ -540,10 +545,8 @@ mod tests {
 
         insert_post(&conn, "new1", "Unique Title", "Some content");
         let mut doc = Document::new("new1".to_string());
-        doc.fields
-            .insert("title".into(), serde_json::json!("Unique Title"));
-        doc.fields
-            .insert("body".into(), serde_json::json!("Some content"));
+        doc.fields.insert("title".into(), json!("Unique Title"));
+        doc.fields.insert("body".into(), json!("Some content"));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let results = fts_search(&conn, "posts", "Unique", 10).unwrap();
@@ -558,9 +561,8 @@ mod tests {
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         let mut doc = Document::new("1".to_string());
-        doc.fields
-            .insert("title".into(), serde_json::json!("New Title"));
-        doc.fields.insert("body".into(), serde_json::json!(""));
+        doc.fields.insert("title".into(), json!("New Title"));
+        doc.fields.insert("body".into(), json!(""));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let old_results = fts_search(&conn, "posts", "Old", 10).unwrap();
@@ -623,9 +625,9 @@ mod tests {
 
         let mut doc = Document::new("doc1".to_string());
         doc.fields
-            .insert("title__en".into(), serde_json::json!("English Title"));
+            .insert("title__en".into(), json!("English Title"));
         doc.fields
-            .insert("title__de".into(), serde_json::json!("Deutscher Titel"));
+            .insert("title__de".into(), json!("Deutscher Titel"));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let en_results = fts_search(&conn, "posts", "English", 10).unwrap();
@@ -658,9 +660,8 @@ mod tests {
         .unwrap();
 
         let mut doc = Document::new("1".to_string());
-        doc.fields.insert("title".into(), serde_json::json!("Test"));
-        doc.fields
-            .insert("content".into(), serde_json::json!(pm_json));
+        doc.fields.insert("title".into(), json!("Test"));
+        doc.fields.insert("content".into(), json!(pm_json));
         fts_upsert(&conn, "posts", &doc, Some(&def)).unwrap();
 
         let results = fts_search(&conn, "posts", "Searchable", 10).unwrap();
@@ -706,10 +707,8 @@ mod tests {
         let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]},{"type":"cta","attrs":{"button_text":"Click Here","url":"/go"}}]}"#;
 
         let mut doc = Document::new("rg1".to_string());
-        doc.fields
-            .insert("title".into(), serde_json::json!("Registry Test"));
-        doc.fields
-            .insert("content".into(), serde_json::json!(pm_json));
+        doc.fields.insert("title".into(), json!("Registry Test"));
+        doc.fields.insert("content".into(), json!(pm_json));
 
         fts_upsert_with_registry(&conn, "posts", &doc, Some(&def), Some(&registry)).unwrap();
 
@@ -741,8 +740,7 @@ mod tests {
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         let mut doc = Document::new("plain1".to_string());
-        doc.fields
-            .insert("title".into(), serde_json::json!("Plain text"));
+        doc.fields.insert("title".into(), json!("Plain text"));
 
         fts_upsert_with_registry(&conn, "posts", &doc, None, None).unwrap();
 
@@ -765,7 +763,7 @@ mod tests {
 
         let mut doc = Document::new("obj1".to_string());
         doc.fields
-            .insert("title".into(), serde_json::json!({"nested": "object"}));
+            .insert("title".into(), json!({"nested": "object"}));
         fts_upsert(&conn, "posts", &doc, None).unwrap();
 
         let results = fts_search(&conn, "posts", "nested", 10).unwrap();

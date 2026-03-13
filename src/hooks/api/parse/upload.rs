@@ -2,9 +2,15 @@
 
 use mlua::{Table, Value};
 
-use crate::core::field::{FieldAdmin, FieldDefinition, FieldType};
-use crate::core::upload::ImageSizeBuilder;
-use crate::core::upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit, ImageSize};
+use crate::{
+    config::parse_filesize_string,
+    core::{
+        field::{FieldAdmin, FieldDefinition, FieldType},
+        upload::{
+            CollectionUpload, FormatOptions, FormatQuality, ImageFit, ImageSize, ImageSizeBuilder,
+        },
+    },
+};
 
 use super::helpers::*;
 
@@ -27,7 +33,7 @@ pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload
                 Ok(mlua::Value::Integer(n)) => Some(n as u64),
                 Ok(mlua::Value::String(s)) => {
                     let text = s.to_str().ok().map(|s| s.to_string());
-                    text.and_then(|t| crate::config::parse_filesize_string(&t))
+                    text.and_then(|t| parse_filesize_string(&t))
                 }
                 _ => None,
             };
@@ -62,6 +68,7 @@ pub(super) fn parse_image_sizes(tbl: &Table) -> Vec<ImageSize> {
         };
         let width = size_tbl.get::<u32>("width").unwrap_or(0);
         let height = size_tbl.get::<u32>("height").unwrap_or(0);
+
         if width == 0 || height == 0 {
             continue;
         }
@@ -159,8 +166,10 @@ pub(super) fn inject_upload_fields(fields: &mut Vec<FieldDefinition>, upload: &C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::FieldDefinition;
-    use crate::core::upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit};
+    use crate::core::{
+        field::{FieldDefinition, FieldType},
+        upload::{CollectionUpload, FormatOptions, FormatQuality, ImageFit},
+    };
     use mlua::Lua;
 
     #[test]
@@ -275,8 +284,7 @@ mod tests {
 
     #[test]
     fn test_inject_upload_fields_basic() {
-        let mut fields =
-            vec![FieldDefinition::builder("alt_text", crate::core::field::FieldType::Text).build()];
+        let mut fields = vec![FieldDefinition::builder("alt_text", FieldType::Text).build()];
         let upload = CollectionUpload::new();
         inject_upload_fields(&mut fields, &upload);
         assert_eq!(fields.len(), 9);

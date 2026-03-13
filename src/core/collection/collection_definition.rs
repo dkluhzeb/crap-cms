@@ -1,12 +1,12 @@
 //! Full definition of a collection, parsed from a Lua file. Maps to one SQLite table.
 
+use serde::{Deserialize, Serialize};
+
 use super::{
     Access, AdminConfig, Auth, Hooks, IndexDefinition, Labels, LiveSetting, McpConfig,
     VersionsConfig,
 };
-use crate::core::field::FieldDefinition;
-use crate::core::upload::CollectionUpload;
-use serde::{Deserialize, Serialize};
+use crate::core::{field::FieldDefinition, upload::CollectionUpload};
 
 fn default_true() -> bool {
     true
@@ -160,7 +160,7 @@ impl CollectionDefinition {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::LocalizedString;
+    use crate::core::{field::LocalizedString, upload::CollectionUpload};
     use std::collections::HashMap;
 
     fn make_collection(
@@ -239,7 +239,6 @@ mod tests {
 
     #[test]
     fn is_upload_collection() {
-        use crate::core::upload::CollectionUpload;
         let mut col = make_collection("media", None, None, None);
         col.upload = Some(CollectionUpload::new());
         assert!(col.is_upload_collection());
@@ -362,7 +361,6 @@ mod tests {
 
     #[test]
     fn is_upload_collection_false_when_disabled() {
-        use crate::core::upload::CollectionUpload;
         let mut col = make_collection("media", None, None, None);
         col.upload = Some(CollectionUpload::default());
         assert!(!col.is_upload_collection());

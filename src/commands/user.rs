@@ -1,7 +1,14 @@
 //! `user` command — user management for auth collections.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
+use serde_json::Value;
 use std::collections::HashMap;
+
+use crate::{
+    config::{CrapConfig, PasswordPolicy},
+    core::{CollectionDefinition, Document, SharedRegistry, field::FieldType},
+    db::{DbPool, query},
+};
 
 /// Dispatch user management subcommands.
 /// Untestable: dispatches to interactive CLI functions that require stdin/dialoguer.
@@ -15,7 +22,7 @@ pub fn run(action: super::UserAction) -> Result<()> {
             password,
             fields,
         } => {
-            let cfg = crate::config::CrapConfig::load(&config).context("Failed to load config")?;
+            let cfg = CrapConfig::load(&config).context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_create(
                 &pool,
@@ -93,7 +100,7 @@ pub fn run(action: super::UserAction) -> Result<()> {
             id,
             password,
         } => {
-            let cfg = crate::config::CrapConfig::load(&config).context("Failed to load config")?;
+            let cfg = CrapConfig::load(&config).context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config)?;
             user_change_password(
                 &pool,
@@ -112,22 +119,22 @@ pub fn run(action: super::UserAction) -> Result<()> {
 /// Untestable: interactive fallback uses dialoguer::Select for user selection.
 #[cfg(not(tarpaulin_include))]
 fn resolve_user(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
-) -> Result<(crate::core::CollectionDefinition, crate::core::Document)> {
+) -> Result<(CollectionDefinition, Document)> {
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let def = reg
         .get_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+        .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
 
     if !def.is_auth_collection() {
-        anyhow::bail!(
+        bail!(
             "Collection '{}' is not an auth collection (auth must be enabled)",
             collection
         );
@@ -139,22 +146,21 @@ fn resolve_user(
     let conn = pool.get().context("Failed to get database connection")?;
 
     if let Some(email) = email {
-        let doc =
-            crate::db::query::find_by_email(&conn, collection, &def, &email)?.ok_or_else(|| {
-                anyhow::anyhow!("No user found with email '{}' in '{}'", email, collection)
-            })?;
+        let doc = query::find_by_email(&conn, collection, &def, &email)?
+            .ok_or_else(|| anyhow!("No user found with email '{}' in '{}'", email, collection))?;
         Ok((def, doc))
     } else if let Some(id) = id {
-        let doc = crate::db::query::find_by_id(&conn, collection, &def, &id, None)?
-            .ok_or_else(|| anyhow::anyhow!("No user found with id '{}' in '{}'", id, collection))?;
+        let doc = query::find_by_id(&conn, collection, &def, &id, None)?
+            .ok_or_else(|| anyhow!("No user found with id '{}' in '{}'", id, collection))?;
         Ok((def, doc))
     } else {
         // Interactive: select from existing users
         use dialoguer::Select;
-        let query = crate::db::query::FindQuery::default();
-        let users = crate::db::query::find(&conn, collection, &def, &query, None)?;
+        let find_query = query::FindQuery::default();
+        let users = query::find(&conn, collection, &def, &find_query, None)?;
+
         if users.is_empty() {
-            anyhow::bail!("No users in '{}'", collection);
+            bail!("No users in '{}'", collection);
         }
         let labels: Vec<String> = users
             .iter()
@@ -167,9 +173,11 @@ fn resolve_user(
                 format!("{} — {}", email, u.id)
             })
             .collect();
+
         if users.len() == 1 {
             println!("Auto-selected only user: {}", labels[0]);
             let doc = users.into_iter().next().expect("guarded by len == 1");
+
             return Ok((def, doc));
         }
         let selection = Select::new()
@@ -191,24 +199,24 @@ fn resolve_user(
 /// Untestable: interactive email/password prompts via stdin and rpassword.
 #[cfg(not(tarpaulin_include))]
 pub fn user_create(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     password: Option<String>,
     fields: Vec<(String, String)>,
-    password_policy: &crate::config::PasswordPolicy,
+    password_policy: &PasswordPolicy,
 ) -> Result<()> {
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let def = reg
         .get_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+        .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
 
     if !def.is_auth_collection() {
-        anyhow::bail!(
+        bail!(
             "Collection '{}' is not an auth collection (auth must be enabled)",
             collection
         );
@@ -227,8 +235,9 @@ pub fn user_create(
                 .read_line(&mut input)
                 .context("Failed to read email")?;
             let trimmed = input.trim().to_string();
+
             if trimmed.is_empty() {
-                anyhow::bail!("Email cannot be empty");
+                bail!("Email cannot be empty");
             }
             trimmed
         }
@@ -245,13 +254,15 @@ pub fn user_create(
         None => {
             eprint!("Password: ");
             let p1 = rpassword::read_password().context("Failed to read password")?;
+
             if p1.is_empty() {
-                anyhow::bail!("Password cannot be empty");
+                bail!("Password cannot be empty");
             }
             eprint!("Confirm password: ");
             let p2 = rpassword::read_password().context("Failed to read password confirmation")?;
+
             if p1 != p2 {
-                anyhow::bail!("Passwords do not match");
+                bail!("Passwords do not match");
             }
             p1
         }
@@ -269,7 +280,7 @@ pub fn user_create(
         if field.name == "email" {
             continue; // already handled above
         }
-        if field.field_type == crate::core::field::FieldType::Checkbox {
+        if field.field_type == FieldType::Checkbox {
             continue; // absent checkbox = false, always valid
         }
         if data.contains_key(&field.name) {
@@ -283,7 +294,7 @@ pub fn user_create(
             && let Some(ref dv) = field.default_value
         {
             let val = match dv {
-                serde_json::Value::String(s) => s.clone(),
+                Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
             data.insert(field.name.clone(), val);
@@ -292,7 +303,7 @@ pub fn user_create(
         // Required field with a default — use it automatically
         if let Some(ref dv) = field.default_value {
             let val = match dv {
-                serde_json::Value::String(s) => s.clone(),
+                Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
             eprint!("{} [{}]: ", field.name, val);
@@ -301,6 +312,7 @@ pub fn user_create(
                 .read_line(&mut input)
                 .with_context(|| format!("Failed to read {}", field.name))?;
             let trimmed = input.trim();
+
             if trimmed.is_empty() {
                 data.insert(field.name.clone(), val);
             } else {
@@ -315,8 +327,9 @@ pub fn user_create(
             .read_line(&mut input)
             .with_context(|| format!("Failed to read {}", field.name))?;
         let trimmed = input.trim().to_string();
+
         if trimmed.is_empty() {
-            anyhow::bail!("{} is required", field.name);
+            bail!("{} is required", field.name);
         }
         data.insert(field.name.clone(), trimmed);
     }
@@ -325,10 +338,9 @@ pub fn user_create(
     let mut conn = pool.get().context("Failed to get database connection")?;
     let tx = conn.transaction().context("Failed to begin transaction")?;
 
-    let doc = crate::db::query::create(&tx, collection, &def, &data, None)
-        .context("Failed to create user")?;
+    let doc = query::create(&tx, collection, &def, &data, None).context("Failed to create user")?;
 
-    crate::db::query::update_password(&tx, collection, &doc.id, &password)
+    query::update_password(&tx, collection, &doc.id, &password)
         .context("Failed to set password")?;
 
     tx.commit().context("Failed to commit transaction")?;
@@ -341,21 +353,17 @@ pub fn user_create(
 /// List users in an auth collection.
 /// Untestable: depends on resolve_user which uses interactive dialoguer.
 #[cfg(not(tarpaulin_include))]
-pub fn user_list(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
-    collection: &str,
-) -> Result<()> {
+pub fn user_list(pool: &DbPool, registry: &SharedRegistry, collection: &str) -> Result<()> {
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let def = reg
         .get_collection(collection)
-        .ok_or_else(|| anyhow::anyhow!("Collection '{}' not found", collection))?;
+        .ok_or_else(|| anyhow!("Collection '{}' not found", collection))?;
 
     if !def.is_auth_collection() {
-        anyhow::bail!(
+        bail!(
             "Collection '{}' is not an auth collection (auth must be enabled)",
             collection
         );
@@ -367,12 +375,13 @@ pub fn user_list(
 
     let conn = pool.get().context("Failed to get database connection")?;
 
-    let query = crate::db::query::FindQuery::default();
+    let find_query = query::FindQuery::default();
 
-    let users = crate::db::query::find(&conn, collection, &def, &query, None)?;
+    let users = query::find(&conn, collection, &def, &find_query, None)?;
 
     if users.is_empty() {
         println!("No users in '{}'.", collection);
+
         return Ok(());
     }
 
@@ -394,12 +403,11 @@ pub fn user_list(
             .get("email")
             .and_then(|v| v.as_str())
             .unwrap_or("-");
-        let locked = crate::db::query::is_locked(&conn, collection, &user.id).unwrap_or(false);
+        let locked = query::is_locked(&conn, collection, &user.id).unwrap_or(false);
         let locked_str = if locked { "yes" } else { "no" };
 
         if verify_email {
-            let verified =
-                crate::db::query::is_verified(&conn, collection, &user.id).unwrap_or(false);
+            let verified = query::is_verified(&conn, collection, &user.id).unwrap_or(false);
             let verified_str = if verified { "yes" } else { "no" };
             println!(
                 "{:<24} {:<30} {:<8} {:<8}",
@@ -419,8 +427,8 @@ pub fn user_list(
 /// Untestable: depends on resolve_user which uses interactive dialoguer.
 #[cfg(not(tarpaulin_include))]
 pub fn user_info(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -431,8 +439,8 @@ pub fn user_info(
 
     let conn = pool.get().context("Failed to get database connection")?;
 
-    let locked = crate::db::query::is_locked(&conn, collection, &doc.id).unwrap_or(false);
-    let has_pw = crate::db::query::has_password(&conn, collection, &doc.id).unwrap_or(false);
+    let locked = query::is_locked(&conn, collection, &doc.id).unwrap_or(false);
+    let has_pw = query::has_password(&conn, collection, &doc.id).unwrap_or(false);
 
     let user_email = doc
         .fields
@@ -446,8 +454,9 @@ pub fn user_info(
 
     println!("\nStatus:");
     println!("  Locked:    {}", if locked { "yes" } else { "no" });
+
     if verify_email {
-        let verified = crate::db::query::is_verified(&conn, collection, &doc.id).unwrap_or(false);
+        let verified = query::is_verified(&conn, collection, &doc.id).unwrap_or(false);
         println!("  Verified:  {}", if verified { "yes" } else { "no" });
     }
     println!("  Password:  {}", if has_pw { "set" } else { "not set" });
@@ -479,8 +488,8 @@ pub fn user_info(
         println!("\nFields:");
         for (key, val) in &extra {
             let display = match val {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Null => "-".to_string(),
+                Value::String(s) => s.clone(),
+                Value::Null => "-".to_string(),
                 other => other.to_string(),
             };
             println!("  {:<12} {}", format!("{}:", key), display);
@@ -494,8 +503,8 @@ pub fn user_info(
 /// Untestable: interactive confirmation via dialoguer::Confirm.
 #[cfg(not(tarpaulin_include))]
 pub fn user_delete(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -519,14 +528,16 @@ pub fn user_delete(
             .default(false)
             .interact()
             .context("Failed to read confirmation")?;
+
         if !proceed {
             println!("Aborted.");
+
             return Ok(());
         }
     }
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::delete(&conn, collection, &doc.id).context("Failed to delete user")?;
+    query::delete(&conn, collection, &doc.id).context("Failed to delete user")?;
 
     println!(
         "Deleted user {} ({}) from '{}'",
@@ -540,8 +551,8 @@ pub fn user_delete(
 /// Untestable: depends on resolve_user which uses interactive dialoguer.
 #[cfg(not(tarpaulin_include))]
 pub fn user_lock(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -549,7 +560,7 @@ pub fn user_lock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::lock_user(&conn, collection, &doc.id).context("Failed to lock user")?;
+    query::lock_user(&conn, collection, &doc.id).context("Failed to lock user")?;
 
     let user_email = doc
         .fields
@@ -568,8 +579,8 @@ pub fn user_lock(
 /// Untestable: depends on resolve_user which uses interactive dialoguer.
 #[cfg(not(tarpaulin_include))]
 pub fn user_unlock(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -577,7 +588,7 @@ pub fn user_unlock(
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::unlock_user(&conn, collection, &doc.id).context("Failed to unlock user")?;
+    query::unlock_user(&conn, collection, &doc.id).context("Failed to unlock user")?;
 
     let user_email = doc
         .fields
@@ -596,8 +607,8 @@ pub fn user_unlock(
 /// Untestable: depends on resolve_user which uses interactive dialoguer.
 #[cfg(not(tarpaulin_include))]
 pub fn user_verify(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -605,14 +616,14 @@ pub fn user_verify(
     let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
-        anyhow::bail!(
+        bail!(
             "Collection '{}' does not have email verification enabled (verify_email must be true)",
             collection
         );
     }
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::mark_verified(&conn, collection, &doc.id).context("Failed to verify user")?;
+    query::mark_verified(&conn, collection, &doc.id).context("Failed to verify user")?;
 
     let user_email = doc
         .fields
@@ -631,8 +642,8 @@ pub fn user_verify(
 /// Untestable: depends on resolve_user which uses interactive dialoguer.
 #[cfg(not(tarpaulin_include))]
 pub fn user_unverify(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
@@ -640,15 +651,14 @@ pub fn user_unverify(
     let (def, doc) = resolve_user(pool, registry, collection, email, id)?;
 
     if !def.auth.as_ref().map(|a| a.verify_email).unwrap_or(false) {
-        anyhow::bail!(
+        bail!(
             "Collection '{}' does not have email verification enabled (verify_email must be true)",
             collection
         );
     }
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::mark_unverified(&conn, collection, &doc.id)
-        .context("Failed to unverify user")?;
+    query::mark_unverified(&conn, collection, &doc.id).context("Failed to unverify user")?;
 
     let user_email = doc
         .fields
@@ -667,13 +677,13 @@ pub fn user_unverify(
 /// Untestable: interactive password prompts via rpassword + depends on resolve_user.
 #[cfg(not(tarpaulin_include))]
 pub fn user_change_password(
-    pool: &crate::db::DbPool,
-    registry: &crate::core::SharedRegistry,
+    pool: &DbPool,
+    registry: &SharedRegistry,
     collection: &str,
     email: Option<String>,
     id: Option<String>,
     password: Option<String>,
-    password_policy: &crate::config::PasswordPolicy,
+    password_policy: &PasswordPolicy,
 ) -> Result<()> {
     let (_, doc) = resolve_user(pool, registry, collection, email, id)?;
 
@@ -687,13 +697,15 @@ pub fn user_change_password(
         None => {
             eprint!("New password: ");
             let p1 = rpassword::read_password().context("Failed to read password")?;
+
             if p1.is_empty() {
-                anyhow::bail!("Password cannot be empty");
+                bail!("Password cannot be empty");
             }
             eprint!("Confirm password: ");
             let p2 = rpassword::read_password().context("Failed to read password confirmation")?;
+
             if p1 != p2 {
-                anyhow::bail!("Passwords do not match");
+                bail!("Passwords do not match");
             }
             p1
         }
@@ -703,7 +715,7 @@ pub fn user_change_password(
     password_policy.validate(&password)?;
 
     let conn = pool.get().context("Failed to get database connection")?;
-    crate::db::query::update_password(&conn, collection, &doc.id, &password)
+    query::update_password(&conn, collection, &doc.id, &password)
         .context("Failed to update password")?;
 
     let user_email = doc

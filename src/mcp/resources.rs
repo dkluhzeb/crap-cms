@@ -1,12 +1,13 @@
 //! MCP resource definitions and handlers.
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-use super::protocol::{ResourceContent, ResourceDefinition};
-use super::schema::{CrudOp, collection_input_schema, global_input_schema};
-use super::tools::should_include;
-use crate::config::CrapConfig;
-use crate::core::Registry;
+use super::{
+    protocol::{ResourceContent, ResourceDefinition},
+    schema::{CrudOp, collection_input_schema, global_input_schema},
+    tools::should_include,
+};
+use crate::{config::CrapConfig, core::Registry};
 
 /// List all available MCP resources.
 pub fn list_resources() -> Vec<ResourceDefinition> {
@@ -40,7 +41,7 @@ pub fn read_resource(
 ) -> Option<ResourceContent> {
     match uri {
         "crap://schema/collections" => {
-            let mut schemas = serde_json::Map::new();
+            let mut schemas = Map::new();
             for (slug, def) in &registry.collections {
                 if !should_include(slug, &config.mcp) {
                     continue;
@@ -65,7 +66,7 @@ pub fn read_resource(
             })
         }
         "crap://schema/globals" => {
-            let mut schemas = serde_json::Map::new();
+            let mut schemas = Map::new();
             for (slug, def) in &registry.globals {
                 let schema = global_input_schema(def, CrudOp::Update);
                 schemas.insert(
@@ -85,6 +86,7 @@ pub fn read_resource(
         "crap://config" => {
             // Sanitize config: redact secrets
             let mut config_json = serde_json::to_value(config).unwrap_or(Value::Null);
+
             if let Some(obj) = config_json.as_object_mut() {
                 // Redact auth secret
                 if let Some(auth) = obj.get_mut("auth").and_then(|a| a.as_object_mut())

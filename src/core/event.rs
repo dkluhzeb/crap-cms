@@ -1,10 +1,15 @@
 //! Real-time event bus for broadcasting mutation events to subscribers.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use serde::Serialize;
+use serde_json::Value;
 use tokio::sync::broadcast;
 
 /// The type of entity that was mutated.
@@ -64,7 +69,7 @@ pub struct MutationEvent {
     /// The ID of the document or global name.
     pub document_id: String,
     /// The data that was changed or the full state.
-    pub data: HashMap<String, serde_json::Value>,
+    pub data: HashMap<String, Value>,
     /// The user who performed the action, if known.
     pub edited_by: Option<EventUser>,
 }
@@ -96,7 +101,7 @@ impl EventBus {
         operation: EventOperation,
         collection: String,
         document_id: String,
-        data: HashMap<String, serde_json::Value>,
+        data: HashMap<String, Value>,
         edited_by: Option<EventUser>,
     ) -> Option<MutationEvent> {
         let event = MutationEvent {

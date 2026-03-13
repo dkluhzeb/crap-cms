@@ -4,13 +4,22 @@ pub mod rate_limit;
 pub mod service;
 pub mod upload;
 
+use std::{path::Path, sync::Arc};
+
 use anyhow::Result;
 use tonic::transport::Server;
 
-use crate::core::Registry;
-use crate::core::event::EventBus;
-use crate::db::DbPool;
-use crate::hooks::lifecycle::HookRunner;
+use crate::{
+    config::{CrapConfig, DepthConfig},
+    core::{
+        Registry,
+        email::EmailRenderer,
+        event::EventBus,
+        rate_limit::{GrpcRateLimiter, LoginRateLimiter},
+    },
+    db::DbPool,
+    hooks::lifecycle::HookRunner,
+};
 
 /// Generated gRPC content service types.
 pub mod content {
@@ -28,27 +37,26 @@ pub mod content {
 pub async fn start_server(
     addr: &str,
     pool: DbPool,
-    registry: std::sync::Arc<Registry>,
+    registry: Arc<Registry>,
     hook_runner: HookRunner,
     jwt_secret: String,
-    depth_config: &crate::config::DepthConfig,
-    config: &crate::config::CrapConfig,
-    config_dir: &std::path::Path,
+    depth_config: &DepthConfig,
+    config: &CrapConfig,
+    config_dir: &Path,
     event_bus: Option<EventBus>,
     shutdown: tokio_util::sync::CancellationToken,
 ) -> Result<()> {
     let addr = addr.parse()?;
 
-    let email_renderer = std::sync::Arc::new(crate::core::email::EmailRenderer::new(config_dir)?);
-    let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(
+    let email_renderer = Arc::new(EmailRenderer::new(config_dir)?);
+    let login_limiter = Arc::new(LoginRateLimiter::new(
         config.auth.max_login_attempts,
         config.auth.login_lockout_seconds,
     ));
-    let forgot_password_limiter =
-        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(
-            config.auth.max_forgot_password_attempts,
-            config.auth.forgot_password_window_seconds,
-        ));
+    let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
+        config.auth.max_forgot_password_attempts,
+        config.auth.forgot_password_window_seconds,
+    ));
     let content_service = service::ContentService::new(
         pool,
         registry,
@@ -83,7 +91,7 @@ pub async fn start_server(
         });
     }
 
-    let grpc_limiter = std::sync::Arc::new(crate::core::rate_limit::GrpcRateLimiter::new(
+    let grpc_limiter = Arc::new(GrpcRateLimiter::new(
         config.server.grpc_rate_limit_requests,
         config.server.grpc_rate_limit_window,
     ));

@@ -84,6 +84,7 @@ pub fn claim_pending_jobs(
         let max_conc = job_concurrency.get(&slug).copied().unwrap_or(1) as i64;
         let current = running_counts.get(&slug).copied().unwrap_or(0)
             + extra_running.get(&slug).copied().unwrap_or(0);
+
         if current >= max_conc {
             continue;
         }
@@ -103,6 +104,7 @@ pub fn claim_pending_jobs(
                 .data(data)
                 .attempt(attempt + 1)
                 .max_attempts(max_attempts);
+
             if let Some(sb) = scheduled_by {
                 b = b.scheduled_by(sb);
             }
@@ -277,6 +279,7 @@ pub fn get_job_run(conn: &rusqlite::Connection, id: &str) -> Result<Option<JobRu
     )?;
 
     let mut rows = stmt.query_map([id], row_to_job_run)?;
+
     match rows.next() {
         Some(Ok(job)) => Ok(Some(job)),
         Some(Err(e)) => Err(e.into()),
@@ -294,6 +297,7 @@ pub fn purge_old_jobs(conn: &rusqlite::Connection, older_than_secs: u64) -> Resu
            AND created_at < datetime('now', ?1)",
         [&threshold],
     )? as i64;
+
     Ok(deleted)
 }
 
@@ -307,6 +311,7 @@ pub fn count_failed_since(conn: &rusqlite::Connection, since_secs: u64) -> Resul
         [&threshold],
         |row| row.get(0),
     )?;
+
     Ok(count)
 }
 
@@ -320,6 +325,7 @@ pub fn count_pending_older_than(conn: &rusqlite::Connection, older_than_secs: u6
         [&threshold],
         |row| row.get(0),
     )?;
+
     Ok(count)
 }
 
@@ -334,6 +340,7 @@ pub fn last_completed_run(conn: &rusqlite::Connection, slug: &str) -> Result<Opt
          LIMIT 1",
     )?;
     let mut rows = stmt.query_map([slug], row_to_job_run)?;
+
     match rows.next() {
         Some(Ok(job)) => Ok(Some(job)),
         Some(Err(e)) => Err(e.into()),
@@ -348,6 +355,7 @@ pub fn mark_stale(conn: &rusqlite::Connection, id: &str, error: &str) -> Result<
          WHERE id = ?1",
         rusqlite::params![id, error],
     )?;
+
     Ok(())
 }
 
@@ -362,6 +370,7 @@ fn row_to_job_run(row: &rusqlite::Row) -> rusqlite::Result<JobRun> {
         .data(row.get::<_, String>(4).unwrap_or_else(|_| "{}".to_string()))
         .attempt(row.get::<_, i64>(7).unwrap_or(0) as u32)
         .max_attempts(row.get::<_, i64>(8).unwrap_or(1) as u32);
+
     if let Some(r) = row.get::<_, Option<String>>(5)? {
         b = b.result(r);
     }
@@ -383,6 +392,7 @@ fn row_to_job_run(row: &rusqlite::Row) -> rusqlite::Result<JobRun> {
     if let Some(ha) = row.get::<_, Option<String>>(13)? {
         b = b.heartbeat_at(ha);
     }
+
     Ok(b.build())
 }
 

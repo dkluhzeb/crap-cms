@@ -1,9 +1,12 @@
 //! Field/column resolution helpers for FTS5 indexing.
 
-use crate::config::LocaleConfig;
-use crate::core::CollectionDefinition;
-use crate::core::field::FieldType;
-use crate::db::query::sanitize_locale;
+use std::collections::HashMap;
+
+use crate::{
+    config::LocaleConfig,
+    core::{CollectionDefinition, Registry, field::FieldType},
+    db::query::sanitize_locale,
+};
 
 /// Determine which logical fields should be indexed in the FTS5 table.
 ///
@@ -37,6 +40,7 @@ pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
 /// For localized fields, each field expands to `field__locale` for each locale.
 pub fn get_fts_columns(def: &CollectionDefinition, locale_config: &LocaleConfig) -> Vec<String> {
     let logical_fields = get_fts_fields(def);
+
     if logical_fields.is_empty() {
         return Vec::new();
     }
@@ -82,9 +86,9 @@ pub(super) fn json_richtext_columns(
 /// and registry. Used for FTS extraction of custom richtext node content.
 pub(super) fn build_node_searchable_map<'a>(
     def: Option<&'a CollectionDefinition>,
-    registry: Option<&'a crate::core::Registry>,
-) -> std::collections::HashMap<&'a str, Vec<&'a str>> {
-    let mut map = std::collections::HashMap::new();
+    registry: Option<&'a Registry>,
+) -> HashMap<&'a str, Vec<&'a str>> {
+    let mut map = HashMap::new();
     let (def, registry) = match (def, registry) {
         (Some(d), Some(r)) => (d, r),
         _ => return map,

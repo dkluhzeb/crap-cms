@@ -17,7 +17,7 @@ pub use features::{
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
 pub use server::{AdminConfig, CompressionMode, DatabaseConfig, ServerConfig};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -70,6 +70,7 @@ impl CrapConfig {
     /// causes an error.
     pub fn load(config_dir: &Path) -> Result<Self> {
         let config_path = config_dir.join("crap.toml");
+
         if config_path.exists() {
             let contents = std::fs::read_to_string(&config_path)
                 .with_context(|| format!("Failed to read {}", config_path.display()))?;
@@ -99,17 +100,17 @@ impl CrapConfig {
     pub fn validate(&self) -> Result<()> {
         // Fatal: database pool with no connections
         if self.database.pool_max_size == 0 {
-            anyhow::bail!("database.pool_max_size must be > 0");
+            bail!("database.pool_max_size must be > 0");
         }
 
         // Fatal: instant connection timeout
         if self.database.connection_timeout == 0 {
-            anyhow::bail!("database.connection_timeout must be > 0");
+            bail!("database.connection_timeout must be > 0");
         }
 
         // Fatal: Lua VM pool with no VMs
         if self.hooks.vm_pool_size == 0 {
-            anyhow::bail!("hooks.vm_pool_size must be > 0");
+            bail!("hooks.vm_pool_size must be > 0");
         }
 
         // Warning: no jobs will execute
@@ -174,6 +175,7 @@ impl CrapConfig {
     #[must_use]
     pub fn db_path(&self, config_dir: &Path) -> PathBuf {
         let p = Path::new(&self.database.path);
+
         if p.is_absolute() {
             p.to_path_buf()
         } else {

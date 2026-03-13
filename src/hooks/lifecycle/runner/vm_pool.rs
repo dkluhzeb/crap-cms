@@ -1,9 +1,11 @@
 //! Lua VM pool for concurrent hook execution.
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use mlua::Lua;
-use std::sync::{Condvar, Mutex};
-use std::time::Duration;
+use std::{
+    sync::{Condvar, Mutex},
+    time::Duration,
+};
 
 /// Pool of Lua VMs for concurrent hook execution.
 pub(super) struct VmPool {
@@ -25,7 +27,7 @@ impl VmPool {
         let mut pool = self
             .vms
             .lock()
-            .map_err(|e| anyhow::anyhow!("VM pool lock poisoned: {}", e))?;
+            .map_err(|e| anyhow!("VM pool lock poisoned: {}", e))?;
         loop {
             if let Some(vm) = pool.pop() {
                 return Ok(VmGuard {
@@ -36,8 +38,9 @@ impl VmPool {
             let (guard, wait_result) = self
                 .available
                 .wait_timeout(pool, timeout)
-                .map_err(|e| anyhow::anyhow!("VM pool condvar wait failed: {}", e))?;
+                .map_err(|e| anyhow!("VM pool condvar wait failed: {}", e))?;
             pool = guard;
+
             if wait_result.timed_out() {
                 // Try one more time after timeout — another thread may have returned a VM
                 if let Some(vm) = pool.pop() {

@@ -1,5 +1,7 @@
 //! Row-to-document conversion from SQLite result sets.
 
+use serde_json::{Number, Value};
+
 use crate::core::Document;
 use rusqlite::Row;
 use std::collections::HashMap;
@@ -50,24 +52,26 @@ fn normalize_timestamp(ts: String) -> String {
 }
 
 /// Convert a SQLite column value to a JSON value.
-fn sqlite_value_to_json(row: &Row, column: &str) -> rusqlite::Result<serde_json::Value> {
+fn sqlite_value_to_json(row: &Row, column: &str) -> rusqlite::Result<Value> {
     // Try each type in order: integer, real, text, null
     if let Ok(v) = row.get::<_, i64>(column) {
-        return Ok(serde_json::Value::Number(v.into()));
+        return Ok(Value::Number(v.into()));
     }
     if let Ok(v) = row.get::<_, f64>(column)
-        && let Some(n) = serde_json::Number::from_f64(v)
+        && let Some(n) = Number::from_f64(v)
     {
-        return Ok(serde_json::Value::Number(n));
+        return Ok(Value::Number(n));
     }
     if let Ok(v) = row.get::<_, String>(column) {
-        return Ok(serde_json::Value::String(v));
+        return Ok(Value::String(v));
     }
-    Ok(serde_json::Value::Null)
+    Ok(Value::Null)
 }
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use rusqlite::Connection;
 
@@ -96,10 +100,10 @@ mod tests {
         let mut stmt = conn
             .prepare("SELECT int_col FROM test WHERE id='1'")
             .unwrap();
-        let val: serde_json::Value = stmt
+        let val: Value = stmt
             .query_row([], |row| sqlite_value_to_json(row, "int_col"))
             .unwrap();
-        assert_eq!(val, serde_json::json!(42));
+        assert_eq!(val, json!(42));
     }
 
     #[test]
@@ -110,7 +114,7 @@ mod tests {
         let mut stmt = conn
             .prepare("SELECT real_col FROM test WHERE id='1'")
             .unwrap();
-        let val: serde_json::Value = stmt
+        let val: Value = stmt
             .query_row([], |row| sqlite_value_to_json(row, "real_col"))
             .unwrap();
         // SQLite stores 3.14 as float; check it's close
@@ -125,10 +129,10 @@ mod tests {
         let mut stmt = conn
             .prepare("SELECT text_col FROM test WHERE id='1'")
             .unwrap();
-        let val: serde_json::Value = stmt
+        let val: Value = stmt
             .query_row([], |row| sqlite_value_to_json(row, "text_col"))
             .unwrap();
-        assert_eq!(val, serde_json::json!("hello"));
+        assert_eq!(val, json!("hello"));
     }
 
     #[test]
@@ -139,7 +143,7 @@ mod tests {
         let mut stmt = conn
             .prepare("SELECT null_col FROM test WHERE id='1'")
             .unwrap();
-        let val: serde_json::Value = stmt
+        let val: Value = stmt
             .query_row([], |row| sqlite_value_to_json(row, "null_col"))
             .unwrap();
         assert!(val.is_null());
@@ -168,11 +172,8 @@ mod tests {
             .query_row([], |row| row_to_document(row, &columns))
             .unwrap();
         assert_eq!(doc.id, "doc1");
-        assert_eq!(
-            doc.fields.get("text_col").unwrap(),
-            &serde_json::json!("hello")
-        );
-        assert_eq!(doc.fields.get("int_col").unwrap(), &serde_json::json!(42));
+        assert_eq!(doc.fields.get("text_col").unwrap(), &json!("hello"));
+        assert_eq!(doc.fields.get("int_col").unwrap(), &json!(42));
         assert_eq!(doc.created_at.as_deref(), Some("2024-01-01"));
         assert_eq!(doc.updated_at.as_deref(), Some("2024-01-02"));
         // id, created_at, updated_at should NOT be in fields

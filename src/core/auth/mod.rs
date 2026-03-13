@@ -7,7 +7,7 @@ pub mod claims_builder;
 
 use std::sync::LazyLock;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use argon2::{
     Argon2,
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
@@ -33,14 +33,13 @@ pub fn hash_password(password: &str) -> Result<String> {
     let argon2 = Argon2::default();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| anyhow::anyhow!("Password hashing failed: {}", e))?;
+        .map_err(|e| anyhow!("Password hashing failed: {}", e))?;
     Ok(hash.to_string())
 }
 
 /// Verify a password against a stored hash.
 pub fn verify_password(password: &str, hash: &str) -> Result<bool> {
-    let parsed =
-        PasswordHash::new(hash).map_err(|e| anyhow::anyhow!("Invalid password hash: {}", e))?;
+    let parsed = PasswordHash::new(hash).map_err(|e| anyhow!("Invalid password hash: {}", e))?;
     Ok(Argon2::default()
         .verify_password(password.as_bytes(), &parsed)
         .is_ok())

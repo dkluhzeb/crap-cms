@@ -1,12 +1,17 @@
 //! Non-polymorphic relationship population helpers.
 
 use anyhow::Result;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use super::super::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
-use super::populate_relationships_cached;
-use crate::core::Document;
-use crate::db::query::read::{find_by_id, find_by_ids};
+use super::{
+    super::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json},
+    populate_relationships_cached,
+};
+use crate::{
+    core::{CollectionDefinition, Document, upload},
+    db::query::read::{find_by_id, find_by_ids},
+};
 
 /// Populate a non-polymorphic has-many field.
 pub(super) fn populate_nonpoly_has_many(
@@ -14,11 +19,11 @@ pub(super) fn populate_nonpoly_has_many(
     doc: &mut Document,
     field_name: &str,
     rel_collection: &str,
-    rel_def: &crate::core::CollectionDefinition,
+    rel_def: &CollectionDefinition,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     let ids: Vec<String> = match doc.fields.get(field_name) {
-        Some(serde_json::Value::Array(arr)) => arr
+        Some(Value::Array(arr)) => arr
             .iter()
             .filter_map(|v| v.as_str().map(|s| s.to_string()))
             .collect(),
@@ -44,10 +49,11 @@ pub(super) fn populate_nonpoly_has_many(
     let mut populated = Vec::new();
     for id in &ids {
         if visited.contains(&(rel_collection.to_string(), id.clone())) {
-            populated.push(serde_json::Value::String(id.clone()));
+            populated.push(Value::String(id.clone()));
             continue;
         }
         let hm_cache_key = (rel_collection.to_string(), id.clone());
+
         if let Some(cached) = ctx.cache.get(&hm_cache_key) {
             populated.push(document_to_json(cached.value(), rel_collection));
         } else {
@@ -56,7 +62,7 @@ pub(super) fn populate_nonpoly_has_many(
                     if let Some(ref uc) = rel_def.upload
                         && uc.enabled
                     {
-                        crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
+                        upload::assemble_sizes_object(&mut related_doc, uc);
                     }
                     populate_relationships_cached(
                         &PopulateContext {
@@ -78,13 +84,13 @@ pub(super) fn populate_nonpoly_has_many(
                     populated.push(document_to_json(&related_doc, rel_collection));
                 }
                 None => {
-                    populated.push(serde_json::Value::String(id.clone()));
+                    populated.push(Value::String(id.clone()));
                 }
             }
         }
     }
     doc.fields
-        .insert(field_name.to_string(), serde_json::Value::Array(populated));
+        .insert(field_name.to_string(), Value::Array(populated));
     Ok(())
 }
 
@@ -94,11 +100,11 @@ pub(super) fn populate_nonpoly_has_one(
     doc: &mut Document,
     field_name: &str,
     rel_collection: &str,
-    rel_def: &crate::core::CollectionDefinition,
+    rel_def: &CollectionDefinition,
     visited: &mut HashSet<(String, String)>,
 ) -> Result<()> {
     let id = match doc.fields.get(field_name) {
-        Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(Value::String(s)) if !s.is_empty() => s.clone(),
         _ => return Ok(()),
     };
 
@@ -107,6 +113,7 @@ pub(super) fn populate_nonpoly_has_one(
     }
 
     let ho_cache_key = (rel_collection.to_string(), id.clone());
+
     if let Some(cached) = ctx.cache.get(&ho_cache_key) {
         doc.fields.insert(
             field_name.to_string(),
@@ -118,7 +125,7 @@ pub(super) fn populate_nonpoly_has_one(
         if let Some(ref uc) = rel_def.upload
             && uc.enabled
         {
-            crate::core::upload::assemble_sizes_object(&mut related_doc, uc);
+            upload::assemble_sizes_object(&mut related_doc, uc);
         }
         populate_relationships_cached(
             &PopulateContext {
@@ -147,11 +154,12 @@ pub(super) fn populate_nonpoly_has_one(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::super::test_helpers::*;
     use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
-    use crate::core::Registry;
-    use crate::core::field::*;
+    use crate::core::{Document, Registry, field::*};
     use rusqlite::Connection;
     use std::collections::HashSet;
 
@@ -202,11 +210,9 @@ mod tests {
         registry.register_collection(posts_def.clone());
         registry.register_collection(cats_def);
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("tags".to_string(), serde_json::json!(["c1", "c2"]));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("tags".to_string(), json!(["c1", "c2"]));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-01".to_string());
 
@@ -278,14 +284,11 @@ mod tests {
         registry.register_collection(posts_def.clone());
         registry.register_collection(cats_def);
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("title".to_string(), json!("Hello"));
         // Reference IDs that don't exist in categories table
-        doc.fields.insert(
-            "tags".to_string(),
-            serde_json::json!(["nonexistent1", "nonexistent2"]),
-        );
+        doc.fields
+            .insert("tags".to_string(), json!(["nonexistent1", "nonexistent2"]));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -349,9 +352,8 @@ mod tests {
         registry.register_collection(posts_def.clone());
         registry.register_collection(cats_def);
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("tags".to_string(), serde_json::json!(["c1"]));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("tags".to_string(), json!(["c1"]));
 
         // Pre-mark c1 as visited — should keep it as ID string
         let mut visited = HashSet::new();
@@ -388,9 +390,8 @@ mod tests {
         let registry = make_registry_with_posts_and_authors();
         let posts_def = make_posts_def();
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), json!("a1"));
 
         // Mark a1 as already visited
         let mut visited = HashSet::new();
@@ -431,15 +432,14 @@ mod tests {
 
         // Pre-populate cache with a different name to distinguish from DB
         let cache = PopulateCache::new();
-        let mut cached_author = crate::core::Document::new("a1".to_string());
+        let mut cached_author = Document::new("a1".to_string());
         cached_author
             .fields
-            .insert("name".to_string(), serde_json::json!("CachedAlice"));
+            .insert("name".to_string(), json!("CachedAlice"));
         cache.insert(("authors".to_string(), "a1".to_string()), cached_author);
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("author".to_string(), json!("a1"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -494,15 +494,14 @@ mod tests {
 
         // Pre-populate cache with a different name to distinguish from DB
         let cache = PopulateCache::new();
-        let mut cached_cat = crate::core::Document::new("c1".to_string());
+        let mut cached_cat = Document::new("c1".to_string());
         cached_cat
             .fields
-            .insert("name".to_string(), serde_json::json!("CachedTech"));
+            .insert("name".to_string(), json!("CachedTech"));
         cache.insert(("categories".to_string(), "c1".to_string()), cached_cat);
 
-        let mut doc = crate::core::Document::new("p1".to_string());
-        doc.fields
-            .insert("tags".to_string(), serde_json::json!(["c1"]));
+        let mut doc = Document::new("p1".to_string());
+        doc.fields.insert("tags".to_string(), json!(["c1"]));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(

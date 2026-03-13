@@ -4,6 +4,7 @@ use super::{
     BlockDefinition, FieldAdmin, FieldTab, FieldType, JoinConfig, RelationshipConfig, SelectOption,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Lua function references for field-level access control (read/create/update).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -69,7 +70,7 @@ pub struct FieldDefinition {
     pub validate: Option<String>,
     /// Default value for the field when creating new items.
     #[serde(default)]
-    pub default_value: Option<serde_json::Value>,
+    pub default_value: Option<Value>,
     /// List of options for Select and Radio fields.
     #[serde(default)]
     pub options: Vec<SelectOption>,

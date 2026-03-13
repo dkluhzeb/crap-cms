@@ -1,10 +1,11 @@
 //! Array field join table operations.
 
 use anyhow::Result;
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use super::super::coerce_value;
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::field::{FieldDefinition, FieldType, flatten_array_sub_fields};
 
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
@@ -19,6 +20,7 @@ pub fn set_array_rows(
     locale: Option<&str>,
 ) -> Result<()> {
     let table_name = format!("{}_{}", collection, field_name);
+
     if let Some(loc) = locale {
         conn.execute(
             &format!(
@@ -34,7 +36,7 @@ pub fn set_array_rows(
         )?;
     }
 
-    let flat_subs = crate::core::field::flatten_array_sub_fields(sub_fields);
+    let flat_subs = flatten_array_sub_fields(sub_fields);
 
     if rows.is_empty() || flat_subs.is_empty() {
         return Ok(());
@@ -76,6 +78,7 @@ pub fn set_array_rows(
             Box::new(parent_id.to_string()),
             Box::new(order as i64),
         ];
+
         if let Some(loc) = locale {
             params.push(Box::new(loc.to_string()));
         }
@@ -99,9 +102,9 @@ pub fn find_array_rows(
     parent_id: &str,
     sub_fields: &[FieldDefinition],
     locale: Option<&str>,
-) -> Result<Vec<serde_json::Value>> {
+) -> Result<Vec<Value>> {
     let table_name = format!("{}_{}", collection, field_name);
-    let flat_subs = crate::core::field::flatten_array_sub_fields(sub_fields);
+    let flat_subs = flatten_array_sub_fields(sub_fields);
     let col_names: Vec<&str> = flat_subs.iter().map(|f| f.name.as_str()).collect();
     let select_cols = if col_names.is_empty() {
         "id".to_string()
@@ -128,15 +131,15 @@ pub fn find_array_rows(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
     let rows = stmt
         .query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
-            let mut map = serde_json::Map::new();
+            let mut map = Map::new();
             let id: String = row.get(0)?;
-            map.insert("id".to_string(), serde_json::Value::String(id));
+            map.insert("id".to_string(), Value::String(id));
             for (i, sf) in flat_subs.iter().enumerate() {
                 let val: rusqlite::types::Value = row.get(i + 1)?;
                 let json_val = match val {
-                    rusqlite::types::Value::Null => serde_json::Value::Null,
-                    rusqlite::types::Value::Integer(n) => serde_json::json!(n),
-                    rusqlite::types::Value::Real(f) => serde_json::json!(f),
+                    rusqlite::types::Value::Null => Value::Null,
+                    rusqlite::types::Value::Integer(n) => json!(n),
+                    rusqlite::types::Value::Real(f) => json!(f),
                     rusqlite::types::Value::Text(s) => {
                         // Composite sub-fields store JSON in TEXT columns —
                         // attempt to parse so nested data comes back structured.
@@ -148,16 +151,16 @@ pub fn find_array_rows(
                             | FieldType::Collapsible
                             | FieldType::Tabs
                             | FieldType::Json => {
-                                serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))
+                                serde_json::from_str(&s).unwrap_or(Value::String(s))
                             }
-                            _ => serde_json::Value::String(s),
+                            _ => Value::String(s),
                         }
                     }
-                    rusqlite::types::Value::Blob(_) => serde_json::Value::Null,
+                    rusqlite::types::Value::Blob(_) => Value::Null,
                 };
                 map.insert(sf.name.clone(), json_val);
             }
-            Ok(serde_json::Value::Object(map))
+            Ok(Value::Object(map))
         })?
         .filter_map(|r| r.ok())
         .collect();

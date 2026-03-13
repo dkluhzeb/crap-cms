@@ -1,10 +1,18 @@
 //! HookRunner methods for job execution and arbitrary Lua evaluation.
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 
-use crate::core::Document;
-use crate::hooks::lifecycle::execution::resolve_hook_function;
-use crate::hooks::lifecycle::types::{TxContext, UserContext};
+use crate::{
+    core::Document,
+    hooks::{
+        api,
+        lifecycle::{
+            execution::resolve_hook_function,
+            types::{TxContext, UserContext},
+        },
+    },
+};
 
 use super::HookRunner;
 
@@ -31,9 +39,9 @@ impl HookRunner {
             let ctx = lua.create_table()?;
 
             // Parse data JSON into Lua table
-            let data_value: serde_json::Value = serde_json::from_str(data_json)
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-            let data_lua = crate::hooks::api::json_to_lua(&lua, &data_value)?;
+            let data_value: JsonValue =
+                serde_json::from_str(data_json).unwrap_or(JsonValue::Object(JsonMap::new()));
+            let data_lua = api::json_to_lua(&lua, &data_value)?;
             ctx.set("data", data_lua)?;
 
             // Job metadata
@@ -53,7 +61,7 @@ impl HookRunner {
             match return_val {
                 mlua::Value::Nil => Ok(None),
                 other => {
-                    let json_val = crate::hooks::api::lua_to_json(&lua, &other)?;
+                    let json_val = api::lua_to_json(&lua, &other)?;
                     Ok(Some(serde_json::to_string(&json_val)?))
                 }
             }
@@ -84,6 +92,6 @@ impl HookRunner {
         lua.remove_app_data::<TxContext>();
         lua.remove_app_data::<UserContext>();
 
-        result.map_err(|e| anyhow::anyhow!("{}", e))
+        result.map_err(|e| anyhow!("{}", e))
     }
 }

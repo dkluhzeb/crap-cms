@@ -38,6 +38,7 @@ pub fn normalize_date_value(value: &str) -> String {
     // Try full RFC 3339 / ISO 8601 with timezone (e.g., 2026-01-15T09:00:00Z, 2026-01-15T09:00:00+05:00)
     if let Ok(dt) = DateTime::<FixedOffset>::parse_from_rfc3339(value) {
         let utc = dt.with_timezone(&Utc);
+
         return utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     }
 
@@ -46,6 +47,7 @@ pub fn normalize_date_value(value: &str) -> String {
         && let Ok(d) = NaiveDate::parse_from_str(value, "%Y-%m-%d")
     {
         let noon = d.and_hms_opt(12, 0, 0).expect("12:00:00 is valid");
+
         return noon.and_utc().format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
     }
 

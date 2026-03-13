@@ -2,14 +2,19 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::api::content;
-use crate::db::query::{Filter, FilterClause, FilterOp};
+use serde_json::{Map, Number, Value};
+
+use crate::{
+    api::content,
+    core::{
+        Document,
+        field::{FieldDefinition, FieldType},
+    },
+    db::query::{Filter, FilterClause, FilterOp},
+};
 
 /// Convert a core `Document` to a protobuf `Document`, mapping all fields to a prost Struct.
-pub(super) fn document_to_proto(
-    doc: &crate::core::Document,
-    collection: &str,
-) -> content::Document {
+pub(super) fn document_to_proto(doc: &Document, collection: &str) -> content::Document {
     let mut fields = prost_types::Struct {
         fields: BTreeMap::new(),
     };
@@ -28,23 +33,23 @@ pub(super) fn document_to_proto(
 }
 
 /// Convert a `serde_json::Value` to a `prost_types::Value` for protobuf serialization.
-pub(super) fn json_to_prost_value(v: &serde_json::Value) -> prost_types::Value {
+pub(super) fn json_to_prost_value(v: &Value) -> prost_types::Value {
     match v {
-        serde_json::Value::Null => prost_types::Value {
+        Value::Null => prost_types::Value {
             kind: Some(prost_types::value::Kind::NullValue(0)),
         },
-        serde_json::Value::Bool(b) => prost_types::Value {
+        Value::Bool(b) => prost_types::Value {
             kind: Some(prost_types::value::Kind::BoolValue(*b)),
         },
-        serde_json::Value::Number(n) => prost_types::Value {
+        Value::Number(n) => prost_types::Value {
             kind: Some(prost_types::value::Kind::NumberValue(
                 n.as_f64().unwrap_or(0.0),
             )),
         },
-        serde_json::Value::String(s) => prost_types::Value {
+        Value::String(s) => prost_types::Value {
             kind: Some(prost_types::value::Kind::StringValue(s.clone())),
         },
-        serde_json::Value::Array(arr) => {
+        Value::Array(arr) => {
             let values: Vec<_> = arr.iter().map(json_to_prost_value).collect();
             prost_types::Value {
                 kind: Some(prost_types::value::Kind::ListValue(
@@ -52,7 +57,7 @@ pub(super) fn json_to_prost_value(v: &serde_json::Value) -> prost_types::Value {
                 )),
             }
         }
-        serde_json::Value::Object(map) => {
+        Value::Object(map) => {
             let mut fields = BTreeMap::new();
             for (k, v) in map {
                 fields.insert(k.clone(), json_to_prost_value(v));
@@ -84,9 +89,7 @@ pub(super) fn prost_struct_to_hashmap(s: &prost_types::Struct) -> HashMap<String
 
 /// Convert a prost Struct to a JSON Value map, preserving arrays and nested objects.
 /// Used for extracting join table data (has-many relationships and arrays).
-pub(super) fn prost_struct_to_json_map(
-    s: &prost_types::Struct,
-) -> HashMap<String, serde_json::Value> {
+pub(super) fn prost_struct_to_json_map(s: &prost_types::Struct) -> HashMap<String, Value> {
     let mut map = HashMap::new();
     for (k, v) in &s.fields {
         map.insert(k.clone(), prost_value_to_json(v));
@@ -95,36 +98,34 @@ pub(super) fn prost_struct_to_json_map(
 }
 
 /// Convert a `prost_types::Value` back to a `serde_json::Value`.
-pub(super) fn prost_value_to_json(v: &prost_types::Value) -> serde_json::Value {
+pub(super) fn prost_value_to_json(v: &prost_types::Value) -> Value {
     match &v.kind {
-        Some(prost_types::value::Kind::NullValue(_)) => serde_json::Value::Null,
-        Some(prost_types::value::Kind::BoolValue(b)) => serde_json::Value::Bool(*b),
-        Some(prost_types::value::Kind::NumberValue(n)) => serde_json::Number::from_f64(*n)
-            .map(serde_json::Value::Number)
-            .unwrap_or(serde_json::Value::Null),
-        Some(prost_types::value::Kind::StringValue(s)) => serde_json::Value::String(s.clone()),
+        Some(prost_types::value::Kind::NullValue(_)) => Value::Null,
+        Some(prost_types::value::Kind::BoolValue(b)) => Value::Bool(*b),
+        Some(prost_types::value::Kind::NumberValue(n)) => Number::from_f64(*n)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        Some(prost_types::value::Kind::StringValue(s)) => Value::String(s.clone()),
         Some(prost_types::value::Kind::ListValue(list)) => {
-            serde_json::Value::Array(list.values.iter().map(prost_value_to_json).collect())
+            Value::Array(list.values.iter().map(prost_value_to_json).collect())
         }
         Some(prost_types::value::Kind::StructValue(s)) => {
-            let obj: serde_json::Map<String, serde_json::Value> = s
+            let obj: Map<String, Value> = s
                 .fields
                 .iter()
                 .map(|(k, v)| (k.clone(), prost_value_to_json(v)))
                 .collect();
-            serde_json::Value::Object(obj)
+            Value::Object(obj)
         }
-        None => serde_json::Value::Null,
+        None => Value::Null,
     }
 }
 
 /// Convert a `FieldDefinition` to a protobuf `FieldInfo`, including options, blocks, and relationship metadata.
-pub(super) fn field_def_to_proto(
-    field: &crate::core::field::FieldDefinition,
-) -> content::FieldInfo {
+pub(super) fn field_def_to_proto(field: &FieldDefinition) -> content::FieldInfo {
     // Tabs stores sub-fields in field.tabs[*].fields, not field.fields.
     // Flatten all tab sub-fields into the proto `fields` list.
-    let sub_fields: Vec<_> = if field.field_type == crate::core::field::FieldType::Tabs {
+    let sub_fields: Vec<_> = if field.field_type == FieldType::Tabs {
         field
             .tabs
             .iter()
@@ -170,7 +171,7 @@ pub(super) fn field_def_to_proto(
 /// Parse a JSON `where` clause into `Vec<FilterClause>`.
 /// Format: `{ "field": { "op": "value" }, "field2": "simple_value" }`
 pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, String> {
-    let obj: serde_json::Value =
+    let obj: Value =
         serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
 
     let map = obj
@@ -191,13 +192,13 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
                 let mut group = Vec::new();
                 for (f, v) in obj {
                     match v {
-                        serde_json::Value::String(s) => {
+                        Value::String(s) => {
                             group.push(Filter {
                                 field: f.clone(),
                                 op: FilterOp::Equals(s.clone()),
                             });
                         }
-                        serde_json::Value::Object(ops) => {
+                        Value::Object(ops) => {
                             for (op_name, op_value) in ops {
                                 let op = parse_filter_op(op_name, op_value)
                                     .map_err(|e| format!("or field '{}': {}", f, e))?;
@@ -222,13 +223,13 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
         }
 
         match value {
-            serde_json::Value::String(s) => {
+            Value::String(s) => {
                 clauses.push(FilterClause::Single(Filter {
                     field: field.clone(),
                     op: FilterOp::Equals(s.clone()),
                 }));
             }
-            serde_json::Value::Object(ops) => {
+            Value::Object(ops) => {
                 for (op_name, op_value) in ops {
                     let op = parse_filter_op(op_name, op_value)
                         .map_err(|e| format!("field '{}': {}", field, e))?;
@@ -250,10 +251,7 @@ pub(super) fn parse_where_json(json_str: &str) -> Result<Vec<FilterClause>, Stri
 }
 
 /// Parse a filter operator name (e.g. "equals", "greater_than") and its JSON value into a `FilterOp`.
-pub(super) fn parse_filter_op(
-    op_name: &str,
-    value: &serde_json::Value,
-) -> Result<FilterOp, String> {
+pub(super) fn parse_filter_op(op_name: &str, value: &Value) -> Result<FilterOp, String> {
     match op_name {
         "equals" => Ok(FilterOp::Equals(value_to_string(value)?)),
         "not_equals" => Ok(FilterOp::NotEquals(value_to_string(value)?)),
@@ -284,11 +282,11 @@ pub(super) fn parse_filter_op(
 }
 
 /// Convert a JSON value to its string representation. Only supports string, number, and boolean.
-pub(super) fn value_to_string(v: &serde_json::Value) -> Result<String, String> {
+pub(super) fn value_to_string(v: &Value) -> Result<String, String> {
     match v {
-        serde_json::Value::String(s) => Ok(s.clone()),
-        serde_json::Value::Number(n) => Ok(n.to_string()),
-        serde_json::Value::Bool(b) => Ok(b.to_string()),
+        Value::String(s) => Ok(s.clone()),
+        Value::Number(n) => Ok(n.to_string()),
+        Value::Bool(b) => Ok(b.to_string()),
         _ => Err("value must be string, number, or boolean".to_string()),
     }
 }

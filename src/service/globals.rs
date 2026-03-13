@@ -2,13 +2,18 @@
 
 use anyhow::{Context as _, Result};
 
-use crate::core::collection::GlobalDefinition;
-use crate::core::document::Document;
-use crate::db::DbPool;
-use crate::db::query;
-use crate::hooks::lifecycle::HookRunner;
+use rusqlite::TransactionBehavior;
 
-use super::{WriteInput, WriteResult, build_before_ctx, build_hook_data, run_after_change_hooks};
+use crate::{
+    core::{collection::GlobalDefinition, document::Document},
+    db::{DbPool, query},
+    hooks::lifecycle::HookRunner,
+};
+
+use super::{
+    WriteInput, WriteResult, build_before_ctx, build_hook_data, run_after_change_hooks,
+    versions::{self, VersionSnapshotCtx},
+};
 
 /// Update a global document within a single transaction: before-hooks → update → after-hooks.
 /// When `draft` is true and the global has drafts enabled, creates a version-only save.
@@ -27,7 +32,7 @@ pub fn update_global_document(
 
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("Start transaction")?;
 
     let global_table = format!("_global_{}", slug);
@@ -56,7 +61,7 @@ pub fn update_global_document(
 
     let doc = if is_draft && def.has_versions() {
         let existing_doc = query::get_global(&tx, slug, def, input.locale_ctx)?;
-        crate::service::versions::save_draft_version(
+        versions::save_draft_version(
             &tx,
             &global_table,
             "default",
@@ -76,15 +81,16 @@ pub fn update_global_document(
             &final_ctx.data,
             input.locale_ctx,
         )?;
+
         if def.has_versions() {
-            let ctx = crate::service::versions::VersionSnapshotCtx {
+            let ctx = VersionSnapshotCtx {
                 table: &global_table,
                 parent_id: "default",
                 fields: &def.fields,
                 versions: def.versions.as_ref(),
                 has_drafts: def.has_drafts(),
             };
-            crate::service::versions::create_version_snapshot(&tx, &ctx, "published", &doc)?;
+            versions::create_version_snapshot(&tx, &ctx, "published", &doc)?;
         }
         doc
     };

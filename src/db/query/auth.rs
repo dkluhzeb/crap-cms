@@ -3,8 +3,10 @@
 use anyhow::{Context as _, Result};
 
 use super::get_column_names;
-use crate::core::{CollectionDefinition, Document};
-use crate::db::document::row_to_document;
+use crate::{
+    core::{CollectionDefinition, Document, auth::hash_password},
+    db::document::row_to_document,
+};
 
 /// Find a document by email in an auth collection.
 pub fn find_by_email(
@@ -58,7 +60,7 @@ pub fn update_password(
     id: &str,
     password: &str,
 ) -> Result<()> {
-    let hash = crate::core::auth::hash_password(password)?;
+    let hash = hash_password(password)?;
     let sql = format!("UPDATE {} SET _password_hash = ?1 WHERE id = ?2", slug);
     conn.execute(&sql, rusqlite::params![hash, id])
         .with_context(|| format!("Failed to update password for {} in {}", id, slug))?;

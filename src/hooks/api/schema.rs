@@ -3,7 +3,7 @@
 use anyhow::Result;
 use mlua::{Lua, Table, Value};
 
-use crate::core::SharedRegistry;
+use crate::core::{CollectionDefinition, SharedRegistry, field::FieldDefinition};
 
 /// Register `crap.schema` — read-only collection/global introspection.
 pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
@@ -32,6 +32,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
                 let tbl = lua.create_table()?;
                 tbl.set("slug", def.slug.as_str())?;
                 let labels = lua.create_table()?;
+
                 if let Some(ref s) = def.labels.singular {
                     labels.set("singular", s.resolve_default())?;
                 }
@@ -63,6 +64,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
             let item = lua.create_table()?;
             item.set("slug", def.slug.as_str())?;
             let labels = lua.create_table()?;
+
             if let Some(ref s) = def.labels.singular {
                 labels.set("singular", s.resolve_default())?;
             }
@@ -88,6 +90,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
             let item = lua.create_table()?;
             item.set("slug", def.slug.as_str())?;
             let labels = lua.create_table()?;
+
             if let Some(ref s) = def.labels.singular {
                 labels.set("singular", s.resolve_default())?;
             }
@@ -107,13 +110,11 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
 }
 
 /// Convert a CollectionDefinition to a Lua table for crap.schema.get_collection().
-fn collection_def_to_lua_table(
-    lua: &Lua,
-    def: &crate::core::CollectionDefinition,
-) -> mlua::Result<Table> {
+fn collection_def_to_lua_table(lua: &Lua, def: &CollectionDefinition) -> mlua::Result<Table> {
     let tbl = lua.create_table()?;
     tbl.set("slug", def.slug.as_str())?;
     let labels = lua.create_table()?;
+
     if let Some(ref s) = def.labels.singular {
         labels.set("singular", s.resolve_default())?;
     }
@@ -136,10 +137,7 @@ fn collection_def_to_lua_table(
 }
 
 /// Convert a FieldDefinition to a Lua table for schema introspection.
-fn field_def_to_lua_table(
-    lua: &Lua,
-    f: &crate::core::field::FieldDefinition,
-) -> mlua::Result<Table> {
+fn field_def_to_lua_table(lua: &Lua, f: &FieldDefinition) -> mlua::Result<Table> {
     let tbl = lua.create_table()?;
     tbl.set("name", f.name.as_str())?;
     tbl.set("type", f.field_type.as_str())?;
@@ -149,6 +147,7 @@ fn field_def_to_lua_table(
 
     if let Some(ref rc) = f.relationship {
         let rel = lua.create_table()?;
+
         if rc.is_polymorphic() {
             let arr = lua.create_table()?;
             for (i, slug) in rc.polymorphic.iter().enumerate() {
@@ -159,6 +158,7 @@ fn field_def_to_lua_table(
             rel.set("collection", rc.collection.as_str())?;
         }
         rel.set("has_many", rc.has_many)?;
+
         if let Some(md) = rc.max_depth {
             rel.set("max_depth", md)?;
         }
@@ -236,6 +236,7 @@ fn field_def_to_lua_table(
         for (i, b) in f.blocks.iter().enumerate() {
             let bt = lua.create_table()?;
             bt.set("type", b.block_type.as_str())?;
+
             if let Some(ref lbl) = b.label {
                 bt.set("label", lbl.resolve_default())?;
             }
@@ -261,42 +262,37 @@ fn field_def_to_lua_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{
+        CollectionDefinition, Registry, SharedRegistry,
+        collection::GlobalDefinition,
+        field::{
+            BlockDefinition, FieldDefinition, FieldType, JoinConfig, LocalizedString,
+            RelationshipConfig,
+        },
+    };
     use mlua::Lua;
     use std::sync::{Arc, RwLock};
 
-    fn make_registry_with_collection() -> crate::core::SharedRegistry {
-        use crate::core::field::LocalizedString;
-        let mut reg = crate::core::Registry::new();
-        let mut posts = crate::core::CollectionDefinition::new("posts");
+    fn make_registry_with_collection() -> SharedRegistry {
+        let mut reg = Registry::new();
+        let mut posts = CollectionDefinition::new("posts");
         posts.labels.singular = Some(LocalizedString::Plain("Post".to_string()));
         posts.labels.plural = Some(LocalizedString::Plain("Posts".to_string()));
         posts.timestamps = true;
-        let mut tags_rel = crate::core::field::RelationshipConfig::new("tags", true);
+        let mut tags_rel = RelationshipConfig::new("tags", true);
         tags_rel.max_depth = Some(1);
         posts.fields = vec![
-            crate::core::field::FieldDefinition::builder(
-                "title",
-                crate::core::field::FieldType::Text,
-            )
-            .required(true)
-            .build(),
-            crate::core::field::FieldDefinition::builder(
-                "tags",
-                crate::core::field::FieldType::Relationship,
-            )
-            .relationship(tags_rel)
-            .build(),
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("tags", FieldType::Relationship)
+                .relationship(tags_rel)
+                .build(),
         ];
         reg.register_collection(posts);
-        let mut settings = crate::core::collection::GlobalDefinition::new("settings");
+        let mut settings = GlobalDefinition::new("settings");
         settings.labels.singular = Some(LocalizedString::Plain("Setting".to_string()));
-        settings.fields = vec![
-            crate::core::field::FieldDefinition::builder(
-                "site_name",
-                crate::core::field::FieldType::Text,
-            )
-            .build(),
-        ];
+        settings.fields = vec![FieldDefinition::builder("site_name", FieldType::Text).build()];
         reg.register_global(settings);
         Arc::new(RwLock::new(reg))
     }
@@ -376,6 +372,7 @@ mod tests {
         let schema: Table = crap.get("schema").unwrap();
         let get_global: mlua::Function = schema.get("get_global").unwrap();
         let result: Value = get_global.call("settings".to_string()).unwrap();
+
         if let Value::Table(tbl) = result {
             let slug: String = tbl.get("slug").unwrap();
             assert_eq!(slug, "settings");
@@ -420,14 +417,11 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_polymorphic_relationship() {
         let lua = Lua::new();
-        let mut rel_cfg = crate::core::field::RelationshipConfig::new("articles", true);
+        let mut rel_cfg = RelationshipConfig::new("articles", true);
         rel_cfg.polymorphic = vec!["articles".to_string(), "pages".to_string()];
-        let field = crate::core::field::FieldDefinition::builder(
-            "refs",
-            crate::core::field::FieldType::Relationship,
-        )
-        .relationship(rel_cfg)
-        .build();
+        let field = FieldDefinition::builder("refs", FieldType::Relationship)
+            .relationship(rel_cfg)
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         let rel: Table = tbl.get("relationship").unwrap();
@@ -444,12 +438,9 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_non_polymorphic_relationship() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "author",
-            crate::core::field::FieldType::Relationship,
-        )
-        .relationship(crate::core::field::RelationshipConfig::new("users", false))
-        .build();
+        let field = FieldDefinition::builder("author", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("users", false))
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         let rel: Table = tbl.get("relationship").unwrap();
@@ -461,11 +452,7 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_richtext_features() {
         let lua = Lua::new();
-        let mut field = crate::core::field::FieldDefinition::builder(
-            "body",
-            crate::core::field::FieldType::Richtext,
-        )
-        .build();
+        let mut field = FieldDefinition::builder("body", FieldType::Richtext).build();
         field.admin.features = vec![
             "bold".to_string(),
             "italic".to_string(),
@@ -485,11 +472,7 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_richtext_no_features() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "body",
-            crate::core::field::FieldType::Richtext,
-        )
-        .build();
+        let field = FieldDefinition::builder("body", FieldType::Richtext).build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         // No features key when empty
@@ -501,15 +484,12 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_min_max_length_and_value() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "score",
-            crate::core::field::FieldType::Number,
-        )
-        .min_length(2)
-        .max_length(100)
-        .min(0.5)
-        .max(99.9)
-        .build();
+        let field = FieldDefinition::builder("score", FieldType::Number)
+            .min_length(2)
+            .max_length(100)
+            .min(0.5)
+            .max(99.9)
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         let min_length: usize = tbl.get("min_length").unwrap();
@@ -526,12 +506,9 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_has_many() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "tags",
-            crate::core::field::FieldType::Select,
-        )
-        .has_many(true)
-        .build();
+        let field = FieldDefinition::builder("tags", FieldType::Select)
+            .has_many(true)
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         let has_many: bool = tbl.get("has_many").unwrap();
@@ -542,13 +519,10 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_min_max_date() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "published_at",
-            crate::core::field::FieldType::Date,
-        )
-        .min_date("2020-01-01")
-        .max_date("2030-12-31")
-        .build();
+        let field = FieldDefinition::builder("published_at", FieldType::Date)
+            .min_date("2020-01-01")
+            .max_date("2030-12-31")
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         let min_date: String = tbl.get("min_date").unwrap();
@@ -561,11 +535,7 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_language() {
         let lua = Lua::new();
-        let mut field = crate::core::field::FieldDefinition::builder(
-            "snippet",
-            crate::core::field::FieldType::Code,
-        )
-        .build();
+        let mut field = FieldDefinition::builder("snippet", FieldType::Code).build();
         field.admin.language = Some("javascript".to_string());
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
@@ -577,11 +547,7 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_picker() {
         let lua = Lua::new();
-        let mut field = crate::core::field::FieldDefinition::builder(
-            "layout",
-            crate::core::field::FieldType::Blocks,
-        )
-        .build();
+        let mut field = FieldDefinition::builder("layout", FieldType::Blocks).build();
         field.admin.picker = Some("card".to_string());
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
@@ -593,12 +559,9 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_join_config() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "comments",
-            crate::core::field::FieldType::Join,
-        )
-        .join(crate::core::field::JoinConfig::new("comments", "post_id"))
-        .build();
+        let field = FieldDefinition::builder("comments", FieldType::Join)
+            .join(JoinConfig::new("comments", "post_id"))
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         let collection: String = tbl.get("collection").unwrap();
@@ -611,24 +574,14 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_sub_fields() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "address",
-            crate::core::field::FieldType::Group,
-        )
-        .fields(vec![
-            crate::core::field::FieldDefinition::builder(
-                "street",
-                crate::core::field::FieldType::Text,
-            )
-            .build(),
-            crate::core::field::FieldDefinition::builder(
-                "city",
-                crate::core::field::FieldType::Text,
-            )
-            .required(true)
-            .build(),
-        ])
-        .build();
+        let field = FieldDefinition::builder("address", FieldType::Group)
+            .fields(vec![
+                FieldDefinition::builder("street", FieldType::Text).build(),
+                FieldDefinition::builder("city", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
 
         let sub: Table = tbl.get("fields").unwrap();
@@ -646,12 +599,9 @@ mod tests {
     // evaluates to None and skips — exercises the None path rather than Some).
     #[test]
     fn get_global_with_no_plural_label() {
-        use std::sync::{Arc, RwLock};
-        let mut reg = crate::core::Registry::new();
-        let mut branding = crate::core::collection::GlobalDefinition::new("branding");
-        branding.labels.singular = Some(crate::core::field::LocalizedString::Plain(
-            "Brand".to_string(),
-        ));
+        let mut reg = Registry::new();
+        let mut branding = GlobalDefinition::new("branding");
+        branding.labels.singular = Some(LocalizedString::Plain("Brand".to_string()));
         // no plural label
         reg.register_global(branding);
         let registry = Arc::new(RwLock::new(reg));
@@ -681,29 +631,20 @@ mod tests {
     #[test]
     fn field_def_to_lua_table_blocks_with_group_and_image() {
         let lua = Lua::new();
-        let field = crate::core::field::FieldDefinition::builder(
-            "content",
-            crate::core::field::FieldType::Blocks,
-        )
-        .blocks({
-            let mut hero = crate::core::field::BlockDefinition::new("hero", vec![]);
-            hero.label = Some(crate::core::field::LocalizedString::Plain(
-                "Hero".to_string(),
-            ));
-            hero.group = Some("Layout".to_string());
-            hero.image_url = Some("/static/blocks/hero.svg".to_string());
-            let mut text_block = crate::core::field::BlockDefinition::new("text", vec![]);
-            text_block.label = Some(crate::core::field::LocalizedString::Plain(
-                "Text".to_string(),
-            ));
-            text_block.group = Some("Content".to_string());
-            let mut divider = crate::core::field::BlockDefinition::new("divider", vec![]);
-            divider.label = Some(crate::core::field::LocalizedString::Plain(
-                "Divider".to_string(),
-            ));
-            vec![hero, text_block, divider]
-        })
-        .build();
+        let field = FieldDefinition::builder("content", FieldType::Blocks)
+            .blocks({
+                let mut hero = BlockDefinition::new("hero", vec![]);
+                hero.label = Some(LocalizedString::Plain("Hero".to_string()));
+                hero.group = Some("Layout".to_string());
+                hero.image_url = Some("/static/blocks/hero.svg".to_string());
+                let mut text_block = BlockDefinition::new("text", vec![]);
+                text_block.label = Some(LocalizedString::Plain("Text".to_string()));
+                text_block.group = Some("Content".to_string());
+                let mut divider = BlockDefinition::new("divider", vec![]);
+                divider.label = Some(LocalizedString::Plain("Divider".to_string()));
+                vec![hero, text_block, divider]
+            })
+            .build();
         let tbl = field_def_to_lua_table(&lua, &field).unwrap();
         let blocks: Table = tbl.get("blocks").unwrap();
 

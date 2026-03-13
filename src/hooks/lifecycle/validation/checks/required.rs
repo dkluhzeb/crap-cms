@@ -1,5 +1,9 @@
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{
+    field::{FieldDefinition, FieldType},
+    validate::FieldError,
+};
 use std::collections::HashMap;
 
 /// Check required constraint. Skipped for checkboxes, drafts, and partial updates.
@@ -7,7 +11,7 @@ use std::collections::HashMap;
 pub(crate) fn check_required(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     is_draft: bool,
     is_update: bool,
@@ -23,10 +27,11 @@ pub(crate) fn check_required(
 
     if !field.has_parent_column() {
         let has_items = match value {
-            Some(serde_json::Value::Array(arr)) => !arr.is_empty(),
-            Some(serde_json::Value::String(s)) => !s.is_empty(),
+            Some(Value::Array(arr)) => !arr.is_empty(),
+            Some(Value::String(s)) => !s.is_empty(),
             _ => false,
         };
+
         if !has_items {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
@@ -37,11 +42,12 @@ pub(crate) fn check_required(
         }
     } else if field.has_many {
         let has_items = match value {
-            Some(serde_json::Value::String(s)) => serde_json::from_str::<Vec<serde_json::Value>>(s)
+            Some(Value::String(s)) => serde_json::from_str::<Vec<Value>>(s)
                 .map(|arr| !arr.is_empty())
                 .unwrap_or(!s.is_empty()),
             _ => false,
         };
+
         if !has_items {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
@@ -63,6 +69,7 @@ pub(crate) fn check_required(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::field::RelationshipConfig;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
@@ -163,7 +170,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("tags", FieldType::Relationship)
                 .required(true)
-                .relationship(crate::core::field::RelationshipConfig::new("tags", true))
+                .relationship(RelationshipConfig::new("tags", true))
                 .build(),
         ];
         let mut data = HashMap::new();
@@ -193,7 +200,7 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("tags", FieldType::Relationship)
                 .required(true)
-                .relationship(crate::core::field::RelationshipConfig::new("tags", true))
+                .relationship(RelationshipConfig::new("tags", true))
                 .build(),
         ];
         let mut data = HashMap::new();

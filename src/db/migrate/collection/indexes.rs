@@ -1,10 +1,16 @@
 //! B-tree index sync for collection tables.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use std::collections::HashSet;
 
-use crate::config::LocaleConfig;
-use crate::db::migrate::helpers::{collect_column_specs, sanitize_locale};
+use crate::{
+    config::LocaleConfig,
+    core::CollectionDefinition,
+    db::{
+        migrate::helpers::{collect_column_specs, sanitize_locale},
+        query::is_valid_identifier,
+    },
+};
 
 /// Sync B-tree indexes for a collection table: field-level `index: true` and
 /// collection-level compound `indexes`. Idempotent — creates missing indexes,
@@ -12,7 +18,7 @@ use crate::db::migrate::helpers::{collect_column_specs, sanitize_locale};
 pub(super) fn sync_indexes(
     conn: &rusqlite::Connection,
     slug: &str,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let mut desired: HashSet<String> = HashSet::new();
@@ -47,8 +53,8 @@ pub(super) fn sync_indexes(
     for index_def in &def.indexes {
         // Validate all field names
         for field_name in &index_def.fields {
-            if !crate::db::query::is_valid_identifier(field_name) {
-                anyhow::bail!(
+            if !is_valid_identifier(field_name) {
+                bail!(
                     "Invalid field name '{}' in compound index for collection '{}'",
                     field_name,
                     slug

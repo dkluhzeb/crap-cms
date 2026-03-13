@@ -1,16 +1,20 @@
 //! Static (non-CRUD) tool implementations: collection listing, describe, field types,
 //! CLI reference, and config file operations.
 
-use std::path::Path;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result, bail};
 use serde_json::{Value, json};
 
-use crate::config::McpConfig;
-use crate::core::Registry;
+use crate::{config::McpConfig, core::Registry};
 
-use super::super::schema::{CrudOp, collection_input_schema, global_input_schema};
-use super::should_include;
+use super::{
+    super::schema::{CrudOp, collection_input_schema, global_input_schema},
+    should_include,
+};
 
 pub(super) fn exec_list_collections(registry: &Registry, mcp_config: &McpConfig) -> Result<String> {
     let mut result = Vec::new();
@@ -63,6 +67,7 @@ pub(super) fn exec_describe_collection(
             "has_drafts": def.has_drafts(),
             "schema": schema,
         });
+
         return Ok(serde_json::to_string_pretty(&result)?);
     }
 
@@ -74,6 +79,7 @@ pub(super) fn exec_describe_collection(
             "label": def.display_name(),
             "schema": schema,
         });
+
         return Ok(serde_json::to_string_pretty(&result)?);
     }
 
@@ -487,9 +493,9 @@ pub(super) fn exec_cli_reference(args: &Value) -> Result<String> {
 
 /// Safely resolve a relative path within the config directory.
 /// Rejects absolute paths, `..` components, and symlinks escaping the boundary.
-pub(super) fn safe_config_path(config_dir: &Path, relative: &str) -> Result<std::path::PathBuf> {
+pub(super) fn safe_config_path(config_dir: &Path, relative: &str) -> Result<PathBuf> {
     // Reject absolute paths outright (on Unix, Path::join with absolute replaces the base)
-    if std::path::Path::new(relative).is_absolute() {
+    if Path::new(relative).is_absolute() {
         bail!("Absolute paths not allowed");
     }
     // Reject .. traversal
@@ -506,6 +512,7 @@ pub(super) fn safe_config_path(config_dir: &Path, relative: &str) -> Result<std:
     // If file exists, canonicalize it. Otherwise verify the parent is inside config_dir.
     if full_path.exists() {
         let canonical = full_path.canonicalize()?;
+
         if !canonical.starts_with(&canonical_base) {
             bail!("Path escapes config directory");
         }
@@ -513,6 +520,7 @@ pub(super) fn safe_config_path(config_dir: &Path, relative: &str) -> Result<std:
         // For new files, check that the parent stays inside config_dir
         if parent.exists() {
             let canonical_parent = parent.canonicalize()?;
+
             if !canonical_parent.starts_with(&canonical_base) {
                 bail!("Path escapes config directory");
             }
@@ -527,7 +535,7 @@ pub(super) fn exec_read_config_file(args: &Value, config_dir: &Path) -> Result<S
         .and_then(|v| v.as_str())
         .context("Missing 'path' argument")?;
     let full_path = safe_config_path(config_dir, path)?;
-    let content = std::fs::read_to_string(&full_path)
+    let content = fs::read_to_string(&full_path)
         .with_context(|| format!("Failed to read {}", full_path.display()))?;
     Ok(content)
 }
@@ -542,11 +550,12 @@ pub(super) fn exec_write_config_file(args: &Value, config_dir: &Path) -> Result<
         .and_then(|v| v.as_str())
         .context("Missing 'content' argument")?;
     let full_path = safe_config_path(config_dir, path)?;
+
     if let Some(parent) = full_path.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
     tracing::info!("MCP write_config_file: {}", path);
-    std::fs::write(&full_path, content)
+    fs::write(&full_path, content)
         .with_context(|| format!("Failed to write {}", full_path.display()))?;
     Ok(json!({ "written": path }).to_string())
 }
@@ -559,8 +568,9 @@ pub(super) fn exec_list_config_files(args: &Value, config_dir: &Path) -> Result<
         safe_config_path(config_dir, subdir)?
     };
     let mut files = Vec::new();
+
     if dir.is_dir() {
-        for entry in std::fs::read_dir(&dir)? {
+        for entry in fs::read_dir(&dir)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().to_string();
             let is_dir = entry.file_type()?.is_dir();

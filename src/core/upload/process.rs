@@ -1,17 +1,22 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    fs,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context as _, Result, bail};
 
-use super::collection_upload::CollectionUpload;
-use super::format::FormatResult;
-use super::processed_upload::ProcessedUpload;
-use super::processed_upload_builder::ProcessedUploadBuilder;
-use super::queued_conversion_builder::QueuedConversionBuilder;
-use super::resize::{resize_image, save_avif, save_webp};
-use super::size_result_builder::SizeResultBuilder;
-use super::uploaded_file::UploadedFile;
-use super::validate::{format_filesize, mime_matches, sanitize_filename, validate_mime_type};
+use super::{
+    collection_upload::CollectionUpload,
+    format::FormatResult,
+    processed_upload::ProcessedUpload,
+    processed_upload_builder::ProcessedUploadBuilder,
+    queued_conversion_builder::QueuedConversionBuilder,
+    resize::{resize_image, save_avif, save_webp},
+    size_result_builder::SizeResultBuilder,
+    uploaded_file::UploadedFile,
+    validate::{format_filesize, mime_matches, sanitize_filename, validate_mime_type},
+};
 
 /// RAII guard that deletes written files if the upload process fails.
 /// Call `commit()` on success to prevent cleanup.
@@ -41,7 +46,7 @@ impl Drop for CleanupGuard {
     fn drop(&mut self) {
         if !self.committed {
             for path in &self.files {
-                let _ = std::fs::remove_file(path);
+                let _ = fs::remove_file(path);
             }
         }
     }
@@ -53,7 +58,7 @@ impl Drop for CleanupGuard {
 pub fn process_upload(
     file: UploadedFile,
     upload_config: &CollectionUpload,
-    config_dir: &std::path::Path,
+    config_dir: &Path,
     collection_slug: &str,
     global_max_file_size: u64,
 ) -> Result<ProcessedUpload> {
@@ -67,6 +72,7 @@ pub fn process_upload(
     // claimed content_type. Files without magic bytes (text, CSS, JS) pass through.
     if let Some(detected) = infer::get(&file.data) {
         let detected_mime = detected.mime_type();
+
         if !mime_matches(detected_mime, &file.content_type)
             && !mime_matches(&file.content_type, detected_mime)
         {
@@ -81,6 +87,7 @@ pub fn process_upload(
     // Validate file size
     let max_size = upload_config.max_file_size.unwrap_or(global_max_file_size);
     let filesize = file.data.len() as u64;
+
     if filesize > max_size {
         bail!(
             "File size {} exceeds maximum allowed size {}",
@@ -96,7 +103,7 @@ pub fn process_upload(
 
     // Create upload directory
     let upload_dir = config_dir.join("uploads").join(collection_slug);
-    std::fs::create_dir_all(&upload_dir).with_context(|| {
+    fs::create_dir_all(&upload_dir).with_context(|| {
         format!(
             "Failed to create upload directory: {}",
             upload_dir.display()
@@ -108,7 +115,7 @@ pub fn process_upload(
 
     // Save original file
     let original_path = upload_dir.join(&unique_filename);
-    std::fs::write(&original_path, &file.data)
+    fs::write(&original_path, &file.data)
         .with_context(|| format!("Failed to write file: {}", original_path.display()))?;
     guard.push(original_path);
 
@@ -217,6 +224,7 @@ pub fn process_upload(
         .sizes(sizes)
         .queued_conversions(queued_conversions)
         .created_files(created_files);
+
     if let Some(w) = width {
         builder = builder.width(w);
     }
@@ -228,6 +236,8 @@ pub fn process_upload(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::core::upload::{
         FormatOptions, FormatQuality, ImageFit, ImageSizeBuilder, UploadedFileBuilder,
@@ -625,8 +635,8 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let f1 = tmp.path().join("a.txt");
         let f2 = tmp.path().join("b.txt");
-        std::fs::write(&f1, b"a").unwrap();
-        std::fs::write(&f2, b"b").unwrap();
+        fs::write(&f1, b"a").unwrap();
+        fs::write(&f2, b"b").unwrap();
 
         {
             let mut guard = CleanupGuard::new();
@@ -643,7 +653,7 @@ mod tests {
     fn cleanup_guard_keeps_files_on_commit() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let f1 = tmp.path().join("keep.txt");
-        std::fs::write(&f1, b"keep").unwrap();
+        fs::write(&f1, b"keep").unwrap();
 
         {
             let mut guard = CleanupGuard::new();

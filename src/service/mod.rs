@@ -15,28 +15,31 @@ pub use globals::update_global_document;
 
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 
-use crate::core::CollectionDefinition;
-use crate::core::document::Document;
-use crate::core::field::FieldDefinition;
-use crate::db::query::{self, LocaleContext};
-use crate::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
+use serde_json::Value;
+
+use crate::{
+    config::PasswordPolicy,
+    core::{CollectionDefinition, collection::Hooks, document::Document, field::FieldDefinition},
+    db::query::{self, LocaleContext},
+    hooks::lifecycle::{HookContext, HookEvent, HookRunner},
+};
 
 /// Validate a password against the configured policy. Call this before any
 /// password-setting operation (create, update, reset).
-pub fn validate_password(password: &str, policy: &crate::config::PasswordPolicy) -> Result<()> {
+pub fn validate_password(password: &str, policy: &PasswordPolicy) -> Result<()> {
     policy.validate(password)
 }
 
 /// Result of a write operation: the document and the request-scoped hook context.
-pub type WriteResult = (Document, HashMap<String, serde_json::Value>);
+pub type WriteResult = (Document, HashMap<String, Value>);
 
 /// Input data for a write operation (create/update). Bundles the 6 data parameters
 /// that callers provide, reducing argument count on public API functions.
 pub struct WriteInput<'a> {
     pub data: HashMap<String, String>,
-    pub join_data: &'a HashMap<String, serde_json::Value>,
+    pub join_data: &'a HashMap<String, Value>,
     pub password: Option<&'a str>,
     pub locale_ctx: Option<&'a LocaleContext>,
     pub locale: Option<String>,
@@ -48,11 +51,11 @@ pub struct WriteInput<'a> {
 /// Converts string values to JSON strings and merges in blocks/arrays/has-many.
 pub(crate) fn build_hook_data(
     data: &HashMap<String, String>,
-    join_data: &HashMap<String, serde_json::Value>,
-) -> HashMap<String, serde_json::Value> {
-    let mut hook_data: HashMap<String, serde_json::Value> = data
+    join_data: &HashMap<String, Value>,
+) -> HashMap<String, Value> {
+    let mut hook_data: HashMap<String, Value> = data
         .iter()
-        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
         .collect();
     for (k, v) in join_data {
         hook_data.insert(k.clone(), v.clone());
@@ -64,7 +67,7 @@ pub(crate) fn build_hook_data(
 pub(crate) fn build_before_ctx(
     slug: &str,
     operation: &str,
-    hook_data: HashMap<String, serde_json::Value>,
+    hook_data: HashMap<String, Value>,
     locale: Option<String>,
     is_draft: bool,
     user: Option<&Document>,
@@ -75,6 +78,7 @@ pub(crate) fn build_before_ctx(
         .draft(is_draft)
         .user(user)
         .ui_locale(ui_locale);
+
     if let Some(l) = locale {
         builder = builder.locale(l);
     }
@@ -86,26 +90,27 @@ pub(crate) fn build_before_ctx(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn run_after_change_hooks(
     runner: &HookRunner,
-    hooks: &crate::core::collection::Hooks,
+    hooks: &Hooks,
     fields: &[FieldDefinition],
     slug: &str,
     operation: &str,
     doc: &Document,
     locale: Option<String>,
     is_draft: bool,
-    req_context: HashMap<String, serde_json::Value>,
+    req_context: HashMap<String, Value>,
     tx: &rusqlite::Connection,
     user: Option<&Document>,
     ui_locale: Option<&str>,
-) -> Result<HashMap<String, serde_json::Value>> {
+) -> Result<HashMap<String, Value>> {
     let mut after_data = doc.fields.clone();
-    after_data.insert("id".to_string(), serde_json::Value::String(doc.id.clone()));
+    after_data.insert("id".to_string(), Value::String(doc.id.clone()));
     let mut builder = HookContext::builder(slug, operation)
         .data(after_data)
         .draft(is_draft)
         .context(req_context)
         .user(user)
         .ui_locale(ui_locale);
+
     if let Some(l) = locale {
         builder = builder.locale(l);
     }
@@ -130,7 +135,7 @@ pub fn persist_create(
     slug: &str,
     def: &CollectionDefinition,
     final_data: &HashMap<String, String>,
-    hook_data: &HashMap<String, serde_json::Value>,
+    hook_data: &HashMap<String, Value>,
     opts: &PersistOptions<'_>,
 ) -> Result<Document> {
     let status = if opts.is_draft { "draft" } else { "published" };
@@ -167,7 +172,7 @@ pub fn persist_update(
     id: &str,
     def: &CollectionDefinition,
     final_data: &HashMap<String, String>,
-    hook_data: &HashMap<String, serde_json::Value>,
+    hook_data: &HashMap<String, Value>,
     password: Option<&str>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
@@ -202,11 +207,11 @@ pub fn persist_draft_version(
     slug: &str,
     id: &str,
     def: &CollectionDefinition,
-    hook_data: &HashMap<String, serde_json::Value>,
+    hook_data: &HashMap<String, Value>,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Document> {
     let existing_doc = query::find_by_id_raw(conn, slug, def, id, locale_ctx)?
-        .ok_or_else(|| anyhow::anyhow!("Document {} not found in {}", id, slug))?;
+        .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
     versions::save_draft_version(
         conn,
@@ -230,7 +235,7 @@ pub fn persist_unpublish(
     def: &CollectionDefinition,
 ) -> Result<Document> {
     let doc = query::find_by_id_raw(conn, slug, def, id, None)?
-        .ok_or_else(|| anyhow::anyhow!("Document {} not found in {}", id, slug))?;
+        .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
     query::set_document_status(conn, slug, id, "draft")?;
     let snapshot = query::build_snapshot(conn, slug, &def.fields, &doc)?;

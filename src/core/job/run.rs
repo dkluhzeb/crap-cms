@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::definition_builder::JobRunBuilder;
-use super::status::JobStatus;
+use super::{definition_builder::JobRunBuilder, status::JobStatus};
 
 /// A single execution instance of a job.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,15 +1,24 @@
 //! Version restore operations for collections and globals.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use rusqlite::params_from_iter;
+use serde_json::{Map, Value};
+use std::collections::HashMap;
 
-use crate::config::LocaleConfig;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::FieldDefinition;
-use crate::db::query::sanitize_locale;
+use crate::{
+    config::LocaleConfig,
+    core::{
+        Document,
+        collection::{CollectionDefinition, GlobalDefinition},
+        field::{FieldDefinition, FieldType},
+    },
+    db::query::sanitize_locale,
+};
 
-use super::crud::{create_version, set_document_status};
-use super::snapshot::{collect_join_data_from_snapshot, extract_snapshot_data};
+use super::{
+    crud::{create_version, set_document_status},
+    snapshot::{collect_join_data_from_snapshot, extract_snapshot_data},
+};
 
 /// Restore a version snapshot back to the main table. Updates all regular columns
 /// and join tables from the snapshot data. Creates a new version recording the restore.
@@ -23,13 +32,13 @@ pub fn restore_version(
     slug: &str,
     def: &CollectionDefinition,
     parent_id: &str,
-    snapshot: &serde_json::Value,
+    snapshot: &Value,
     status: &str,
     locale_config: &LocaleConfig,
-) -> Result<crate::core::Document> {
+) -> Result<Document> {
     let obj = snapshot
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("Snapshot is not a JSON object"))?;
+        .ok_or_else(|| anyhow!("Snapshot is not a JSON object"))?;
 
     let locales_enabled = locale_config.is_enabled();
     let data = extract_snapshot_data(obj, &def.fields, locales_enabled);
@@ -61,13 +70,13 @@ pub fn restore_global_version(
     conn: &rusqlite::Connection,
     slug: &str,
     def: &GlobalDefinition,
-    snapshot: &serde_json::Value,
+    snapshot: &Value,
     status: &str,
     locale_config: &LocaleConfig,
-) -> Result<crate::core::Document> {
+) -> Result<Document> {
     let obj = snapshot
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("Snapshot is not a JSON object"))?;
+        .ok_or_else(|| anyhow!("Snapshot is not a JSON object"))?;
 
     let global_table = format!("_global_{}", slug);
     let locales_enabled = locale_config.is_enabled();
@@ -106,7 +115,7 @@ fn restore_locale_and_join_data(
     table: &str,
     parent_id: &str,
     fields: &[FieldDefinition],
-    obj: &serde_json::Map<String, serde_json::Value>,
+    obj: &Map<String, Value>,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let locales_enabled = locale_config.is_enabled();
@@ -118,10 +127,11 @@ fn restore_locale_and_join_data(
         let mut idx = 1;
 
         for field in fields {
-            if field.field_type == crate::core::field::FieldType::Group {
+            if field.field_type == FieldType::Group {
                 let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
                 for sub in &field.fields {
                     let is_localized = field.localized || sub.localized;
+
                     if !is_localized {
                         continue;
                     }
@@ -143,9 +153,7 @@ fn restore_locale_and_join_data(
             }
             // Row/Collapsible fields promote sub-fields as top-level columns (no prefix).
             // Recurse to handle nested layout wrappers.
-            if field.field_type == crate::core::field::FieldType::Row
-                || field.field_type == crate::core::field::FieldType::Collapsible
-            {
+            if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
                 collect_locale_restore_fields(
                     &field.fields,
                     obj,
@@ -158,7 +166,7 @@ fn restore_locale_and_join_data(
             }
             // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix).
             // Recurse to handle nested layout wrappers.
-            if field.field_type == crate::core::field::FieldType::Tabs {
+            if field.field_type == FieldType::Tabs {
                 for tab in &field.tabs {
                     collect_locale_restore_fields(
                         &tab.fields,
@@ -200,9 +208,9 @@ fn restore_locale_and_join_data(
     }
 
     // Restore join table data from snapshot
-    let mut join_data: std::collections::HashMap<String, serde_json::Value> =
-        std::collections::HashMap::new();
+    let mut join_data: HashMap<String, Value> = HashMap::new();
     collect_join_data_from_snapshot(fields, obj, &mut join_data);
+
     if !join_data.is_empty() {
         super::super::save_join_table_data(conn, table, fields, parent_id, &join_data, None)?;
     }
@@ -213,17 +221,18 @@ fn restore_locale_and_join_data(
 /// Recursively collect locale fields to restore from layout wrappers (Row/Collapsible/Tabs).
 fn collect_locale_restore_fields(
     fields: &[FieldDefinition],
-    obj: &serde_json::Map<String, serde_json::Value>,
+    obj: &Map<String, Value>,
     locale_config: &LocaleConfig,
     set_clauses: &mut Vec<String>,
     params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
     idx: &mut usize,
 ) {
     for field in fields {
-        if field.field_type == crate::core::field::FieldType::Group {
+        if field.field_type == FieldType::Group {
             let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
             for sub in &field.fields {
                 let is_localized = field.localized || sub.localized;
+
                 if !is_localized {
                     continue;
                 }
@@ -233,9 +242,7 @@ fn collect_locale_restore_fields(
                     .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
                 restore_locale_columns(val, &base, locale_config, set_clauses, params, idx);
             }
-        } else if field.field_type == crate::core::field::FieldType::Row
-            || field.field_type == crate::core::field::FieldType::Collapsible
-        {
+        } else if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
             collect_locale_restore_fields(
                 &field.fields,
                 obj,
@@ -244,7 +251,7 @@ fn collect_locale_restore_fields(
                 params,
                 idx,
             );
-        } else if field.field_type == crate::core::field::FieldType::Tabs {
+        } else if field.field_type == FieldType::Tabs {
             for tab in &field.tabs {
                 collect_locale_restore_fields(
                     &tab.fields,
@@ -271,7 +278,7 @@ fn collect_locale_restore_fields(
 /// Emit SET clauses that NULL all locale columns for a field, then set the
 /// default locale column to the snapshot value.
 fn restore_locale_columns(
-    snapshot_val: Option<&serde_json::Value>,
+    snapshot_val: Option<&Value>,
     field_name: &str,
     locale_config: &LocaleConfig,
     set_clauses: &mut Vec<String>,
@@ -280,20 +287,21 @@ fn restore_locale_columns(
 ) {
     for locale in &locale_config.locales {
         let col = format!("{}__{}", field_name, sanitize_locale(locale));
+
         if *locale == locale_config.default_locale {
             // Set default locale from snapshot
             match snapshot_val {
-                Some(serde_json::Value::String(s)) => {
+                Some(Value::String(s)) => {
                     set_clauses.push(format!("{} = ?{}", col, idx));
                     params.push(Box::new(s.clone()));
                     *idx += 1;
                 }
-                Some(serde_json::Value::Number(n)) => {
+                Some(Value::Number(n)) => {
                     set_clauses.push(format!("{} = ?{}", col, idx));
                     params.push(Box::new(n.to_string()));
                     *idx += 1;
                 }
-                Some(serde_json::Value::Bool(b)) => {
+                Some(Value::Bool(b)) => {
                     set_clauses.push(format!("{} = ?{}", col, idx));
                     params.push(Box::new(if *b { 1i32 } else { 0i32 }));
                     *idx += 1;
@@ -311,9 +319,14 @@ fn restore_locale_columns(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::config::LocaleConfig;
-    use crate::core::field::FieldDefinition;
+    use crate::core::{
+        collection::{CollectionDefinition, VersionsConfig},
+        field::{FieldDefinition, FieldTab},
+    };
     use crate::db::query::versions::crud::count_versions;
 
     #[test]
@@ -356,26 +369,22 @@ mod tests {
             fallback: true,
         };
 
-        let blocks_field =
-            FieldDefinition::builder("content", crate::core::field::FieldType::Blocks)
-                .localized(true)
-                .build();
-        let mut def = crate::core::collection::CollectionDefinition::new("posts");
+        let blocks_field = FieldDefinition::builder("content", FieldType::Blocks)
+            .localized(true)
+            .build();
+        let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
-            FieldDefinition::builder("title", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("title", FieldType::Text)
                 .localized(true)
                 .build(),
-            FieldDefinition::builder("page_settings", crate::core::field::FieldType::Tabs)
-                .tabs(vec![crate::core::field::FieldTab::new(
-                    "Content",
-                    vec![blocks_field],
-                )])
+            FieldDefinition::builder("page_settings", FieldType::Tabs)
+                .tabs(vec![FieldTab::new("Content", vec![blocks_field])])
                 .build(),
         ];
-        def.versions = Some(crate::core::collection::VersionsConfig::new(true, 10));
+        def.versions = Some(VersionsConfig::new(true, 10));
         let def = def;
 
-        let snapshot = serde_json::json!({
+        let snapshot = json!({
             "title": "Restored Title",
             "content": [
                 {"_block_type": "hero", "heading": "Welcome back"}

@@ -2,11 +2,13 @@
 
 use mlua::{Lua, Table};
 
+use crate::core::CollectionDefinition;
+
 /// Serialize the auth section of a CollectionDefinition into the Lua table.
 pub(super) fn collection_auth_to_lua(
     lua: &Lua,
     tbl: &Table,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
 ) -> mlua::Result<()> {
     if let Some(ref auth) = def.auth
         && auth.enabled
@@ -21,6 +23,7 @@ pub(super) fn collection_auth_to_lua(
         } else {
             let auth_tbl = lua.create_table()?;
             auth_tbl.set("token_expiry", auth.token_expiry)?;
+
             if auth.disable_local {
                 auth_tbl.set("disable_local", true)?;
             }
@@ -49,14 +52,18 @@ pub(super) fn collection_auth_to_lua(
 #[cfg(test)]
 mod tests {
     use super::super::collection::collection_config_to_lua;
+    use crate::core::{
+        CollectionDefinition,
+        collection::{Auth, AuthStrategy},
+    };
     use mlua::{self, Value};
 
     #[test]
     fn test_collection_config_to_lua_with_auth_simple() {
         let lua = mlua::Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("users");
+        let mut def = CollectionDefinition::new("users");
         def.timestamps = true;
-        def.auth = Some(crate::core::collection::Auth::new(true));
+        def.auth = Some(Auth::new(true));
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let auth_val: bool = tbl.get("auth").unwrap();
         assert!(auth_val);
@@ -65,17 +72,14 @@ mod tests {
     #[test]
     fn test_collection_config_to_lua_with_auth_complex() {
         let lua = mlua::Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("users");
+        let mut def = CollectionDefinition::new("users");
         def.timestamps = true;
-        let mut auth = crate::core::collection::Auth::new(true);
+        let mut auth = Auth::new(true);
         auth.token_expiry = 3600;
         auth.disable_local = true;
         auth.verify_email = true;
         auth.forgot_password = false;
-        auth.strategies = vec![crate::core::collection::AuthStrategy::new(
-            "oauth",
-            "hooks.auth.oauth",
-        )];
+        auth.strategies = vec![AuthStrategy::new("oauth", "hooks.auth.oauth")];
         def.auth = Some(auth);
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let auth_tbl: mlua::Table = tbl.get("auth").unwrap();
@@ -92,9 +96,9 @@ mod tests {
     #[test]
     fn test_collection_config_to_lua_auth_disabled_not_emitted() {
         let lua = mlua::Lua::new();
-        let mut def = crate::core::CollectionDefinition::new("items");
+        let mut def = CollectionDefinition::new("items");
         def.timestamps = false;
-        def.auth = Some(crate::core::collection::Auth::new(false));
+        def.auth = Some(Auth::new(false));
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let auth_val: Value = tbl.get("auth").unwrap();
         assert!(matches!(auth_val, Value::Nil), "auth = None when disabled");

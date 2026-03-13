@@ -47,6 +47,7 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
         let mut all_locales = vec![default.clone()];
         for l in extra.split(',') {
             let l = l.trim().to_string();
+
             if !l.is_empty() && !all_locales.contains(&l) {
                 all_locales.push(l);
             }
@@ -97,6 +98,7 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
     // 3. First admin user (right after auth collection)
     if let Some(ref auth_collection) = auth_slug {
         println!();
+
         if Confirm::new()
             .with_prompt("Create first admin user now?")
             .default(true)
@@ -147,6 +149,7 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
     // 5. Additional collections
     loop {
         println!();
+
         if !Confirm::new()
             .with_prompt("Create another collection?")
             .default(false)

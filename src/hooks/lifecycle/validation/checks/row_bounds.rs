@@ -1,12 +1,13 @@
-use crate::core::field::FieldDefinition;
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{field::FieldDefinition, validate::FieldError};
 use std::collections::HashMap;
 
 /// Validate min_rows / max_rows for Array, Blocks, and has-many Relationship fields.
 pub(crate) fn check_row_bounds(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_draft: bool,
     errors: &mut Vec<FieldError>,
 ) {
@@ -14,9 +15,10 @@ pub(crate) fn check_row_bounds(
         return;
     }
     let row_count = match value {
-        Some(serde_json::Value::Array(arr)) => arr.len(),
+        Some(Value::Array(arr)) => arr.len(),
         _ => 0,
     };
+
     if let Some(min) = field.min_rows
         && row_count < min
     {

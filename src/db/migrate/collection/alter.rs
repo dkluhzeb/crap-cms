@@ -3,23 +3,26 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 
-use crate::config::LocaleConfig;
-use crate::core::field::FieldType;
-use crate::db::migrate::helpers::sanitize_locale;
+use crate::{
+    config::LocaleConfig,
+    core::{CollectionDefinition, field::FieldType},
+    db::migrate::helpers::{collect_column_specs, get_table_columns, sanitize_locale},
+};
 
 pub(super) fn alter_collection_table(
     conn: &rusqlite::Connection,
     slug: &str,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     // Get existing columns
-    let existing_columns = crate::db::migrate::helpers::get_table_columns(conn, slug)?;
+    let existing_columns = get_table_columns(conn, slug)?;
 
-    for spec in &crate::db::migrate::helpers::collect_column_specs(&def.fields, locale_config) {
+    for spec in &collect_column_specs(&def.fields, locale_config) {
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
+
                 if !existing_columns.contains(&col_name) {
                     let mut col_def = spec.field.field_type.sqlite_type().to_string();
                     super::create::append_default_value(
@@ -75,6 +78,7 @@ pub(super) fn alter_collection_table(
                 .split_whitespace()
                 .next()
                 .expect("static column definition");
+
             if !existing_columns.contains(col_name) {
                 let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
                 tracing::info!("Adding {} column to {}", col_name, slug);
@@ -92,6 +96,7 @@ pub(super) fn alter_collection_table(
                     .split_whitespace()
                     .next()
                     .expect("static column definition");
+
                 if !existing_columns.contains(col_name) {
                     let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
                     tracing::info!("Adding {} column to {}", col_name, slug);
@@ -123,6 +128,7 @@ pub(super) fn alter_collection_table(
             for sub in &f.fields {
                 let base = format!("{}__{}", f.name, sub.name);
                 let is_localized = (f.localized || sub.localized) && locale_config.is_enabled();
+
                 if is_localized {
                     for locale in &locale_config.locales {
                         field_names.insert(format!("{}__{}", base, locale));
@@ -134,6 +140,7 @@ pub(super) fn alter_collection_table(
         } else if f.field_type == FieldType::Row || f.field_type == FieldType::Collapsible {
             for sub in &f.fields {
                 let is_localized = sub.localized && locale_config.is_enabled();
+
                 if is_localized {
                     for locale in &locale_config.locales {
                         field_names.insert(format!("{}__{}", sub.name, locale));
@@ -146,6 +153,7 @@ pub(super) fn alter_collection_table(
             for tab in &f.tabs {
                 for sub in &tab.fields {
                     let is_localized = sub.localized && locale_config.is_enabled();
+
                     if is_localized {
                         for locale in &locale_config.locales {
                             field_names.insert(format!("{}__{}", sub.name, locale));

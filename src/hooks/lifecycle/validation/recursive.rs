@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 
 use mlua::Lua;
+use serde_json::Value;
 
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::validate::FieldError;
-use crate::db::query::sanitize_locale;
-use crate::db::query::{LocaleContext, LocaleMode};
+use crate::{
+    core::{
+        field::{FieldDefinition, FieldType},
+        validate::FieldError,
+    },
+    db::query::{LocaleContext, LocaleMode, sanitize_locale},
+};
 
-use super::checks;
-use super::sub_fields::validate_sub_fields_inner;
+use super::{checks, sub_fields::validate_sub_fields_inner};
 
 /// Recursive validation with prefix support for arbitrary nesting.
 /// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through.
@@ -17,7 +20,7 @@ use super::sub_fields::validate_sub_fields_inner;
 pub(super) fn validate_fields_recursive(
     lua: &Lua,
     fields: &[FieldDefinition],
-    data: &HashMap<String, serde_json::Value>,
+    data: &HashMap<String, Value>,
     conn: &rusqlite::Connection,
     table: &str,
     exclude_id: Option<&str>,
@@ -109,7 +112,7 @@ pub(super) fn validate_fields_recursive(
 fn validate_scalar_field(
     lua: &Lua,
     field: &FieldDefinition,
-    data: &HashMap<String, serde_json::Value>,
+    data: &HashMap<String, Value>,
     conn: &rusqlite::Connection,
     table: &str,
     exclude_id: Option<&str>,
@@ -128,8 +131,8 @@ fn validate_scalar_field(
     let value = data.get(&data_key);
     let is_empty = match value {
         None => true,
-        Some(serde_json::Value::Null) => true,
-        Some(serde_json::Value::String(s)) => s.is_empty(),
+        Some(Value::Null) => true,
+        Some(Value::String(s)) => s.is_empty(),
         _ => false,
     };
     let is_update = exclude_id.is_some();
@@ -142,7 +145,7 @@ fn validate_scalar_field(
     // Validate sub-fields within Array/Blocks rows
     if !is_draft
         && matches!(field.field_type, FieldType::Array | FieldType::Blocks)
-        && let Some(serde_json::Value::Array(rows)) = value
+        && let Some(Value::Array(rows)) = value
     {
         for (idx, row) in rows.iter().enumerate() {
             let row_obj = match row.as_object() {
@@ -469,7 +472,9 @@ mod tests {
             r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_tabs_field = function(value, ctx)
+
                 if value == "bad" then return "tabs validation error" end
+
                 return true
             end
         "#,

@@ -6,8 +6,10 @@ use rusqlite::params_from_iter;
 use super::super::{
     LocaleContext, LocaleMode, get_column_names, get_locale_select_columns, group_locale_fields,
 };
-use crate::core::{CollectionDefinition, Document};
-use crate::db::document::row_to_document;
+use crate::{
+    core::{CollectionDefinition, Document},
+    db::document::row_to_document,
+};
 
 /// Find a single document by ID with full hydration (join tables, group reconstruction).
 ///
@@ -82,6 +84,7 @@ pub fn find_by_ids(
     let mut documents = Vec::new();
     for row in rows {
         let mut doc = row?;
+
         if let Some(ctx) = locale_ctx
             && ctx.config.is_enabled()
             && let LocaleMode::All = ctx.mode

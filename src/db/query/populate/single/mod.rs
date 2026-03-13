@@ -8,8 +8,7 @@ use anyhow::Result;
 use std::collections::HashSet;
 
 use super::{PopulateCache, PopulateContext, PopulateCtx, PopulateOpts};
-use crate::core::Document;
-use crate::core::field::FieldType;
+use crate::core::{Document, field::FieldType};
 
 /// Recursively populate relationship fields with full document objects.
 /// depth=0 is a no-op. Tracks visited (collection, id) pairs to break cycles.
@@ -29,11 +28,13 @@ pub fn populate_relationships_cached(
     let depth = opts.depth;
     let select = opts.select;
     let locale_ctx = opts.locale_ctx;
+
     if depth <= 0 {
         return Ok(());
     }
 
     let visit_key = (collection_slug.to_string(), doc.id.clone());
+
     if visited.contains(&visit_key) {
         return Ok(());
     }
@@ -59,6 +60,7 @@ pub fn populate_relationships_cached(
             Some(max) if max < depth => max,
             _ => depth,
         };
+
         if effective_depth <= 0 {
             continue;
         }
@@ -115,6 +117,8 @@ pub fn populate_relationships_cached(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::test_helpers::*;
     use super::super::{PopulateCache, PopulateContext, PopulateOpts};
     use super::*;
@@ -131,10 +135,8 @@ mod tests {
         let posts_def = make_posts_def();
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("author".to_string(), json!("a1"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-01".to_string());
 
@@ -172,10 +174,8 @@ mod tests {
         let posts_def = make_posts_def();
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("author".to_string(), json!("a1"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-01".to_string());
 
@@ -260,10 +260,8 @@ mod tests {
         registry.register_collection(authors_def);
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("author".to_string(), json!("a1"));
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-01".to_string());
 
@@ -332,10 +330,8 @@ mod tests {
         registry.register_collection(make_authors_def());
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("author".to_string(), json!("a1"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -387,12 +383,9 @@ mod tests {
         registry.register_collection(make_authors_def());
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
-        doc.fields
-            .insert("editor".to_string(), serde_json::json!("a1"));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("author".to_string(), json!("a1"));
+        doc.fields.insert("editor".to_string(), json!("a1"));
 
         let mut visited = HashSet::new();
         let select = vec!["author".to_string()]; // Only populate author, not editor
@@ -433,10 +426,8 @@ mod tests {
         let posts_def = make_posts_def();
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("author".to_string(), serde_json::json!(""));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("author".to_string(), json!(""));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -474,8 +465,7 @@ mod tests {
         let posts_def = make_posts_def();
 
         let mut doc = Document::new("p1".to_string());
-        doc.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        doc.fields.insert("author".to_string(), json!("a1"));
 
         let mut visited = HashSet::new();
         // First call — populates
@@ -499,8 +489,7 @@ mod tests {
 
         // Reset and call again to confirm fresh cache (no stale state between calls)
         let mut doc2 = Document::new("p1".to_string());
-        doc2.fields
-            .insert("author".to_string(), serde_json::json!("a1"));
+        doc2.fields.insert("author".to_string(), json!("a1"));
         let mut visited2 = HashSet::new();
         super::super::populate_relationships(
             &PopulateContext {

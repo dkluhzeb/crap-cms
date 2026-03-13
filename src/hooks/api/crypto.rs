@@ -75,6 +75,7 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
         let combined = base64::engine::general_purpose::STANDARD
             .decode(encoded.as_bytes())
             .map_err(|e| mlua::Error::RuntimeError(format!("base64 decode: {}", e)))?;
+
         if combined.len() < 12 {
             return Err(mlua::Error::RuntimeError("ciphertext too short".into()));
         }
@@ -158,6 +159,7 @@ mod tests {
             .load(
                 r#"
                 local ct = crap.crypto.encrypt("hello, world")
+
                 return crap.crypto.decrypt(ct)
             "#,
             )
@@ -173,6 +175,7 @@ mod tests {
             .load(
                 r#"
                 local ct = crap.crypto.encrypt("")
+
                 return crap.crypto.decrypt(ct)
             "#,
             )
@@ -190,6 +193,7 @@ mod tests {
                 r#"
                 local ct1 = crap.crypto.encrypt("same plaintext")
                 local ct2 = crap.crypto.encrypt("same plaintext")
+
                 return ct1 ~= ct2
             "#,
             )
@@ -243,6 +247,7 @@ mod tests {
             .load(
                 r#"
                 local encoded = crap.crypto.base64_encode("hello base64")
+
                 return crap.crypto.base64_decode(encoded)
             "#,
             )
@@ -322,6 +327,7 @@ mod tests {
                 r#"
                 local h1 = crap.crypto.hmac_sha256("data", "key1")
                 local h2 = crap.crypto.hmac_sha256("data", "key2")
+
                 return h1 ~= h2
             "#,
             )
@@ -361,6 +367,7 @@ mod tests {
                 r#"
                 local a = crap.crypto.random_bytes(32)
                 local b = crap.crypto.random_bytes(32)
+
                 return a ~= b
             "#,
             )

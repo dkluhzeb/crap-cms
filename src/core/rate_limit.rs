@@ -1,9 +1,11 @@
 //! In-memory login rate limiter: tracks failed attempts per email
 //! and blocks further attempts after a configurable threshold.
 
-use std::collections::HashMap;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 /// Maximum number of unique keys before triggering a sweep.
 const MAX_MAP_SIZE: usize = 100_000;
@@ -32,6 +34,7 @@ impl LoginRateLimiter {
             Err(_) => return false,
         };
         let now = Instant::now();
+
         if let Some(times) = map.get_mut(email) {
             times.retain(|t| now.duration_since(*t) < self.window);
             times.len() as u32 >= self.max_attempts
@@ -107,6 +110,7 @@ impl GrpcRateLimiter {
         }
         let times = map.entry(ip.to_string()).or_default();
         times.retain(|t| now.duration_since(*t) < self.window);
+
         if times.len() as u32 >= self.max_requests {
             return false;
         }

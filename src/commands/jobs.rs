@@ -1,6 +1,14 @@
 //! `jobs` command — manage background jobs.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
+use serde_json::Value;
+
+use crate::{
+    config::{CrapConfig, parse_duration_string},
+    core::job::JobStatus,
+    db::{migrate, pool, query},
+    hooks,
+};
 
 /// Handle the `jobs` subcommand.
 // Excluded from coverage: requires full Lua + DB setup (init_lua, create_pool, sync_all)
@@ -10,18 +18,19 @@ pub fn run(action: super::JobsAction) -> Result<()> {
     match action {
         super::JobsAction::List { config } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
-            crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let registry = hooks::init_lua(&config_dir, &cfg)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
+            migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
             let reg = registry
                 .read()
-                .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
             let conn = pool.get().context("Failed to get DB connection")?;
 
             if reg.jobs.is_empty() {
                 println!("No jobs defined.");
+
                 return Ok(());
             }
 
@@ -37,29 +46,30 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             for slug in slugs {
                 let def = &reg.jobs[slug];
                 let schedule = def.schedule.as_deref().unwrap_or("-");
-                let recent = crate::db::query::jobs::list_job_runs(&conn, Some(slug), None, 5, 0)
-                    .unwrap_or_default();
+                let recent =
+                    query::jobs::list_job_runs(&conn, Some(slug), None, 5, 0).unwrap_or_default();
 
                 let status_summary = if recent.is_empty() {
                     "none".to_string()
                 } else {
                     let completed = recent
                         .iter()
-                        .filter(|r| r.status == crate::core::job::JobStatus::Completed)
+                        .filter(|r| r.status == JobStatus::Completed)
                         .count();
                     let failed = recent
                         .iter()
-                        .filter(|r| r.status == crate::core::job::JobStatus::Failed)
+                        .filter(|r| r.status == JobStatus::Failed)
                         .count();
                     let pending = recent
                         .iter()
-                        .filter(|r| r.status == crate::core::job::JobStatus::Pending)
+                        .filter(|r| r.status == JobStatus::Pending)
                         .count();
                     let running = recent
                         .iter()
-                        .filter(|r| r.status == crate::core::job::JobStatus::Running)
+                        .filter(|r| r.status == JobStatus::Running)
                         .count();
                     let mut parts = Vec::new();
+
                     if completed > 0 {
                         parts.push(format!("{}ok", completed));
                     }
@@ -85,26 +95,26 @@ pub fn run(action: super::JobsAction) -> Result<()> {
         }
         super::JobsAction::Trigger { config, slug, data } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
-            crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let registry = hooks::init_lua(&config_dir, &cfg)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
+            migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
             let reg = registry
                 .read()
-                .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
             let job_def = reg
                 .get_job(&slug)
-                .ok_or_else(|| anyhow::anyhow!("Job '{}' not defined", slug))?;
+                .ok_or_else(|| anyhow!("Job '{}' not defined", slug))?;
 
             let data_json = data.as_deref().unwrap_or("{}");
 
             // Validate JSON
-            serde_json::from_str::<serde_json::Value>(data_json).context("Invalid JSON data")?;
+            serde_json::from_str::<Value>(data_json).context("Invalid JSON data")?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
-            let job_run = crate::db::query::jobs::insert_job(
+            let job_run = query::jobs::insert_job(
                 &conn,
                 &slug,
                 data_json,
@@ -125,17 +135,17 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             limit,
         } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
-            crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let registry = hooks::init_lua(&config_dir, &cfg)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
+            migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
 
             if let Some(run_id) = id {
                 // Show single run
-                let run = crate::db::query::jobs::get_job_run(&conn, &run_id)?
-                    .ok_or_else(|| anyhow::anyhow!("Job run '{}' not found", run_id))?;
+                let run = query::jobs::get_job_run(&conn, &run_id)?
+                    .ok_or_else(|| anyhow!("Job run '{}' not found", run_id))?;
                 println!("ID:          {}", run.id);
                 println!("Job:         {}", run.slug);
                 println!("Status:      {}", run.status.as_str());
@@ -151,6 +161,7 @@ pub fn run(action: super::JobsAction) -> Result<()> {
                     "Completed:   {}",
                     run.completed_at.as_deref().unwrap_or("-")
                 );
+
                 if let Some(ref data) = Some(&run.data) {
                     println!("Data:        {}", data);
                 }
@@ -162,10 +173,11 @@ pub fn run(action: super::JobsAction) -> Result<()> {
                 }
             } else {
                 // List runs
-                let runs =
-                    crate::db::query::jobs::list_job_runs(&conn, slug.as_deref(), None, limit, 0)?;
+                let runs = query::jobs::list_job_runs(&conn, slug.as_deref(), None, limit, 0)?;
+
                 if runs.is_empty() {
                     println!("No job runs found.");
+
                     return Ok(());
                 }
 
@@ -194,52 +206,53 @@ pub fn run(action: super::JobsAction) -> Result<()> {
         }
         super::JobsAction::Purge { config, older_than } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
 
             // Parse duration string
-            let secs = crate::config::parse_duration_string(&older_than)
-                .ok_or_else(|| anyhow::anyhow!(
+            let secs = parse_duration_string(&older_than)
+                .ok_or_else(|| anyhow!(
                     "Invalid duration '{}'. Use format like '7d' (days), '24h' (hours), '30m' (minutes), '60s' (seconds)",
                     older_than
                 ))?;
 
             let conn = pool.get().context("Failed to get DB connection")?;
-            let deleted = crate::db::query::jobs::purge_old_jobs(&conn, secs)?;
+            let deleted = query::jobs::purge_old_jobs(&conn, secs)?;
             println!("Purged {} old job run(s)", deleted);
 
             Ok(())
         }
         super::JobsAction::Healthcheck { config } => {
             let config_dir = config.canonicalize().unwrap_or(config);
-            let cfg = crate::config::CrapConfig::load(&config_dir)?;
-            let registry = crate::hooks::init_lua(&config_dir, &cfg)?;
-            let pool = crate::db::pool::create_pool(&config_dir, &cfg)?;
-            crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)?;
+            let cfg = CrapConfig::load(&config_dir)?;
+            let registry = hooks::init_lua(&config_dir, &cfg)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
+            migrate::sync_all(&pool, &registry, &cfg.locale)?;
 
             let reg = registry
                 .read()
-                .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+                .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
             let conn = pool.get().context("Failed to get DB connection")?;
 
             let defined_count = reg.jobs.len();
 
             // Stale jobs: running but heartbeat expired (heartbeat_interval * 3)
             let stale_threshold = cfg.jobs.heartbeat_interval * 3;
-            let stale_jobs = crate::db::query::jobs::find_stale_jobs(&conn, stale_threshold)?;
+            let stale_jobs = query::jobs::find_stale_jobs(&conn, stale_threshold)?;
             let stale_count = stale_jobs.len();
 
             // Failed jobs in the last 24 hours
-            let failed_24h = crate::db::query::jobs::count_failed_since(&conn, 86400)?;
+            let failed_24h = query::jobs::count_failed_since(&conn, 86400)?;
 
             // Pending jobs waiting longer than 5 minutes
-            let pending_long = crate::db::query::jobs::count_pending_older_than(&conn, 300)?;
+            let pending_long = query::jobs::count_pending_older_than(&conn, 300)?;
 
             // Check for scheduled jobs with no recent runs
             let mut no_recent_runs = Vec::new();
             for (slug, def) in &reg.jobs {
                 if def.schedule.is_some() {
-                    let last = crate::db::query::jobs::last_completed_run(&conn, slug)?;
+                    let last = query::jobs::last_completed_run(&conn, slug)?;
+
                     if last.is_none() {
                         // Scheduled job has never completed
                         no_recent_runs.push(slug.clone());
@@ -261,6 +274,7 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             println!("  Stale jobs:      {}", stale_count);
             println!("  Failed (24h):    {}", failed_24h);
             println!("  Pending > 5min:  {}", pending_long);
+
             if !no_recent_runs.is_empty() {
                 no_recent_runs.sort();
                 println!("  Never completed: {}", no_recent_runs.join(", "));

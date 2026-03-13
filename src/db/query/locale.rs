@@ -1,8 +1,14 @@
 //! Locale types and functions for locale-aware queries.
 
-use crate::config::LocaleConfig;
-use crate::core::Document;
-use crate::core::field::{FieldDefinition, FieldType};
+use serde_json::{Map, Value};
+
+use crate::{
+    config::LocaleConfig,
+    core::{
+        Document,
+        field::{FieldDefinition, FieldType},
+    },
+};
 
 use super::validation::sanitize_locale;
 
@@ -134,6 +140,7 @@ fn collect_locale_columns(
                 };
                 let is_localized =
                     (inherited_localized || field.localized) && locale_ctx.config.is_enabled();
+
                 if is_localized {
                     add_locale_columns(select_exprs, result_names, &base, locale_ctx);
                 } else {
@@ -252,6 +259,7 @@ fn group_locale_fields_inner(
                 }
                 let is_localized =
                     (inherited_localized || field.localized) && locale_config.is_enabled();
+
                 if !is_localized {
                     continue;
                 }
@@ -260,16 +268,16 @@ fn group_locale_fields_inner(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                let mut locale_map = serde_json::Map::new();
+                let mut locale_map = Map::new();
                 for locale in &locale_config.locales {
                     let col = format!("{}__{}", base, sanitize_locale(locale));
+
                     if let Some(val) = doc.fields.remove(&col) {
                         locale_map.insert(locale.clone(), val);
                     }
                 }
                 if !locale_map.is_empty() {
-                    doc.fields
-                        .insert(base, serde_json::Value::Object(locale_map));
+                    doc.fields.insert(base, Value::Object(locale_map));
                 }
             }
         }
@@ -295,6 +303,7 @@ pub(crate) fn locale_write_column(
         } else {
             ctx.config.default_locale.as_str()
         };
+
         return format!("{}__{}", field_name, sanitize_locale(locale));
     }
     field_name.to_string()
@@ -302,13 +311,19 @@ pub(crate) fn locale_write_column(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-    use crate::core::field::FieldType;
+    use crate::config::LocaleConfig;
+    use crate::core::{
+        Document,
+        field::{FieldTab, FieldType},
+    };
     use crate::db::query::test_helpers::*;
 
     #[test]
     fn locale_context_disabled() {
-        let config = crate::config::LocaleConfig::default();
+        let config = LocaleConfig::default();
         let ctx = LocaleContext::from_locale_string(None, &config);
         assert!(
             ctx.is_none(),
@@ -428,11 +443,9 @@ mod tests {
     fn group_locale_fields_basic() {
         let fields = vec![make_localized_field("title", FieldType::Text)];
         let locale_cfg = make_locale_config();
-        let mut doc = crate::core::Document::new("id1".to_string());
-        doc.fields
-            .insert("title__en".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("title__de".to_string(), serde_json::json!("Hallo"));
+        let mut doc = Document::new("id1".to_string());
+        doc.fields.insert("title__en".to_string(), json!("Hello"));
+        doc.fields.insert("title__de".to_string(), json!("Hallo"));
 
         group_locale_fields(&mut doc, &fields, &locale_cfg);
 
@@ -450,11 +463,11 @@ mod tests {
             vec![make_localized_field("title", FieldType::Text)],
         )];
         let locale_cfg = make_locale_config();
-        let mut doc = crate::core::Document::new("id1".to_string());
+        let mut doc = Document::new("id1".to_string());
         doc.fields
-            .insert("seo__title__en".to_string(), serde_json::json!("SEO EN"));
+            .insert("seo__title__en".to_string(), json!("SEO EN"));
         doc.fields
-            .insert("seo__title__de".to_string(), serde_json::json!("SEO DE"));
+            .insert("seo__title__de".to_string(), json!("SEO DE"));
 
         group_locale_fields(&mut doc, &fields, &locale_cfg);
 
@@ -472,7 +485,7 @@ mod tests {
     fn get_locale_select_columns_tabs_with_group() {
         let fields = vec![make_tabs_field(
             "layout",
-            vec![crate::core::field::FieldTab::new(
+            vec![FieldTab::new(
                 "Social",
                 vec![make_group_field(
                     "social",
@@ -497,7 +510,7 @@ mod tests {
     fn get_locale_select_columns_tabs_with_localized_field() {
         let fields = vec![make_tabs_field(
             "layout",
-            vec![crate::core::field::FieldTab::new(
+            vec![FieldTab::new(
                 "Content",
                 vec![make_localized_field("title", FieldType::Text)],
             )],
@@ -522,7 +535,7 @@ mod tests {
                 "meta",
                 vec![make_tabs_field(
                     "t",
-                    vec![crate::core::field::FieldTab::new(
+                    vec![FieldTab::new(
                         "Content",
                         vec![make_field("title", FieldType::Text)],
                     )],

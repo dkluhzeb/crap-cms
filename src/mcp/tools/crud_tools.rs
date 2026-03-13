@@ -1,16 +1,18 @@
 //! CRUD tool implementations: find, find_by_id, create, update, delete, and global ops.
 
-use std::collections::HashMap;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context as _, Result};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-use crate::core::Registry;
-use crate::core::document::Document;
-use crate::db::DbPool;
-use crate::db::query::{self, FindQuery};
-use crate::hooks::lifecycle::HookRunner;
+use crate::{
+    core::{Registry, document::Document},
+    db::{
+        DbPool,
+        query::{self, FindQuery},
+    },
+    hooks::lifecycle::HookRunner,
+};
 
 /// Parse JSON `where` object into filter clauses.
 /// Supports `{ field: "value" }` (equals) and `{ field: { op: value } }` (operator-based).
@@ -114,7 +116,7 @@ pub(super) fn parse_where_filters(args: &Value) -> Vec<query::FilterClause> {
 }
 
 pub(super) fn doc_to_json(doc: &Document) -> Value {
-    let mut obj = serde_json::Map::new();
+    let mut obj = Map::new();
     obj.insert("id".to_string(), Value::String(doc.id.clone()));
     for (k, v) in &doc.fields {
         obj.insert(k.clone(), v.clone());
@@ -272,6 +274,7 @@ pub(super) fn exec_create(
     // Convert args to string map for create
     let mut data = HashMap::new();
     let mut join_data = HashMap::new();
+
     if let Some(obj) = args.as_object() {
         for (k, v) in obj {
             if k == "password" {
@@ -352,6 +355,7 @@ pub(super) fn exec_update(
 
     let mut data = HashMap::new();
     let mut join_data = HashMap::new();
+
     if let Some(obj) = args.as_object() {
         for (k, v) in obj {
             if k == "id" || k == "password" {
@@ -435,6 +439,7 @@ pub(super) fn exec_read_global(
         Err(e) => {
             // "not found" is expected for globals that haven't been written yet
             let err_msg = e.to_string();
+
             if err_msg.contains("not found") || err_msg.contains("no rows") {
                 Ok(json!({}).to_string())
             } else {
@@ -455,6 +460,7 @@ pub(super) fn exec_update_global(
 
     let mut data = HashMap::new();
     let mut join_data = HashMap::new();
+
     if let Some(obj) = args.as_object() {
         for (k, v) in obj {
             match v {

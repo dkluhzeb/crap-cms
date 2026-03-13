@@ -2,11 +2,16 @@
 
 use anyhow::Result;
 use mlua::{Function, Lua, Table, Value};
+use serde_json::Value as JsonValue;
 
-use crate::core::SharedRegistry;
-use crate::core::field::LocalizedString;
-use crate::core::field::SelectOption;
-use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
+use crate::core::{
+    SharedRegistry,
+    field::{LocalizedString, SelectOption},
+    richtext::{
+        NodeAttr, NodeAttrType, RichtextNodeDef, render_html_custom_nodes,
+        render_prosemirror_to_html,
+    },
+};
 
 /// Register the `crap.richtext` namespace on the `crap` global table.
 ///
@@ -63,6 +68,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
         let node_entry = lua.create_table()?;
         node_entry.set("label", label.as_str())?;
         node_entry.set("inline", inline)?;
+
         if has_render {
             let render_fn: Function = spec.get("render")?;
             node_entry.set("render", render_fn)?;
@@ -87,6 +93,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
     // crap.richtext.render(content_string)
     let render_fn = lua.create_function(|lua, content: String| -> mlua::Result<String> {
         let content = content.trim();
+
         if content.is_empty() {
             return Ok(String::new());
         }
@@ -95,7 +102,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
         let storage: Table = globals.get("_crap_richtext_nodes")?;
 
         // Build the custom renderer closure that calls Lua render functions
-        let render_custom = |node_type: &str, attrs: &serde_json::Value| -> Option<String> {
+        let render_custom = |node_type: &str, attrs: &JsonValue| -> Option<String> {
             let entry: Table = match storage.get(node_type) {
                 Ok(e) => e,
                 Err(_) => return None,
@@ -120,13 +127,10 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
 
         // Detect format: starts with '{' → JSON, otherwise HTML
         if content.starts_with('{') {
-            crate::core::richtext::render_prosemirror_to_html(content, &render_custom)
+            render_prosemirror_to_html(content, &render_custom)
                 .map_err(|e| mlua::Error::RuntimeError(format!("Render error: {}", e)))
         } else {
-            Ok(crate::core::richtext::render_html_custom_nodes(
-                content,
-                &render_custom,
-            ))
+            Ok(render_html_custom_nodes(content, &render_custom))
         }
     })?;
     richtext_table.set("render", render_fn)?;
@@ -164,6 +168,7 @@ fn parse_node_attrs(lua: &Lua, attrs_tbl: &Table) -> mlua::Result<Vec<NodeAttr>>
             .attr_type(NodeAttrType::from_name(&attr_type_str))
             .required(required)
             .options(options);
+
         if let Some(dv) = default_value {
             node_attr_builder = node_attr_builder.default_value(dv);
         }
@@ -241,6 +246,7 @@ mod tests {
                     { name = "text", type = "text", label = "Text", required = true },
                 },
                 render = function(attrs)
+
                     return "<span class='badge'>" .. attrs.text .. "</span>"
                 end,
             })
@@ -276,6 +282,7 @@ mod tests {
             crap.richtext.register_node("cta", {
                 label = "CTA",
                 render = function(attrs)
+
                     return '<a href="' .. attrs.url .. '">' .. attrs.text .. '</a>'
                 end,
             })
@@ -285,6 +292,7 @@ mod tests {
         .unwrap();
 
         let result: String = lua.load(r#"
+
             return crap.richtext.render('{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click","url":"/go"}}]}')
         "#).eval().unwrap();
         assert_eq!(result, r#"<a href="/go">Click</a>"#);
@@ -298,6 +306,7 @@ mod tests {
             crap.richtext.register_node("cta", {
                 label = "CTA",
                 render = function(attrs)
+
                     return '<button>' .. attrs.text .. '</button>'
                 end,
             })
@@ -307,6 +316,7 @@ mod tests {
         .unwrap();
 
         let result: String = lua.load(r#"
+
             return crap.richtext.render('<p>Hi</p><crap-node data-type="cta" data-attrs=\'{"text":"Go"}\'></crap-node>')
         "#).eval().unwrap();
         assert_eq!(result, "<p>Hi</p><button>Go</button>");
@@ -318,6 +328,7 @@ mod tests {
         let result: String = lua
             .load(
                 r#"
+
             return crap.richtext.render("")
         "#,
             )
@@ -383,6 +394,7 @@ mod tests {
         // The render closure will find the node entry but no `render` key → return None
         // → rendered as <crap-node> passthrough.
         let result: String = lua.load(r#"
+
             return crap.richtext.render('{"type":"doc","content":[{"type":"badge","attrs":{"text":"hi"}}]}')
         "#).eval().unwrap();
         assert!(
@@ -400,6 +412,7 @@ mod tests {
         let (lua, _) = setup_lua();
         // No nodes registered at all.
         let result: String = lua.load(r#"
+
             return crap.richtext.render('{"type":"doc","content":[{"type":"mystery","attrs":{"x":"y"}}]}')
         "#).eval().unwrap();
         assert!(
@@ -432,6 +445,7 @@ mod tests {
         let result: String = lua
             .load(
                 r#"
+
             return crap.richtext.render('{"type":"doc","content":[{"type":"boom","attrs":{}}]}')
         "#,
             )
@@ -453,6 +467,7 @@ mod tests {
         let result = lua
             .load(
                 r#"
+
             return crap.richtext.render("{not valid json")
         "#,
             )

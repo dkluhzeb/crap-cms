@@ -1,9 +1,7 @@
 //! Template/static file listing, extraction, and proto export.
 
-use anyhow::{Context as _, Result};
-use std::fs;
-use std::io::Write;
-use std::path::Path;
+use anyhow::{Context as _, Result, bail};
+use std::{fs, io::Write, path::Path};
 
 use include_dir::{Dir, include_dir};
 
@@ -160,6 +158,7 @@ fn print_categorized(files: &[(String, &[u8])], categories: &[FileCategory]) {
 
     // Any uncategorized files
     let remaining: Vec<usize> = (0..files.len()).filter(|i| !used[*i]).collect();
+
     if !remaining.is_empty() {
         let total: usize = remaining.iter().map(|&i| files[i].1.len()).sum();
         let n = remaining.len();
@@ -213,7 +212,7 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
         && f != "templates"
         && f != "static"
     {
-        anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
+        bail!("Invalid --type '{}' — valid: templates, static", f);
     }
 
     let show_templates = type_filter.is_none() || type_filter == Some("templates");
@@ -227,6 +226,7 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
             files.len(),
             format_size(total_size)
         );
+
         if verbose {
             print_file_tree(&files);
         } else {
@@ -248,6 +248,7 @@ pub fn templates_list(type_filter: Option<&str>, verbose: bool) -> Result<()> {
             files.len(),
             format_size(total_size)
         );
+
         if verbose {
             print_file_tree(&files);
         } else {
@@ -283,11 +284,11 @@ pub fn templates_extract(
         && f != "templates"
         && f != "static"
     {
-        anyhow::bail!("Invalid --type '{}' — valid: templates, static", f);
+        bail!("Invalid --type '{}' — valid: templates, static", f);
     }
 
     if !all && paths.is_empty() {
-        anyhow::bail!("Specify file paths to extract, or use --all to extract everything");
+        bail!("Specify file paths to extract, or use --all to extract everything");
     }
 
     let want_templates = type_filter.is_none() || type_filter == Some("templates");
@@ -300,6 +301,7 @@ pub fn templates_extract(
             let files = collect_embedded_files_flat(&EMBEDDED_TEMPLATES);
             for (path, content) in &files {
                 let dest = config_dir.join("templates").join(path);
+
                 if dest.exists() && !force {
                     println!("  Skipped: templates/{} (exists, use --force)", path);
                     continue;
@@ -316,6 +318,7 @@ pub fn templates_extract(
                     count,
                     config_dir.display()
                 );
+
                 return Ok(());
             }
         }
@@ -325,6 +328,7 @@ pub fn templates_extract(
             let files = collect_embedded_files_flat(&EMBEDDED_STATIC);
             for (path, content) in &files {
                 let dest = config_dir.join("static").join(path);
+
                 if dest.exists() && !force {
                     println!("  Skipped: static/{} (exists, use --force)", path);
                     continue;
@@ -341,6 +345,7 @@ pub fn templates_extract(
                     count,
                     config_dir.display()
                 );
+
                 return Ok(());
             }
             println!(
@@ -375,6 +380,7 @@ pub fn templates_extract(
         match found {
             Some((kind, file)) => {
                 let dest = config_dir.join(kind).join(path);
+
                 if dest.exists() && !force {
                     println!("  Skipped: {}/{} (exists, use --force)", kind, path);
                     continue;

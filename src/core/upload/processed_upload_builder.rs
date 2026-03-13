@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
-use super::processed_upload::ProcessedUpload;
-use super::queued_conversion::QueuedConversion;
-use super::size_result::SizeResult;
+use super::{
+    processed_upload::ProcessedUpload, queued_conversion::QueuedConversion, size_result::SizeResult,
+};
 
 /// Builder for [`ProcessedUpload`].
 ///

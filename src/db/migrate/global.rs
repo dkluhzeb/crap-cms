@@ -2,7 +2,7 @@
 
 use anyhow::{Context as _, Result};
 
-use crate::config::LocaleConfig;
+use crate::{config::LocaleConfig, core::collection::GlobalDefinition};
 
 use super::helpers::{
     get_table_columns, sanitize_locale, sync_join_tables, sync_versions_table, table_exists,
@@ -11,7 +11,7 @@ use super::helpers::{
 pub(super) fn sync_global_table(
     conn: &rusqlite::Connection,
     slug: &str,
-    def: &crate::core::collection::GlobalDefinition,
+    def: &GlobalDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let table_name = format!("_global_{}", slug);
@@ -67,6 +67,7 @@ pub(super) fn sync_global_table(
             if spec.is_localized {
                 for locale in &locale_config.locales {
                     let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
+
                     if !existing_columns.contains(&col_name) {
                         let sql = format!(
                             "ALTER TABLE {} ADD COLUMN {} {}",
@@ -98,6 +99,7 @@ pub(super) fn sync_global_table(
     // Versioned globals with drafts: ensure _status column exists (ALTER path)
     if exists && def.has_drafts() {
         let existing_columns = get_table_columns(conn, &table_name)?;
+
         if !existing_columns.contains("_status") {
             let sql = format!(
                 "ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",

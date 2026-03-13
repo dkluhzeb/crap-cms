@@ -14,8 +14,7 @@ pub use builder::HookRunnerBuilder;
 
 use vm_pool::VmPool;
 
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 /// Thread-safe hook runner with a pool of Lua VMs for concurrent execution.
 #[derive(Clone)]

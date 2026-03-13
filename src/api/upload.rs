@@ -5,6 +5,8 @@
 //! - `PATCH  /api/upload/{slug}/{id}`  — replace file on existing document
 //! - `DELETE /api/upload/{slug}/{id}`  — delete upload document + files
 
+use std::{collections::HashMap, fs, path::PathBuf};
+
 use axum::{
     Router,
     extract::{Path, State},
@@ -12,15 +14,22 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, patch, post},
 };
-use std::collections::HashMap;
+use serde_json::{Value, json};
 
-use crate::admin::AdminState;
-use crate::admin::handlers::collections::forms::parse_multipart_form;
-use crate::admin::server::load_auth_user;
-use crate::core::auth::{self, AuthUser};
-use crate::core::event::EventUser;
-use crate::core::upload::{self, inject_upload_metadata};
-use crate::db::query::{self, AccessResult};
+use crate::{
+    admin::{
+        AdminState,
+        handlers::collections::forms::{extract_join_data_from_form, parse_multipart_form},
+        server::load_auth_user,
+    },
+    core::{
+        auth::{self, AuthUser},
+        event::{EventOperation, EventTarget, EventUser},
+        upload::{self, inject_upload_metadata},
+    },
+    db::query::{self, AccessResult},
+    service::{self, WriteInput},
+};
 
 /// Build the upload API router with all routes.
 #[cfg(not(tarpaulin_include))]
@@ -44,7 +53,7 @@ fn extract_bearer_user(state: &AdminState, headers: &HeaderMap) -> Option<AuthUs
 /// Return a JSON error response.
 #[cfg(not(tarpaulin_include))]
 fn json_error(status: StatusCode, message: &str) -> Response {
-    let body = serde_json::json!({ "error": message });
+    let body = json!({ "error": message });
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -55,7 +64,7 @@ fn json_error(status: StatusCode, message: &str) -> Response {
 
 /// Return a JSON success response with the given status and body.
 #[cfg(not(tarpaulin_include))]
-fn json_ok(status: StatusCode, body: &serde_json::Value) -> Response {
+fn json_ok(status: StatusCode, body: &Value) -> Response {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -203,10 +212,7 @@ async fn create_upload(
     };
 
     // Extract join table data
-    let join_data = crate::admin::handlers::collections::forms::extract_join_data_from_form(
-        &form_data,
-        &def.fields,
-    );
+    let join_data = extract_join_data_from_form(&form_data, &def.fields);
 
     // Extract draft flag
     let action = form_data.remove("_action").unwrap_or_default();
@@ -219,12 +225,12 @@ async fn create_upload(
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
     let result = tokio::task::spawn_blocking(move || {
-        crate::service::create_document(
+        service::create_document(
             &pool,
             &runner,
             &slug_owned,
             &def_owned,
-            crate::service::WriteInput {
+            WriteInput {
                 data: form_data,
                 join_data: &join_data,
                 password: password.as_deref(),
@@ -256,15 +262,15 @@ async fn create_upload(
                 &state.event_bus,
                 &def.hooks,
                 def.live.as_ref(),
-                crate::core::event::EventTarget::Collection,
-                crate::core::event::EventOperation::Create,
+                EventTarget::Collection,
+                EventOperation::Create,
                 slug,
                 doc.id.clone(),
                 doc.fields.clone(),
                 edited_by,
             );
 
-            let body = serde_json::json!({ "document": doc });
+            let body = json!({ "document": doc });
             json_ok(StatusCode::CREATED, &body)
         }
         Ok(Err(e)) => {
@@ -355,7 +361,8 @@ async fn update_upload(
     };
 
     // Load old document to get file paths for cleanup
-    let mut old_doc_fields: Option<HashMap<String, serde_json::Value>> = None;
+    let mut old_doc_fields: Option<HashMap<String, Value>> = None;
+
     if let Some(ref f) = file
         && !f.data.is_empty()
         && let Ok(conn) = state.pool.get()
@@ -366,7 +373,8 @@ async fn update_upload(
 
     // Process upload if a new file was provided — runs on blocking thread
     let mut queued_conversions = Vec::new();
-    let mut created_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut created_files: Vec<PathBuf> = Vec::new();
+
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
     {
@@ -416,10 +424,7 @@ async fn update_upload(
         None
     };
 
-    let join_data = crate::admin::handlers::collections::forms::extract_join_data_from_form(
-        &form_data,
-        &def.fields,
-    );
+    let join_data = extract_join_data_from_form(&form_data, &def.fields);
 
     let action = form_data.remove("_action").unwrap_or_default();
     let draft = action == "save_draft";
@@ -432,13 +437,13 @@ async fn update_upload(
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
     let result = tokio::task::spawn_blocking(move || {
-        crate::service::update_document(
+        service::update_document(
             &pool,
             &runner,
             &slug_owned,
             &id_owned,
             &def_owned,
-            crate::service::WriteInput {
+            WriteInput {
                 data: form_data,
                 join_data: &join_data,
                 password: password.as_deref(),
@@ -474,15 +479,15 @@ async fn update_upload(
                 &state.event_bus,
                 &def.hooks,
                 def.live.as_ref(),
-                crate::core::event::EventTarget::Collection,
-                crate::core::event::EventOperation::Update,
+                EventTarget::Collection,
+                EventOperation::Update,
                 slug,
                 id,
                 doc.fields.clone(),
                 edited_by,
             );
 
-            let body = serde_json::json!({ "document": doc });
+            let body = json!({ "document": doc });
             json_ok(StatusCode::OK, &body)
         }
         Ok(Err(e)) => {
@@ -500,9 +505,9 @@ async fn update_upload(
 }
 
 /// Delete a list of files, ignoring errors (best-effort orphan cleanup).
-fn cleanup_files(files: &[std::path::PathBuf]) {
+fn cleanup_files(files: &[PathBuf]) {
     for path in files {
-        let _ = std::fs::remove_file(path);
+        let _ = fs::remove_file(path);
     }
 }
 
@@ -595,7 +600,7 @@ async fn delete_upload(
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let config_dir = state.config_dir.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::service::delete_document(
+        service::delete_document(
             &pool,
             &runner,
             &slug_owned,
@@ -616,15 +621,15 @@ async fn delete_upload(
                 &state.event_bus,
                 &def.hooks,
                 def.live.as_ref(),
-                crate::core::event::EventTarget::Collection,
-                crate::core::event::EventOperation::Delete,
+                EventTarget::Collection,
+                EventOperation::Delete,
                 slug,
                 id,
                 HashMap::new(),
                 edited_by,
             );
 
-            json_ok(StatusCode::OK, &serde_json::json!({ "success": true }))
+            json_ok(StatusCode::OK, &json!({ "success": true }))
         }
         Ok(Err(e)) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,

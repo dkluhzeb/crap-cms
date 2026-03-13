@@ -1,6 +1,6 @@
 //! HookRunner methods for running Lua migrations.
 
-use std::path::Path;
+use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result};
 
@@ -17,7 +17,7 @@ impl HookRunner {
         direction: &str,
         conn: &rusqlite::Connection,
     ) -> Result<()> {
-        let code = std::fs::read_to_string(path)
+        let code = fs::read_to_string(path)
             .with_context(|| format!("Failed to read migration {}", path.display()))?;
 
         let lua = self.pool.acquire()?;

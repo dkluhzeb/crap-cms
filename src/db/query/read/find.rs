@@ -2,14 +2,17 @@
 
 use anyhow::{Context as _, Result, bail};
 use rusqlite::params_from_iter;
+use serde_json::Value;
 
-use super::super::filter::{build_where_clause, resolve_filter_column, resolve_filters};
 use super::super::{
-    FindQuery, LocaleContext, LocaleMode, get_column_names, get_locale_select_columns,
-    group_locale_fields, validate_query_fields,
+    FindQuery, LocaleContext, LocaleMode,
+    filter::{build_where_clause, resolve_filter_column, resolve_filters},
+    get_column_names, get_locale_select_columns, group_locale_fields, validate_query_fields,
 };
-use crate::core::{CollectionDefinition, Document};
-use crate::db::document::row_to_document;
+use crate::{
+    core::{CollectionDefinition, Document},
+    db::document::row_to_document,
+};
 
 /// Convert ISO 8601 timestamp back to SQLite storage format for cursor comparison.
 /// "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
@@ -51,6 +54,7 @@ pub fn find(
     // Build WHERE with locale-resolved column names
     let resolved_filters = resolve_filters(&query.filters, def, locale_ctx);
     let where_clause = build_where_clause(&resolved_filters, slug, &def.fields, &mut params)?;
+
     if !where_clause.is_empty() {
         sql.push_str(&where_clause);
     }
@@ -70,6 +74,7 @@ pub fn find(
 
     // Cursor + offset mutual exclusion
     let has_cursor = query.after_cursor.is_some() || query.before_cursor.is_some();
+
     if has_cursor && query.offset.is_some() {
         bail!("Cannot use both cursor and offset — they are mutually exclusive");
     }
@@ -123,9 +128,9 @@ pub fn find(
         // Denormalize ISO timestamps back to SQLite format for comparison:
         // "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
         let sort_val_str = match &cursor.sort_val {
-            serde_json::Value::String(s) => denormalize_timestamp(s),
-            serde_json::Value::Number(n) => n.to_string(),
-            serde_json::Value::Null => String::new(),
+            Value::String(s) => denormalize_timestamp(s),
+            Value::Number(n) => n.to_string(),
+            Value::Null => String::new(),
             other => other.to_string(),
         };
         params.push(Box::new(sort_val_str));
@@ -150,6 +155,7 @@ pub fn find(
     };
 
     let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
+
     if sort_col != "id" {
         // Stable ordering: primary sort + id tiebreaker
         sql.push_str(&format!(
@@ -184,6 +190,7 @@ pub fn find(
     let mut documents = Vec::new();
     for row in rows {
         let mut doc = row?;
+
         if let Some(ctx) = locale_ctx
             && ctx.config.is_enabled()
             && let LocaleMode::All = ctx.mode
@@ -203,6 +210,8 @@ pub fn find(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::super::write::create;
     use super::super::super::{Filter, FilterClause, FilterOp, FindQuery};
     use super::*;
@@ -334,7 +343,7 @@ mod tests {
         query.after_cursor = Some(super::super::super::cursor::CursorData {
             sort_col: "id".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!("abc"),
+            sort_val: json!("abc"),
             id: "abc".to_string(),
         });
         query.offset = Some(10);
@@ -374,7 +383,7 @@ mod tests {
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!(last.get_str("title").unwrap()),
+            sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.clone(),
         };
         let mut q2 = FindQuery::new();
@@ -391,7 +400,7 @@ mod tests {
         let cursor2 = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!(last2.get_str("title").unwrap()),
+            sort_val: json!(last2.get_str("title").unwrap()),
             id: last2.id.clone(),
         };
         let mut q3 = FindQuery::new();
@@ -427,7 +436,7 @@ mod tests {
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "DESC".to_string(),
-            sort_val: serde_json::json!(last.get_str("title").unwrap()),
+            sort_val: json!(last.get_str("title").unwrap()),
             id: last.id.clone(),
         };
         let mut q2 = FindQuery::new();
@@ -450,7 +459,7 @@ mod tests {
         query.after_cursor = Some(super::super::super::cursor::CursorData {
             sort_col: "status".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!("x"),
+            sort_val: json!("x"),
             id: "abc".to_string(),
         });
         let result = find(&conn, "posts", &def, &query, None);
@@ -478,7 +487,7 @@ mod tests {
         let fwd_cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!(last_p1.get_str("title").unwrap()),
+            sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.clone(),
         };
         let mut p2q = FindQuery::new();
@@ -494,7 +503,7 @@ mod tests {
         let back_cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!(first_p2.get_str("title").unwrap()),
+            sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.clone(),
         };
         let mut bq = FindQuery::new();
@@ -533,7 +542,7 @@ mod tests {
         let fwd_cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "DESC".to_string(),
-            sort_val: serde_json::json!(last_p1.get_str("title").unwrap()),
+            sort_val: json!(last_p1.get_str("title").unwrap()),
             id: last_p1.id.clone(),
         };
         let mut p2q = FindQuery::new();
@@ -549,7 +558,7 @@ mod tests {
         let back_cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "DESC".to_string(),
-            sort_val: serde_json::json!(first_p2.get_str("title").unwrap()),
+            sort_val: json!(first_p2.get_str("title").unwrap()),
             id: first_p2.id.clone(),
         };
         let mut bq = FindQuery::new();
@@ -572,7 +581,7 @@ mod tests {
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "id".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!("abc"),
+            sort_val: json!("abc"),
             id: "abc".to_string(),
         };
         let mut query = FindQuery::new();
@@ -612,7 +621,7 @@ mod tests {
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!(99i64), // Number variant
+            sort_val: json!(99i64), // Number variant
             id: page1[0].id.clone(),
         };
         let mut q2 = FindQuery::new();
@@ -633,7 +642,7 @@ mod tests {
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!(true), // Bool variant
+            sort_val: json!(true), // Bool variant
             id: "anyid".to_string(),
         };
         let mut q = FindQuery::new();
@@ -663,7 +672,7 @@ mod tests {
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::json!("Post 01"),
+            sort_val: json!("Post 01"),
             id: "~".to_string(),
         };
         let mut q = FindQuery::new();

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use super::format::FormatResult;
-use super::size_result::SizeResult;
+use super::{format::FormatResult, size_result::SizeResult};
 
 /// Builder for [`SizeResult`].
 ///

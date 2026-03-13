@@ -1,10 +1,12 @@
 //! Blueprint management — save, use, list, remove reusable config directory templates.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow, bail};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 /// Manifest filename written to each saved blueprint.
 const MANIFEST_FILENAME: &str = ".crap-blueprint.toml";
@@ -42,6 +44,7 @@ fn write_manifest(dir: &Path) -> Result<()> {
 /// manifest file does not exist (backward compatible with old blueprints).
 fn read_manifest(dir: &Path) -> Result<Option<BlueprintManifest>> {
     let path = dir.join(MANIFEST_FILENAME);
+
     if !path.exists() {
         return Ok(None);
     }
@@ -87,7 +90,7 @@ fn check_blueprint_version_against(blueprint_version: &str, pkg_version: &str) -
 /// - Windows: `C:\Users\<user>\AppData\Roaming\crap-cms\blueprints\`
 fn blueprints_dir() -> Result<PathBuf> {
     let base = dirs::config_dir()
-        .ok_or_else(|| anyhow::anyhow!("Could not determine config directory for your platform"))?;
+        .ok_or_else(|| anyhow!("Could not determine config directory for your platform"))?;
     Ok(base.join("crap-cms").join("blueprints"))
 }
 
@@ -103,7 +106,7 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
 
     // Verify it's actually a config directory
     if !config_dir.join("crap.toml").exists() {
-        anyhow::bail!(
+        bail!(
             "Directory '{}' does not contain a crap.toml — not a valid config directory",
             config_dir.display()
         );
@@ -113,7 +116,7 @@ pub fn blueprint_save(config_dir: &Path, name: &str, force: bool) -> Result<()> 
     let target = bp_dir.join(name);
 
     if target.exists() && !force {
-        anyhow::bail!(
+        bail!(
             "Blueprint '{}' already exists — use --force to overwrite",
             name
         );
@@ -156,13 +159,14 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
 
     if !source.exists() {
         let available = list_blueprint_names()?;
+
         if available.is_empty() {
-            anyhow::bail!(
+            bail!(
                 "Blueprint '{}' not found. No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>",
                 name
             );
         } else {
-            anyhow::bail!(
+            bail!(
                 "Blueprint '{}' not found. Available blueprints: {}",
                 name,
                 available.join(", ")
@@ -181,7 +185,7 @@ pub fn blueprint_use(name: &str, dir: Option<PathBuf>) -> Result<()> {
 
     // Refuse to overwrite existing config
     if target.join("crap.toml").exists() {
-        anyhow::bail!(
+        bail!(
             "Directory '{}' already contains a crap.toml — refusing to overwrite",
             target.display()
         );
@@ -224,13 +228,16 @@ pub fn blueprint_list() -> Result<()> {
     if !bp_dir.exists() {
         println!("No blueprints saved yet.");
         println!("Save one with: crap-cms blueprint save <dir> <name>");
+
         return Ok(());
     }
 
     let names = list_blueprint_names()?;
+
     if names.is_empty() {
         println!("No blueprints saved yet.");
         println!("Save one with: crap-cms blueprint save <dir> <name>");
+
         return Ok(());
     }
 
@@ -264,7 +271,7 @@ pub fn blueprint_remove(name: &str) -> Result<()> {
     let target = bp_dir.join(name);
 
     if !target.exists() {
-        anyhow::bail!("Blueprint '{}' not found", name);
+        bail!("Blueprint '{}' not found", name);
     }
 
     fs::remove_dir_all(&target)
@@ -278,12 +285,14 @@ pub fn blueprint_remove(name: &str) -> Result<()> {
 /// List blueprint names from the global blueprints directory.
 pub fn list_blueprint_names() -> Result<Vec<String>> {
     let bp_dir = blueprints_dir()?;
+
     if !bp_dir.exists() {
         return Ok(Vec::new());
     }
     let mut names = Vec::new();
     for entry in fs::read_dir(&bp_dir)? {
         let entry = entry?;
+
         if entry.path().is_dir() {
             names.push(entry.file_name().to_string_lossy().to_string());
         }
@@ -339,13 +348,13 @@ fn count_lua_files(dir: &Path) -> usize {
 /// Validate a blueprint name: alphanumeric, hyphens, underscores.
 fn validate_blueprint_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        anyhow::bail!("Blueprint name cannot be empty");
+        bail!("Blueprint name cannot be empty");
     }
     if !name
         .chars()
         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
     {
-        anyhow::bail!(
+        bail!(
             "Invalid blueprint name '{}' — use alphanumeric characters, hyphens, and underscores only",
             name
         );
@@ -356,8 +365,8 @@ fn validate_blueprint_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::sync::Mutex;
+    use crate::scaffold::init::LUA_API_TYPES;
+    use std::{fs, sync::Mutex};
 
     /// Mutex to serialize tests that mutate XDG_CONFIG_HOME.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -699,11 +708,7 @@ mod tests {
         // Write types like blueprint_use does
         let types_dir = target.join("types");
         fs::create_dir_all(&types_dir).unwrap();
-        fs::write(
-            types_dir.join("crap.lua"),
-            crate::scaffold::init::LUA_API_TYPES,
-        )
-        .unwrap();
+        fs::write(types_dir.join("crap.lua"), LUA_API_TYPES).unwrap();
 
         // Verify types/crap.lua exists and is non-empty
         let types_file = target.join("types/crap.lua");

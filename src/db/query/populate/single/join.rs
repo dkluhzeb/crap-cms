@@ -1,14 +1,17 @@
 //! Join field (virtual reverse lookup) population.
 
 use anyhow::Result;
+use serde_json::Value;
 use std::collections::HashSet;
 
-use super::super::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
-use super::populate_relationships_cached;
-use crate::core::Document;
-use crate::core::field::FieldType;
-use crate::db::query::read::find;
-use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
+use super::{
+    super::{PopulateCache, PopulateContext, PopulateOpts, document_to_json},
+    populate_relationships_cached,
+};
+use crate::{
+    core::{Document, field::FieldType, upload},
+    db::query::{Filter, FilterClause, FilterOp, FindQuery, hydrate_document, read::find},
+};
 
 /// Populate join fields (virtual reverse lookups).
 pub(super) fn populate_join_fields(
@@ -47,10 +50,11 @@ pub(super) fn populate_join_fields(
             op: FilterOp::Equals(doc.id.clone()),
         })];
         let fq = fq;
+
         if let Ok(matched_docs) = find(conn, &jc.collection, &target_def, &fq, locale_ctx) {
             let mut populated = Vec::new();
             for mut matched_doc in matched_docs {
-                crate::db::query::hydrate_document(
+                hydrate_document(
                     conn,
                     &jc.collection,
                     &target_def.fields,
@@ -58,10 +62,11 @@ pub(super) fn populate_join_fields(
                     None,
                     locale_ctx,
                 )?;
+
                 if let Some(ref uc) = target_def.upload
                     && uc.enabled
                 {
-                    crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
+                    upload::assemble_sizes_object(&mut matched_doc, uc);
                 }
                 populate_relationships_cached(
                     &PopulateContext {
@@ -82,7 +87,7 @@ pub(super) fn populate_join_fields(
                 populated.push(document_to_json(&matched_doc, &jc.collection));
             }
             doc.fields
-                .insert(field.name.clone(), serde_json::Value::Array(populated));
+                .insert(field.name.clone(), Value::Array(populated));
         }
     }
     Ok(())
@@ -90,10 +95,12 @@ pub(super) fn populate_join_fields(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::super::test_helpers::*;
     use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
-    use crate::core::Registry;
+    use crate::core::{Document, Registry};
     use std::collections::HashSet;
 
     #[test]
@@ -105,9 +112,8 @@ mod tests {
         registry.register_collection(authors_def.clone());
         registry.register_collection(posts_def);
 
-        let mut doc = crate::core::Document::new("a1".to_string());
-        doc.fields
-            .insert("name".to_string(), serde_json::json!("Alice"));
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -152,9 +158,8 @@ mod tests {
         registry.register_collection(authors_def.clone());
         registry.register_collection(posts_def);
 
-        let mut doc = crate::core::Document::new("a1".to_string());
-        doc.fields
-            .insert("name".to_string(), serde_json::json!("Alice"));
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -192,9 +197,8 @@ mod tests {
         registry.register_collection(posts_def);
 
         // Author with no posts
-        let mut doc = crate::core::Document::new("a99".to_string());
-        doc.fields
-            .insert("name".to_string(), serde_json::json!("Nobody"));
+        let mut doc = Document::new("a99".to_string());
+        doc.fields.insert("name".to_string(), json!("Nobody"));
 
         let mut visited = HashSet::new();
         populate_relationships_cached(
@@ -235,9 +239,8 @@ mod tests {
         registry.register_collection(authors_def.clone());
         registry.register_collection(posts_def);
 
-        let mut doc = crate::core::Document::new("a1".to_string());
-        doc.fields
-            .insert("name".to_string(), serde_json::json!("Alice"));
+        let mut doc = Document::new("a1".to_string());
+        doc.fields.insert("name".to_string(), json!("Alice"));
 
         let mut visited = HashSet::new();
         // Select only "name", not "posts"

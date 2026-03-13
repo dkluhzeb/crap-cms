@@ -40,6 +40,7 @@ pub(super) fn register_hooks(lua: &Lua, crap: &Table) -> Result<()> {
         for i in 1..=len {
             let entry: Value = list.raw_get(i)?;
             let eq: bool = rawequal.call((entry, func.clone()))?;
+
             if eq {
                 remove_idx = Some(i);
                 break;

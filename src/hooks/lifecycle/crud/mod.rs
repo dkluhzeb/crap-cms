@@ -8,8 +8,7 @@ mod write;
 use anyhow::Result;
 use mlua::Lua;
 
-use crate::config::LocaleConfig;
-use crate::core::SharedRegistry;
+use crate::{config::LocaleConfig, core::SharedRegistry};
 
 use super::TxContext;
 

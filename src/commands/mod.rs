@@ -17,6 +17,13 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use std::path::{Path, PathBuf};
 
+use crate::{
+    config::CrapConfig,
+    core::SharedRegistry,
+    db::{DbPool, migrate, pool},
+    hooks,
+};
+
 /// Parse a key=value pair for --field arguments.
 pub fn parse_key_val(s: &str) -> Result<(String, String), String> {
     let pos = s
@@ -519,27 +526,22 @@ pub enum ImagesAction {
 }
 
 /// Load config, init Lua, create pool, and sync schema. Shared by user, export, import commands.
-pub fn load_config_and_sync(
-    config_dir: &Path,
-) -> Result<(crate::db::DbPool, crate::core::SharedRegistry)> {
+pub fn load_config_and_sync(config_dir: &Path) -> Result<(DbPool, SharedRegistry)> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     // Check crap_version compatibility
     if let Some(warning) = cfg.check_version() {
         tracing::warn!("{}", warning);
     }
 
-    let registry =
-        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
-    let pool = crate::db::pool::create_pool(&config_dir, &cfg)
-        .context("Failed to create database pool")?;
+    let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
+    let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
-    crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
-        .context("Failed to sync database schema")?;
+    migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
     Ok((pool, registry))
 }

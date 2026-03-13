@@ -1,5 +1,7 @@
 //! Core types used across the lifecycle module.
 
+use serde_json::Value;
+
 use crate::core::Document;
 
 /// Result of evaluating a display condition function.
@@ -9,10 +11,7 @@ pub enum DisplayConditionResult {
     Bool(bool),
     /// Lua returned a condition table. Can be evaluated client-side.
     /// `visible` is the initial evaluation result; `condition` is the JSON to embed.
-    Table {
-        condition: serde_json::Value,
-        visible: bool,
-    },
+    Table { condition: Value, visible: bool },
 }
 
 /// Events that trigger hooks.

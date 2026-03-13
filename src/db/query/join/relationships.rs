@@ -14,6 +14,7 @@ pub fn set_related_ids(
     locale: Option<&str>,
 ) -> Result<()> {
     let table_name = format!("{}_{}", collection, field);
+
     if let Some(loc) = locale {
         conn.execute(
             &format!(
@@ -61,6 +62,7 @@ pub fn find_related_ids(
     locale: Option<&str>,
 ) -> Result<Vec<String>> {
     let table_name = format!("{}_{}", collection, field);
+
     if let Some(loc) = locale {
         let sql = format!(
             "SELECT related_id FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",
@@ -100,6 +102,7 @@ pub fn set_polymorphic_related(
     locale: Option<&str>,
 ) -> Result<()> {
     let table_name = format!("{}_{}", collection, field);
+
     if let Some(loc) = locale {
         conn.execute(
             &format!(
@@ -143,6 +146,7 @@ pub fn find_polymorphic_related(
     locale: Option<&str>,
 ) -> Result<Vec<(String, String)>> {
     let table_name = format!("{}_{}", collection, field);
+
     if let Some(loc) = locale {
         let sql = format!(
             "SELECT related_collection, related_id FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",

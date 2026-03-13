@@ -1,8 +1,6 @@
 //! Builder for constructing pagination info proto messages.
 
-use crate::api::content;
-use crate::core::Document;
-use crate::db::query::cursor;
+use crate::{api::content, core::Document, db::query::cursor};
 
 /// Builder for constructing `PaginationInfo` proto messages. Handles both
 /// page-based and cursor-based pagination modes.

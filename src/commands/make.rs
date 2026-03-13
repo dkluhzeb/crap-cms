@@ -1,7 +1,16 @@
 //! `make` command — scaffold collections, globals, hooks, and jobs.
 
-use anyhow::{Context as _, Result};
-use std::path::Path;
+use anyhow::{Context as _, Result, anyhow, bail};
+use std::{fs, path::Path};
+
+use crate::{
+    config::CrapConfig,
+    core::field::FieldType,
+    hooks,
+    scaffold::{
+        self, CollectionOptions, ConditionFieldInfo, HookType, MakeHookOptions, VALID_FIELD_TYPES,
+    },
+};
 
 /// Dispatch the `make` subcommand.
 #[cfg(not(tarpaulin_include))] // interactive dispatcher — uses dialoguer prompts
@@ -18,7 +27,7 @@ pub fn run(action: super::MakeAction) -> Result<()> {
             no_input,
             force,
         } => {
-            let opts = crate::scaffold::CollectionOptions {
+            let opts = CollectionOptions {
                 no_timestamps,
                 auth,
                 upload,
@@ -40,13 +49,13 @@ pub fn run(action: super::MakeAction) -> Result<()> {
                     Input::<String>::new()
                         .with_prompt("Global slug")
                         .validate_with(|input: &String| -> Result<(), String> {
-                            crate::scaffold::validate_slug(input).map_err(|e| e.to_string())
+                            scaffold::validate_slug(input).map_err(|e| e.to_string())
                         })
                         .interact_text()
                         .context("Failed to read global slug")?
                 }
             };
-            crate::scaffold::make_global(&config, &slug, fields.as_deref(), force)
+            scaffold::make_global(&config, &slug, fields.as_deref(), force)
         }
         super::MakeAction::Hook {
             config,
@@ -73,13 +82,13 @@ pub fn run(action: super::MakeAction) -> Result<()> {
                     Input::<String>::new()
                         .with_prompt("Job slug")
                         .validate_with(|input: &String| -> Result<(), String> {
-                            crate::scaffold::validate_slug(input).map_err(|e| e.to_string())
+                            scaffold::validate_slug(input).map_err(|e| e.to_string())
                         })
                         .interact_text()
                         .context("Failed to read job slug")?
                 }
             };
-            crate::scaffold::make_job(
+            scaffold::make_job(
                 &config,
                 &slug,
                 schedule.as_deref(),
@@ -99,7 +108,7 @@ pub(crate) fn make_collection_command(
     slug: Option<String>,
     fields: Option<String>,
     interactive: bool,
-    opts: &crate::scaffold::CollectionOptions,
+    opts: &CollectionOptions,
 ) -> Result<()> {
     use dialoguer::{Confirm, Input, Select};
 
@@ -126,7 +135,7 @@ pub(crate) fn make_collection_command(
             .interact_text()
             .context("Failed to read collection slug")?,
         None => {
-            anyhow::bail!("Collection slug is required (or omit --no-input for interactive mode)")
+            bail!("Collection slug is required (or omit --no-input for interactive mode)")
         }
     };
 
@@ -150,11 +159,11 @@ pub(crate) fn make_collection_command(
 
                 let type_idx = Select::new()
                     .with_prompt("Field type")
-                    .items(crate::scaffold::VALID_FIELD_TYPES)
+                    .items(VALID_FIELD_TYPES)
                     .default(0)
                     .interact()
                     .context("Failed to read field type")?;
-                let field_type = crate::scaffold::VALID_FIELD_TYPES[type_idx];
+                let field_type = VALID_FIELD_TYPES[type_idx];
 
                 let required = Confirm::new()
                     .with_prompt("Required?")
@@ -174,6 +183,7 @@ pub(crate) fn make_collection_command(
                 };
 
                 let mut part = format!("{}:{}", name, field_type);
+
                 if required {
                     part.push_str(":required");
                 }
@@ -245,14 +255,14 @@ pub(crate) fn make_collection_command(
         false
     };
 
-    let final_opts = crate::scaffold::CollectionOptions {
+    let final_opts = CollectionOptions {
         no_timestamps,
         auth,
         upload,
         versions,
         force: opts.force,
     };
-    crate::scaffold::make_collection(config_dir, &slug, fields_shorthand.as_deref(), &final_opts)
+    scaffold::make_collection(config_dir, &slug, fields_shorthand.as_deref(), &final_opts)
 }
 
 /// Handle the `make hook` subcommand — resolve missing flags via interactive survey.
@@ -270,8 +280,8 @@ fn make_hook_command(
 
     // 1. Resolve hook type
     let hook_type = match hook_type {
-        Some(t) => crate::scaffold::HookType::from_name(&t).ok_or_else(|| {
-            anyhow::anyhow!(
+        Some(t) => HookType::from_name(&t).ok_or_else(|| {
+            anyhow!(
                 "Unknown hook type '{}' — valid: collection, field, access, condition",
                 t
             )
@@ -285,10 +295,10 @@ fn make_hook_command(
                 .interact()
                 .context("Failed to read hook type selection")?;
             match selection {
-                0 => crate::scaffold::HookType::Collection,
-                1 => crate::scaffold::HookType::Field,
-                2 => crate::scaffold::HookType::Access,
-                _ => crate::scaffold::HookType::Condition,
+                0 => HookType::Collection,
+                1 => HookType::Field,
+                2 => HookType::Access,
+                _ => HookType::Condition,
             }
         }
     };
@@ -340,7 +350,7 @@ fn make_hook_command(
     let position = match position {
         Some(p) => {
             if !hook_type.valid_positions().contains(&p.as_str()) {
-                anyhow::bail!(
+                bail!(
                     "Invalid position '{}' for {} hook — valid: {}",
                     p,
                     hook_type.label(),
@@ -351,11 +361,12 @@ fn make_hook_command(
         }
         None => {
             let positions = hook_type.valid_positions();
+
             if positions.len() == 1 {
                 // Single valid position (e.g., condition hooks) — skip prompt
                 positions[0].to_string()
             } else {
-                let prompt = if hook_type == crate::scaffold::HookType::Condition {
+                let prompt = if hook_type == HookType::Condition {
                     "Return type"
                 } else {
                     "Lifecycle position"
@@ -372,11 +383,12 @@ fn make_hook_command(
     };
 
     // 4. Resolve field name (field hooks only)
-    let field = if hook_type == crate::scaffold::HookType::Field {
+    let field = if hook_type == HookType::Field {
         match field {
             Some(f) => Some(f),
             None => {
                 let field_names = try_load_field_names(config_dir, &collection);
+
                 if let Some(names) = field_names.filter(|n| !n.is_empty()) {
                     let selection = Select::new()
                         .with_prompt("Field")
@@ -413,22 +425,23 @@ fn make_hook_command(
     };
 
     // 6. For condition hooks: resolve watched field with type info
-    let condition_field = if hook_type == crate::scaffold::HookType::Condition {
+    let condition_field = if hook_type == HookType::Condition {
         let field_infos = try_load_field_infos(config_dir, &collection);
+
         if let Some(ref f) = field {
             // CLI --field flag provided — look up type info from registry if available
             if let Some(ref infos) = field_infos {
                 if let Some(info) = infos.iter().find(|i| i.name == *f) {
                     Some(info.clone())
                 } else {
-                    Some(crate::scaffold::ConditionFieldInfo {
+                    Some(ConditionFieldInfo {
                         name: f.clone(),
                         field_type: "text".to_string(),
                         select_options: vec![],
                     })
                 }
             } else {
-                Some(crate::scaffold::ConditionFieldInfo {
+                Some(ConditionFieldInfo {
                     name: f.clone(),
                     field_type: "text".to_string(),
                     select_options: vec![],
@@ -453,7 +466,7 @@ fn make_hook_command(
         None
     };
 
-    let opts = crate::scaffold::MakeHookOptions {
+    let opts = MakeHookOptions {
         config_dir,
         name: &name,
         hook_type,
@@ -465,13 +478,13 @@ fn make_hook_command(
         is_global,
     };
 
-    crate::scaffold::make_hook(&opts)
+    scaffold::make_hook(&opts)
 }
 
 /// Check if localization is enabled in the config dir's crap.toml.
 pub fn has_locales_enabled(config_dir: &Path) -> bool {
     let toml_path = config_dir.join("crap.toml");
-    let content = std::fs::read_to_string(&toml_path).unwrap_or_default();
+    let content = fs::read_to_string(&toml_path).unwrap_or_default();
     let table: toml::Table = content.parse().unwrap_or_default();
     table
         .get("locale")
@@ -484,8 +497,8 @@ pub fn has_locales_enabled(config_dir: &Path) -> bool {
 /// Try to load collection slugs from the config dir for interactive selection.
 pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
     let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = crate::config::CrapConfig::load(&config_dir).ok()?;
-    let registry = crate::hooks::init_lua(&config_dir, &cfg).ok()?;
+    let cfg = CrapConfig::load(&config_dir).ok()?;
+    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
     let reg = registry.read().ok()?;
     let mut slugs: Vec<String> = reg.collections.keys().cloned().collect();
     slugs.sort();
@@ -495,8 +508,8 @@ pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
 /// Try to load global slugs from the config dir for interactive selection.
 pub fn try_load_global_slugs(config_dir: &Path) -> Option<Vec<String>> {
     let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = crate::config::CrapConfig::load(&config_dir).ok()?;
-    let registry = crate::hooks::init_lua(&config_dir, &cfg).ok()?;
+    let cfg = CrapConfig::load(&config_dir).ok()?;
+    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
     let reg = registry.read().ok()?;
     let mut slugs: Vec<String> = reg.globals.keys().cloned().collect();
     slugs.sort();
@@ -506,8 +519,8 @@ pub fn try_load_global_slugs(config_dir: &Path) -> Option<Vec<String>> {
 /// Try to load field names for a collection from the config dir.
 pub fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<String>> {
     let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = crate::config::CrapConfig::load(&config_dir).ok()?;
-    let registry = crate::hooks::init_lua(&config_dir, &cfg).ok()?;
+    let cfg = CrapConfig::load(&config_dir).ok()?;
+    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
     let reg = registry.read().ok()?;
     let def = reg.get_collection(collection)?;
     Some(def.fields.iter().map(|f| f.name.clone()).collect())
@@ -517,10 +530,10 @@ pub fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<S
 pub fn try_load_field_infos(
     config_dir: &Path,
     collection: &str,
-) -> Option<Vec<crate::scaffold::ConditionFieldInfo>> {
+) -> Option<Vec<ConditionFieldInfo>> {
     let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = crate::config::CrapConfig::load(&config_dir).ok()?;
-    let registry = crate::hooks::init_lua(&config_dir, &cfg).ok()?;
+    let cfg = CrapConfig::load(&config_dir).ok()?;
+    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
     let reg = registry.read().ok()?;
     let def = reg.get_collection(collection)?;
     Some(
@@ -529,15 +542,15 @@ pub fn try_load_field_infos(
             .filter(|f| {
                 !matches!(
                     f.field_type,
-                    crate::core::field::FieldType::Array
-                        | crate::core::field::FieldType::Blocks
-                        | crate::core::field::FieldType::Group
-                        | crate::core::field::FieldType::Row
-                        | crate::core::field::FieldType::Collapsible
-                        | crate::core::field::FieldType::Tabs
+                    FieldType::Array
+                        | FieldType::Blocks
+                        | FieldType::Group
+                        | FieldType::Row
+                        | FieldType::Collapsible
+                        | FieldType::Tabs
                 )
             })
-            .map(|f| crate::scaffold::ConditionFieldInfo {
+            .map(|f| ConditionFieldInfo {
                 name: f.name.clone(),
                 field_type: format!("{:?}", f.field_type).to_lowercase(),
                 select_options: f.options.iter().map(|o| o.value.clone()).collect(),

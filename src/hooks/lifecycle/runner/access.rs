@@ -4,16 +4,23 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use mlua::Value;
+use serde_json::Value as JsonValue;
 
-use crate::core::Document;
-use crate::core::document::DocumentBuilder;
-use crate::core::field::FieldDefinition;
-use crate::db::query::AccessResult;
-use crate::hooks::lifecycle::access::{
-    check_access_with_lua, check_field_read_access_with_lua, check_field_write_access_with_lua,
+use crate::{
+    core::{Document, document::DocumentBuilder, field::FieldDefinition},
+    db::query::AccessResult,
+    hooks::{
+        api,
+        lifecycle::{
+            access::{
+                check_access_with_lua, check_field_read_access_with_lua,
+                check_field_write_access_with_lua,
+            },
+            execution::resolve_hook_function,
+            types::{TxContext, UserContext},
+        },
+    },
 };
-use crate::hooks::lifecycle::execution::resolve_hook_function;
-use crate::hooks::lifecycle::types::{TxContext, UserContext};
 
 use super::HookRunner;
 
@@ -55,14 +62,16 @@ impl HookRunner {
                     let mut fields = HashMap::new();
                     for pair in tbl.pairs::<String, Value>() {
                         let (k, v) = pair?;
+
                         if k == "id" || k == "created_at" || k == "updated_at" {
                             continue;
                         }
-                        fields.insert(k, crate::hooks::api::lua_to_json(&lua, &v)?);
+                        fields.insert(k, api::lua_to_json(&lua, &v)?);
                     }
                     let created_at: Option<String> = tbl.get("created_at").ok();
                     let updated_at: Option<String> = tbl.get("updated_at").ok();
                     let mut builder = DocumentBuilder::new(id).fields(fields);
+
                     if let Some(ts) = created_at {
                         builder = builder.created_at(ts);
                     }
@@ -94,7 +103,7 @@ impl HookRunner {
         access_ref: Option<&str>,
         user: Option<&Document>,
         id: Option<&str>,
-        data: Option<&HashMap<String, serde_json::Value>>,
+        data: Option<&HashMap<String, JsonValue>>,
         conn: &rusqlite::Connection,
     ) -> Result<AccessResult> {
         let lua = self.pool.acquire()?;
@@ -151,6 +160,7 @@ impl HookRunner {
             "update" => f.access.update.is_some(),
             _ => false,
         });
+
         if !has_write_access {
             return Vec::new();
         }

@@ -1,10 +1,8 @@
-use std::io::Cursor;
-use std::path::Path;
+use std::{fs, io::Cursor, path::Path};
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 
-use super::image_fit::ImageFit;
-use super::image_size::ImageSize;
+use super::{image_fit::ImageFit, image_size::ImageSize};
 
 /// Resize an image according to the given size definition and fit mode.
 pub(super) fn resize_image(img: &image::DynamicImage, size: &ImageSize) -> image::DynamicImage {
@@ -53,8 +51,7 @@ pub(super) fn save_webp(img: &image::DynamicImage, path: &Path, quality: u8) -> 
     let rgba = img.to_rgba8();
     let encoder = webp::Encoder::from_rgba(&rgba, img.width(), img.height());
     let mem = encoder.encode(quality as f32);
-    std::fs::write(path, &*mem)
-        .with_context(|| format!("Failed to write WebP: {}", path.display()))?;
+    fs::write(path, &*mem).with_context(|| format!("Failed to write WebP: {}", path.display()))?;
     Ok(())
 }
 
@@ -72,7 +69,7 @@ pub(super) fn save_avif(img: &image::DynamicImage, path: &Path, quality: u8) -> 
             image::ExtendedColorType::Rgba8,
         )
         .with_context(|| "Failed to encode AVIF")?;
-    std::fs::write(path, buf.into_inner())
+    fs::write(path, buf.into_inner())
         .with_context(|| format!("Failed to write AVIF: {}", path.display()))?;
     Ok(())
 }
@@ -84,24 +81,26 @@ pub fn process_image_entry(
     target_path: &str,
     format: &str,
     quality: u8,
-) -> anyhow::Result<()> {
-    let source = std::path::Path::new(source_path);
+) -> Result<()> {
+    let source = Path::new(source_path);
+
     if !source.exists() {
-        anyhow::bail!("Source image not found: {}", source_path);
+        bail!("Source image not found: {}", source_path);
     }
 
     let img =
         image::open(source).with_context(|| format!("Failed to decode image: {}", source_path))?;
 
-    let target = std::path::Path::new(target_path);
+    let target = Path::new(target_path);
+
     if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
+        fs::create_dir_all(parent)?;
     }
 
     match format {
         "webp" => save_webp(&img, target, quality)?,
         "avif" => save_avif(&img, target, quality)?,
-        _ => anyhow::bail!("Unsupported format: {}", format),
+        _ => bail!("Unsupported format: {}", format),
     }
 
     Ok(())
@@ -109,6 +108,8 @@ pub fn process_image_entry(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use super::*;
     use crate::core::upload::ImageSizeBuilder;
 
@@ -235,7 +236,7 @@ mod tests {
         save_webp(&img, &path, 80).expect("save_webp should succeed");
         assert!(path.exists(), "WebP file should be created");
         assert!(
-            std::fs::metadata(&path).unwrap().len() > 0,
+            fs::metadata(&path).unwrap().len() > 0,
             "WebP file should not be empty"
         );
     }
@@ -250,7 +251,7 @@ mod tests {
         save_avif(&img, &path, 50).expect("save_avif should succeed");
         assert!(path.exists(), "AVIF file should be created");
         assert!(
-            std::fs::metadata(&path).unwrap().len() > 0,
+            fs::metadata(&path).unwrap().len() > 0,
             "AVIF file should not be empty"
         );
     }
@@ -260,7 +261,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let png_data = create_test_png(30, 30);
         let source = tmp.path().join("source.png");
-        std::fs::write(&source, &png_data).unwrap();
+        fs::write(&source, &png_data).unwrap();
 
         // Save the source as a proper image file first
         let img = image::load_from_memory(&png_data).unwrap();

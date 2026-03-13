@@ -3,16 +3,23 @@
 use anyhow::Result;
 use mlua::{Lua, Table, Value};
 
-use crate::core::collection::{
-    Access, AdminConfig, CollectionDefinition, GlobalDefinition, IndexDefinition, Labels,
-    LiveSetting, VersionsConfig,
+use crate::{
+    core::{
+        collection::{
+            Access, AdminConfig, CollectionDefinition, GlobalDefinition, Hooks, IndexDefinition,
+            Labels, LiveSetting, McpConfig, VersionsConfig,
+        },
+        field::{FieldAdmin, FieldDefinition, FieldType, LocalizedString},
+    },
+    db::query,
 };
-use crate::core::field::{FieldAdmin, FieldDefinition, FieldType, LocalizedString};
 
-use super::auth::parse_collection_auth;
-use super::fields::parse_fields;
-use super::helpers::*;
-use super::upload::{inject_upload_fields, parse_collection_upload};
+use super::{
+    auth::parse_collection_auth,
+    fields::parse_fields,
+    helpers::*,
+    upload::{inject_upload_fields, parse_collection_upload},
+};
 
 /// Admin UI max nesting depth for rendering fields (must match `MAX_FIELD_DEPTH` in field_context.rs).
 const ADMIN_MAX_FIELD_DEPTH: usize = 5;
@@ -37,6 +44,7 @@ pub(super) fn max_field_nesting(fields: &[FieldDefinition], current: usize) -> u
 /// Warn if field nesting exceeds the admin UI rendering limit.
 pub(super) fn warn_deep_nesting(kind: &str, slug: &str, fields: &[FieldDefinition]) {
     let depth = max_field_nesting(fields, 0);
+
     if depth > ADMIN_MAX_FIELD_DEPTH {
         tracing::warn!(
             "{} '{}': field nesting depth is {} — the admin UI only renders up to {} levels",
@@ -54,7 +62,7 @@ pub fn parse_collection_definition(
     slug: &str,
     config: &Table,
 ) -> Result<CollectionDefinition> {
-    crate::db::query::validate_slug(slug)?;
+    query::validate_slug(slug)?;
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {
         Labels {
             singular: get_localized_string(&labels_tbl, "singular"),
@@ -96,7 +104,7 @@ pub fn parse_collection_definition(
     let hooks = if let Ok(hooks_tbl) = get_table(config, "hooks") {
         parse_hooks(&hooks_tbl)?
     } else {
-        crate::core::collection::Hooks::default()
+        Hooks::default()
     };
 
     // Parse auth: true | { token_expiry = 3600 }
@@ -145,7 +153,7 @@ pub fn parse_collection_definition(
 
     // Parse MCP config
     let mcp = if let Ok(mcp_tbl) = get_table(config, "mcp") {
-        crate::core::collection::McpConfig {
+        McpConfig {
             description: get_string(&mcp_tbl, "description"),
         }
     } else {
@@ -170,7 +178,7 @@ pub fn parse_collection_definition(
 
 /// Parse a Lua table into a `GlobalDefinition`, extracting fields, hooks, and access config.
 pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
-    crate::db::query::validate_slug(slug)?;
+    query::validate_slug(slug)?;
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {
         Labels {
             singular: get_localized_string(&labels_tbl, "singular"),
@@ -209,7 +217,7 @@ pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
     let hooks = if let Ok(hooks_tbl) = get_table(config, "hooks") {
         parse_hooks(&hooks_tbl)?
     } else {
-        crate::core::collection::Hooks::default()
+        Hooks::default()
     };
 
     let access = parse_access_config(config);
@@ -218,7 +226,7 @@ pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
 
     // Parse MCP config
     let mcp = if let Ok(mcp_tbl) = get_table(config, "mcp") {
-        crate::core::collection::McpConfig {
+        McpConfig {
             description: get_string(&mcp_tbl, "description"),
         }
     } else {
@@ -247,6 +255,7 @@ pub(super) fn parse_live_setting(config: &Table) -> Option<LiveSetting> {
         Value::Boolean(true) | Value::Nil => None,
         Value::String(s) => {
             let func_ref = s.to_str().ok()?.to_string();
+
             if func_ref.is_empty() {
                 None
             } else {
@@ -296,6 +305,7 @@ pub(super) fn parse_indexes(config: &Table) -> Vec<IndexDefinition> {
             .sequence_values::<String>()
             .filter_map(|r| r.ok())
             .collect();
+
         if fields.is_empty() {
             continue;
         }

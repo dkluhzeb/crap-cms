@@ -4,13 +4,17 @@ mod nonpoly;
 mod poly;
 
 use anyhow::Result;
+use serde_json::Value;
 use std::collections::HashSet;
 
-use super::single::populate_relationships_cached;
-use super::{PopulateCache, PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
-use crate::core::Document;
-use crate::core::field::FieldType;
-use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
+use super::{
+    PopulateCache, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+    single::populate_relationships_cached,
+};
+use crate::{
+    core::{Document, field::FieldType, upload},
+    db::query::{Filter, FilterClause, FilterOp, FindQuery, hydrate_document, read},
+};
 
 /// Batch-populate relationship fields across a slice of documents.
 ///
@@ -34,6 +38,7 @@ pub fn populate_relationships_batch_cached(
     let depth = opts.depth;
     let select = opts.select;
     let locale_ctx = opts.locale_ctx;
+
     if depth <= 0 || docs.is_empty() {
         return Ok(());
     }
@@ -64,6 +69,7 @@ pub fn populate_relationships_batch_cached(
             Some(max) if max < depth => max,
             _ => depth,
         };
+
         if effective_depth <= 0 {
             continue;
         }
@@ -116,6 +122,7 @@ pub fn populate_relationships_batch_cached(
             && f.join.is_some()
             && select.is_none_or(|sel| sel.iter().any(|s| s == &f.name))
     });
+
     if has_join_fields {
         for doc in docs.iter_mut() {
             let mut doc_visited = visited.clone();
@@ -142,12 +149,13 @@ pub fn populate_relationships_batch_cached(
                     op: FilterOp::Equals(doc.id.clone()),
                 })];
                 let fq = fq;
+
                 if let Ok(matched_docs) =
-                    crate::db::query::read::find(conn, &jc.collection, &target_def, &fq, locale_ctx)
+                    read::find(conn, &jc.collection, &target_def, &fq, locale_ctx)
                 {
                     let mut populated = Vec::new();
                     for mut matched_doc in matched_docs {
-                        crate::db::query::hydrate_document(
+                        hydrate_document(
                             conn,
                             &jc.collection,
                             &target_def.fields,
@@ -155,10 +163,11 @@ pub fn populate_relationships_batch_cached(
                             None,
                             locale_ctx,
                         )?;
+
                         if let Some(ref uc) = target_def.upload
                             && uc.enabled
                         {
-                            crate::core::upload::assemble_sizes_object(&mut matched_doc, uc);
+                            upload::assemble_sizes_object(&mut matched_doc, uc);
                         }
                         populate_relationships_cached(
                             &PopulateContext {
@@ -179,7 +188,7 @@ pub fn populate_relationships_batch_cached(
                         populated.push(document_to_json(&matched_doc, &jc.collection));
                     }
                     doc.fields
-                        .insert(field.name.clone(), serde_json::Value::Array(populated));
+                        .insert(field.name.clone(), Value::Array(populated));
                 }
             }
         }
@@ -190,6 +199,8 @@ pub fn populate_relationships_batch_cached(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::test_helpers::*;
     use super::super::{PopulateCache, PopulateContext, PopulateOpts};
     use super::*;
@@ -280,10 +291,8 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("author".to_string(), serde_json::json!("a1"));
-            d.fields
-                .insert("editor".to_string(), serde_json::json!("a1"));
+            d.fields.insert("author".to_string(), json!("a1"));
+            d.fields.insert("editor".to_string(), json!("a1"));
             d
         }];
 
@@ -331,8 +340,7 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("author".to_string(), serde_json::json!("a1"));
+            d.fields.insert("author".to_string(), json!("a1"));
             d
         }];
 
@@ -373,8 +381,7 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("author".to_string(), serde_json::json!("nonexistent"));
+            d.fields.insert("author".to_string(), json!("nonexistent"));
             d
         }];
 
@@ -412,8 +419,7 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("a1".to_string());
-            d.fields
-                .insert("name".to_string(), serde_json::json!("Alice"));
+            d.fields.insert("name".to_string(), json!("Alice"));
             d
         }];
 
@@ -452,8 +458,7 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("author".to_string(), serde_json::json!("a1"));
+            d.fields.insert("author".to_string(), json!("a1"));
             d
         }];
 

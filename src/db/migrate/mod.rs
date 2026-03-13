@@ -10,11 +10,10 @@ pub use tracking::{
     list_migration_files, record_migration, remove_migration,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 
 use super::DbPool;
-use crate::config::LocaleConfig;
-use crate::core::SharedRegistry;
+use crate::{config::LocaleConfig, core::SharedRegistry};
 
 /// Sync all collection tables with their Lua definitions.
 pub fn sync_all(
@@ -102,7 +101,7 @@ pub fn sync_all(
 
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     for (slug, def) in &reg.collections {
         collection::sync_collection_table(&tx, slug, def, locale_config)?;

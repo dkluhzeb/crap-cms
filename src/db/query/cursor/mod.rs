@@ -3,9 +3,10 @@
 //! Cursors are encoded as base64url(JSON). They contain the sort column,
 //! direction, last sort value, and document ID (tiebreaker).
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::core::Document;
 
@@ -17,7 +18,7 @@ const B64: base64::engine::GeneralPurpose = base64::engine::general_purpose::URL
 pub struct CursorData {
     pub sort_col: String,
     pub sort_dir: String,
-    pub sort_val: serde_json::Value,
+    pub sort_val: Value,
     pub id: String,
 }
 
@@ -32,11 +33,12 @@ impl CursorData {
     pub fn decode(s: &str) -> Result<Self> {
         let bytes = B64
             .decode(s.as_bytes())
-            .map_err(|e| anyhow::anyhow!("Invalid cursor encoding: {}", e))?;
-        let json_str = std::str::from_utf8(&bytes)
-            .map_err(|e| anyhow::anyhow!("Invalid cursor UTF-8: {}", e))?;
-        let data: CursorData = serde_json::from_str(json_str)
-            .map_err(|e| anyhow::anyhow!("Invalid cursor JSON: {}", e))?;
+            .map_err(|e| anyhow!("Invalid cursor encoding: {}", e))?;
+        let json_str =
+            std::str::from_utf8(&bytes).map_err(|e| anyhow!("Invalid cursor UTF-8: {}", e))?;
+        let data: CursorData =
+            serde_json::from_str(json_str).map_err(|e| anyhow!("Invalid cursor JSON: {}", e))?;
+
         if data.sort_col.is_empty() || data.id.is_empty() {
             bail!("Cursor missing required fields");
         }
@@ -72,22 +74,19 @@ pub fn build_cursors(
 /// Extract cursor data from a document.
 fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: &str) -> Option<String> {
     let sort_val = if sort_col == "id" {
-        serde_json::Value::String(doc.id.clone())
+        Value::String(doc.id.clone())
     } else if sort_col == "created_at" {
         match &doc.created_at {
-            Some(v) => serde_json::Value::String(v.clone()),
-            None => serde_json::Value::Null,
+            Some(v) => Value::String(v.clone()),
+            None => Value::Null,
         }
     } else if sort_col == "updated_at" {
         match &doc.updated_at {
-            Some(v) => serde_json::Value::String(v.clone()),
-            None => serde_json::Value::Null,
+            Some(v) => Value::String(v.clone()),
+            None => Value::Null,
         }
     } else {
-        doc.fields
-            .get(sort_col)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null)
+        doc.fields.get(sort_col).cloned().unwrap_or(Value::Null)
     };
 
     let cursor = CursorData {
@@ -101,6 +100,8 @@ fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: &str) -> Option<Str
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -108,7 +109,7 @@ mod tests {
         let cursor = CursorData {
             sort_col: "created_at".to_string(),
             sort_dir: "DESC".to_string(),
-            sort_val: serde_json::json!("2024-06-01T12:00:00"),
+            sort_val: json!("2024-06-01T12:00:00"),
             id: "abc123".to_string(),
         };
         let encoded = cursor.encode().unwrap();
@@ -169,10 +170,8 @@ mod tests {
         let docs: Vec<Document> = (0..3)
             .map(|i| {
                 let mut d = Document::new(format!("id{}", i));
-                d.fields.insert(
-                    "title".to_string(),
-                    serde_json::json!(format!("Post {}", i)),
-                );
+                d.fields
+                    .insert("title".to_string(), json!(format!("Post {}", i)));
                 d.created_at = Some(format!("2024-0{}-01", i + 1));
                 d
             })
@@ -225,12 +224,12 @@ mod tests {
         let cursor = CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: serde_json::Value::Null,
+            sort_val: Value::Null,
             id: "abc".to_string(),
         };
         let encoded = cursor.encode().unwrap();
         let decoded = CursorData::decode(&encoded).unwrap();
-        assert_eq!(decoded.sort_val, serde_json::Value::Null);
+        assert_eq!(decoded.sort_val, Value::Null);
     }
 
     #[test]
@@ -272,7 +271,7 @@ mod tests {
         assert_eq!(decoded_start.sort_col, "updated_at");
         assert_eq!(
             decoded_start.sort_val,
-            serde_json::Value::String("2024-06-15".to_string())
+            Value::String("2024-06-15".to_string())
         );
         assert_eq!(decoded_end.sort_col, "updated_at");
     }
@@ -282,7 +281,7 @@ mod tests {
         let docs = vec![Document::new("doc1".to_string())];
         let (start, _end) = build_cursors(&docs, "updated_at", "ASC");
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
-        assert_eq!(decoded.sort_val, serde_json::Value::Null);
+        assert_eq!(decoded.sort_val, Value::Null);
     }
 
     #[test]
@@ -290,7 +289,7 @@ mod tests {
         let docs = vec![Document::new("doc2".to_string())];
         let (start, _end) = build_cursors(&docs, "created_at", "ASC");
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
-        assert_eq!(decoded.sort_val, serde_json::Value::Null);
+        assert_eq!(decoded.sort_val, Value::Null);
     }
 
     #[test]
@@ -299,22 +298,18 @@ mod tests {
         let (start, _end) = build_cursors(&docs, "id", "ASC");
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "id");
-        assert_eq!(
-            decoded.sort_val,
-            serde_json::Value::String("the-id".to_string())
-        );
+        assert_eq!(decoded.sort_val, Value::String("the-id".to_string()));
     }
 
     #[test]
     fn build_cursors_sort_by_arbitrary_field_present() {
         let mut doc = Document::new("doc3".to_string());
-        doc.fields
-            .insert("score".to_string(), serde_json::json!(42));
+        doc.fields.insert("score".to_string(), json!(42));
         let docs = vec![doc];
         let (start, _end) = build_cursors(&docs, "score", "ASC");
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
         assert_eq!(decoded.sort_col, "score");
-        assert_eq!(decoded.sort_val, serde_json::json!(42));
+        assert_eq!(decoded.sort_val, json!(42));
     }
 
     #[test]
@@ -322,6 +317,6 @@ mod tests {
         let docs = vec![Document::new("doc4".to_string())];
         let (start, _end) = build_cursors(&docs, "nonexistent", "ASC");
         let decoded = CursorData::decode(&start.unwrap()).unwrap();
-        assert_eq!(decoded.sort_val, serde_json::Value::Null);
+        assert_eq!(decoded.sort_val, Value::Null);
     }
 }

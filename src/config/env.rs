@@ -39,6 +39,7 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
         result.push_str(&input[last_end..full_match.start()]);
 
         let inner = &cap[1];
+
         if let Some((var_name, default_val)) = inner.split_once(":-") {
             match std::env::var(var_name) {
                 Ok(val) if !val.is_empty() => result.push_str(&val),

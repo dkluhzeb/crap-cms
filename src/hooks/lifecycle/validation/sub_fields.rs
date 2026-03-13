@@ -1,24 +1,26 @@
 use std::collections::HashMap;
 
 use mlua::Lua;
+use serde_json::{Map as JsonMap, Value};
 
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::validate::FieldError;
+use crate::core::{
+    field::{FieldDefinition, FieldType},
+    validate::FieldError,
+};
 
-use super::checks::is_valid_date_format;
-use super::custom::run_validate_function_inner;
+use super::{checks::is_valid_date_format, custom::run_validate_function_inner};
 
 /// Validate sub-fields within a single array/blocks row (inner, no mutex).
 pub(super) fn validate_sub_fields_inner(
     lua: &Lua,
     sub_fields: &[FieldDefinition],
-    row_obj: &serde_json::Map<String, serde_json::Value>,
+    row_obj: &JsonMap<String, Value>,
     parent_name: &str,
     idx: usize,
     table: &str,
     errors: &mut Vec<FieldError>,
 ) {
-    let row_data: HashMap<String, serde_json::Value> = row_obj
+    let row_data: HashMap<String, Value> = row_obj
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
@@ -27,8 +29,8 @@ pub(super) fn validate_sub_fields_inner(
         let sf_value = row_obj.get(&sf.name);
         let sf_empty = match sf_value {
             None => true,
-            Some(serde_json::Value::Null) => true,
-            Some(serde_json::Value::String(s)) => s.is_empty(),
+            Some(Value::Null) => true,
+            Some(Value::String(s)) => s.is_empty(),
             _ => false,
         };
         let qualified_name = format!("{}[{}][{}]", parent_name, idx, sf.name);
@@ -44,7 +46,7 @@ pub(super) fn validate_sub_fields_inner(
 
         if sf.field_type == FieldType::Date
             && !sf_empty
-            && let Some(serde_json::Value::String(s)) = sf_value
+            && let Some(Value::String(s)) = sf_value
             && !is_valid_date_format(s)
         {
             errors.push(FieldError::with_key(
@@ -70,7 +72,7 @@ pub(super) fn validate_sub_fields_inner(
         }
 
         if matches!(sf.field_type, FieldType::Array | FieldType::Blocks)
-            && let Some(serde_json::Value::Array(nested_rows)) = sf_value
+            && let Some(Value::Array(nested_rows)) = sf_value
         {
             let nested_parent = format!("{}[{}][{}]", parent_name, idx, sf.name);
             for (nested_idx, nested_row) in nested_rows.iter().enumerate() {
@@ -175,16 +177,16 @@ pub(super) fn validate_sub_fields_inner(
 fn validate_leaf_sub_field(
     lua: &Lua,
     sf: &FieldDefinition,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     qualified_name: &str,
-    row_data: &HashMap<String, serde_json::Value>,
+    row_data: &HashMap<String, Value>,
     table: &str,
     errors: &mut Vec<FieldError>,
 ) {
     let is_empty = match value {
         None => true,
-        Some(serde_json::Value::Null) => true,
-        Some(serde_json::Value::String(s)) => s.is_empty(),
+        Some(Value::Null) => true,
+        Some(Value::String(s)) => s.is_empty(),
         _ => false,
     };
 
@@ -201,7 +203,7 @@ fn validate_leaf_sub_field(
     // 2. Date format check
     if sf.field_type == FieldType::Date
         && !is_empty
-        && let Some(serde_json::Value::String(s)) = value
+        && let Some(Value::String(s)) = value
         && !is_valid_date_format(s)
     {
         errors.push(FieldError::with_key(
@@ -441,9 +443,12 @@ mod tests {
             r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_sub = function(value, ctx)
+
                 if value == "invalid" then
+
                     return "sub-field invalid"
                 end
+
                 return true
             end
         "#,
@@ -536,6 +541,7 @@ mod tests {
             r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_group_sub = function(value, ctx)
+
                 return "group validation error"
             end
         "#,
@@ -871,7 +877,9 @@ mod tests {
             r#"
             package.loaded["validators"] = {
                 validate_tab_row = function(value, ctx)
+
                     if value == "bad" then return "tab field error" end
+
                     return true
                 end
             }
@@ -1012,7 +1020,9 @@ mod tests {
             r#"
             package.loaded["validators"] = {
                 validate_row_field = function(value, ctx)
+
                     if value == "forbidden" then return "row field forbidden" end
+
                     return true
                 end
             }
@@ -1120,7 +1130,9 @@ mod tests {
             r#"
             package.loaded["validators"] = {
                 validate_coll_field = function(value, ctx)
+
                     if value == "nope" then return "collapsible field rejected" end
+
                     return true
                 end
             }

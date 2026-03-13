@@ -1,20 +1,34 @@
 //! `serve` command — start admin UI and gRPC servers.
 
-use anyhow::{Context as _, Result};
-use std::path::Path;
+use anyhow::{Context as _, Result, anyhow};
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+    process,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+use crate::{
+    admin, api,
+    config::CrapConfig,
+    core::{Registry, event::EventBus, upload::format_filesize},
+    db::{migrate, pool},
+    hooks,
+    hooks::lifecycle::HookRunner,
+    scheduler, typegen,
+};
+
 /// Path to the PID file within the config directory.
-fn pid_file_path(config_dir: &Path) -> std::path::PathBuf {
+fn pid_file_path(config_dir: &Path) -> PathBuf {
     config_dir.join("data").join("crap.pid")
 }
 
 /// Write the current process PID to the PID file.
 fn write_pid_file(config_dir: &Path, pid: u32) -> Result<()> {
     let path = pid_file_path(config_dir);
-    let _ = std::fs::create_dir_all(path.parent().expect("pid path has parent"));
-    std::fs::write(&path, pid.to_string())
+    let _ = fs::create_dir_all(path.parent().expect("pid path has parent"));
+    fs::write(&path, pid.to_string())
         .with_context(|| format!("Failed to write PID file: {}", path.display()))?;
     Ok(())
 }
@@ -22,19 +36,22 @@ fn write_pid_file(config_dir: &Path, pid: u32) -> Result<()> {
 /// Remove the PID file on clean shutdown.
 fn remove_pid_file(config_dir: &Path) {
     let path = pid_file_path(config_dir);
+
     if path.exists() {
-        let _ = std::fs::remove_file(&path);
+        let _ = fs::remove_file(&path);
     }
 }
 
 /// Check if a PID file exists and warn if the process is still running.
 fn check_existing_pid(config_dir: &Path) {
     let path = pid_file_path(config_dir);
-    if let Ok(contents) = std::fs::read_to_string(&path)
+
+    if let Ok(contents) = fs::read_to_string(&path)
         && let Ok(pid) = contents.trim().parse::<u32>()
     {
         // Check if process is still running (kill -0)
-        let running = std::path::Path::new(&format!("/proc/{}", pid)).exists();
+        let running = Path::new(&format!("/proc/{}", pid)).exists();
+
         if running {
             warn!(
                 "PID file exists with PID {} — another instance may be running",
@@ -47,19 +64,19 @@ fn check_existing_pid(config_dir: &Path) {
 /// Re-exec the current binary as a detached background process.
 #[cfg(not(tarpaulin_include))]
 pub fn detach(config_dir: &Path) -> Result<()> {
-    let exe = std::env::current_exe().context("Failed to determine executable path")?;
+    let exe = env::current_exe().context("Failed to determine executable path")?;
 
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
     check_existing_pid(&config_dir);
 
-    let child = std::process::Command::new(&exe)
+    let child = process::Command::new(&exe)
         .arg("serve")
         .arg(&config_dir)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdin(process::Stdio::null())
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
         .spawn()
         .context("Failed to spawn detached process")?;
 
@@ -78,12 +95,12 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // PID file management
     check_existing_pid(&config_dir);
-    write_pid_file(&config_dir, std::process::id())?;
+    write_pid_file(&config_dir, process::id())?;
 
     info!("Config directory: {}", config_dir.display());
 
     // Load config
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
     info!("Configuration loaded");
 
     // Validate configuration
@@ -95,13 +112,12 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     }
 
     // Initialize Lua VM and load collections/globals
-    let registry =
-        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
+    let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
 
     {
         let reg = registry
             .read()
-            .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
         info!(
             "Loaded {} collection(s), {} global(s)",
             reg.collections.len(),
@@ -116,23 +132,21 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     {
         let reg = registry
             .read()
-            .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
-        match crate::typegen::generate(&config_dir, &reg) {
+            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+        match typegen::generate(&config_dir, &reg) {
             Ok(path) => info!("Generated type definitions: {}", path.display()),
             Err(e) => warn!("Failed to generate type definitions: {}", e),
         }
     }
 
     // Initialize database
-    let pool = crate::db::pool::create_pool(&config_dir, &cfg)
-        .context("Failed to create database pool")?;
+    let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
     // Sync database schema from Lua definitions
-    crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
-        .context("Failed to sync database schema")?;
+    migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
     // Initialize Lua hook runner (with registry for CRUD access in hooks)
-    let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+    let hook_runner = HookRunner::builder()
         .config_dir(&config_dir)
         .registry(registry.clone())
         .config(&cfg)
@@ -154,16 +168,18 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let jwt_secret = if cfg.auth.secret.is_empty() {
         // Persist auto-generated secret so sessions survive restarts
         let secret_path = config_dir.join("data").join(".jwt_secret");
+
         if secret_path.exists() {
-            match std::fs::read_to_string(&secret_path) {
+            match fs::read_to_string(&secret_path) {
                 Ok(s) if !s.trim().is_empty() => {
                     info!("Using persisted JWT secret from {}", secret_path.display());
                     s.trim().to_string()
                 }
                 _ => {
                     let secret = nanoid::nanoid!(64);
-                    let _ = std::fs::create_dir_all(secret_path.parent().expect("path has parent"));
-                    if let Err(e) = std::fs::write(&secret_path, &secret) {
+                    let _ = fs::create_dir_all(secret_path.parent().expect("path has parent"));
+
+                    if let Err(e) = fs::write(&secret_path, &secret) {
                         warn!(
                             "Failed to write JWT secret to {}: {}",
                             secret_path.display(),
@@ -180,8 +196,9 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             }
         } else {
             let secret = nanoid::nanoid!(64);
-            let _ = std::fs::create_dir_all(secret_path.parent().expect("path has parent"));
-            if let Err(e) = std::fs::write(&secret_path, &secret) {
+            let _ = fs::create_dir_all(secret_path.parent().expect("path has parent"));
+
+            if let Err(e) = fs::write(&secret_path, &secret) {
                 warn!(
                     "Failed to write JWT secret to {}: {}",
                     secret_path.display(),
@@ -203,13 +220,14 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     {
         let reg = registry
             .read()
-            .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
         let auth_collections: Vec<_> = reg
             .collections
             .values()
             .filter(|d| d.is_auth_collection())
             .map(|d| d.slug.as_str())
             .collect();
+
         if auth_collections.is_empty() {
             info!("No auth collections — admin UI and API are open");
         } else {
@@ -224,7 +242,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     {
         let reg = registry
             .read()
-            .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
         let global_max = cfg.upload.max_file_size;
         for (slug, def) in &reg.collections {
             if let Some(ref upload_cfg) = def.upload
@@ -235,8 +253,8 @@ pub async fn run(config_dir: &Path) -> Result<()> {
                     "Collection '{}' has max_file_size ({}) exceeding global limit ({}). \
                              Axum's body limit will reject uploads before the per-collection check.",
                     slug,
-                    crate::core::upload::format_filesize(collection_max),
-                    crate::core::upload::format_filesize(global_max),
+                    format_filesize(collection_max),
+                    format_filesize(global_max),
                 );
             }
         }
@@ -244,11 +262,11 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // Snapshot the registry for hot-path consumers (admin UI + gRPC).
     // HookRunner + scheduler keep the SharedRegistry (which is only read at runtime anyway).
-    let registry_snapshot = crate::core::Registry::snapshot(&registry);
+    let registry_snapshot = Registry::snapshot(&registry);
 
     // Create EventBus for live updates (if enabled)
     let event_bus = if cfg.live.enabled {
-        let bus = crate::core::event::EventBus::new(cfg.live.channel_capacity);
+        let bus = EventBus::new(cfg.live.channel_capacity);
         info!(
             "Live event streaming enabled (capacity: {})",
             cfg.live.channel_capacity
@@ -311,7 +329,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             warn!("Received second shutdown signal, forcing exit");
         }
 
-        std::process::exit(1);
+        process::exit(1);
     });
 
     // Start servers
@@ -321,7 +339,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     info!("Starting Admin UI on http://{}", admin_addr);
     info!("Starting gRPC API on {}", grpc_addr);
 
-    let admin_handle = crate::admin::server::start(
+    let admin_handle = admin::server::start(
         &admin_addr,
         cfg.clone(),
         config_dir.clone(),
@@ -333,7 +351,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
         shutdown.clone(),
     );
 
-    let grpc_handle = crate::api::start_server(
+    let grpc_handle = api::start_server(
         &grpc_addr,
         pool.clone(),
         registry_snapshot,
@@ -353,7 +371,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let scheduler_config = cfg.jobs.clone();
     let scheduler_shutdown = shutdown.clone();
     let scheduler_handle = async move {
-        crate::scheduler::start(
+        scheduler::start(
             scheduler_pool,
             scheduler_runner,
             scheduler_registry,
@@ -387,7 +405,7 @@ mod tests {
 
         let path = pid_file_path(config_dir);
         assert!(path.exists());
-        let contents = std::fs::read_to_string(&path).unwrap();
+        let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "12345");
 
         remove_pid_file(config_dir);
@@ -397,7 +415,7 @@ mod tests {
     #[test]
     fn pid_file_path_is_in_data_dir() {
         let path = pid_file_path(Path::new("/some/config"));
-        assert_eq!(path, std::path::PathBuf::from("/some/config/data/crap.pid"));
+        assert_eq!(path, PathBuf::from("/some/config/data/crap.pid"));
     }
 
     #[test]

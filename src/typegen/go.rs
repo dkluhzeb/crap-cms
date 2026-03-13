@@ -2,9 +2,11 @@
 
 use std::fmt::Write;
 
-use crate::core::Registry;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::{FieldDefinition, FieldType};
+use crate::core::{
+    Registry,
+    collection::{CollectionDefinition, GlobalDefinition},
+    field::{FieldDefinition, FieldType},
+};
 
 use super::{
     is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
@@ -503,7 +505,7 @@ mod tests {
 
     #[test]
     fn go_global_output() {
-        let mut global = crate::core::collection::GlobalDefinition::new("site_settings");
+        let mut global = GlobalDefinition::new("site_settings");
         global.fields = vec![text_field("site_name", true)];
         let mut out = String::new();
         render_global(&mut out, &global);
@@ -518,7 +520,7 @@ mod tests {
     fn go_full_render_with_globals() {
         let mut registry = Registry::new();
         registry.register_collection(make_col("posts", vec![text_field("title", true)]));
-        let mut settings = crate::core::collection::GlobalDefinition::new("settings");
+        let mut settings = GlobalDefinition::new("settings");
         settings.fields = vec![text_field("name", true)];
         registry.register_global(settings);
         let out = render(&registry);

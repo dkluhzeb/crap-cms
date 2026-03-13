@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::image_fit::ImageFit;
-use super::image_size_builder::ImageSizeBuilder;
+use super::{image_fit::ImageFit, image_size_builder::ImageSizeBuilder};
 
 /// A named image resize target (e.g. "thumbnail" at 200x200).
 #[derive(Debug, Clone, Serialize, Deserialize)]

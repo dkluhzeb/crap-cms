@@ -143,6 +143,7 @@ pub const PROTOCOL_VERSION: &str = "2025-03-26";
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn parse_json_rpc_request() {
@@ -154,10 +155,7 @@ mod tests {
 
     #[test]
     fn serialize_success_response() {
-        let resp = JsonRpcResponse::success(
-            Some(Value::Number(1.into())),
-            serde_json::json!({"ok": true}),
-        );
+        let resp = JsonRpcResponse::success(Some(Value::Number(1.into())), json!({"ok": true}));
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"result\""));
         assert!(!json.contains("\"error\""));

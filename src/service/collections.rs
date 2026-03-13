@@ -4,12 +4,21 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 
-use crate::core::CollectionDefinition;
-use crate::core::document::Document;
-use crate::db::DbPool;
-use crate::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
+use serde_json::Value;
+
+use rusqlite::TransactionBehavior;
+
+use crate::{
+    config::LocaleConfig,
+    core::{CollectionDefinition, document::Document, upload},
+    db::{
+        DbPool,
+        query::{self, LocaleContext},
+    },
+    hooks::lifecycle::{HookContext, HookEvent, HookRunner},
+};
 
 use super::{WriteInput, WriteResult, build_before_ctx, build_hook_data, run_after_change_hooks};
 
@@ -31,7 +40,7 @@ pub fn create_document(
 
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("Start transaction")?;
 
     let ui_locale = input.ui_locale.as_deref();
@@ -100,7 +109,7 @@ pub fn update_document(
 
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("Start transaction")?;
 
     let ui_locale = input.ui_locale.as_deref();
@@ -173,11 +182,11 @@ pub fn unpublish_document(
 ) -> Result<Document> {
     let mut conn = pool.get().context("DB connection")?;
     let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("Start transaction")?;
 
-    let doc = crate::db::query::find_by_id_raw(&tx, slug, def, id, None)?
-        .ok_or_else(|| anyhow::anyhow!("Document {} not found in {}", id, slug))?;
+    let doc = query::find_by_id_raw(&tx, slug, def, id, None)?
+        .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
     let hook_ctx = build_before_ctx(slug, "update", doc.fields.clone(), None, false, user, None);
     let final_ctx =
@@ -218,16 +227,14 @@ pub fn delete_document(
     def: &CollectionDefinition,
     user: Option<&Document>,
     config_dir: Option<&std::path::Path>,
-) -> Result<HashMap<String, serde_json::Value>> {
+) -> Result<HashMap<String, Value>> {
     let mut conn = pool.get().context("DB connection")?;
 
     // For upload collections, load the document before deleting to get file paths
     let upload_doc_fields = if def.is_upload_collection() {
-        let locale_ctx = crate::db::query::LocaleContext::from_locale_string(
-            None,
-            &crate::config::LocaleConfig::default(),
-        );
-        crate::db::query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref())
+        let locale_ctx = LocaleContext::from_locale_string(None, &LocaleConfig::default());
+
+        query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref())
             .ok()
             .flatten()
             .map(|doc| doc.fields.clone())
@@ -236,20 +243,22 @@ pub fn delete_document(
     };
 
     let tx = conn
-        .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .transaction_with_behavior(TransactionBehavior::Immediate)
         .context("Start transaction")?;
 
     let hook_ctx = HookContext::builder(slug, "delete")
-        .data([("id".to_string(), serde_json::Value::String(id.to_string()))].into())
+        .data([("id".to_string(), Value::String(id.to_string()))].into())
         .user(user)
         .build();
     let final_ctx =
         runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx)?;
-    crate::db::query::delete(&tx, slug, id)?;
-    crate::db::query::fts::fts_delete(&tx, slug, id)?;
+
+    query::delete(&tx, slug, id)?;
+
+    query::fts::fts_delete(&tx, slug, id)?;
 
     let after_ctx = HookContext::builder(slug, "delete")
-        .data([("id".to_string(), serde_json::Value::String(id.to_string()))].into())
+        .data([("id".to_string(), Value::String(id.to_string()))].into())
         .context(final_ctx.context)
         .user(user)
         .build();
@@ -260,7 +269,7 @@ pub fn delete_document(
 
     // Clean up upload files after successful commit
     if let (Some(dir), Some(fields)) = (config_dir, upload_doc_fields) {
-        crate::core::upload::delete_upload_files(dir, &fields);
+        upload::delete_upload_files(dir, &fields);
     }
 
     Ok(after_result.context)

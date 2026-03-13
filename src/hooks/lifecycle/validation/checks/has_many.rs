@@ -1,5 +1,9 @@
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{
+    field::{FieldDefinition, FieldType},
+    validate::FieldError,
+};
 use std::collections::HashMap;
 
 /// Validate individual values within a has_many text/number JSON array.
@@ -7,7 +11,7 @@ use std::collections::HashMap;
 pub(crate) fn check_has_many_elements(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
@@ -17,7 +21,7 @@ pub(crate) fn check_has_many_elements(
     {
         return;
     }
-    if let Some(serde_json::Value::String(s)) = value
+    if let Some(Value::String(s)) = value
         && let Ok(values) = serde_json::from_str::<Vec<String>>(s)
     {
         // Validate count with min_rows/max_rows

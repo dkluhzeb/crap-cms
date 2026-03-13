@@ -1,6 +1,7 @@
 //! Blocks field join table operations.
 
 use anyhow::{Context as _, Result};
+use serde_json::{Map, Value};
 
 /// Set block rows for a blocks field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
@@ -10,10 +11,11 @@ pub fn set_block_rows(
     collection: &str,
     field_name: &str,
     parent_id: &str,
-    rows: &[serde_json::Value],
+    rows: &[Value],
     locale: Option<&str>,
 ) -> Result<()> {
     let table_name = format!("{}_{}", collection, field_name);
+
     if let Some(loc) = locale {
         conn.execute(
             &format!(
@@ -50,11 +52,11 @@ pub fn set_block_rows(
                 .to_string();
             let mut data_map = match row.as_object() {
                 Some(m) => m.clone(),
-                None => serde_json::Map::new(),
+                None => Map::new(),
             };
             data_map.remove("_block_type");
             data_map.remove("id");
-            let data_json = serde_json::Value::Object(data_map).to_string();
+            let data_json = Value::Object(data_map).to_string();
             stmt.execute(rusqlite::params![
                 id,
                 parent_id,
@@ -79,11 +81,11 @@ pub fn set_block_rows(
                 .to_string();
             let mut data_map = match row.as_object() {
                 Some(m) => m.clone(),
-                None => serde_json::Map::new(),
+                None => Map::new(),
             };
             data_map.remove("_block_type");
             data_map.remove("id");
-            let data_json = serde_json::Value::Object(data_map).to_string();
+            let data_json = Value::Object(data_map).to_string();
             stmt.execute(rusqlite::params![
                 id,
                 parent_id,
@@ -104,7 +106,7 @@ pub fn find_block_rows(
     field_name: &str,
     parent_id: &str,
     locale: Option<&str>,
-) -> Result<Vec<serde_json::Value>> {
+) -> Result<Vec<Value>> {
     let table_name = format!("{}_{}", collection, field_name);
     let sql = if locale.is_some() {
         format!(
@@ -133,16 +135,13 @@ pub fn find_block_rows(
         })?
         .filter_map(|r| r.ok())
         .map(|(id, block_type, data_json)| {
-            let mut map = match serde_json::from_str::<serde_json::Value>(&data_json) {
-                Ok(serde_json::Value::Object(m)) => m,
-                _ => serde_json::Map::new(),
+            let mut map = match serde_json::from_str::<Value>(&data_json) {
+                Ok(Value::Object(m)) => m,
+                _ => Map::new(),
             };
-            map.insert("id".to_string(), serde_json::Value::String(id));
-            map.insert(
-                "_block_type".to_string(),
-                serde_json::Value::String(block_type),
-            );
-            serde_json::Value::Object(map)
+            map.insert("id".to_string(), Value::String(id));
+            map.insert("_block_type".to_string(), Value::String(block_type));
+            Value::Object(map)
         })
         .collect();
     Ok(rows)
@@ -150,6 +149,8 @@ pub fn find_block_rows(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use rusqlite::Connection;
 
@@ -176,8 +177,8 @@ mod tests {
     fn set_and_find_block_rows() {
         let conn = setup_blocks_db();
         let blocks = vec![
-            serde_json::json!({"_block_type": "paragraph", "text": "Hello world"}),
-            serde_json::json!({"_block_type": "image", "url": "/img/photo.jpg", "alt": "A photo"}),
+            json!({"_block_type": "paragraph", "text": "Hello world"}),
+            json!({"_block_type": "image", "url": "/img/photo.jpg", "alt": "A photo"}),
         ];
         set_block_rows(&conn, "posts", "content", "p1", &blocks, None).unwrap();
 
@@ -195,11 +196,10 @@ mod tests {
     #[test]
     fn replace_block_rows() {
         let conn = setup_blocks_db();
-        let blocks_old = vec![serde_json::json!({"_block_type": "paragraph", "text": "Old text"})];
+        let blocks_old = vec![json!({"_block_type": "paragraph", "text": "Old text"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks_old, None).unwrap();
 
-        let blocks_new =
-            vec![serde_json::json!({"_block_type": "heading", "level": 1, "text": "New heading"})];
+        let blocks_new = vec![json!({"_block_type": "heading", "level": 1, "text": "New heading"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks_new, None).unwrap();
 
         let found = find_block_rows(&conn, "posts", "content", "p1", None).unwrap();
@@ -223,10 +223,10 @@ mod tests {
         )
         .unwrap();
 
-        let blocks_en = vec![serde_json::json!({"_block_type": "text", "body": "Hello"})];
+        let blocks_en = vec![json!({"_block_type": "text", "body": "Hello"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks_en, Some("en")).unwrap();
 
-        let blocks_de = vec![serde_json::json!({"_block_type": "text", "body": "Hallo"})];
+        let blocks_de = vec![json!({"_block_type": "text", "body": "Hallo"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks_de, Some("de")).unwrap();
 
         let en = find_block_rows(&conn, "posts", "content", "p1", Some("en")).unwrap();
@@ -253,7 +253,7 @@ mod tests {
         )
         .unwrap();
 
-        let blocks = vec![serde_json::json!({"_block_type": "text", "body": "Hi"})];
+        let blocks = vec![json!({"_block_type": "text", "body": "Hi"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks, Some("en")).unwrap();
 
         // Clearing with empty slice should remove only the en locale rows

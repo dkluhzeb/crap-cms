@@ -46,6 +46,7 @@ pub(super) fn register_fields(lua: &Lua, crap: &Table) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::field::FieldType;
     use mlua::{Function, Lua, Table};
 
     #[test]
@@ -131,7 +132,7 @@ mod tests {
         let parsed = super::super::parse::fields::parse_fields(&fields_arr).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "status");
-        assert_eq!(parsed[0].field_type, crate::core::field::FieldType::Select);
+        assert_eq!(parsed[0].field_type, FieldType::Select);
         assert_eq!(parsed[0].options.len(), 1);
         assert_eq!(parsed[0].options[0].value, "draft");
     }

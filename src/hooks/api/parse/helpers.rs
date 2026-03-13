@@ -1,11 +1,14 @@
 //! Shared helper functions for Lua table parsing.
 
-use mlua::{Table, Value};
-
-use crate::core::collection::Hooks;
-use crate::core::field::{LocalizedString, SelectOption};
+use std::collections::HashMap;
 
 use anyhow::Result;
+use mlua::{Table, Value};
+
+use crate::core::{
+    collection::Hooks,
+    field::{LocalizedString, SelectOption},
+};
 
 pub(super) fn get_table(tbl: &Table, key: &str) -> mlua::Result<Table> {
     tbl.get(key)
@@ -20,7 +23,7 @@ pub(super) fn get_localized_string(tbl: &Table, key: &str) -> Option<LocalizedSt
     match tbl.get::<Value>(key) {
         Ok(Value::String(s)) => Some(LocalizedString::Plain(s.to_str().ok()?.to_string())),
         Ok(Value::Table(t)) => {
-            let mut map = std::collections::HashMap::new();
+            let mut map = HashMap::new();
             for (k, v) in t.pairs::<String, String>().flatten() {
                 map.insert(k, v);
             }

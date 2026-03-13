@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
 use mlua::Lua;
+use serde_json::Value;
 
-use crate::core::field::FieldDefinition;
-use crate::core::validate::FieldError;
+use crate::core::{field::FieldDefinition, validate::FieldError};
 
 use super::super::custom::run_validate_function_inner;
 
@@ -12,8 +12,8 @@ pub(crate) fn check_custom_validate(
     lua: &Lua,
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
-    data: &HashMap<String, serde_json::Value>,
+    value: Option<&Value>,
+    data: &HashMap<String, Value>,
     table: &str,
     errors: &mut Vec<FieldError>,
 ) {
@@ -38,7 +38,7 @@ pub(crate) fn check_custom_validate(
 
 #[cfg(test)]
 mod tests {
-    use crate::core::field::FieldDefinition;
+    use crate::core::field::{FieldDefinition, FieldType};
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
@@ -50,9 +50,12 @@ mod tests {
             r#"
             package.loaded["validators"] = {
                 validate_test = function(value, ctx)
+
                     if value == "bad" then
+
                         return "value cannot be bad"
                     end
+
                     return true
                 end
             }
@@ -64,7 +67,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .validate("validators.validate_test")
                 .build(),
         ];
@@ -97,6 +100,7 @@ mod tests {
             r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_fail = function(value, ctx)
+
                 return false
             end
         "#,
@@ -107,7 +111,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .validate("validators.validate_fail")
                 .build(),
         ];
@@ -136,6 +140,7 @@ mod tests {
             r#"
             package.loaded["validators"] = package.loaded["validators"] or {}
             package.loaded["validators"].validate_ok = function(value, ctx)
+
                 return true
             end
         "#,
@@ -146,7 +151,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
         let fields = vec![
-            FieldDefinition::builder("name", crate::core::field::FieldType::Text)
+            FieldDefinition::builder("name", FieldType::Text)
                 .validate("validators.validate_ok")
                 .build(),
         ];

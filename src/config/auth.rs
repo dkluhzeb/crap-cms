@@ -1,6 +1,6 @@
 //! Authentication and password policy configuration.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::parsing::serde_duration;
@@ -89,22 +89,22 @@ impl PasswordPolicy {
     /// meets all requirements, or `Err` with a human-readable message.
     pub fn validate(&self, password: &str) -> Result<()> {
         if password.len() < self.min_length {
-            anyhow::bail!("Password must be at least {} characters", self.min_length);
+            bail!("Password must be at least {} characters", self.min_length);
         }
         if password.len() > self.max_length {
-            anyhow::bail!("Password must be at most {} characters", self.max_length);
+            bail!("Password must be at most {} characters", self.max_length);
         }
         if self.require_uppercase && !password.chars().any(|c| c.is_ascii_uppercase()) {
-            anyhow::bail!("Password must contain at least one uppercase letter");
+            bail!("Password must contain at least one uppercase letter");
         }
         if self.require_lowercase && !password.chars().any(|c| c.is_ascii_lowercase()) {
-            anyhow::bail!("Password must contain at least one lowercase letter");
+            bail!("Password must contain at least one lowercase letter");
         }
         if self.require_digit && !password.chars().any(|c| c.is_ascii_digit()) {
-            anyhow::bail!("Password must contain at least one digit");
+            bail!("Password must contain at least one digit");
         }
         if self.require_special && !password.chars().any(|c| !c.is_alphanumeric()) {
-            anyhow::bail!("Password must contain at least one special character");
+            bail!("Password must contain at least one special character");
         }
         Ok(())
     }

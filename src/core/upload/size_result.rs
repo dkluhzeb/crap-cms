@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::format::FormatResult;
-use super::size_result_builder::SizeResultBuilder;
+use super::{format::FormatResult, size_result_builder::SizeResultBuilder};
 
 /// Output metadata for one generated image size.
 #[derive(Debug, Clone, Serialize, Deserialize)]

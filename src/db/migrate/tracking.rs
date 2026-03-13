@@ -17,6 +17,7 @@ pub fn list_migration_files(migrations_dir: &std::path::Path) -> Result<Vec<Stri
     {
         let entry = entry?;
         let path = entry.path();
+
         if path.extension().is_some_and(|ext| ext == "lua")
             && let Some(name) = path.file_name()
         {
@@ -32,6 +33,7 @@ pub fn get_applied_migrations(pool: &DbPool) -> Result<HashSet<String>> {
     let conn = pool.get().context("Failed to get DB connection")?;
     // Table may not exist yet if sync_all hasn't run
     let exists = table_exists(&conn, "_crap_migrations")?;
+
     if !exists {
         return Ok(HashSet::new());
     }
@@ -48,6 +50,7 @@ pub fn get_applied_migrations(pool: &DbPool) -> Result<HashSet<String>> {
 pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
     let conn = pool.get().context("Failed to get DB connection")?;
     let exists = table_exists(&conn, "_crap_migrations")?;
+
     if !exists {
         return Ok(Vec::new());
     }

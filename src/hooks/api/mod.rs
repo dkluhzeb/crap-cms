@@ -23,8 +23,7 @@ use anyhow::{Context as _, Result};
 use mlua::Lua;
 use std::path::Path;
 
-use crate::config::CrapConfig;
-use crate::core::SharedRegistry;
+use crate::{config::CrapConfig, core::SharedRegistry};
 
 pub(crate) use serializers::{json_to_lua, lua_to_json};
 

@@ -1,19 +1,23 @@
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{
+    field::{FieldDefinition, FieldType},
+    validate::FieldError,
+};
 use std::collections::HashMap;
 
 /// Validate email format (only if non-empty).
 pub(crate) fn check_email_format(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
     if field.field_type != FieldType::Email || is_empty {
         return;
     }
-    if let Some(serde_json::Value::String(s)) = value
+    if let Some(Value::String(s)) = value
         && !is_valid_email_format(s)
     {
         errors.push(FieldError::with_key(
@@ -29,6 +33,7 @@ pub(crate) fn check_email_format(
 /// Simple check: has exactly one @, non-empty local and domain parts, domain has a dot.
 pub(crate) fn is_valid_email_format(value: &str) -> bool {
     let parts: Vec<&str> = value.splitn(2, '@').collect();
+
     if parts.len() != 2 {
         return false;
     }

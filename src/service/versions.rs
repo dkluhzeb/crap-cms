@@ -3,11 +3,12 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde_json::{Map, Value};
 
-use crate::core::collection::VersionsConfig;
-use crate::core::document::Document;
-use crate::core::field::FieldDefinition;
-use crate::db::query;
+use crate::{
+    core::{collection::VersionsConfig, document::Document, field::FieldDefinition},
+    db::query,
+};
 
 /// Context for creating a version snapshot, bundling the table/document metadata.
 pub(crate) struct VersionSnapshotCtx<'a> {
@@ -21,9 +22,9 @@ pub(crate) struct VersionSnapshotCtx<'a> {
 /// Recursively merge join-table data (blocks, arrays, relationships) into a snapshot,
 /// handling Tabs/Row/Collapsible layout wrappers.
 fn merge_join_data_into_snapshot(
-    obj: &mut serde_json::Map<String, serde_json::Value>,
+    obj: &mut Map<String, Value>,
     fields: &[FieldDefinition],
-    data: &HashMap<String, serde_json::Value>,
+    data: &HashMap<String, Value>,
 ) {
     use crate::core::field::FieldType;
     for field in fields {
@@ -55,7 +56,7 @@ pub(crate) fn save_draft_version(
     fields: &[FieldDefinition],
     versions: Option<&VersionsConfig>,
     existing_doc: &Document,
-    final_ctx_data: &HashMap<String, serde_json::Value>,
+    final_ctx_data: &HashMap<String, Value>,
 ) -> Result<()> {
     let mut snapshot_fields = existing_doc.fields.clone();
     for (k, v) in final_ctx_data {
@@ -69,6 +70,7 @@ pub(crate) fn save_draft_version(
     };
 
     let mut snapshot = query::build_snapshot(conn, table, fields, &snapshot_doc)?;
+
     if let Some(obj) = snapshot.as_object_mut() {
         merge_join_data_into_snapshot(obj, fields, final_ctx_data);
     }
@@ -117,6 +119,7 @@ mod tests {
         PersistOptions, persist_create, persist_draft_version, persist_unpublish, persist_update,
     };
     use rusqlite::Connection;
+    use serde_json::{Value, json};
     use std::collections::HashMap;
 
     fn test_def() -> CollectionDefinition {
@@ -252,7 +255,7 @@ mod tests {
         let id = doc.id.clone();
 
         let mut draft_data = HashMap::new();
-        draft_data.insert("title".to_string(), serde_json::json!("Draft Title"));
+        draft_data.insert("title".to_string(), json!("Draft Title"));
 
         let existing = persist_draft_version(&conn, "posts", &id, &def, &draft_data, None).unwrap();
         assert_eq!(
@@ -396,11 +399,11 @@ mod tests {
         .unwrap();
         let id = doc.id.clone();
 
-        let mut hook_data: HashMap<String, serde_json::Value> = HashMap::new();
-        hook_data.insert("title".to_string(), serde_json::json!("Page 1 Draft"));
+        let mut hook_data: HashMap<String, Value> = HashMap::new();
+        hook_data.insert("title".to_string(), json!("Page 1 Draft"));
         hook_data.insert(
             "content".to_string(),
-            serde_json::json!([
+            json!([
                 {"_block_type": "hero", "heading": "Welcome"},
                 {"_block_type": "text", "body": "Hello world"},
             ]),

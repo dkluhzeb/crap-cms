@@ -1,10 +1,15 @@
 //! In-memory registry of collection and global definitions loaded from Lua.
 
-use super::collection::{CollectionDefinition, GlobalDefinition};
-use super::job::JobDefinition;
-use super::richtext::RichtextNodeDef;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
+
+use super::{
+    collection::{CollectionDefinition, GlobalDefinition},
+    job::JobDefinition,
+    richtext::RichtextNodeDef,
+};
 
 /// Holds all collection, global, and job definitions loaded at startup.
 #[derive(Clone)]
@@ -99,6 +104,7 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
 
     fn make_collection(slug: &str) -> CollectionDefinition {
         CollectionDefinition::new(slug)
@@ -152,7 +158,6 @@ mod tests {
 
     #[test]
     fn register_and_get_richtext_node() {
-        use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
         let mut reg = Registry::new();
         assert!(reg.get_richtext_node("cta").is_none());
 

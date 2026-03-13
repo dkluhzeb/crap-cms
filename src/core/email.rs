@@ -1,9 +1,11 @@
 //! Email sending (SMTP via lettre) and email template rendering (Handlebars).
 
+use std::path::Path;
+
 use anyhow::{Context as _, Result};
 use handlebars::Handlebars;
 use include_dir::{Dir, include_dir};
-use std::path::Path;
+use serde_json::Value;
 
 use crate::config::{EmailConfig, SmtpTls};
 
@@ -25,6 +27,7 @@ impl EmailRenderer {
         // Register compiled-in email templates
         for file in EMAIL_TEMPLATES_DIR.files() {
             let path = file.path();
+
             if path.extension().is_some_and(|ext| ext == "hbs") {
                 let name = path.with_extension("").to_string_lossy().to_string();
                 let content = std::str::from_utf8(file.contents())
@@ -36,10 +39,12 @@ impl EmailRenderer {
 
         // Overlay with config dir email templates
         let overlay_dir = config_dir.join("templates/email");
+
         if overlay_dir.exists() {
             for entry in std::fs::read_dir(&overlay_dir)? {
                 let entry = entry?;
                 let path = entry.path();
+
                 if path.extension().is_some_and(|ext| ext == "hbs") {
                     let name = path
                         .file_stem()
@@ -56,7 +61,7 @@ impl EmailRenderer {
     }
 
     /// Render an email template by name with the given data.
-    pub fn render(&self, template: &str, data: &serde_json::Value) -> Result<String> {
+    pub fn render(&self, template: &str, data: &Value) -> Result<String> {
         self.hbs
             .render(template, data)
             .with_context(|| format!("Failed to render email template '{}'", template))
@@ -78,6 +83,7 @@ pub fn send_email(
             "Email not configured (smtp_host empty), skipping send to {}",
             to
         );
+
         return Ok(());
     }
 
@@ -190,6 +196,8 @@ pub fn is_configured(config: &EmailConfig) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::config::EmailConfig;
 
@@ -200,7 +208,7 @@ mod tests {
         // Should be able to render the compiled-in password_reset template
         let result = renderer.render(
             "password_reset",
-            &serde_json::json!({
+            &json!({
                 "reset_url": "http://example.com/reset?token=abc",
                 "app_name": "Test",
             }),
@@ -233,7 +241,7 @@ mod tests {
         let html = renderer
             .render(
                 "password_reset",
-                &serde_json::json!({
+                &json!({
                     "reset_url": "http://example.com/reset",
                 }),
             )
@@ -292,7 +300,7 @@ mod tests {
     fn renderer_render_missing_template() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
-        let result = renderer.render("nonexistent_template", &serde_json::json!({}));
+        let result = renderer.render("nonexistent_template", &json!({}));
         assert!(result.is_err(), "Rendering a missing template should fail");
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -308,7 +316,7 @@ mod tests {
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         let result = renderer.render(
             "verify_email",
-            &serde_json::json!({
+            &json!({
                 "verify_url": "http://example.com/verify?token=xyz",
                 "from_name": "Test CMS",
             }),
@@ -340,7 +348,7 @@ mod tests {
         let html = renderer
             .render(
                 "custom",
-                &serde_json::json!({
+                &json!({
                     "name": "Alice",
                     "code": "ABC123",
                 }),
@@ -361,11 +369,11 @@ mod tests {
 
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         // test.hbs should be loadable
-        let result = renderer.render("test", &serde_json::json!({"val": "ok"}));
+        let result = renderer.render("test", &json!({"val": "ok"}));
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "Test: ok");
         // notes.txt should not be registered as a template
-        let result2 = renderer.render("notes", &serde_json::json!({}));
+        let result2 = renderer.render("notes", &json!({}));
         assert!(
             result2.is_err(),
             "non-hbs files should not be registered as templates"
@@ -382,7 +390,7 @@ mod tests {
         // Should still be able to render compiled-in templates
         let result = renderer.render(
             "password_reset",
-            &serde_json::json!({
+            &json!({
                 "reset_url": "http://example.com/reset",
             }),
         );
@@ -395,7 +403,7 @@ mod tests {
         let renderer = EmailRenderer::new(tmp.path()).expect("create renderer");
         // Render with empty data — Handlebars in non-strict mode should still succeed,
         // just leaving placeholders empty
-        let result = renderer.render("password_reset", &serde_json::json!({}));
+        let result = renderer.render("password_reset", &json!({}));
         assert!(
             result.is_ok(),
             "Rendering with missing data should succeed in non-strict mode"

@@ -1,13 +1,14 @@
 //! Create operation and its helper.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, anyhow};
 use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
-use super::super::read::find_by_id_raw;
-use super::super::{LocaleContext, coerce_value, locale_write_column};
-use crate::core::field::FieldType;
-use crate::core::{CollectionDefinition, Document};
+use super::super::{LocaleContext, coerce_value, locale_write_column, read::find_by_id_raw};
+use crate::core::{
+    CollectionDefinition, Document,
+    field::{FieldDefinition, FieldType},
+};
 
 /// Accumulator for INSERT column/placeholder/param collection during recursive field traversal.
 pub(super) struct InsertCollector {
@@ -65,13 +66,13 @@ pub fn create(
 
     // Return the created document with the same locale context
     find_by_id_raw(conn, slug, def, &id, locale_ctx)?
-        .ok_or_else(|| anyhow::anyhow!("Failed to find newly created document"))
+        .ok_or_else(|| anyhow!("Failed to find newly created document"))
 }
 
 /// Recursively collect columns, placeholders, and params for INSERT.
 /// Handles arbitrary nesting: Group (prefixed), Row/Collapsible/Tabs (promoted flat).
 pub(super) fn collect_insert_params(
-    fields: &[crate::core::field::FieldDefinition],
+    fields: &[FieldDefinition],
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
     collector: &mut InsertCollector,
@@ -105,6 +106,7 @@ pub(super) fn collect_insert_params(
                     format!("{}__{}", prefix, field.name)
                 };
                 let col_name = locale_write_column(&data_key, field, locale_ctx);
+
                 if let Some(value) = data.get(&data_key) {
                     collector.columns.push(col_name);
                     collector.placeholders.push(format!("?{}", collector.idx));
@@ -125,6 +127,8 @@ pub(super) fn collect_insert_params(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::*;
@@ -204,7 +208,7 @@ mod tests {
 
         // Checkbox should default to 0 (integer)
         let published = doc.get("published").unwrap();
-        assert_eq!(published, &serde_json::json!(0));
+        assert_eq!(published, &json!(0));
     }
 
     #[test]
@@ -304,7 +308,7 @@ mod tests {
         let data = HashMap::new();
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let val = doc.get("settings__featured").unwrap();
-        assert_eq!(val, &serde_json::json!(0));
+        assert_eq!(val, &json!(0));
     }
 
     #[test]

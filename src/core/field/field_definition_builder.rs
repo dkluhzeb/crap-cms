@@ -1,5 +1,7 @@
 //! Builder for [`FieldDefinition`](super::FieldDefinition).
 
+use serde_json::Value;
+
 use super::{
     BlockDefinition, FieldAccess, FieldAdmin, FieldDefinition, FieldHooks, FieldTab, FieldType,
     JoinConfig, McpFieldConfig, RelationshipConfig, SelectOption,
@@ -50,7 +52,7 @@ impl FieldDefinitionBuilder {
     }
 
     /// Set the default value for this field.
-    pub fn default_value(mut self, v: serde_json::Value) -> Self {
+    pub fn default_value(mut self, v: Value) -> Self {
         self.inner.default_value = Some(v);
         self
     }

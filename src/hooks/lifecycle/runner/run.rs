@@ -3,17 +3,18 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde_json::Value;
 
-use crate::core::Document;
-use crate::core::collection::Hooks;
-use crate::core::field::FieldDefinition;
-use crate::hooks::lifecycle::context::HookContext;
-use crate::hooks::lifecycle::execution::{
-    call_hook_ref, call_registered_hooks, get_hook_refs, has_field_hooks_for_event,
-    run_field_hooks_inner,
-};
-use crate::hooks::lifecycle::types::{
-    FieldHookEvent, HookEvent, TxContext, UiLocaleContext, UserContext,
+use crate::{
+    core::{Document, collection::Hooks, field::FieldDefinition},
+    hooks::lifecycle::{
+        context::HookContext,
+        execution::{
+            call_hook_ref, call_registered_hooks, get_hook_refs, has_field_hooks_for_event,
+            run_field_hooks_inner,
+        },
+        types::{FieldHookEvent, HookEvent, TxContext, UiLocaleContext, UserContext},
+    },
 };
 
 use super::HookRunner;
@@ -134,7 +135,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         event: FieldHookEvent,
-        data: &mut HashMap<String, serde_json::Value>,
+        data: &mut HashMap<String, Value>,
         collection: &str,
         operation: &str,
     ) -> Result<()> {
@@ -156,7 +157,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         event: FieldHookEvent,
-        data: &mut HashMap<String, serde_json::Value>,
+        data: &mut HashMap<String, Value>,
         collection: &str,
         operation: &str,
         conn: &rusqlite::Connection,

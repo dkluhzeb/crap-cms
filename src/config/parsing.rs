@@ -6,6 +6,7 @@
 /// Returns `None` for empty or invalid input.
 pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     let s = s.trim();
+
     if s.is_empty() {
         return None;
     }
@@ -27,6 +28,7 @@ pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
 /// Returns `None` for empty or invalid input.
 pub(crate) fn parse_filesize_string(s: &str) -> Option<u64> {
     let s = s.trim();
+
     if s.is_empty() {
         return None;
     }
@@ -43,6 +45,7 @@ pub(crate) fn parse_filesize_string(s: &str) -> Option<u64> {
     }
     if upper.ends_with('B') {
         let num_str = &upper[..upper.len() - 1];
+
         return num_str.parse::<u64>().ok();
     }
     None

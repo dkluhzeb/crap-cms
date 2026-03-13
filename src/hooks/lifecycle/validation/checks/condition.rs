@@ -1,12 +1,14 @@
+use serde_json::Value;
+
 /// Evaluate a condition table (JSON) against form data.
 /// A single condition object has `{ field, equals|not_equals|in|not_in|is_truthy|is_falsy }`.
 /// An array of conditions means AND (all must be true).
-pub fn evaluate_condition_table(condition: &serde_json::Value, data: &serde_json::Value) -> bool {
+pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
     match condition {
-        serde_json::Value::Array(arr) => arr.iter().all(|c| evaluate_condition_table(c, data)),
-        serde_json::Value::Object(obj) => {
+        Value::Array(arr) => arr.iter().all(|c| evaluate_condition_table(c, data)),
+        Value::Object(obj) => {
             let field_name = obj.get("field").and_then(|v| v.as_str()).unwrap_or("");
-            let field_val = data.get(field_name).unwrap_or(&serde_json::Value::Null);
+            let field_val = data.get(field_name).unwrap_or(&Value::Null);
 
             if let Some(eq) = obj.get("equals") {
                 return field_val == eq;
@@ -14,10 +16,10 @@ pub fn evaluate_condition_table(condition: &serde_json::Value, data: &serde_json
             if let Some(neq) = obj.get("not_equals") {
                 return field_val != neq;
             }
-            if let Some(serde_json::Value::Array(list)) = obj.get("in") {
+            if let Some(Value::Array(list)) = obj.get("in") {
                 return list.contains(field_val);
             }
-            if let Some(serde_json::Value::Array(list)) = obj.get("not_in") {
+            if let Some(Value::Array(list)) = obj.get("not_in") {
                 return !list.contains(field_val);
             }
             if obj
@@ -41,14 +43,14 @@ pub fn evaluate_condition_table(condition: &serde_json::Value, data: &serde_json
 }
 
 /// Check if a JSON value is "truthy" for display condition evaluation.
-pub(crate) fn condition_is_truthy(val: &serde_json::Value) -> bool {
+pub(crate) fn condition_is_truthy(val: &Value) -> bool {
     match val {
-        serde_json::Value::Null => false,
-        serde_json::Value::Bool(b) => *b,
-        serde_json::Value::String(s) => !s.is_empty(),
-        serde_json::Value::Number(_) => true,
-        serde_json::Value::Array(a) => !a.is_empty(),
-        serde_json::Value::Object(o) => !o.is_empty(),
+        Value::Null => false,
+        Value::Bool(b) => *b,
+        Value::String(s) => !s.is_empty(),
+        Value::Number(_) => true,
+        Value::Array(a) => !a.is_empty(),
+        Value::Object(o) => !o.is_empty(),
     }
 }
 

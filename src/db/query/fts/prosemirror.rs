@@ -1,16 +1,21 @@
 //! ProseMirror JSON text extraction helpers.
 
+use std::collections::HashMap;
+
+use serde_json::Value;
+
 /// Extract plain text from a ProseMirror JSON document.
 ///
 /// Recursively walks the JSON tree collecting `{ "type": "text", "text": "..." }` nodes.
 /// Returns concatenated plain text with spaces between nodes.
 /// Returns an empty string for invalid input.
 pub fn extract_prosemirror_text(json_str: &str) -> String {
-    fn collect_text(value: &serde_json::Value, out: &mut Vec<String>) {
+    fn collect_text(value: &Value, out: &mut Vec<String>) {
         let obj = match value.as_object() {
             Some(o) => o,
             None => return,
         };
+
         if obj.get("type").and_then(|t| t.as_str()) == Some("text")
             && let Some(text) = obj.get("text").and_then(|t| t.as_str())
         {
@@ -23,7 +28,7 @@ pub fn extract_prosemirror_text(json_str: &str) -> String {
         }
     }
 
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+    let parsed: Value = match serde_json::from_str(json_str) {
         Ok(v) => v,
         Err(_) => return String::new(),
     };
@@ -39,11 +44,11 @@ pub fn extract_prosemirror_text(json_str: &str) -> String {
 /// walking children.
 pub fn extract_prosemirror_text_with_nodes(
     json_str: &str,
-    node_searchable: &std::collections::HashMap<&str, Vec<&str>>,
+    node_searchable: &HashMap<&str, Vec<&str>>,
 ) -> String {
     fn collect_text_with_nodes(
-        value: &serde_json::Value,
-        node_searchable: &std::collections::HashMap<&str, Vec<&str>>,
+        value: &Value,
+        node_searchable: &HashMap<&str, Vec<&str>>,
         out: &mut Vec<String>,
     ) {
         let obj = match value.as_object() {
@@ -51,6 +56,7 @@ pub fn extract_prosemirror_text_with_nodes(
             None => return,
         };
         let node_type = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
         if node_type == "text"
             && let Some(text) = obj.get("text").and_then(|t| t.as_str())
         {
@@ -75,7 +81,7 @@ pub fn extract_prosemirror_text_with_nodes(
         }
     }
 
-    let parsed: serde_json::Value = match serde_json::from_str(json_str) {
+    let parsed: Value = match serde_json::from_str(json_str) {
         Ok(v) => v,
         Err(_) => return String::new(),
     };
@@ -118,7 +124,7 @@ mod tests {
     #[test]
     fn extract_prosemirror_text_with_custom_node_attrs() {
         let json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]},{"type":"cta","attrs":{"text":"Click me","url":"/go"}}]}"#;
-        let mut node_searchable = std::collections::HashMap::new();
+        let mut node_searchable = HashMap::new();
         node_searchable.insert("cta", vec!["text"]);
         let result = extract_prosemirror_text_with_nodes(json, &node_searchable);
         assert!(result.contains("Hello"));
@@ -129,7 +135,7 @@ mod tests {
     #[test]
     fn extract_prosemirror_text_ignores_non_searchable_attrs() {
         let json = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"Button","url":"https://example.com","style":"primary"}}]}"#;
-        let mut node_searchable = std::collections::HashMap::new();
+        let mut node_searchable = HashMap::new();
         node_searchable.insert("cta", vec!["text"]);
         let result = extract_prosemirror_text_with_nodes(json, &node_searchable);
         assert_eq!(result, "Button");
@@ -139,21 +145,21 @@ mod tests {
     fn extract_prosemirror_text_with_nodes_empty_map() {
         // With empty map, behaves like the regular extract
         let json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello"}]}]}"#;
-        let node_searchable = std::collections::HashMap::new();
+        let node_searchable = HashMap::new();
         let result = extract_prosemirror_text_with_nodes(json, &node_searchable);
         assert_eq!(result, "Hello");
     }
 
     #[test]
     fn extract_prosemirror_text_with_nodes_invalid_json() {
-        let node_searchable = std::collections::HashMap::new();
+        let node_searchable = HashMap::new();
         let result = extract_prosemirror_text_with_nodes("not valid json", &node_searchable);
         assert_eq!(result, "", "invalid JSON should return empty string");
     }
 
     #[test]
     fn extract_prosemirror_text_with_nodes_empty_string() {
-        let node_searchable = std::collections::HashMap::new();
+        let node_searchable = HashMap::new();
         let result = extract_prosemirror_text_with_nodes("", &node_searchable);
         assert_eq!(result, "");
     }

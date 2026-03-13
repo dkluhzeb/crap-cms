@@ -1,8 +1,7 @@
 //! `init` command — scaffold a new config directory.
 
-use anyhow::{Context as _, Result};
-use std::fs;
-use std::path::PathBuf;
+use anyhow::{Context as _, Result, bail};
+use std::{fs, path::PathBuf};
 
 /// Embedded Lua API type definitions — compiled into the binary.
 pub(crate) const LUA_API_TYPES: &str = include_str!("../../types/crap.lua");
@@ -39,8 +38,9 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
 
     // Refuse to overwrite existing config
     let toml_path = target.join("crap.toml");
+
     if toml_path.exists() {
-        anyhow::bail!(
+        bail!(
             "Directory '{}' already contains a crap.toml — refusing to overwrite",
             target.display()
         );

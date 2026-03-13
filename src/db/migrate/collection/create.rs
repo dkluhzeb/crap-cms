@@ -1,24 +1,28 @@
 //! Collection table creation from Lua definitions.
 
 use anyhow::{Context as _, Result};
+use serde_json::Value;
 
-use crate::config::LocaleConfig;
-use crate::core::field::FieldType;
-use crate::db::migrate::helpers::sanitize_locale;
+use crate::{
+    config::LocaleConfig,
+    core::{CollectionDefinition, field::FieldType},
+    db::migrate::helpers::{collect_column_specs, sanitize_locale},
+};
 
 pub fn create_collection_table(
     conn: &rusqlite::Connection,
     slug: &str,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let mut columns = vec!["id TEXT PRIMARY KEY".to_string()];
 
-    for spec in &crate::db::migrate::helpers::collect_column_specs(&def.fields, locale_config) {
+    for spec in &collect_column_specs(&def.fields, locale_config) {
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
                 let mut col = format!("{} {}", col_name, spec.field.field_type.sqlite_type());
+
                 if spec.field.required
                     && *locale == locale_config.default_locale
                     && !def.has_drafts()
@@ -33,6 +37,7 @@ pub fn create_collection_table(
             }
         } else {
             let mut col = format!("{} {}", spec.col_name, spec.field.field_type.sqlite_type());
+
             if spec.field.required && !def.has_drafts() {
                 col.push_str(" NOT NULL");
             }
@@ -56,6 +61,7 @@ pub fn create_collection_table(
         columns.push("_reset_token_exp INTEGER".to_string());
         columns.push("_locked INTEGER DEFAULT 0".to_string());
         columns.push("_settings TEXT".to_string());
+
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
             columns.push("_verified INTEGER DEFAULT 0".to_string());
             columns.push("_verification_token TEXT".to_string());
@@ -82,18 +88,14 @@ pub fn create_collection_table(
 /// Append a DEFAULT value clause to a column definition string.
 pub fn append_default_value(
     col: &mut String,
-    default_value: &Option<serde_json::Value>,
+    default_value: &Option<Value>,
     field_type: &FieldType,
 ) {
     if let Some(default) = &default_value {
         match default {
-            serde_json::Value::String(s) => {
-                col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''")))
-            }
-            serde_json::Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
-            serde_json::Value::Bool(b) => {
-                col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 }))
-            }
+            Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''"))),
+            Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
+            Value::Bool(b) => col.push_str(&format!(" DEFAULT {}", if *b { 1 } else { 0 })),
             _ => {}
         }
     } else if *field_type == FieldType::Checkbox {
@@ -103,6 +105,8 @@ pub fn append_default_value(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::test_helpers::*;
     use super::*;
     use crate::core::collection::*;
@@ -202,10 +206,10 @@ mod tests {
             "posts",
             vec![
                 FieldDefinition::builder("status", FieldType::Text)
-                    .default_value(serde_json::json!("draft"))
+                    .default_value(json!("draft"))
                     .build(),
                 FieldDefinition::builder("count", FieldType::Number)
-                    .default_value(serde_json::json!(0))
+                    .default_value(json!(0))
                     .build(),
             ],
         );
@@ -702,29 +706,21 @@ mod tests {
     #[test]
     fn append_default_string() {
         let mut col = "name TEXT".to_string();
-        append_default_value(
-            &mut col,
-            &Some(serde_json::json!("hello")),
-            &FieldType::Text,
-        );
+        append_default_value(&mut col, &Some(json!("hello")), &FieldType::Text);
         assert!(col.contains("DEFAULT 'hello'"));
     }
 
     #[test]
     fn append_default_number() {
         let mut col = "count REAL".to_string();
-        append_default_value(&mut col, &Some(serde_json::json!(42)), &FieldType::Number);
+        append_default_value(&mut col, &Some(json!(42)), &FieldType::Number);
         assert!(col.contains("DEFAULT 42"));
     }
 
     #[test]
     fn append_default_bool() {
         let mut col = "active INTEGER".to_string();
-        append_default_value(
-            &mut col,
-            &Some(serde_json::json!(true)),
-            &FieldType::Checkbox,
-        );
+        append_default_value(&mut col, &Some(json!(true)), &FieldType::Checkbox);
         assert!(col.contains("DEFAULT 1"));
     }
 

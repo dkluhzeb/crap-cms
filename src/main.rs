@@ -4,7 +4,7 @@
 //! `migrate`, `backup`, `export`, `import`, `init`, `templates`, `jobs`, `images`.
 //! Running bare `crap-cms` prints help.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -242,8 +242,9 @@ async fn main() -> Result<()> {
                     None => {
                         use dialoguer::Select;
                         let names = crap_cms::scaffold::list_blueprint_names()?;
+
                         if names.is_empty() {
-                            anyhow::bail!(
+                            bail!(
                                 "No blueprints saved yet.\nSave one with: crap-cms blueprint save <dir> <name>"
                             );
                         }
@@ -264,8 +265,9 @@ async fn main() -> Result<()> {
                     None => {
                         use dialoguer::Select;
                         let names = crap_cms::scaffold::list_blueprint_names()?;
+
                         if names.is_empty() {
-                            anyhow::bail!("No blueprints saved yet.");
+                            bail!("No blueprints saved yet.");
                         }
                         let selection = Select::new()
                             .with_prompt("Select blueprint to remove")

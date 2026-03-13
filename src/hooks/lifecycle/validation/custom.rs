@@ -2,28 +2,32 @@ use std::collections::HashMap;
 
 use anyhow::Result;
 use mlua::{Lua, Value};
+use serde_json::Value as JsonValue;
 
 use super::super::execution::resolve_hook_function;
-use crate::hooks::lifecycle::{UiLocaleContext, UserContext};
+use crate::hooks::{
+    api,
+    lifecycle::{UiLocaleContext, UserContext, converters::document_to_lua_table},
+};
 
 /// Inner implementation of `run_validate_function` — operates on a locked `&Lua`.
 /// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
 pub(super) fn run_validate_function_inner(
     lua: &Lua,
     func_ref: &str,
-    value: &serde_json::Value,
-    data: &HashMap<String, serde_json::Value>,
+    value: &JsonValue,
+    data: &HashMap<String, JsonValue>,
     collection: &str,
     field_name: &str,
 ) -> Result<Option<String>> {
     let func = resolve_hook_function(lua, func_ref)?;
-    let lua_value = crate::hooks::api::json_to_lua(lua, value)?;
+    let lua_value = api::json_to_lua(lua, value)?;
     let ctx_table = lua.create_table()?;
     ctx_table.set("collection", collection)?;
     ctx_table.set("field_name", field_name)?;
     let data_table = lua.create_table()?;
     for (k, v) in data {
-        data_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
+        data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
     }
     ctx_table.set("data", data_table)?;
 
@@ -31,8 +35,7 @@ pub(super) fn run_validate_function_inner(
     if let Some(user_doc) = lua
         .app_data_ref::<UserContext>()
         .and_then(|uc| uc.0.clone())
-        && let Ok(user_tbl) =
-            crate::hooks::lifecycle::converters::document_to_lua_table(lua, &user_doc)
+        && let Ok(user_tbl) = document_to_lua_table(lua, &user_doc)
     {
         let _ = ctx_table.set("user", user_tbl);
     }
@@ -65,6 +68,7 @@ mod tests {
             r#"
             package.loaded["validators"] = {
                 validate_nil = function(value, ctx)
+
                     return nil
                 end
             }
@@ -92,6 +96,7 @@ mod tests {
             r#"
             package.loaded["validators"] = {
                 validate_number = function(value, ctx)
+
                     return 42  -- a number return is treated as valid
                 end
             }

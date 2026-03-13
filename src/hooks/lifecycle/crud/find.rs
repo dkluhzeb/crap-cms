@@ -1,20 +1,29 @@
 //! Registration of `crap.collections.find`, `find_by_id`, and `count` Lua functions.
 
-use crate::config::{LocaleConfig, PaginationConfig};
-use crate::core::SharedRegistry;
-use crate::core::upload;
-use crate::db::query::filter::normalize_filter_fields;
-use crate::db::query::{
-    self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
-};
 use anyhow::Result;
 use mlua::{Lua, Value};
 
+use std::collections::HashSet;
+
+use crate::{
+    config::{LocaleConfig, PaginationConfig},
+    core::{SharedRegistry, upload},
+    db::{
+        ops,
+        query::{
+            self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
+            filter::normalize_filter_fields,
+        },
+    },
+    hooks::lifecycle::{
+        HookContext, HookEvent, UiLocaleContext, UserContext,
+        access::{check_access_with_lua, check_field_read_access_with_lua},
+        converters::*,
+        execution::{AfterReadCtx, apply_after_read_inner, run_hooks_inner},
+    },
+};
+
 use super::get_tx_conn;
-use crate::hooks::lifecycle::access::{check_access_with_lua, check_field_read_access_with_lua};
-use crate::hooks::lifecycle::converters::*;
-use crate::hooks::lifecycle::execution::{AfterReadCtx, apply_after_read_inner, run_hooks_inner};
-use crate::hooks::lifecycle::{HookContext, HookEvent, UiLocaleContext, UserContext};
 
 /// Register `crap.collections.find(collection, query?)`.
 #[cfg(not(tarpaulin_include))]
@@ -205,6 +214,7 @@ pub(super) fn register_find(
                     .app_data_ref::<UserContext>()
                     .and_then(|uc| uc.0.clone());
                 let denied = check_field_read_access_with_lua(lua, &def.fields, user_doc.as_ref());
+
                 if !denied.is_empty() {
                     for doc in &mut docs {
                         for name in &denied {
@@ -263,6 +273,7 @@ pub(super) fn register_find(
                 };
                 pagination.set("hasNextPage", has_next)?;
                 pagination.set("hasPrevPage", has_prev)?;
+
                 if let Some(sc) = start_cursor {
                     pagination.set("startCursor", sc)?;
                 }
@@ -280,6 +291,7 @@ pub(super) fn register_find(
                 pagination.set("pageStart", offset + 1)?;
                 pagination.set("hasNextPage", page < total_pages)?;
                 pagination.set("hasPrevPage", page > 1)?;
+
                 if page > 1 {
                     pagination.set("prevPage", page - 1)?;
                 }
@@ -390,7 +402,7 @@ pub(super) fn register_find_by_id(
             };
 
             // Unified find: draft overlay + constraints + hydration
-            let mut doc = crate::db::ops::find_by_id_full(
+            let mut doc = ops::find_by_id_full(
                 conn,
                 &collection,
                 &def,
@@ -403,11 +415,12 @@ pub(super) fn register_find_by_id(
 
             if let Some(ref mut d) = doc {
                 let select_slice = select.as_deref();
+
                 if depth > 0 {
                     let r = reg
                         .read()
                         .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                    let mut visited = std::collections::HashSet::new();
+                    let mut visited = HashSet::new();
                     let pop_ctx = query::PopulateContext {
                         conn,
                         registry: &r,

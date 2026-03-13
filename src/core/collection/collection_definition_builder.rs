@@ -4,8 +4,7 @@ use super::{
     Access, AdminConfig, Auth, CollectionDefinition, Hooks, IndexDefinition, Labels, LiveSetting,
     McpConfig, VersionsConfig,
 };
-use crate::core::field::FieldDefinition;
-use crate::core::upload::CollectionUpload;
+use crate::core::{field::FieldDefinition, upload::CollectionUpload};
 
 /// Builder for [`CollectionDefinition`].
 ///

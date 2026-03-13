@@ -1,26 +1,32 @@
 //! Pure Lua <-> Rust type conversion helpers (no DB access, no side effects).
 
 use mlua::{Lua, Value};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::db::query::{Filter, FilterClause, FilterOp, FindQuery};
+use crate::{
+    core::field::{FieldDefinition, FieldType},
+    db::query::{Filter, FilterClause, FilterOp, FindQuery, cursor::CursorData},
+    hooks::api,
+};
 
 // ── Lua <-> Rust type conversion helpers ────────────────────────────────────
 
-/// Convert a Lua data table to HashMap<String, serde_json::Value>.
+/// Convert a Lua data table to HashMap<String, Value>.
 /// Preserves nested tables (blocks, arrays, has-many IDs) unlike lua_table_to_hashmap
 /// which only handles scalars.
 pub(crate) fn lua_table_to_json_map(
     lua: &Lua,
     tbl: &mlua::Table,
-) -> mlua::Result<HashMap<String, serde_json::Value>> {
+) -> mlua::Result<HashMap<String, JsonValue>> {
     let mut map = HashMap::new();
     for pair in tbl.pairs::<String, Value>() {
         let (k, v) = pair?;
+
         if matches!(v, Value::Nil) {
             continue;
         }
-        map.insert(k, crate::hooks::api::lua_to_json(lua, &v)?);
+        map.insert(k, api::lua_to_json(lua, &v)?);
     }
     Ok(map)
 }
@@ -140,14 +146,14 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQu
 
     let after_cursor = match tbl.get::<Option<String>>("after_cursor").ok().flatten() {
         Some(s) => Some(
-            crate::db::query::cursor::CursorData::decode(&s)
+            CursorData::decode(&s)
                 .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?,
         ),
         None => None,
     };
     let before_cursor = match tbl.get::<Option<String>>("before_cursor").ok().flatten() {
         Some(s) => Some(
-            crate::db::query::cursor::CursorData::decode(&s)
+            CursorData::decode(&s)
                 .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?,
         ),
         None => None,
@@ -247,11 +253,11 @@ pub(crate) fn lua_table_to_hashmap(tbl: &mlua::Table) -> mlua::Result<HashMap<St
 /// Converts `seo = { meta_title = "X" }` → `seo__meta_title = "X"`.
 pub(crate) fn flatten_lua_groups(
     tbl: &mlua::Table,
-    fields: &[crate::core::field::FieldDefinition],
+    fields: &[FieldDefinition],
     data: &mut HashMap<String, String>,
 ) -> mlua::Result<()> {
     for field in fields {
-        if field.field_type != crate::core::field::FieldType::Group {
+        if field.field_type != FieldType::Group {
             continue;
         }
         if let Ok(sub_table) = tbl.get::<mlua::Table>(field.name.as_str()) {
@@ -281,7 +287,7 @@ pub(crate) fn document_to_lua_table(
     let tbl = lua.create_table()?;
     tbl.set("id", doc.id.as_str())?;
     for (k, v) in &doc.fields {
-        tbl.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
+        tbl.set(k.as_str(), api::json_to_lua(lua, v)?)?;
     }
     if let Some(ref ts) = doc.created_at {
         tbl.set("created_at", ts.as_str())?;
@@ -314,6 +320,7 @@ mod tests {
     use crate::core::document::DocumentBuilder;
     use crate::core::field::{FieldDefinition, FieldType};
     use mlua::Lua;
+    use serde_json::json;
 
     // --- lua_parse_filter_op tests ---
 
@@ -553,8 +560,8 @@ mod tests {
     fn test_document_to_lua_basic() {
         let lua = Lua::new();
         let mut fields = HashMap::new();
-        fields.insert("title".to_string(), serde_json::json!("Hello"));
-        fields.insert("count".to_string(), serde_json::json!(42));
+        fields.insert("title".to_string(), json!("Hello"));
+        fields.insert("count".to_string(), json!(42));
 
         let doc = DocumentBuilder::new("abc123")
             .fields(fields)
@@ -742,9 +749,9 @@ mod tests {
         tbl.set("count", 42).unwrap();
         tbl.set("active", true).unwrap();
         let map = lua_table_to_json_map(&lua, &tbl).unwrap();
-        assert_eq!(map.get("title").unwrap(), &serde_json::json!("Hello"));
-        assert_eq!(map.get("count").unwrap(), &serde_json::json!(42));
-        assert_eq!(map.get("active").unwrap(), &serde_json::json!(true));
+        assert_eq!(map.get("title").unwrap(), &json!("Hello"));
+        assert_eq!(map.get("count").unwrap(), &json!(42));
+        assert_eq!(map.get("active").unwrap(), &json!(true));
     }
 
     #[test]

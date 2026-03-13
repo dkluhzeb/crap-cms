@@ -5,47 +5,54 @@ mod collection;
 mod convert;
 mod schema_ops;
 
-use std::collections::HashMap;
-use std::pin::Pin;
-use tokio_stream::Stream;
-use tonic::metadata::MetadataMap;
-use tonic::{Request, Response, Status};
+use std::{collections::HashMap, path::PathBuf, pin::Pin, sync::Arc};
 
-use crate::api::content;
-use crate::api::content::content_api_server::ContentApi;
-use crate::config::{EmailConfig, LocaleConfig, ServerConfig};
-use crate::core::Registry;
-use crate::core::auth::AuthUser;
-use crate::core::email::EmailRenderer;
-use crate::core::event::EventBus;
-use crate::core::event::EventUser;
-use crate::core::rate_limit::LoginRateLimiter;
-use crate::db::DbPool;
-use crate::db::query;
-use crate::db::query::AccessResult;
-use crate::hooks::lifecycle::HookRunner;
+use serde_json::Value;
+use tokio_stream::Stream;
+use tonic::{Request, Response, Status, metadata::MetadataMap};
+
+use crate::{
+    api::content::{self, content_api_server::ContentApi},
+    config::{
+        DepthConfig, EmailConfig, LocaleConfig, PaginationConfig, PasswordPolicy, ServerConfig,
+    },
+    core::{
+        CollectionDefinition, Registry,
+        auth::{AuthUser, validate_token},
+        collection::GlobalDefinition,
+        email::EmailRenderer,
+        event::{EventBus, EventUser},
+        field::FieldDefinition,
+        rate_limit::LoginRateLimiter,
+    },
+    db::{
+        DbPool,
+        query::{self, AccessResult},
+    },
+    hooks::lifecycle::HookRunner,
+};
 
 /// Implements the gRPC ContentAPI service (Find, Create, Update, Delete, Login, etc.).
 pub struct ContentService {
     pool: DbPool,
-    registry: std::sync::Arc<Registry>,
+    registry: Arc<Registry>,
     hook_runner: HookRunner,
     jwt_secret: String,
     default_depth: i32,
     max_depth: i32,
     email_config: EmailConfig,
-    email_renderer: std::sync::Arc<EmailRenderer>,
+    email_renderer: Arc<EmailRenderer>,
     server_config: ServerConfig,
     event_bus: Option<EventBus>,
     locale_config: LocaleConfig,
-    config_dir: std::path::PathBuf,
-    login_limiter: std::sync::Arc<LoginRateLimiter>,
+    config_dir: PathBuf,
+    login_limiter: Arc<LoginRateLimiter>,
     reset_token_expiry: u64,
-    password_policy: crate::config::PasswordPolicy,
-    forgot_password_limiter: std::sync::Arc<crate::core::rate_limit::LoginRateLimiter>,
+    password_policy: PasswordPolicy,
+    forgot_password_limiter: Arc<LoginRateLimiter>,
     /// Shared cross-request cache for populated relationship documents.
     /// None when disabled (default). Cleared on any write operation.
-    populate_cache: Option<std::sync::Arc<query::PopulateCache>>,
+    populate_cache: Option<Arc<query::PopulateCache>>,
     default_limit: i64,
     max_limit: i64,
     cursor_enabled: bool,
@@ -59,21 +66,21 @@ impl ContentService {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: DbPool,
-        registry: std::sync::Arc<Registry>,
+        registry: Arc<Registry>,
         hook_runner: HookRunner,
         jwt_secret: String,
-        depth_config: &crate::config::DepthConfig,
-        pagination_config: &crate::config::PaginationConfig,
+        depth_config: &DepthConfig,
+        pagination_config: &PaginationConfig,
         email_config: EmailConfig,
-        email_renderer: std::sync::Arc<EmailRenderer>,
+        email_renderer: Arc<EmailRenderer>,
         server_config: ServerConfig,
         event_bus: Option<EventBus>,
         locale_config: LocaleConfig,
-        config_dir: std::path::PathBuf,
-        login_limiter: std::sync::Arc<LoginRateLimiter>,
+        config_dir: PathBuf,
+        login_limiter: Arc<LoginRateLimiter>,
         reset_token_expiry: u64,
-        password_policy: crate::config::PasswordPolicy,
-        forgot_password_limiter: std::sync::Arc<crate::core::rate_limit::LoginRateLimiter>,
+        password_policy: PasswordPolicy,
+        forgot_password_limiter: Arc<LoginRateLimiter>,
     ) -> Self {
         Self {
             pool,
@@ -93,7 +100,7 @@ impl ContentService {
             password_policy,
             forgot_password_limiter,
             populate_cache: if depth_config.populate_cache {
-                Some(std::sync::Arc::new(query::PopulateCache::new()))
+                Some(Arc::new(query::PopulateCache::new()))
             } else {
                 None
             },
@@ -104,12 +111,12 @@ impl ContentService {
     }
 
     /// Get a clone of the shared populate cache handle (for periodic clearing).
-    pub fn populate_cache_handle(&self) -> Option<std::sync::Arc<query::PopulateCache>> {
+    pub fn populate_cache_handle(&self) -> Option<Arc<query::PopulateCache>> {
         self.populate_cache.clone()
     }
 
     #[allow(clippy::result_large_err)]
-    fn get_collection_def(&self, slug: &str) -> Result<crate::core::CollectionDefinition, Status> {
+    fn get_collection_def(&self, slug: &str) -> Result<CollectionDefinition, Status> {
         self.registry
             .get_collection(slug)
             .cloned()
@@ -117,10 +124,7 @@ impl ContentService {
     }
 
     #[allow(clippy::result_large_err)]
-    fn get_global_def(
-        &self,
-        slug: &str,
-    ) -> Result<crate::core::collection::GlobalDefinition, Status> {
+    fn get_global_def(&self, slug: &str) -> Result<GlobalDefinition, Status> {
         self.registry
             .get_global(slug)
             .cloned()
@@ -133,7 +137,7 @@ impl ContentService {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))?;
-        let claims = crate::core::auth::validate_token(token, &self.jwt_secret).ok()?;
+        let claims = validate_token(token, &self.jwt_secret).ok()?;
         let def = self.registry.get_collection(&claims.collection)?.clone();
         let conn = self.pool.get().ok()?;
         let doc = query::find_by_id(&conn, &claims.collection, &def, &claims.sub, None).ok()??;
@@ -147,7 +151,7 @@ impl ContentService {
         access_ref: Option<&str>,
         auth_user: &Option<AuthUser>,
         id: Option<&str>,
-        data: Option<&HashMap<String, serde_json::Value>>,
+        data: Option<&HashMap<String, Value>>,
     ) -> Result<AccessResult, Status> {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
         let mut conn = self
@@ -184,7 +188,7 @@ impl ContentService {
     fn strip_denied_read_fields(
         &self,
         doc: &mut content::Document,
-        fields: &[crate::core::field::FieldDefinition],
+        fields: &[FieldDefinition],
         auth_user: &Option<AuthUser>,
     ) {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
@@ -216,6 +220,7 @@ impl ContentService {
                     .collect()
             }
         };
+
         if let Some(ref mut s) = doc.fields {
             for name in &denied {
                 s.fields.remove(name);

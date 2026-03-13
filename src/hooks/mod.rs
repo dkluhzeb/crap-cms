@@ -7,8 +7,7 @@ use anyhow::{Context as _, Result};
 use mlua::Lua;
 use std::path::Path;
 
-use crate::config::CrapConfig;
-use crate::core::SharedRegistry;
+use crate::{config::CrapConfig, core::SharedRegistry};
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
 /// and run init.lua. Returns a populated SharedRegistry.
@@ -50,6 +49,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
     // Execute init.lua if present
     let init_path = config_dir.join("init.lua");
     let has_init = init_path.exists();
+
     if has_init {
         tracing::debug!("[lua:init] Executing init.lua");
         let code = std::fs::read_to_string(&init_path)

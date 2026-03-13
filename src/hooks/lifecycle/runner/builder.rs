@@ -1,19 +1,25 @@
 //! Builder for [`HookRunner`].
 
-use std::path::Path;
-use std::sync::Arc;
+use std::{fs, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use mlua::Lua;
 
-use crate::config::CrapConfig;
-use crate::core::SharedRegistry;
-use crate::hooks::lifecycle::crud::register_crud_functions;
-use crate::hooks::lifecycle::execution::scan_registered_events;
-use crate::hooks::lifecycle::types::{DefaultDeny, HookDepth, MaxHookDepth};
+use crate::{
+    config::CrapConfig,
+    core::SharedRegistry,
+    hooks::{
+        self,
+        api::{self, VmLabel},
+        lifecycle::{
+            crud::register_crud_functions,
+            execution::scan_registered_events,
+            types::{DefaultDeny, HookDepth, MaxHookDepth},
+        },
+    },
+};
 
-use super::HookRunner;
-use super::vm_pool::VmPool;
+use super::{HookRunner, vm_pool::VmPool};
 
 /// Builder for [`HookRunner`]. Created via [`HookRunner::builder`].
 pub struct HookRunnerBuilder<'a> {
@@ -63,6 +69,7 @@ impl<'a> HookRunnerBuilder<'a> {
         // Cache which events have globally-registered hooks (from init.lua).
         // All VMs execute the same init.lua, so checking any VM suffices.
         let registered_events = scan_registered_events(&vms[0]);
+
         if !registered_events.is_empty() {
             tracing::info!("HookRunner: registered events: {:?}", registered_events);
         }
@@ -83,7 +90,7 @@ fn create_lua_vm(
     vm_index: usize,
 ) -> Result<Lua> {
     let lua = Lua::new();
-    lua.set_app_data(crate::hooks::api::VmLabel(format!("vm-{}", vm_index)));
+    lua.set_app_data(VmLabel(format!("vm-{}", vm_index)));
 
     // Set up package paths
     let config_str = config_dir.to_string_lossy();
@@ -99,7 +106,7 @@ fn create_lua_vm(
         .context("Failed to set package paths")?;
 
     // Register crap.log, crap.util, crap.collections.define, etc.
-    crate::hooks::api::register_api(&lua, registry.clone(), config_dir, config)?;
+    api::register_api(&lua, registry.clone(), config_dir, config)?;
 
     // Register CRUD functions on crap.collections (find, find_by_id, create, update, delete).
     // These read the active transaction from Lua app_data when called inside hooks.
@@ -112,23 +119,27 @@ fn create_lua_vm(
 
     // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
     let collections_dir = config_dir.join("collections");
+
     if collections_dir.exists() {
-        let _ = crate::hooks::load_lua_dir(&lua, &collections_dir, "collection")?;
+        let _ = hooks::load_lua_dir(&lua, &collections_dir, "collection")?;
     }
     let globals_dir = config_dir.join("globals");
+
     if globals_dir.exists() {
-        let _ = crate::hooks::load_lua_dir(&lua, &globals_dir, "global")?;
+        let _ = hooks::load_lua_dir(&lua, &globals_dir, "global")?;
     }
     let jobs_dir = config_dir.join("jobs");
+
     if jobs_dir.exists() {
-        let _ = crate::hooks::load_lua_dir(&lua, &jobs_dir, "job")?;
+        let _ = hooks::load_lua_dir(&lua, &jobs_dir, "job")?;
     }
 
     // Execute init.lua so crap.hooks.register() calls take effect in this VM
     let init_path = config_dir.join("init.lua");
+
     if init_path.exists() {
         tracing::debug!("[lua:vm-{vm_index}] Executing init.lua");
-        let code = std::fs::read_to_string(&init_path)
+        let code = fs::read_to_string(&init_path)
             .with_context(|| format!("Failed to read {}", init_path.display()))?;
         lua.load(&code)
             .set_name(init_path.to_string_lossy())

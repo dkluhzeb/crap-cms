@@ -2,10 +2,14 @@
 
 use std::fmt::Write;
 
-use crate::core::Registry;
-use crate::core::collection::{CollectionDefinition, GlobalDefinition};
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::db::query::get_column_names;
+use crate::{
+    core::{
+        Registry,
+        collection::{CollectionDefinition, GlobalDefinition},
+        field::{FieldDefinition, FieldType},
+    },
+    db::query::get_column_names,
+};
 
 use super::{is_optional, rel_has_many, to_pascal_case};
 
@@ -312,6 +316,7 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
                     .collect::<Vec<_>>()
                     .join(" | ")
             };
+
             if field.has_many {
                 if field.options.is_empty() {
                     "string[]".to_string()
@@ -351,7 +356,7 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::field::{LocalizedString, SelectOption};
+    use crate::core::field::{LocalizedString, RelationshipConfig, SelectOption};
 
     fn text_field(name: &str, required: bool) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text)
@@ -586,14 +591,14 @@ mod tests {
     #[test]
     fn lua_relationship_has_many() {
         let f = FieldDefinition::builder("tags", FieldType::Relationship)
-            .relationship(crate::core::field::RelationshipConfig::new("tags", true))
+            .relationship(RelationshipConfig::new("tags", true))
             .build();
         assert_eq!(field_to_lua_type(&f), "string[]");
     }
 
     #[test]
     fn lua_polymorphic_has_one_type() {
-        let mut rc = crate::core::field::RelationshipConfig::new("posts", false);
+        let mut rc = RelationshipConfig::new("posts", false);
         rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let f = FieldDefinition::builder("subject", FieldType::Relationship)
             .required(true)
@@ -605,7 +610,7 @@ mod tests {
 
     #[test]
     fn lua_polymorphic_has_many_type() {
-        let mut rc = crate::core::field::RelationshipConfig::new("articles", true);
+        let mut rc = RelationshipConfig::new("articles", true);
         rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
         let f = FieldDefinition::builder("related", FieldType::Relationship)
             .relationship(rc)
@@ -616,7 +621,7 @@ mod tests {
 
     #[test]
     fn lua_polymorphic_comment_emitted() {
-        let mut rc = crate::core::field::RelationshipConfig::new("posts", false);
+        let mut rc = RelationshipConfig::new("posts", false);
         rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
         let mut col = CollectionDefinition::new("comments");
         col.fields = vec![
@@ -648,7 +653,7 @@ mod tests {
     fn lua_relationship_has_one() {
         let f = FieldDefinition::builder("author", FieldType::Relationship)
             .required(true)
-            .relationship(crate::core::field::RelationshipConfig::new("users", false))
+            .relationship(RelationshipConfig::new("users", false))
             .build();
         assert_eq!(field_to_lua_type(&f), "string");
     }
@@ -676,7 +681,7 @@ mod tests {
     #[test]
     fn upload_has_many_generates_array_type() {
         let f = FieldDefinition::builder("images", FieldType::Upload)
-            .relationship(crate::core::field::RelationshipConfig::new("", true))
+            .relationship(RelationshipConfig::new("", true))
             .build();
         assert_eq!(field_to_lua_type(&f), "string[]");
     }

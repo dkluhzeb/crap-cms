@@ -1,8 +1,20 @@
 //! `migrate`, `db console`, `backup`, and `db cleanup` commands.
 
-use anyhow::{Context as _, Result};
-use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use anyhow::{Context as _, Result, anyhow, bail};
+use serde_json::{Value, json};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
+
+use crate::{
+    config::{CrapConfig, LocaleConfig},
+    core::{Registry, field::FieldType},
+    db::{migrate, pool},
+    hooks,
+    hooks::lifecycle::HookRunner,
+    scaffold,
+};
 
 /// Handle the `migrate` subcommand.
 /// Untestable as unit: requires full Lua VM + DB setup. Covered by CLI integration tests.
@@ -14,32 +26,30 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
 
     // Create only writes a file — no Lua/DB needed
     if let super::MigrateAction::Create { ref name } = action {
-        return crate::scaffold::make_migration(&config_dir, name);
+        return scaffold::make_migration(&config_dir, name);
     }
 
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
-    let registry =
-        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
-    let pool = crate::db::pool::create_pool(&config_dir, &cfg)
-        .context("Failed to create database pool")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
+    let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
     match action {
         super::MigrateAction::Create { .. } => unreachable!(),
         super::MigrateAction::Up => {
             // Schema sync from Lua definitions
             println!("Syncing schema from Lua definitions...");
-            crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
+            migrate::sync_all(&pool, &registry, &cfg.locale)
                 .context("Failed to sync database schema")?;
             println!("Schema sync complete.");
 
             // Run pending Lua data migrations
             let migrations_dir = config_dir.join("migrations");
-            let pending = crate::db::migrate::get_pending_migrations(&pool, &migrations_dir)?;
+            let pending = migrate::get_pending_migrations(&pool, &migrations_dir)?;
 
             if pending.is_empty() {
                 println!("No pending migrations.");
             } else {
-                let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+                let hook_runner = HookRunner::builder()
                     .config_dir(&config_dir)
                     .registry(registry.clone())
                     .config(&cfg)
@@ -49,7 +59,7 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
                     let mut conn = pool.get().context("Failed to get DB connection")?;
                     let tx = conn.transaction().context("Failed to begin transaction")?;
                     hook_runner.run_migration(&path, "up", &tx)?;
-                    crate::db::migrate::record_migration(&tx, filename)?;
+                    migrate::record_migration(&tx, filename)?;
                     tx.commit()
                         .with_context(|| format!("Failed to commit migration {}", filename))?;
                     println!("Applied: {}", filename);
@@ -58,13 +68,13 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
             }
         }
         super::MigrateAction::Down { steps } => {
-            let applied = crate::db::migrate::get_applied_migrations_desc(&pool)?;
+            let applied = migrate::get_applied_migrations_desc(&pool)?;
             let to_rollback: Vec<_> = applied.into_iter().take(steps).collect();
 
             if to_rollback.is_empty() {
                 println!("No migrations to roll back.");
             } else {
-                let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+                let hook_runner = HookRunner::builder()
                     .config_dir(&config_dir)
                     .registry(registry.clone())
                     .config(&cfg)
@@ -72,13 +82,14 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
                 let migrations_dir = config_dir.join("migrations");
                 for filename in &to_rollback {
                     let path = migrations_dir.join(filename);
+
                     if !path.exists() {
-                        anyhow::bail!("Migration file not found: {}", path.display());
+                        bail!("Migration file not found: {}", path.display());
                     }
                     let mut conn = pool.get().context("Failed to get DB connection")?;
                     let tx = conn.transaction().context("Failed to begin transaction")?;
                     hook_runner.run_migration(&path, "down", &tx)?;
-                    crate::db::migrate::remove_migration(&tx, filename)?;
+                    migrate::remove_migration(&tx, filename)?;
                     tx.commit()
                         .with_context(|| format!("Failed to commit rollback of {}", filename))?;
                     println!("Rolled back: {}", filename);
@@ -88,8 +99,8 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
         }
         super::MigrateAction::List => {
             let migrations_dir = config_dir.join("migrations");
-            let all_files = crate::db::migrate::list_migration_files(&migrations_dir)?;
-            let applied = crate::db::migrate::get_applied_migrations(&pool)?;
+            let all_files = migrate::list_migration_files(&migrations_dir)?;
+            let applied = migrate::get_applied_migrations(&pool)?;
 
             if all_files.is_empty() {
                 println!("No migration files found in {}", migrations_dir.display());
@@ -108,26 +119,27 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
         }
         super::MigrateAction::Fresh { confirm } => {
             if !confirm {
-                anyhow::bail!(
+                bail!(
                     "migrate fresh is destructive — it drops ALL tables and recreates them.\n\
                      Pass --confirm to proceed."
                 );
             }
 
             println!("Dropping all tables...");
-            crate::db::migrate::drop_all_tables(&pool)?;
+            migrate::drop_all_tables(&pool)?;
             println!("Tables dropped.");
 
             println!("Recreating schema from Lua definitions...");
-            crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
+            migrate::sync_all(&pool, &registry, &cfg.locale)
                 .context("Failed to sync database schema")?;
             println!("Schema sync complete.");
 
             // Run all migrations from scratch
             let migrations_dir = config_dir.join("migrations");
-            let all_files = crate::db::migrate::list_migration_files(&migrations_dir)?;
+            let all_files = migrate::list_migration_files(&migrations_dir)?;
+
             if !all_files.is_empty() {
-                let hook_runner = crate::hooks::lifecycle::HookRunner::builder()
+                let hook_runner = HookRunner::builder()
                     .config_dir(&config_dir)
                     .registry(registry.clone())
                     .config(&cfg)
@@ -137,7 +149,7 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
                     let mut conn = pool.get().context("Failed to get DB connection")?;
                     let tx = conn.transaction().context("Failed to begin transaction")?;
                     hook_runner.run_migration(&path, "up", &tx)?;
-                    crate::db::migrate::record_migration(&tx, filename)?;
+                    migrate::record_migration(&tx, filename)?;
                     tx.commit()
                         .with_context(|| format!("Failed to commit migration {}", filename))?;
                     println!("Applied: {}", filename);
@@ -160,11 +172,12 @@ pub fn console(config_dir: &Path) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     let db_path = cfg.db_path(&config_dir);
+
     if !db_path.exists() {
-        anyhow::bail!("Database file not found: {}", db_path.display());
+        bail!("Database file not found: {}", db_path.display());
     }
 
     println!("Opening SQLite console: {}", db_path.display());
@@ -175,7 +188,7 @@ pub fn console(config_dir: &Path) -> Result<()> {
         .context("Failed to launch sqlite3 — is it installed?")?;
 
     if !status.success() {
-        anyhow::bail!("sqlite3 exited with status {}", status);
+        bail!("sqlite3 exited with status {}", status);
     }
 
     Ok(())
@@ -190,11 +203,12 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
 
     let db_path = cfg.db_path(&config_dir);
+
     if !db_path.exists() {
-        anyhow::bail!("Database file not found: {}", db_path.display());
+        bail!("Database file not found: {}", db_path.display());
     }
 
     // Determine backup directory
@@ -233,8 +247,10 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
 
     // Optionally backup uploads
     let mut uploads_size: Option<u64> = None;
+
     if include_uploads {
         let uploads_dir = config_dir.join("uploads");
+
         if uploads_dir.exists() && uploads_dir.is_dir() {
             let archive_path = backup_dir.join("uploads.tar.gz");
             println!("Compressing uploads...");
@@ -272,7 +288,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
     }
 
     // Write manifest.json
-    let manifest = serde_json::json!({
+    let manifest = json!({
         "crap_version": env!("CARGO_PKG_VERSION"),
         "timestamp": chrono::Local::now().to_rfc3339(),
         "db_size": db_size,
@@ -300,7 +316,7 @@ pub fn restore(
     confirm: bool,
 ) -> Result<()> {
     if !confirm {
-        anyhow::bail!(
+        bail!(
             "Restore is destructive — it replaces the current database.\n\
              Pass --confirm / -y to proceed."
         );
@@ -318,16 +334,16 @@ pub fn restore(
     let backup_db_path = backup_dir.join("crap.db");
 
     if !manifest_path.exists() {
-        anyhow::bail!("No manifest.json found in {}", backup_dir.display());
+        bail!("No manifest.json found in {}", backup_dir.display());
     }
     if !backup_db_path.exists() {
-        anyhow::bail!("No crap.db found in {}", backup_dir.display());
+        bail!("No crap.db found in {}", backup_dir.display());
     }
 
     // Read and display manifest
     let manifest_str =
         std::fs::read_to_string(&manifest_path).context("Failed to read manifest.json")?;
-    let manifest: serde_json::Value =
+    let manifest: Value =
         serde_json::from_str(&manifest_str).context("Failed to parse manifest.json")?;
 
     println!("Restoring from backup:");
@@ -352,12 +368,13 @@ pub fn restore(
             .and_then(|v| v.as_u64())
             .unwrap_or(0)
     );
+
     if let Some(size) = manifest.get("uploads_size").and_then(|v| v.as_u64()) {
         println!("  Uploads:   {} bytes", size);
     }
 
     // Load config to find target DB path
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
     let db_path = cfg.db_path(&config_dir);
 
     // Ensure target directory exists
@@ -375,6 +392,7 @@ pub fn restore(
     // Remove WAL/SHM files if they exist (stale from previous instance)
     let wal_path = db_path.with_extension("db-wal");
     let shm_path = db_path.with_extension("db-shm");
+
     if wal_path.exists() {
         let _ = std::fs::remove_file(&wal_path);
     }
@@ -385,6 +403,7 @@ pub fn restore(
     // Optionally restore uploads
     if include_uploads {
         let archive_path = backup_dir.join("uploads.tar.gz");
+
         if archive_path.exists() {
             println!("Extracting uploads...");
             let status = std::process::Command::new("tar")
@@ -433,18 +452,15 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
-    let cfg = crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
-    let registry =
-        crate::hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
-    let pool = crate::db::pool::create_pool(&config_dir, &cfg)
-        .context("Failed to create database pool")?;
+    let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let registry = hooks::init_lua(&config_dir, &cfg).context("Failed to initialize Lua VM")?;
+    let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
-    crate::db::migrate::sync_all(&pool, &registry, &cfg.locale)
-        .context("Failed to sync database schema")?;
+    migrate::sync_all(&pool, &registry, &cfg.locale).context("Failed to sync database schema")?;
 
     let reg = registry
         .read()
-        .map_err(|e| anyhow::anyhow!("Registry lock poisoned: {}", e))?;
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
     let conn = pool.get().context("Failed to get database connection")?;
 
@@ -452,6 +468,7 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 
     if orphans.is_empty() {
         println!("No orphan columns found. All columns match Lua definitions.");
+
         return Ok(());
     }
 
@@ -468,6 +485,7 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     if !confirm {
         println!("\nThis is a dry run. Pass --confirm to drop these columns.");
         println!("Note: dropping columns is irreversible. Back up your database first.");
+
         return Ok(());
     }
 
@@ -475,8 +493,9 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
     // Check version first.
     let version: String = conn.query_row("SELECT sqlite_version()", [], |row| row.get(0))?;
     let parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
+
     if parts.len() >= 2 && (parts[0] < 3 || (parts[0] == 3 && parts[1] < 35)) {
-        anyhow::bail!(
+        bail!(
             "SQLite {} does not support DROP COLUMN (requires 3.35.0+). \
              Consider recreating the table manually.",
             version
@@ -504,11 +523,9 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 /// fields are included in the registry definitions.
 pub fn find_orphan_columns(
     conn: &rusqlite::Connection,
-    reg: &crate::core::Registry,
-    locale_config: &crate::config::LocaleConfig,
+    reg: &Registry,
+    locale_config: &LocaleConfig,
 ) -> Result<Vec<(String, Vec<String>)>> {
-    use crate::core::field::FieldType;
-
     let mut results = Vec::new();
 
     let mut slugs: Vec<_> = reg.collections.keys().collect();
@@ -518,7 +535,8 @@ pub fn find_orphan_columns(
         let def = &reg.collections[slug];
 
         // Get actual DB columns
-        let existing = crate::db::migrate::helpers::get_table_columns(conn, slug)?;
+        let existing = migrate::helpers::get_table_columns(conn, slug)?;
+
         if existing.is_empty() {
             continue; // table doesn't exist yet
         }
@@ -533,6 +551,7 @@ pub fn find_orphan_columns(
                     let base = format!("{}__{}", field.name, sub.name);
                     let is_localized =
                         (field.localized || sub.localized) && locale_config.is_enabled();
+
                     if is_localized {
                         for locale in &locale_config.locales {
                             expected.insert(format!("{}__{}", base, locale));
@@ -546,6 +565,7 @@ pub fn find_orphan_columns(
             if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
                 for sub in &field.fields {
                     let is_localized = sub.localized && locale_config.is_enabled();
+
                     if is_localized {
                         for locale in &locale_config.locales {
                             expected.insert(format!("{}__{}", sub.name, locale));
@@ -560,6 +580,7 @@ pub fn find_orphan_columns(
                 for tab in &field.tabs {
                     for sub in &tab.fields {
                         let is_localized = sub.localized && locale_config.is_enabled();
+
                         if is_localized {
                             for locale in &locale_config.locales {
                                 expected.insert(format!("{}__{}", sub.name, locale));

@@ -15,6 +15,8 @@ pub use node_attr_builder::NodeAttrBuilder;
 pub use richtext_node_def::RichtextNodeDef;
 pub use richtext_node_def_builder::RichtextNodeDefBuilder;
 
+use serde_json::{Map, Value};
+
 /// Render ProseMirror JSON to HTML.
 ///
 /// Handles standard PM nodes (doc, paragraph, heading, text, blockquote, code_block,
@@ -25,18 +27,18 @@ pub use richtext_node_def_builder::RichtextNodeDefBuilder;
 /// For unknown nodes without a custom renderer, emits `<crap-node>` passthrough.
 pub fn render_prosemirror_to_html<F>(json_str: &str, custom_renderer: &F) -> Result<String, String>
 where
-    F: Fn(&str, &serde_json::Value) -> Option<String>,
+    F: Fn(&str, &Value) -> Option<String>,
 {
-    let parsed: serde_json::Value =
+    let parsed: Value =
         serde_json::from_str(json_str).map_err(|e| format!("Invalid JSON: {}", e))?;
     let mut out = String::new();
     render_node(&parsed, custom_renderer, &mut out);
     Ok(out)
 }
 
-fn render_node<F>(node: &serde_json::Value, custom_renderer: &F, out: &mut String)
+fn render_node<F>(node: &Value, custom_renderer: &F, out: &mut String)
 where
-    F: Fn(&str, &serde_json::Value) -> Option<String>,
+    F: Fn(&str, &Value) -> Option<String>,
 {
     let obj = match node.as_object() {
         Some(o) => o,
@@ -103,7 +105,8 @@ where
             let attrs = obj
                 .get("attrs")
                 .cloned()
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                .unwrap_or(Value::Object(Map::new()));
+
             if let Some(html) = custom_renderer(node_type, &attrs) {
                 out.push_str(&html);
             } else {
@@ -120,9 +123,9 @@ where
     }
 }
 
-fn render_children<F>(node: &serde_json::Value, custom_renderer: &F, out: &mut String)
+fn render_children<F>(node: &Value, custom_renderer: &F, out: &mut String)
 where
-    F: Fn(&str, &serde_json::Value) -> Option<String>,
+    F: Fn(&str, &Value) -> Option<String>,
 {
     if let Some(content) = node.get("content").and_then(|c| c.as_array()) {
         for child in content {
@@ -131,7 +134,7 @@ where
     }
 }
 
-fn render_text_with_marks(text: &str, marks: Option<&Vec<serde_json::Value>>, out: &mut String) {
+fn render_text_with_marks(text: &str, marks: Option<&Vec<Value>>, out: &mut String) {
     let escaped = html_escape(text);
     match marks {
         None => {
@@ -184,7 +187,7 @@ fn render_text_with_marks(text: &str, marks: Option<&Vec<serde_json::Value>>, ou
 /// without a matching renderer are left unchanged.
 pub fn render_html_custom_nodes<F>(html: &str, custom_renderer: &F) -> String
 where
-    F: Fn(&str, &serde_json::Value) -> Option<String>,
+    F: Fn(&str, &Value) -> Option<String>,
 {
     let mut result = String::with_capacity(html.len());
     let mut remaining = html;
@@ -214,10 +217,10 @@ where
         let attrs_str = extract_attr_value(tag, "data-attrs");
 
         if let Some(ref nt) = node_type {
-            let attrs: serde_json::Value = attrs_str
+            let attrs: Value = attrs_str
                 .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+                .unwrap_or(Value::Object(Map::new()));
 
             if let Some(rendered) = custom_renderer(nt, &attrs) {
                 result.push_str(&rendered);
@@ -244,6 +247,7 @@ fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
         if let Some(start) = tag.find(pattern.as_str()) {
             let value_start = start + pattern.len();
             let quote_char = if pattern.ends_with('"') { '"' } else { '\'' };
+
             if let Some(end) = tag[value_start..].find(quote_char) {
                 return Some(tag[value_start..value_start + end].to_string());
             }
@@ -271,7 +275,7 @@ fn html_escape_attr(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn no_custom(_name: &str, _attrs: &serde_json::Value) -> Option<String> {
+    fn no_custom(_name: &str, _attrs: &Value) -> Option<String> {
         None
     }
 
@@ -314,7 +318,7 @@ mod tests {
     fn render_custom_node_with_callback() {
         let json =
             r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click me","url":"/go"}}]}"#;
-        let renderer = |name: &str, attrs: &serde_json::Value| -> Option<String> {
+        let renderer = |name: &str, attrs: &Value| -> Option<String> {
             if name == "cta" {
                 let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
                 let url = attrs.get("url").and_then(|u| u.as_str()).unwrap_or("#");
@@ -377,7 +381,7 @@ mod tests {
     #[test]
     fn html_custom_nodes_replacement() {
         let html = r#"<p>Before</p><crap-node data-type="cta" data-attrs='{"text":"Go","url":"/x"}'></crap-node><p>After</p>"#;
-        let renderer = |name: &str, attrs: &serde_json::Value| -> Option<String> {
+        let renderer = |name: &str, attrs: &Value| -> Option<String> {
             if name == "cta" {
                 let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
                 Some(format!("<button>{}</button>", text))

@@ -2,15 +2,20 @@
 
 use anyhow::Result;
 use mlua::{Lua, Value};
+use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
-use crate::core::Document;
-use crate::core::field::FieldDefinition;
-use crate::db::query::{AccessResult, Filter, FilterClause, FilterOp};
+use crate::{
+    core::{Document, field::FieldDefinition},
+    db::query::{AccessResult, Filter, FilterClause, FilterOp},
+    hooks::api,
+};
 
-use super::DefaultDeny;
-use super::converters::{document_to_lua_table, lua_parse_filter_op};
-use super::execution::resolve_hook_function;
+use super::{
+    DefaultDeny,
+    converters::{document_to_lua_table, lua_parse_filter_op},
+    execution::resolve_hook_function,
+};
 
 /// Check collection-level access using an already-held `&Lua` reference.
 /// Does NOT lock the VM or manage TxContext — caller must ensure those are set.
@@ -20,7 +25,7 @@ pub(crate) fn check_access_with_lua(
     access_ref: Option<&str>,
     user: Option<&Document>,
     id: Option<&str>,
-    data: Option<&HashMap<String, serde_json::Value>>,
+    data: Option<&HashMap<String, JsonValue>>,
 ) -> Result<AccessResult> {
     let func_ref = match access_ref {
         Some(r) => r,
@@ -30,6 +35,7 @@ pub(crate) fn check_access_with_lua(
                 .app_data_ref::<DefaultDeny>()
                 .map(|d| d.0)
                 .unwrap_or(false);
+
             return Ok(if deny {
                 AccessResult::Denied
             } else {
@@ -42,6 +48,7 @@ pub(crate) fn check_access_with_lua(
 
     // Build context table: { user = ..., id = ..., data = ... }
     let ctx_table = lua.create_table()?;
+
     if let Some(user_doc) = user {
         let user_table = document_to_lua_table(lua, user_doc)?;
         ctx_table.set("user", user_table)?;
@@ -52,7 +59,7 @@ pub(crate) fn check_access_with_lua(
     if let Some(doc_data) = data {
         let data_table = lua.create_table()?;
         for (k, v) in doc_data {
-            data_table.set(k.as_str(), crate::hooks::api::json_to_lua(lua, v)?)?;
+            data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
         }
         ctx_table.set("data", data_table)?;
     }
@@ -142,6 +149,7 @@ pub(crate) fn check_field_write_access_with_lua(
             "update" => field.access.update.as_deref(),
             _ => None,
         };
+
         if let Some(ref_str) = access_ref {
             match check_access_with_lua(lua, Some(ref_str), user, None, None) {
                 Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {}
@@ -162,6 +170,7 @@ mod tests {
     use crate::core::document::DocumentBuilder;
     use crate::core::field::{FieldAccess, FieldType};
     use mlua::Lua;
+    use serde_json::json;
 
     /// Set up a Lua VM with test access functions available via require/package.loaded.
     fn setup_lua() -> Lua {
@@ -171,63 +180,82 @@ mod tests {
             local access = {}
 
             function access.allow(ctx)
+
                 return true
             end
 
             function access.deny(ctx)
+
                 return false
             end
 
             function access.return_nil(ctx)
+
                 return nil
             end
 
             function access.return_number(ctx)
+
                 return 42
             end
 
             function access.constrained_string(ctx)
+
                 return { status = "published" }
             end
 
             function access.constrained_integer(ctx)
+
                 return { priority = 1 }
             end
 
             function access.constrained_number(ctx)
+
                 return { score = 3.14 }
             end
 
             function access.constrained_ops(ctx)
+
                 return { score = { greater_than = "50" } }
             end
 
             function access.constrained_multi_ops(ctx)
+
                 return { score = { greater_than = "10", less_than = "100" } }
             end
 
             function access.constrained_ignore_bool(ctx)
+
                 return { active = true }
             end
 
             function access.check_user(ctx)
+
                 if ctx.user and ctx.user.role == "admin" then
+
                     return true
                 end
+
                 return false
             end
 
             function access.check_id(ctx)
+
                 if ctx.id == "doc-123" then
+
                     return true
                 end
+
                 return false
             end
 
             function access.check_data(ctx)
+
                 if ctx.data and ctx.data.title == "test" then
+
                     return true
                 end
+
                 return false
             end
 
@@ -251,8 +279,8 @@ mod tests {
 
     fn make_user_doc(role: &str) -> Document {
         let mut fields = HashMap::new();
-        fields.insert("role".to_string(), serde_json::json!(role));
-        fields.insert("email".to_string(), serde_json::json!("user@test.com"));
+        fields.insert("role".to_string(), json!(role));
+        fields.insert("email".to_string(), json!("user@test.com"));
         DocumentBuilder::new("user-1").fields(fields).build()
     }
 
@@ -532,7 +560,7 @@ mod tests {
     fn access_passes_data_context() {
         let lua = setup_lua();
         let mut data = HashMap::new();
-        data.insert("title".to_string(), serde_json::json!("test"));
+        data.insert("title".to_string(), json!("test"));
         let result = check_access_with_lua(
             &lua,
             Some("test_access.check_data"),
@@ -544,7 +572,7 @@ mod tests {
         assert!(matches!(result, AccessResult::Allowed));
 
         let mut bad_data = HashMap::new();
-        bad_data.insert("title".to_string(), serde_json::json!("other"));
+        bad_data.insert("title".to_string(), json!("other"));
         let result = check_access_with_lua(
             &lua,
             Some("test_access.check_data"),

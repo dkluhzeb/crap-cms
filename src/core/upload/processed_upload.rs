@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
-use super::processed_upload_builder::ProcessedUploadBuilder;
-use super::queued_conversion::QueuedConversion;
-use super::size_result::SizeResult;
+use super::{
+    processed_upload_builder::ProcessedUploadBuilder, queued_conversion::QueuedConversion,
+    size_result::SizeResult,
+};
 
 /// Result of processing an upload (original + generated sizes/formats).
 #[derive(Debug)]

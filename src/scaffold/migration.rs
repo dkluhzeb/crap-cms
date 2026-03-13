@@ -1,8 +1,7 @@
 //! `make migration` command — generate migration Lua files.
 
-use anyhow::{Context as _, Result};
-use std::fs;
-use std::path::Path;
+use anyhow::{Context as _, Result, bail};
+use std::{fs, path::Path};
 
 /// Create a new migration file at `<config_dir>/migrations/YYYYMMDDHHMMSS_name.lua`.
 pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
@@ -11,7 +10,7 @@ pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
     {
-        anyhow::bail!(
+        bail!(
             "Invalid migration name '{}' — use lowercase letters, digits, and underscores only",
             name
         );

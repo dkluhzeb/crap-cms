@@ -2,6 +2,8 @@
 ///
 /// `id` and `parent` are taken in `new()`.
 /// `version`, `status`, `latest`, and `snapshot` are required via chained methods.
+use serde_json::Value;
+
 use crate::core::document::VersionSnapshot;
 
 pub struct VersionSnapshotBuilder {
@@ -10,7 +12,7 @@ pub struct VersionSnapshotBuilder {
     version: Option<i64>,
     status: Option<String>,
     latest: Option<bool>,
-    snapshot: Option<serde_json::Value>,
+    snapshot: Option<Value>,
     created_at: Option<String>,
     updated_at: Option<String>,
 }
@@ -49,7 +51,7 @@ impl VersionSnapshotBuilder {
     }
 
     /// Set the JSON data snapshot of the document fields.
-    pub fn snapshot(mut self, s: serde_json::Value) -> Self {
+    pub fn snapshot(mut self, s: Value) -> Self {
         self.snapshot = Some(s);
         self
     }
@@ -95,6 +97,8 @@ impl VersionSnapshotBuilder {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -103,7 +107,7 @@ mod tests {
             .version(3)
             .status("published")
             .latest(true)
-            .snapshot(serde_json::json!({"title": "v3"}))
+            .snapshot(json!({"title": "v3"}))
             .created_at("2024-01-01")
             .updated_at("2024-01-02")
             .build();
@@ -112,7 +116,7 @@ mod tests {
         assert_eq!(snap.version, 3);
         assert_eq!(snap.status, "published");
         assert!(snap.latest);
-        assert_eq!(snap.snapshot, serde_json::json!({"title": "v3"}));
+        assert_eq!(snap.snapshot, json!({"title": "v3"}));
         assert_eq!(snap.created_at.as_deref(), Some("2024-01-01"));
         assert_eq!(snap.updated_at.as_deref(), Some("2024-01-02"));
     }
@@ -123,7 +127,7 @@ mod tests {
         VersionSnapshotBuilder::new("s", "p")
             .status("draft")
             .latest(false)
-            .snapshot(serde_json::json!({}))
+            .snapshot(json!({}))
             .build();
     }
 
@@ -133,7 +137,7 @@ mod tests {
         VersionSnapshotBuilder::new("s", "p")
             .version(1)
             .latest(false)
-            .snapshot(serde_json::json!({}))
+            .snapshot(json!({}))
             .build();
     }
 
@@ -143,7 +147,7 @@ mod tests {
         VersionSnapshotBuilder::new("s", "p")
             .version(1)
             .status("draft")
-            .snapshot(serde_json::json!({}))
+            .snapshot(json!({}))
             .build();
     }
 

@@ -5,10 +5,14 @@ use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
 use super::{LocaleContext, LocaleMode, coerce_value, group_locale_fields, locale_write_column};
-use crate::core::Document;
-use crate::core::collection::GlobalDefinition;
-use crate::core::field::FieldType;
-use crate::db::document::row_to_document;
+use crate::{
+    core::{
+        Document,
+        collection::GlobalDefinition,
+        field::{FieldDefinition, FieldType},
+    },
+    db::document::row_to_document,
+};
 
 /// Get the single global document from `_global_{slug}`.
 pub fn get_global(
@@ -101,7 +105,7 @@ pub fn update_global(
 /// Recursively collect SET clauses + params from a field list.
 /// Handles arbitrary nesting: Group (prefixed), Row/Collapsible/Tabs (promoted flat).
 fn collect_update_params(
-    fields: &[crate::core::field::FieldDefinition],
+    fields: &[FieldDefinition],
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
     set_clauses: &mut Vec<String>,
@@ -161,6 +165,7 @@ fn collect_update_params(
                     format!("{}__{}", prefix, field.name)
                 };
                 let col_name = locale_write_column(&data_key, field, locale_ctx);
+
                 if let Some(value) = data.get(&data_key) {
                     set_clauses.push(format!("{} = ?{}", col_name, *idx));
                     params.push(coerce_value(&field.field_type, value));
@@ -178,6 +183,7 @@ fn collect_update_params(
 fn get_global_column_names(def: &GlobalDefinition) -> Vec<String> {
     let mut names = vec!["id".to_string()];
     super::collect_column_names(&def.fields, &mut names);
+
     if def.has_drafts() {
         names.push("_status".to_string());
     }
@@ -207,7 +213,10 @@ fn get_global_locale_columns(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+    use crate::config::LocaleConfig;
     use crate::core::collection::*;
     use crate::core::field::*;
     use rusqlite::Connection;
@@ -270,7 +279,7 @@ mod tests {
         ];
         let def = def;
 
-        let locale_config = crate::config::LocaleConfig {
+        let locale_config = LocaleConfig {
             default_locale: "en".to_string(),
             locales: vec!["en".to_string(), "de".to_string()],
             fallback: true,
@@ -379,7 +388,7 @@ mod tests {
         // Update without providing the checkbox field -- should default to 0
         let data = HashMap::new();
         let doc = update_global(&conn, "prefs", &def, &data, None).unwrap();
-        assert_eq!(doc.get("newsletter"), Some(&serde_json::json!(0)));
+        assert_eq!(doc.get("newsletter"), Some(&json!(0)));
     }
 
     #[test]

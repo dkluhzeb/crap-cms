@@ -1,7 +1,6 @@
 //! Field validation error types returned by the hook system.
 
-use std::collections::HashMap;
-use std::fmt;
+use std::{collections::HashMap, fmt};
 
 /// A single field validation error.
 #[derive(Debug, Clone)]

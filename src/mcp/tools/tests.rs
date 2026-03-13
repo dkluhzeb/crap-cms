@@ -1,7 +1,13 @@
+use std::{fs, path::Path};
+
 use super::*;
-use crate::config::McpConfig;
-use crate::core::{CollectionDefinition, collection::GlobalDefinition};
-use crate::db::query;
+use crate::{
+    config::{CrapConfig, McpConfig},
+    core::{CollectionDefinition, collection::GlobalDefinition, document::Document},
+    db::{migrate, pool, query},
+    hooks::lifecycle::HookRunner,
+};
+use serde_json::{Map, Value};
 
 fn make_registry() -> Registry {
     let mut reg = Registry::new();
@@ -216,13 +222,13 @@ fn cli_reference_unknown_command() {
 
 #[test]
 fn safe_config_path_rejects_absolute() {
-    let dir = std::path::Path::new("/tmp");
+    let dir = Path::new("/tmp");
     assert!(safe_config_path(dir, "/etc/passwd").is_err());
 }
 
 #[test]
 fn safe_config_path_rejects_dot_dot() {
-    let dir = std::path::Path::new("/tmp");
+    let dir = Path::new("/tmp");
     assert!(safe_config_path(dir, "../etc/passwd").is_err());
     assert!(safe_config_path(dir, "foo/../../etc/passwd").is_err());
 }
@@ -382,13 +388,13 @@ fn parse_where_scalar_operators() {
         ("like", "like"),
     ] {
         let args = {
-            let mut where_field = serde_json::Map::new();
+            let mut where_field = Map::new();
             where_field.insert(op_name.to_string(), json!("val"));
-            let mut where_obj = serde_json::Map::new();
-            where_obj.insert("field".to_string(), serde_json::Value::Object(where_field));
-            let mut root = serde_json::Map::new();
-            root.insert("where".to_string(), serde_json::Value::Object(where_obj));
-            serde_json::Value::Object(root)
+            let mut where_obj = Map::new();
+            where_obj.insert("field".to_string(), Value::Object(where_field));
+            let mut root = Map::new();
+            root.insert("where".to_string(), Value::Object(where_obj));
+            Value::Object(root)
         };
         let clauses = parse_where_filters(&args);
         assert_eq!(
@@ -583,7 +589,7 @@ fn exec_describe_collection_excluded_errors() {
 fn exec_read_config_file_success() {
     let dir = tempfile::tempdir().unwrap();
     // Write a test file
-    std::fs::write(dir.path().join("hello.txt"), "world").unwrap();
+    fs::write(dir.path().join("hello.txt"), "world").unwrap();
     let args = json!({ "path": "hello.txt" });
     let result = super::exec_read_config_file(&args, dir.path()).unwrap();
     assert_eq!(result, "world");
@@ -612,7 +618,7 @@ fn exec_write_config_file_success() {
     let result = super::exec_write_config_file(&args, dir.path()).unwrap();
     let parsed: Value = serde_json::from_str(&result).unwrap();
     assert_eq!(parsed["written"], "output.txt");
-    let written = std::fs::read_to_string(dir.path().join("output.txt")).unwrap();
+    let written = fs::read_to_string(dir.path().join("output.txt")).unwrap();
     assert_eq!(written, "hello");
 }
 
@@ -623,7 +629,7 @@ fn exec_write_config_file_creates_parent_dirs() {
     let result = super::exec_write_config_file(&args, dir.path()).unwrap();
     let parsed: Value = serde_json::from_str(&result).unwrap();
     assert_eq!(parsed["written"], "subdir/nested/file.txt");
-    let content = std::fs::read_to_string(dir.path().join("subdir/nested/file.txt")).unwrap();
+    let content = fs::read_to_string(dir.path().join("subdir/nested/file.txt")).unwrap();
     assert_eq!(content, "data");
 }
 
@@ -646,9 +652,9 @@ fn exec_write_config_file_missing_content_errors() {
 #[test]
 fn exec_list_config_files_root() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("a.txt"), "").unwrap();
-    std::fs::write(dir.path().join("b.lua"), "").unwrap();
-    std::fs::create_dir(dir.path().join("sub")).unwrap();
+    fs::write(dir.path().join("a.txt"), "").unwrap();
+    fs::write(dir.path().join("b.lua"), "").unwrap();
+    fs::create_dir(dir.path().join("sub")).unwrap();
 
     let args = json!({});
     let result = super::exec_list_config_files(&args, dir.path()).unwrap();
@@ -671,8 +677,8 @@ fn exec_list_config_files_root() {
 #[test]
 fn exec_list_config_files_subdirectory() {
     let dir = tempfile::tempdir().unwrap();
-    std::fs::create_dir(dir.path().join("collections")).unwrap();
-    std::fs::write(dir.path().join("collections/posts.lua"), "").unwrap();
+    fs::create_dir(dir.path().join("collections")).unwrap();
+    fs::write(dir.path().join("collections/posts.lua"), "").unwrap();
 
     let args = json!({ "path": "collections" });
     let result = super::exec_list_config_files(&args, dir.path()).unwrap();
@@ -699,7 +705,6 @@ fn exec_list_config_files_nonexistent_dir_returns_empty() {
 
 #[test]
 fn doc_to_json_includes_all_fields() {
-    use crate::core::document::Document;
     use std::collections::HashMap;
     let mut fields = HashMap::new();
     fields.insert("title".to_string(), json!("Hello"));
@@ -720,7 +725,6 @@ fn doc_to_json_includes_all_fields() {
 
 #[test]
 fn doc_to_json_without_timestamps() {
-    use crate::core::document::Document;
     use std::collections::HashMap;
     let doc = Document {
         id: "xyz".to_string(),
@@ -738,11 +742,8 @@ fn doc_to_json_without_timestamps() {
 
 #[test]
 fn execute_tool_config_tools_disabled_returns_error() {
-    use crate::db::{migrate, pool};
-    use crate::hooks::lifecycle::HookRunner;
-
     let tmp = tempfile::tempdir().unwrap();
-    let mut config = crate::config::CrapConfig::default();
+    let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
     // config_tools is false by default
     assert!(!config.mcp.config_tools);
@@ -773,11 +774,8 @@ fn execute_tool_config_tools_disabled_returns_error() {
 
 #[test]
 fn execute_tool_unknown_tool_errors() {
-    use crate::db::{migrate, pool};
-    use crate::hooks::lifecycle::HookRunner;
-
     let tmp = tempfile::tempdir().unwrap();
-    let mut config = crate::config::CrapConfig::default();
+    let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
 
     let db_pool = pool::create_pool(tmp.path(), &config).unwrap();

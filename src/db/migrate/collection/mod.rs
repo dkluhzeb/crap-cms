@@ -6,7 +6,7 @@ mod indexes;
 
 use anyhow::Result;
 
-use crate::config::LocaleConfig;
+use crate::{config::LocaleConfig, core::CollectionDefinition, db::query::fts};
 
 use super::helpers::{sync_join_tables, sync_versions_table, table_exists};
 
@@ -16,7 +16,7 @@ pub(super) use create::create_collection_table;
 pub(super) fn sync_collection_table(
     conn: &rusqlite::Connection,
     slug: &str,
-    def: &crate::core::CollectionDefinition,
+    def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let table_exists = table_exists(conn, slug)?;
@@ -36,7 +36,7 @@ pub(super) fn sync_collection_table(
     }
 
     // Sync FTS5 full-text search index
-    crate::db::query::fts::sync_fts_table(conn, slug, def, locale_config)?;
+    fts::sync_fts_table(conn, slug, def, locale_config)?;
 
     // Sync B-tree indexes (field-level index=true + collection-level compound indexes)
     indexes::sync_indexes(conn, slug, def, locale_config)?;

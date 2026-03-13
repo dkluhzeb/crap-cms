@@ -1,12 +1,17 @@
 //! Non-polymorphic batch population helpers.
 
 use anyhow::Result;
+use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
-use super::super::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
-use super::populate_relationships_batch_cached;
-use crate::core::Document;
-use crate::db::query::read::find_by_ids;
+use super::{
+    super::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json},
+    populate_relationships_batch_cached,
+};
+use crate::{
+    core::{CollectionDefinition, Document, upload},
+    db::query::read::find_by_ids,
+};
 
 /// Batch fetch and distribute for non-polymorphic has-many fields.
 pub(super) fn batch_nonpoly_has_many(
@@ -14,13 +19,13 @@ pub(super) fn batch_nonpoly_has_many(
     docs: &mut [Document],
     field_name: &str,
     rel_collection: &str,
-    rel_def: &crate::core::CollectionDefinition,
+    rel_def: &CollectionDefinition,
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
     // Collect all unique IDs across all docs for this has-many field
     let mut all_ids: Vec<String> = Vec::new();
     for doc in docs.iter() {
-        if let Some(serde_json::Value::Array(arr)) = doc.fields.get(field_name) {
+        if let Some(Value::Array(arr)) = doc.fields.get(field_name) {
             for v in arr {
                 if let Some(s) = v.as_str()
                     && !visited.contains(&(rel_collection.to_string(), s.to_string()))
@@ -38,7 +43,7 @@ pub(super) fn batch_nonpoly_has_many(
     // Distribute back to each document preserving order
     for doc in docs.iter_mut() {
         let ids: Vec<String> = match doc.fields.get(field_name) {
-            Some(serde_json::Value::Array(arr)) => arr
+            Some(Value::Array(arr)) => arr
                 .iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect(),
@@ -49,11 +54,11 @@ pub(super) fn batch_nonpoly_has_many(
             if let Some(cached_doc) = doc_map.get(id) {
                 populated.push(document_to_json(cached_doc, rel_collection));
             } else {
-                populated.push(serde_json::Value::String(id.clone()));
+                populated.push(Value::String(id.clone()));
             }
         }
         doc.fields
-            .insert(field_name.to_string(), serde_json::Value::Array(populated));
+            .insert(field_name.to_string(), Value::Array(populated));
     }
     Ok(())
 }
@@ -64,12 +69,12 @@ pub(super) fn batch_nonpoly_has_one(
     docs: &mut [Document],
     field_name: &str,
     rel_collection: &str,
-    rel_def: &crate::core::CollectionDefinition,
+    rel_def: &CollectionDefinition,
     visited: &HashSet<(String, String)>,
 ) -> Result<()> {
     let mut all_ids: Vec<String> = Vec::new();
     for doc in docs.iter() {
-        if let Some(serde_json::Value::String(s)) = doc.fields.get(field_name)
+        if let Some(Value::String(s)) = doc.fields.get(field_name)
             && !s.is_empty()
             && !visited.contains(&(rel_collection.to_string(), s.clone()))
         {
@@ -84,9 +89,10 @@ pub(super) fn batch_nonpoly_has_one(
     // Distribute back
     for doc in docs.iter_mut() {
         let id = match doc.fields.get(field_name) {
-            Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
+            Some(Value::String(s)) if !s.is_empty() => s.clone(),
             _ => continue,
         };
+
         if let Some(cached_doc) = doc_map.get(&id) {
             doc.fields.insert(
                 field_name.to_string(),
@@ -102,13 +108,14 @@ pub(super) fn batch_nonpoly_has_one(
 pub(super) fn batch_fetch_single_collection(
     ctx: &PopulateCtx<'_>,
     collection: &str,
-    rel_def: &crate::core::CollectionDefinition,
+    rel_def: &CollectionDefinition,
     all_ids: &[String],
 ) -> Result<HashMap<String, Document>> {
     let mut doc_map: HashMap<String, Document> = HashMap::new();
     let mut uncached_ids: Vec<String> = Vec::new();
     for id in all_ids {
         let key = (collection.to_string(), id.clone());
+
         if let Some(cached) = ctx.cache.get(&key) {
             doc_map.insert(id.clone(), cached.value().clone());
         } else {
@@ -123,7 +130,7 @@ pub(super) fn batch_fetch_single_collection(
             if let Some(ref uc) = rel_def.upload
                 && uc.enabled
             {
-                crate::core::upload::assemble_sizes_object(d, uc);
+                upload::assemble_sizes_object(d, uc);
             }
         }
         if ctx.effective_depth - 1 > 0 {
@@ -154,6 +161,8 @@ pub(super) fn batch_fetch_single_collection(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::super::super::test_helpers::*;
     use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
     use super::super::populate_relationships_batch_cached;
@@ -183,26 +192,20 @@ mod tests {
         let mut docs = vec![
             {
                 let mut d = Document::new("p1".to_string());
-                d.fields
-                    .insert("title".to_string(), serde_json::json!("Post 1"));
-                d.fields
-                    .insert("author".to_string(), serde_json::json!("a1"));
+                d.fields.insert("title".to_string(), json!("Post 1"));
+                d.fields.insert("author".to_string(), json!("a1"));
                 d
             },
             {
                 let mut d = Document::new("p2".to_string());
-                d.fields
-                    .insert("title".to_string(), serde_json::json!("Post 2"));
-                d.fields
-                    .insert("author".to_string(), serde_json::json!("a1"));
+                d.fields.insert("title".to_string(), json!("Post 2"));
+                d.fields.insert("author".to_string(), json!("a1"));
                 d
             },
             {
                 let mut d = Document::new("p3".to_string());
-                d.fields
-                    .insert("title".to_string(), serde_json::json!("Post 3"));
-                d.fields
-                    .insert("author".to_string(), serde_json::json!("a2"));
+                d.fields.insert("title".to_string(), json!("Post 3"));
+                d.fields.insert("author".to_string(), json!("a2"));
                 d
             },
         ];
@@ -290,14 +293,12 @@ mod tests {
         let mut docs = vec![
             {
                 let mut d = Document::new("p1".to_string());
-                d.fields
-                    .insert("tags".to_string(), serde_json::json!(["c1", "c2"]));
+                d.fields.insert("tags".to_string(), json!(["c1", "c2"]));
                 d
             },
             {
                 let mut d = Document::new("p2".to_string());
-                d.fields
-                    .insert("tags".to_string(), serde_json::json!(["c2", "c3"]));
+                d.fields.insert("tags".to_string(), json!(["c2", "c3"]));
                 d
             },
         ];
@@ -345,13 +346,12 @@ mod tests {
         let mut cached_author = Document::new("a1".to_string());
         cached_author
             .fields
-            .insert("name".to_string(), serde_json::json!("CachedBatchAuthor"));
+            .insert("name".to_string(), json!("CachedBatchAuthor"));
         cache.insert(("authors".to_string(), "a1".to_string()), cached_author);
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("author".to_string(), serde_json::json!("a1"));
+            d.fields.insert("author".to_string(), json!("a1"));
             d
         }];
 
@@ -410,13 +410,12 @@ mod tests {
         let mut cached_cat = Document::new("c1".to_string());
         cached_cat
             .fields
-            .insert("name".to_string(), serde_json::json!("CachedCategory"));
+            .insert("name".to_string(), json!("CachedCategory"));
         cache.insert(("categories".to_string(), "c1".to_string()), cached_cat);
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("tags".to_string(), serde_json::json!(["c1"]));
+            d.fields.insert("tags".to_string(), json!(["c1"]));
             d
         }];
 
@@ -466,8 +465,7 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("author".to_string(), serde_json::json!("a1"));
+            d.fields.insert("author".to_string(), json!("a1"));
             d
         }];
 
@@ -515,8 +513,7 @@ mod tests {
 
         let mut docs = vec![{
             let mut d = Document::new("p1".to_string());
-            d.fields
-                .insert("tags".to_string(), serde_json::json!(["t1"]));
+            d.fields.insert("tags".to_string(), json!(["t1"]));
             d
         }];
 

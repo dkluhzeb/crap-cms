@@ -1,8 +1,7 @@
 //! `make collection` command — generate collection Lua files.
 
-use anyhow::{Context as _, Result};
-use std::fs;
-use std::path::Path;
+use anyhow::{Context as _, Result, bail};
+use std::{fs, path::Path};
 
 /// Valid field types for collection definitions.
 pub const VALID_FIELD_TYPES: &[&str] = &[
@@ -77,8 +76,9 @@ pub fn make_collection(
     fs::create_dir_all(&collections_dir).context("Failed to create collections/ directory")?;
 
     let file_path = collections_dir.join(format!("{}.lua", slug));
+
     if file_path.exists() && !opts.force {
-        anyhow::bail!(
+        bail!(
             "File '{}' already exists — use --force to overwrite",
             file_path.display()
         );
@@ -114,6 +114,7 @@ pub fn make_collection(
     lua.push_str(&format!("        plural = \"{}\",\n", label_plural));
     lua.push_str("    },\n");
     lua.push_str(&format!("    timestamps = {},\n", timestamps));
+
     if opts.auth {
         lua.push_str("    auth = true,\n");
         lua.push_str("    -- Full auth config (uncomment and customize):\n");
@@ -139,6 +140,7 @@ pub fn make_collection(
     let use_as_title = if opts.auth { "email" } else { title_field };
     lua.push_str("    admin = {\n");
     lua.push_str(&format!("        use_as_title = \"{}\",\n", use_as_title));
+
     if !opts.no_timestamps {
         lua.push_str("        default_sort = \"-created_at\",\n");
     }
@@ -152,6 +154,7 @@ pub fn make_collection(
     for field in &fields {
         lua.push_str(&format!("        crap.fields.{}({{\n", field.field_type));
         lua.push_str(&format!("            name = \"{}\",\n", field.name));
+
         if field.required {
             lua.push_str("            required = true,\n");
         }
@@ -188,6 +191,7 @@ pub fn make_collection(
 /// Naive English singularization: strip trailing "s", "es", or "ies" → "y".
 fn singularize(s: &str) -> String {
     let lower = s.to_lowercase();
+
     if lower.ends_with("ies") && lower.len() > 3 {
         format!("{}y", &s[..s.len() - 3])
     } else if lower.ends_with("ses")
@@ -210,6 +214,7 @@ fn pluralize(s: &str) -> String {
         return s.to_string();
     }
     let lower = s.to_lowercase();
+
     if lower.ends_with("z") && !lower.ends_with("zz") {
         // Single trailing z doubles before -es: Quiz → Quizzes
         format!("{}zes", s)
@@ -264,20 +269,23 @@ pub(crate) fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
     let mut fields = Vec::new();
     for part in s.split(',') {
         let part = part.trim();
+
         if part.is_empty() {
             continue;
         }
         let segments: Vec<&str> = part.split(':').collect();
+
         if segments.len() < 2 {
-            anyhow::bail!(
+            bail!(
                 "Invalid field shorthand '{}' — expected 'name:type[:required][:localized]'",
                 part
             );
         }
         let name = segments[0].to_string();
         let field_type = segments[1].to_lowercase();
+
         if !VALID_FIELD_TYPES.contains(&field_type.as_str()) {
-            anyhow::bail!(
+            bail!(
                 "Unknown field type '{}' — valid types: {}",
                 field_type,
                 VALID_FIELD_TYPES.join(", ")
@@ -290,7 +298,7 @@ pub(crate) fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
                 "required" => required = true,
                 "localized" => localized = true,
                 "index" => {} // accepted but not stored in FieldStub (handled at Lua level)
-                other => anyhow::bail!(
+                other => bail!(
                     "Unknown modifier '{}' in field '{}' — valid: required, localized, index",
                     other,
                     name
@@ -306,7 +314,7 @@ pub(crate) fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
     }
 
     if fields.is_empty() {
-        anyhow::bail!("No fields parsed from shorthand");
+        bail!("No fields parsed from shorthand");
     }
 
     Ok(fields)

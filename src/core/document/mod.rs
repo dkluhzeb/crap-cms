@@ -9,8 +9,10 @@ pub use document_builder::DocumentBuilder;
 pub use version_snapshot::VersionSnapshot;
 pub use version_snapshot_builder::VersionSnapshotBuilder;
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// A single content document with an ID, user-defined fields, and optional timestamps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,7 +21,7 @@ pub struct Document {
     pub id: String,
     /// A map of field names to their JSON-serialized values.
     #[serde(flatten)]
-    pub fields: HashMap<String, serde_json::Value>,
+    pub fields: HashMap<String, Value>,
     /// The timestamp when this document was originally created.
     #[serde(default)]
     pub created_at: Option<String>,
@@ -46,7 +48,7 @@ impl Document {
     }
 
     /// Get a field value by name.
-    pub fn get(&self, key: &str) -> Option<&serde_json::Value> {
+    pub fn get(&self, key: &str) -> Option<&Value> {
         self.fields.get(key)
     }
 
@@ -58,6 +60,8 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     #[test]
@@ -72,19 +76,16 @@ mod tests {
     #[test]
     fn get_returns_field_value() {
         let mut doc = Document::new("id1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        assert_eq!(doc.get("title"), Some(&serde_json::json!("Hello")));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        assert_eq!(doc.get("title"), Some(&json!("Hello")));
         assert_eq!(doc.get("missing"), None);
     }
 
     #[test]
     fn get_str_returns_string_value() {
         let mut doc = Document::new("id1".to_string());
-        doc.fields
-            .insert("title".to_string(), serde_json::json!("Hello"));
-        doc.fields
-            .insert("count".to_string(), serde_json::json!(42));
+        doc.fields.insert("title".to_string(), json!("Hello"));
+        doc.fields.insert("count".to_string(), json!(42));
         assert_eq!(doc.get_str("title"), Some("Hello"));
         assert_eq!(doc.get_str("count"), None); // not a string
         assert_eq!(doc.get_str("missing"), None);

@@ -1,7 +1,9 @@
 //! Document snapshot representation for versioning.
 
-use crate::core::document::VersionSnapshotBuilder;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::core::document::VersionSnapshotBuilder;
 
 /// A version snapshot of a document, stored in the `_versions_{slug}` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +19,7 @@ pub struct VersionSnapshot {
     /// Whether this is the latest version for the parent document.
     pub latest: bool,
     /// Full document data as a JSON object.
-    pub snapshot: serde_json::Value,
+    pub snapshot: Value,
     /// The timestamp when this version was created.
     pub created_at: Option<String>,
     /// The timestamp when this version was last updated.

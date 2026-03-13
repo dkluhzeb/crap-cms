@@ -1,19 +1,23 @@
-use crate::core::field::{FieldDefinition, FieldType};
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{
+    field::{FieldDefinition, FieldType},
+    validate::FieldError,
+};
 use std::collections::HashMap;
 
 /// Validate date format and date bounds (min_date / max_date).
 pub(crate) fn check_date_field(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
     if field.field_type != FieldType::Date || is_empty {
         return;
     }
-    if let Some(serde_json::Value::String(s)) = value {
+    if let Some(Value::String(s)) = value {
         if !is_valid_date_format(s) {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
@@ -25,6 +29,7 @@ pub(crate) fn check_date_field(
         // Date bounds validation (ISO dates sort lexicographically)
         if let Some(ref min_date) = field.min_date {
             let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+
             if date_part < min_date.as_str() {
                 errors.push(FieldError::with_key(
                     data_key.to_owned(),
@@ -39,6 +44,7 @@ pub(crate) fn check_date_field(
         }
         if let Some(ref max_date) = field.max_date {
             let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+
             if date_part > max_date.as_str() {
                 errors.push(FieldError::with_key(
                     data_key.to_owned(),
@@ -63,6 +69,7 @@ pub(crate) fn is_valid_date_format(value: &str) -> bool {
     // Time only: HH:MM or HH:MM:SS
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
         let parts: Vec<&str> = value.split(':').collect();
+
         if parts.len() >= 2 {
             return parts.iter().all(|p| p.chars().all(|c| c.is_ascii_digit()));
         }
@@ -71,6 +78,7 @@ pub(crate) fn is_valid_date_format(value: &str) -> bool {
     // Month only: YYYY-MM
     if value.len() == 7 && value.as_bytes().get(4) == Some(&b'-') && !value.contains('T') {
         let parts: Vec<&str> = value.split('-').collect();
+
         if parts.len() == 2 {
             return parts[0].len() == 4
                 && parts[0].chars().all(|c| c.is_ascii_digit())

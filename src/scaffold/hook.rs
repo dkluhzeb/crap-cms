@@ -1,8 +1,7 @@
 //! `make hook` command — generate hook Lua files.
 
-use anyhow::{Context as _, Result};
-use std::fs;
-use std::path::Path;
+use anyhow::{Context as _, Result, bail};
+use std::{fs, path::Path};
 
 use crate::typegen::to_pascal_case;
 
@@ -95,6 +94,7 @@ pub struct ConditionFieldInfo {
 /// Collections use `crap.data.{PascalCase}`, globals use `crap.global_data.{PascalCase}`.
 fn condition_data_type(collection: &str, is_global: bool) -> String {
     let pascal = to_pascal_case(collection);
+
     if is_global {
         format!("crap.global_data.{pascal}")
     } else {
@@ -109,14 +109,15 @@ fn condition_data_type(collection: &str, is_global: bool) -> String {
 pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
     // Validate inputs
     super::validate_slug(opts.collection)?;
+
     if opts.name.is_empty() || !opts.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-        anyhow::bail!(
+        bail!(
             "Invalid hook name '{}' — use alphanumeric characters and underscores only",
             opts.name
         );
     }
     if !opts.hook_type.valid_positions().contains(&opts.position) {
-        anyhow::bail!(
+        bail!(
             "Invalid position '{}' for {} hook — valid: {}",
             opts.position,
             opts.hook_type.label(),
@@ -124,7 +125,7 @@ pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
         );
     }
     if opts.hook_type == HookType::Field && opts.field.is_none() {
-        anyhow::bail!("Field hooks require --field to be specified");
+        bail!("Field hooks require --field to be specified");
     }
 
     let (hooks_dir, file_path) = if opts.hook_type == HookType::Access {
@@ -137,8 +138,9 @@ pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
         (dir, path)
     };
     fs::create_dir_all(&hooks_dir).context("Failed to create hook subdirectory")?;
+
     if file_path.exists() && !opts.force {
-        anyhow::bail!(
+        bail!(
             "File '{}' already exists — use --force to overwrite",
             file_path.display()
         );
@@ -162,8 +164,10 @@ pub fn make_hook(opts: &MakeHookOptions) -> Result<()> {
                 r#"--- {position} hook for {collection}.
 ---@param context {context_type}
 ---@return {context_type}
+
 return function(context)
     -- TODO: implement
+
     return context
 end
 "#,
@@ -183,8 +187,10 @@ end
 ---@param value any
 ---@param context {context_type}
 ---@return any
+
 return function(value, context)
     -- TODO: implement
+
     return value
 end
 "#,
@@ -198,8 +204,10 @@ end
             r#"--- {position} access control for {collection}.
 ---@param context crap.AccessContext
 ---@return boolean | table
+
 return function(context)
     -- TODO: implement
+
     return true
 end
 "#,
@@ -226,9 +234,11 @@ end
 ---
 ---@param data {data_type} Current form field values.
 ---@return boolean
+
 return function(data)
     -- TODO: implement
     local val = data.{field_name} or ""
+
     return val ~= ""
 end
 "#,
@@ -270,6 +280,7 @@ end
             } else {
                 // No field info available — generic template
                 r#"    -- TODO: replace "field_name" with the field to watch
+
     return { field = "field_name", equals = "value" }"#
                     .to_string()
             };
@@ -287,6 +298,7 @@ end
 ---
 ---@param data {data_type} Current form field values.
 ---@return table
+
 return function(data)
 {body}
 end

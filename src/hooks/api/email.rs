@@ -3,7 +3,7 @@
 use anyhow::Result;
 use mlua::{Lua, Table};
 
-use crate::config::CrapConfig;
+use crate::{config::CrapConfig, core::email::send_email};
 
 /// Register `crap.email` — outbound email sending via SMTP.
 pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Result<()> {
@@ -15,7 +15,7 @@ pub(super) fn register_email(lua: &Lua, crap: &Table, config: &CrapConfig) -> Re
         let html: String = opts.get("html")?;
         let text: Option<String> = opts.get("text")?;
 
-        crate::core::email::send_email(&email_config, &to, &subject, &html, text.as_deref())
+        send_email(&email_config, &to, &subject, &html, text.as_deref())
             .map_err(|e| mlua::Error::RuntimeError(format!("email send error: {}", e)))?;
 
         Ok(true)

@@ -1,5 +1,6 @@
-use crate::core::field::FieldDefinition;
-use crate::core::validate::FieldError;
+use serde_json::Value;
+
+use crate::core::{field::FieldDefinition, validate::FieldError};
 use std::collections::HashMap;
 
 /// Validate min / max bounds for number fields.
@@ -7,7 +8,7 @@ use std::collections::HashMap;
 pub(crate) fn check_numeric_bounds(
     field: &FieldDefinition,
     data_key: &str,
-    value: Option<&serde_json::Value>,
+    value: Option<&Value>,
     is_empty: bool,
     errors: &mut Vec<FieldError>,
 ) {
@@ -15,10 +16,11 @@ pub(crate) fn check_numeric_bounds(
         return;
     }
     let num_val = match value {
-        Some(serde_json::Value::Number(n)) => n.as_f64(),
-        Some(serde_json::Value::String(s)) => s.parse::<f64>().ok(),
+        Some(Value::Number(n)) => n.as_f64(),
+        Some(Value::String(s)) => s.parse::<f64>().ok(),
         _ => None,
     };
+
     if let Some(v) = num_val {
         if let Some(min_val) = field.min
             && v < min_val
