@@ -702,15 +702,13 @@ pub(super) async fn do_update(
                 &slug_owned,
                 &id_owned,
                 &def_owned,
-                service::WriteInput {
-                    data: form_data,
-                    join_data: &join_data,
-                    password: password.as_deref(),
-                    locale_ctx: locale_ctx.as_ref(),
-                    locale,
-                    draft,
-                    ui_locale,
-                },
+                service::WriteInput::builder(form_data, &join_data)
+                    .password(password.as_deref())
+                    .locale_ctx(locale_ctx.as_ref())
+                    .locale(locale)
+                    .draft(draft)
+                    .ui_locale(ui_locale)
+                    .build(),
                 user_doc.as_ref(),
             )
         };
@@ -1091,7 +1089,9 @@ mod tests {
     #[test]
     fn compute_cells_date() {
         let def = test_collection();
-        let doc = DocumentBuilder::new("1").created_at("2024-01-15").build();
+        let doc = DocumentBuilder::new("1")
+            .created_at(Some("2024-01-15"))
+            .build();
 
         let columns = vec![serde_json::json!({"key": "created_at"})];
         let cells = compute_cells(&doc, &columns, &def);

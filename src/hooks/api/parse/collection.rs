@@ -64,10 +64,10 @@ pub fn parse_collection_definition(
 ) -> Result<CollectionDefinition> {
     query::validate_slug(slug)?;
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {
-        Labels {
-            singular: get_localized_string(&labels_tbl, "singular"),
-            plural: get_localized_string(&labels_tbl, "plural"),
-        }
+        Labels::new(
+            get_localized_string(&labels_tbl, "singular"),
+            get_localized_string(&labels_tbl, "plural"),
+        )
     } else {
         Labels::default()
     };
@@ -83,12 +83,12 @@ pub fn parse_collection_definition(
             } else {
                 Vec::new()
             };
-        AdminConfig {
-            use_as_title: get_string(&admin_tbl, "use_as_title"),
-            default_sort: get_string(&admin_tbl, "default_sort"),
-            hidden: get_bool(&admin_tbl, "hidden", false),
-            list_searchable_fields,
-        }
+        AdminConfig::builder()
+            .use_as_title(get_string(&admin_tbl, "use_as_title"))
+            .default_sort(get_string(&admin_tbl, "default_sort"))
+            .hidden(get_bool(&admin_tbl, "hidden", false))
+            .list_searchable_fields(list_searchable_fields)
+            .build()
     } else {
         AdminConfig::default()
     };
@@ -153,9 +153,7 @@ pub fn parse_collection_definition(
 
     // Parse MCP config
     let mcp = if let Ok(mcp_tbl) = get_table(config, "mcp") {
-        McpConfig {
-            description: get_string(&mcp_tbl, "description"),
-        }
+        McpConfig::new(get_string(&mcp_tbl, "description"))
     } else {
         Default::default()
     };
@@ -180,10 +178,10 @@ pub fn parse_collection_definition(
 pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result<GlobalDefinition> {
     query::validate_slug(slug)?;
     let labels = if let Ok(labels_tbl) = get_table(config, "labels") {
-        Labels {
-            singular: get_localized_string(&labels_tbl, "singular"),
-            plural: get_localized_string(&labels_tbl, "plural"),
-        }
+        Labels::new(
+            get_localized_string(&labels_tbl, "singular"),
+            get_localized_string(&labels_tbl, "plural"),
+        )
     } else {
         Labels::default()
     };
@@ -226,9 +224,7 @@ pub fn parse_global_definition(_lua: &Lua, slug: &str, config: &Table) -> Result
 
     // Parse MCP config
     let mcp = if let Ok(mcp_tbl) = get_table(config, "mcp") {
-        McpConfig {
-            description: get_string(&mcp_tbl, "description"),
-        }
+        McpConfig::new(get_string(&mcp_tbl, "description"))
     } else {
         Default::default()
     };
@@ -322,12 +318,12 @@ pub(super) fn parse_access_config(config: &Table) -> Access {
         Ok(t) => t,
         Err(_) => return Access::default(),
     };
-    Access {
-        read: get_string(&access_tbl, "read"),
-        create: get_string(&access_tbl, "create"),
-        update: get_string(&access_tbl, "update"),
-        delete: get_string(&access_tbl, "delete"),
-    }
+    Access::builder()
+        .read(get_string(&access_tbl, "read"))
+        .create(get_string(&access_tbl, "create"))
+        .update(get_string(&access_tbl, "update"))
+        .delete(get_string(&access_tbl, "delete"))
+        .build()
 }
 
 #[cfg(test)]

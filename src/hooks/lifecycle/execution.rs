@@ -100,15 +100,11 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
                 .and_then(|v| v.as_str().map(|s| s.to_string()))
                 .or(doc.updated_at.clone());
 
-            let mut builder = DocumentBuilder::new(doc.id).fields(fields);
-
-            if let Some(ts) = created_at {
-                builder = builder.created_at(ts);
-            }
-            if let Some(ts) = updated_at {
-                builder = builder.updated_at(ts);
-            }
-            builder.build()
+            DocumentBuilder::new(doc.id)
+                .fields(fields)
+                .created_at(created_at)
+                .updated_at(updated_at)
+                .build()
         }
         Err(e) => {
             tracing::warn!("after_read hook error for {}: {}", ctx.collection, e);

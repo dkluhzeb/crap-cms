@@ -70,15 +70,13 @@ impl HookRunner {
                     }
                     let created_at: Option<String> = tbl.get("created_at").ok();
                     let updated_at: Option<String> = tbl.get("updated_at").ok();
-                    let mut builder = DocumentBuilder::new(id).fields(fields);
-
-                    if let Some(ts) = created_at {
-                        builder = builder.created_at(ts);
-                    }
-                    if let Some(ts) = updated_at {
-                        builder = builder.updated_at(ts);
-                    }
-                    Ok(Some(builder.build()))
+                    Ok(Some(
+                        DocumentBuilder::new(id)
+                            .fields(fields)
+                            .created_at(created_at)
+                            .updated_at(updated_at)
+                            .build(),
+                    ))
                 }
                 Value::Nil | Value::Boolean(false) => Ok(None),
                 _ => Ok(None),

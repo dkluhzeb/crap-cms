@@ -154,7 +154,7 @@ mod tests {
 
         let ctx = HookContext::builder("posts", "create")
             .data(data)
-            .locale("en")
+            .locale(Some("en"))
             .draft(true)
             .context(ctx_map)
             .build();

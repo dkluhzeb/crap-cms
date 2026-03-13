@@ -85,16 +85,16 @@ pub(super) fn parse_string_list(tbl: &Table, key: &str) -> Result<Vec<String>> {
 }
 
 pub(super) fn parse_hooks(hooks_tbl: &Table) -> Result<Hooks> {
-    Ok(Hooks {
-        before_validate: parse_string_list(hooks_tbl, "before_validate")?,
-        before_change: parse_string_list(hooks_tbl, "before_change")?,
-        after_change: parse_string_list(hooks_tbl, "after_change")?,
-        before_read: parse_string_list(hooks_tbl, "before_read")?,
-        after_read: parse_string_list(hooks_tbl, "after_read")?,
-        before_delete: parse_string_list(hooks_tbl, "before_delete")?,
-        after_delete: parse_string_list(hooks_tbl, "after_delete")?,
-        before_broadcast: parse_string_list(hooks_tbl, "before_broadcast")?,
-    })
+    Ok(Hooks::builder()
+        .before_validate(parse_string_list(hooks_tbl, "before_validate")?)
+        .before_change(parse_string_list(hooks_tbl, "before_change")?)
+        .after_change(parse_string_list(hooks_tbl, "after_change")?)
+        .before_read(parse_string_list(hooks_tbl, "before_read")?)
+        .after_read(parse_string_list(hooks_tbl, "after_read")?)
+        .before_delete(parse_string_list(hooks_tbl, "before_delete")?)
+        .after_delete(parse_string_list(hooks_tbl, "after_delete")?)
+        .before_broadcast(parse_string_list(hooks_tbl, "before_broadcast")?)
+        .build())
 }
 
 pub(super) fn parse_select_options(opts_tbl: &Table) -> Result<Vec<SelectOption>> {

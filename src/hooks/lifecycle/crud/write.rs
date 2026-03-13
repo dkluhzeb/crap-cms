@@ -166,16 +166,13 @@ pub(super) fn register_create(
                 })?;
 
                 // Collection-level before_validate
-                let mut builder = HookContext::builder(collection.clone(), "create")
+                let hook_ctx = HookContext::builder(collection.clone(), "create")
                     .data(hook_data.clone())
                     .draft(is_draft)
+                    .locale(locale_str.clone())
                     .user(hook_user.as_ref())
-                    .ui_locale(hook_ui_locale.as_deref());
-
-                if let Some(ref l) = locale_str {
-                    builder = builder.locale(l.clone());
-                }
-                let hook_ctx = builder.build();
+                    .ui_locale(hook_ui_locale.as_deref())
+                    .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeValidate, hook_ctx)
                     .map_err(|e| {
                         mlua::Error::RuntimeError(format!("before_validate hook error: {}", e))
@@ -208,16 +205,13 @@ pub(super) fn register_create(
                 })?;
 
                 // Collection-level before_change
-                let mut builder = HookContext::builder(collection.clone(), "create")
+                let hook_ctx = HookContext::builder(collection.clone(), "create")
                     .data(hook_data.clone())
                     .draft(is_draft)
+                    .locale(locale_str.clone())
                     .user(hook_user.as_ref())
-                    .ui_locale(hook_ui_locale.as_deref());
-
-                if let Some(ref l) = locale_str {
-                    builder = builder.locale(l.clone());
-                }
-                let hook_ctx = builder.build();
+                    .ui_locale(hook_ui_locale.as_deref())
+                    .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, hook_ctx)
                     .map_err(|e| {
                         mlua::Error::RuntimeError(format!("before_change hook error: {}", e))
@@ -261,16 +255,13 @@ pub(super) fn register_create(
                     mlua::Error::RuntimeError(format!("after_change field hook error: {}", e))
                 })?;
 
-                let mut builder = HookContext::builder(collection.clone(), "create")
+                let after_ctx = HookContext::builder(collection.clone(), "create")
                     .data(doc.fields.clone())
                     .draft(is_draft)
+                    .locale(locale_str.clone())
                     .user(hook_user.as_ref())
-                    .ui_locale(hook_ui_locale.as_deref());
-
-                if let Some(ref l) = locale_str {
-                    builder = builder.locale(l.clone());
-                }
-                let after_ctx = builder.build();
+                    .ui_locale(hook_ui_locale.as_deref())
+                    .build();
                 run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
                     |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
                 )?;
@@ -421,16 +412,13 @@ pub(super) fn register_update(
 
                 if hooks_enabled {
                     lua.set_app_data(HookDepth(current_depth + 1));
-                    let mut builder = HookContext::builder(collection.clone(), "update")
+                    let before_ctx = HookContext::builder(collection.clone(), "update")
                         .data(existing_doc.fields.clone())
                         .draft(false)
+                        .locale(locale_str.clone())
                         .user(hook_user.as_ref())
-                        .ui_locale(hook_ui_locale.as_deref());
-
-                    if let Some(ref l) = locale_str {
-                        builder = builder.locale(l.clone());
-                    }
-                    let before_ctx = builder.build();
+                        .ui_locale(hook_ui_locale.as_deref())
+                        .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, before_ctx).map_err(
                         |e| mlua::Error::RuntimeError(format!("before_change hook error: {}", e)),
                     )?;
@@ -440,16 +428,13 @@ pub(super) fn register_update(
                     .map_err(|e| mlua::Error::RuntimeError(format!("unpublish error: {}", e)))?;
 
                 if hooks_enabled {
-                    let mut builder = HookContext::builder(collection.clone(), "update")
+                    let after_ctx = HookContext::builder(collection.clone(), "update")
                         .data(existing_doc.fields.clone())
                         .draft(false)
+                        .locale(locale_str.clone())
                         .user(hook_user.as_ref())
-                        .ui_locale(hook_ui_locale.as_deref());
-
-                    if let Some(ref l) = locale_str {
-                        builder = builder.locale(l.clone());
-                    }
-                    let after_ctx = builder.build();
+                        .ui_locale(hook_ui_locale.as_deref())
+                        .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
                         |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
                     )?;
@@ -504,16 +489,13 @@ pub(super) fn register_update(
                     mlua::Error::RuntimeError(format!("before_validate field hook error: {}", e))
                 })?;
 
-                let mut builder = HookContext::builder(collection.clone(), "update")
+                let hook_ctx = HookContext::builder(collection.clone(), "update")
                     .data(hook_data.clone())
                     .draft(is_draft)
+                    .locale(locale_str.clone())
                     .user(hook_user.as_ref())
-                    .ui_locale(hook_ui_locale.as_deref());
-
-                if let Some(ref l) = locale_str {
-                    builder = builder.locale(l.clone());
-                }
-                let hook_ctx = builder.build();
+                    .ui_locale(hook_ui_locale.as_deref())
+                    .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeValidate, hook_ctx)
                     .map_err(|e| {
                         mlua::Error::RuntimeError(format!("before_validate hook error: {}", e))
@@ -544,16 +526,13 @@ pub(super) fn register_update(
                     mlua::Error::RuntimeError(format!("before_change field hook error: {}", e))
                 })?;
 
-                let mut builder = HookContext::builder(collection.clone(), "update")
+                let hook_ctx = HookContext::builder(collection.clone(), "update")
                     .data(hook_data.clone())
                     .draft(is_draft)
+                    .locale(locale_str.clone())
                     .user(hook_user.as_ref())
-                    .ui_locale(hook_ui_locale.as_deref());
-
-                if let Some(ref l) = locale_str {
-                    builder = builder.locale(l.clone());
-                }
-                let hook_ctx = builder.build();
+                    .ui_locale(hook_ui_locale.as_deref())
+                    .build();
                 let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, hook_ctx)
                     .map_err(|e| {
                         mlua::Error::RuntimeError(format!("before_change hook error: {}", e))
@@ -578,16 +557,13 @@ pub(super) fn register_update(
                 .map_err(|e| mlua::Error::RuntimeError(format!("draft version error: {}", e)))?;
 
                 if hooks_enabled {
-                    let mut builder = HookContext::builder(collection.clone(), "update")
+                    let after_ctx = HookContext::builder(collection.clone(), "update")
                         .data(existing_doc.fields.clone())
                         .draft(is_draft)
+                        .locale(locale_str.clone())
                         .user(hook_user.as_ref())
-                        .ui_locale(hook_ui_locale.as_deref());
-
-                    if let Some(ref l) = locale_str {
-                        builder = builder.locale(l.clone());
-                    }
-                    let after_ctx = builder.build();
+                        .ui_locale(hook_ui_locale.as_deref())
+                        .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
                         |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
                     )?;
@@ -635,16 +611,13 @@ pub(super) fn register_update(
                         mlua::Error::RuntimeError(format!("after_change field hook error: {}", e))
                     })?;
 
-                    let mut builder = HookContext::builder(collection.clone(), "update")
+                    let after_ctx = HookContext::builder(collection.clone(), "update")
                         .data(doc.fields.clone())
                         .draft(is_draft)
+                        .locale(locale_str.clone())
                         .user(hook_user.as_ref())
-                        .ui_locale(hook_ui_locale.as_deref());
-
-                    if let Some(ref l) = locale_str {
-                        builder = builder.locale(l.clone());
-                    }
-                    let after_ctx = builder.build();
+                        .ui_locale(hook_ui_locale.as_deref())
+                        .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
                         |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
                     )?;

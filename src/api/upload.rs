@@ -231,15 +231,11 @@ async fn create_upload(
             &runner,
             &slug_owned,
             &def_owned,
-            WriteInput {
-                data: form_data,
-                join_data: &join_data,
-                password: password.as_deref(),
-                locale_ctx: None,
-                locale: None,
-                draft,
-                ui_locale,
-            },
+            WriteInput::builder(form_data, &join_data)
+                .password(password.as_deref())
+                .draft(draft)
+                .ui_locale(ui_locale)
+                .build(),
             user_doc_owned.as_ref(),
         )
     })
@@ -444,15 +440,11 @@ async fn update_upload(
             &slug_owned,
             &id_owned,
             &def_owned,
-            WriteInput {
-                data: form_data,
-                join_data: &join_data,
-                password: password.as_deref(),
-                locale_ctx: None,
-                locale: None,
-                draft,
-                ui_locale,
-            },
+            WriteInput::builder(form_data, &join_data)
+                .password(password.as_deref())
+                .draft(draft)
+                .ui_locale(ui_locale)
+                .build(),
             user_doc_owned.as_ref(),
         )
     })

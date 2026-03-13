@@ -15,9 +15,9 @@ use crate::{
             collections::forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
-                check_access_or_forbid, do_unpublish, enrich_field_contexts, forbidden,
-                get_event_user, get_user_doc, html_with_toast, htmx_redirect, redirect_response,
-                server_error, split_sidebar_fields, translate_validation_errors,
+                check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
+                get_user_doc, html_with_toast, htmx_redirect, redirect_response, server_error,
+                split_sidebar_fields, translate_validation_errors,
             },
         },
     },
@@ -123,7 +123,7 @@ pub async fn update_action(
                 .map_err(|e| anyhow!("Start transaction: {}", e))?;
             let doc = query::get_global(&tx, &slug_owned, &def_owned, locale_ctx.as_ref())?;
 
-            do_unpublish(
+            service::unpublish_with_snapshot(
                 &tx,
                 &global_table,
                 "default",
@@ -141,15 +141,12 @@ pub async fn update_action(
                 &runner,
                 &slug_owned,
                 &def_owned,
-                service::WriteInput {
-                    data: form_data,
-                    join_data: &join_data,
-                    password: None,
-                    locale_ctx: locale_ctx.as_ref(),
-                    locale,
-                    draft,
-                    ui_locale,
-                },
+                service::WriteInput::builder(form_data, &join_data)
+                    .locale_ctx(locale_ctx.as_ref())
+                    .locale(locale)
+                    .draft(draft)
+                    .ui_locale(ui_locale)
+                    .build(),
                 user_doc.as_ref(),
             )
         }

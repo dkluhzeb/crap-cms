@@ -39,8 +39,8 @@ impl HookContextBuilder {
         self
     }
 
-    pub fn locale(mut self, locale: impl Into<String>) -> Self {
-        self.locale = Some(locale.into());
+    pub fn locale(mut self, locale: Option<impl Into<String>>) -> Self {
+        self.locale = locale.map(|l| l.into());
         self
     }
 
@@ -106,7 +106,7 @@ mod tests {
 
         let ctx = HookContext::builder("posts", "update")
             .data(data)
-            .locale("en")
+            .locale(Some("en"))
             .draft(true)
             .context(ctx_map)
             .build();

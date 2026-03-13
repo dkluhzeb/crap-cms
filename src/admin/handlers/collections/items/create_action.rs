@@ -197,15 +197,13 @@ pub async fn create_action(
             &runner,
             &slug_owned,
             &def_owned,
-            service::WriteInput {
-                data: form_data,
-                join_data: &join_data,
-                password: password.as_deref(),
-                locale_ctx: locale_ctx.as_ref(),
-                locale,
-                draft,
-                ui_locale,
-            },
+            service::WriteInput::builder(form_data, &join_data)
+                .password(password.as_deref())
+                .locale_ctx(locale_ctx.as_ref())
+                .locale(locale)
+                .draft(draft)
+                .ui_locale(ui_locale)
+                .build(),
             user_doc.as_ref(),
         )
     })

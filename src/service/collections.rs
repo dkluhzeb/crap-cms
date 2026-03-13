@@ -20,10 +20,7 @@ use crate::{
     hooks::lifecycle::{HookContext, HookEvent, HookRunner, ValidationCtx},
 };
 
-use super::{
-    AfterChangeInput, WriteInput, WriteResult, build_before_ctx, build_hook_data,
-    run_after_change_hooks,
-};
+use super::{AfterChangeInput, WriteInput, WriteResult, build_hook_data, run_after_change_hooks};
 
 /// Create a document within a single transaction: before-hooks → insert → after-hooks → commit.
 /// When `draft` is true and the collection has drafts enabled, the document is created with
@@ -48,15 +45,13 @@ pub fn create_document(
 
     let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
-    let hook_ctx = build_before_ctx(
-        slug,
-        "create",
-        hook_data,
-        input.locale.clone(),
-        is_draft,
-        user,
-        ui_locale,
-    );
+    let hook_ctx = HookContext::builder(slug, "create")
+        .data(hook_data)
+        .locale(input.locale.clone())
+        .draft(is_draft)
+        .user(user)
+        .ui_locale(ui_locale)
+        .build();
     let val_ctx = ValidationCtx::builder(&tx, slug)
         .draft(is_draft)
         .locale_ctx(input.locale_ctx)
@@ -113,15 +108,13 @@ pub fn update_document(
 
     let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
-    let hook_ctx = build_before_ctx(
-        slug,
-        "update",
-        hook_data,
-        input.locale.clone(),
-        is_draft,
-        user,
-        ui_locale,
-    );
+    let hook_ctx = HookContext::builder(slug, "update")
+        .data(hook_data)
+        .locale(input.locale.clone())
+        .draft(is_draft)
+        .user(user)
+        .ui_locale(ui_locale)
+        .build();
     let val_ctx = ValidationCtx::builder(&tx, slug)
         .exclude_id(Some(id))
         .draft(is_draft)
@@ -186,7 +179,11 @@ pub fn unpublish_document(
     let doc = query::find_by_id_raw(&tx, slug, def, id, None)?
         .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
-    let hook_ctx = build_before_ctx(slug, "update", doc.fields.clone(), None, false, user, None);
+    let hook_ctx = HookContext::builder(slug, "update")
+        .data(doc.fields.clone())
+        .locale(None::<String>)
+        .user(user)
+        .build();
     let final_ctx =
         runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeChange, hook_ctx, &tx)?;
 

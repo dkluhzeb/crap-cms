@@ -100,15 +100,12 @@ impl ContentService {
                 &runner,
                 &collection,
                 &def_owned,
-                WriteInput {
-                    data,
-                    join_data: &join_data,
-                    password: password.as_deref(),
-                    locale_ctx: locale_ctx.as_ref(),
-                    locale: None,
-                    draft: req.draft.unwrap_or(false),
-                    ui_locale,
-                },
+                WriteInput::builder(data, &join_data)
+                    .password(password.as_deref())
+                    .locale_ctx(locale_ctx.as_ref())
+                    .draft(req.draft.unwrap_or(false))
+                    .ui_locale(ui_locale)
+                    .build(),
                 user_doc.as_ref(),
             )
         })
@@ -308,15 +305,12 @@ impl ContentService {
                 &collection,
                 &id,
                 &def_owned,
-                WriteInput {
-                    data,
-                    join_data: &join_data,
-                    password: password.as_deref(),
-                    locale_ctx: locale_ctx.as_ref(),
-                    locale: None,
-                    draft: req.draft.unwrap_or(false),
-                    ui_locale,
-                },
+                WriteInput::builder(data, &join_data)
+                    .password(password.as_deref())
+                    .locale_ctx(locale_ctx.as_ref())
+                    .draft(req.draft.unwrap_or(false))
+                    .ui_locale(ui_locale)
+                    .build(),
                 user_doc.as_ref(),
             )
         })

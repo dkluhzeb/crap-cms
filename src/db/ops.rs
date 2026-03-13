@@ -122,13 +122,11 @@ fn document_from_snapshot(id: &str, snapshot: &Value) -> Option<Document> {
             fields.insert(k.clone(), v.clone());
         }
     }
-    let mut builder = DocumentBuilder::new(id).fields(fields);
-
-    if let Some(ts) = obj.get("created_at").and_then(|v| v.as_str()) {
-        builder = builder.created_at(ts);
-    }
-    if let Some(ts) = obj.get("updated_at").and_then(|v| v.as_str()) {
-        builder = builder.updated_at(ts);
-    }
-    Some(builder.build())
+    Some(
+        DocumentBuilder::new(id)
+            .fields(fields)
+            .created_at(obj.get("created_at").and_then(|v| v.as_str()))
+            .updated_at(obj.get("updated_at").and_then(|v| v.as_str()))
+            .build(),
+    )
 }

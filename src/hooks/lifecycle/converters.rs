@@ -565,8 +565,8 @@ mod tests {
 
         let doc = DocumentBuilder::new("abc123")
             .fields(fields)
-            .created_at("2024-01-01T00:00:00Z")
-            .updated_at("2024-01-02T00:00:00Z")
+            .created_at(Some("2024-01-01T00:00:00Z"))
+            .updated_at(Some("2024-01-02T00:00:00Z"))
             .build();
 
         let tbl = document_to_lua_table(&lua, &doc).unwrap();

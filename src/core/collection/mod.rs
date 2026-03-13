@@ -13,5 +13,6 @@ pub use collection_definition_builder::CollectionDefinitionBuilder;
 pub use global_definition::GlobalDefinition;
 pub use global_definition_builder::GlobalDefinitionBuilder;
 pub use shared::{
-    Access, AdminConfig, Hooks, IndexDefinition, Labels, LiveSetting, McpConfig, VersionsConfig,
+    Access, AccessBuilder, AdminConfig, AdminConfigBuilder, Hooks, HooksBuilder, IndexDefinition,
+    Labels, LiveSetting, McpConfig, VersionsConfig,
 };

@@ -19,6 +19,59 @@ pub(crate) struct VersionSnapshotCtx<'a> {
     pub has_drafts: bool,
 }
 
+impl<'a> VersionSnapshotCtx<'a> {
+    /// Create a builder with the required table and parent_id fields.
+    pub fn builder(table: &'a str, parent_id: &'a str) -> VersionSnapshotCtxBuilder<'a> {
+        VersionSnapshotCtxBuilder::new(table, parent_id)
+    }
+}
+
+/// Builder for [`VersionSnapshotCtx`]. Created via [`VersionSnapshotCtx::builder`].
+pub(crate) struct VersionSnapshotCtxBuilder<'a> {
+    table: &'a str,
+    parent_id: &'a str,
+    fields: &'a [FieldDefinition],
+    versions: Option<&'a VersionsConfig>,
+    has_drafts: bool,
+}
+
+impl<'a> VersionSnapshotCtxBuilder<'a> {
+    fn new(table: &'a str, parent_id: &'a str) -> Self {
+        Self {
+            table,
+            parent_id,
+            fields: &[],
+            versions: None,
+            has_drafts: false,
+        }
+    }
+
+    pub fn fields(mut self, fields: &'a [FieldDefinition]) -> Self {
+        self.fields = fields;
+        self
+    }
+
+    pub fn versions(mut self, versions: Option<&'a VersionsConfig>) -> Self {
+        self.versions = versions;
+        self
+    }
+
+    pub fn has_drafts(mut self, has_drafts: bool) -> Self {
+        self.has_drafts = has_drafts;
+        self
+    }
+
+    pub fn build(self) -> VersionSnapshotCtx<'a> {
+        VersionSnapshotCtx {
+            table: self.table,
+            parent_id: self.parent_id,
+            fields: self.fields,
+            versions: self.versions,
+            has_drafts: self.has_drafts,
+        }
+    }
+}
+
 /// Recursively merge join-table data (blocks, arrays, relationships) into a snapshot,
 /// handling Tabs/Row/Collapsible layout wrappers.
 fn merge_join_data_into_snapshot(
@@ -62,12 +115,11 @@ pub(crate) fn save_draft_version(
     for (k, v) in final_ctx_data {
         snapshot_fields.insert(k.clone(), v.clone());
     }
-    let snapshot_doc = Document {
-        id: parent_id.to_string(),
-        fields: snapshot_fields,
-        created_at: existing_doc.created_at.clone(),
-        updated_at: existing_doc.updated_at.clone(),
-    };
+    let snapshot_doc = Document::builder(parent_id)
+        .fields(snapshot_fields)
+        .created_at(existing_doc.created_at.as_deref())
+        .updated_at(existing_doc.updated_at.as_deref())
+        .build();
 
     let mut snapshot = query::build_snapshot(conn, table, fields, &snapshot_doc)?;
 
@@ -92,6 +144,23 @@ pub(crate) fn create_version_snapshot(
     let snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc)?;
     query::create_version(conn, ctx.table, ctx.parent_id, status, &snapshot)?;
     prune_versions(conn, ctx.table, ctx.parent_id, ctx.versions)?;
+    Ok(())
+}
+
+/// Set a document's status to "draft", build+save a snapshot, and prune.
+/// Used by both collection `persist_unpublish` and the globals unpublish handler.
+pub fn unpublish_with_snapshot(
+    conn: &rusqlite::Connection,
+    table: &str,
+    parent_id: &str,
+    fields: &[FieldDefinition],
+    versions: Option<&VersionsConfig>,
+    doc: &Document,
+) -> Result<()> {
+    query::set_document_status(conn, table, parent_id, "draft")?;
+    let snapshot = query::build_snapshot(conn, table, fields, doc)?;
+    query::create_version(conn, table, parent_id, "draft", &snapshot)?;
+    prune_versions(conn, table, parent_id, versions)?;
     Ok(())
 }
 

@@ -1337,15 +1337,10 @@ fn service_update_draft_uses_locale_context() {
         &hook_runner,
         "articles",
         &def,
-        service::WriteInput {
-            data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: Some(&en_ctx),
-            locale: Some("en".to_string()),
-            draft: false,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(data, &HashMap::new())
+            .locale_ctx(Some(&en_ctx))
+            .locale(Some("en".to_string()))
+            .build(),
         None,
     )
     .unwrap();
@@ -1366,15 +1361,11 @@ fn service_update_draft_uses_locale_context() {
         "articles",
         &doc.id,
         &def,
-        service::WriteInput {
-            data: draft_data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: Some(&de_ctx),
-            locale: Some("de".to_string()),
-            draft: true,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(draft_data, &HashMap::new())
+            .locale_ctx(Some(&de_ctx))
+            .locale(Some("de".to_string()))
+            .draft(true)
+            .build(),
         None,
     )
     .unwrap();

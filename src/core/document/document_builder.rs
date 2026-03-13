@@ -32,14 +32,14 @@ impl DocumentBuilder {
     }
 
     /// Sets the document's creation timestamp.
-    pub fn created_at(mut self, ts: impl Into<String>) -> Self {
-        self.created_at = Some(ts.into());
+    pub fn created_at(mut self, ts: Option<impl Into<String>>) -> Self {
+        self.created_at = ts.map(|t| t.into());
         self
     }
 
     /// Sets the document's last update timestamp.
-    pub fn updated_at(mut self, ts: impl Into<String>) -> Self {
-        self.updated_at = Some(ts.into());
+    pub fn updated_at(mut self, ts: Option<impl Into<String>>) -> Self {
+        self.updated_at = ts.map(|t| t.into());
         self
     }
 
@@ -66,8 +66,8 @@ mod tests {
         fields.insert("title".to_string(), json!("Hello"));
         let doc = DocumentBuilder::new("doc-1")
             .fields(fields)
-            .created_at("2024-01-01")
-            .updated_at("2024-01-02")
+            .created_at(Some("2024-01-01"))
+            .updated_at(Some("2024-01-02"))
             .build();
         assert_eq!(doc.id, "doc-1");
         assert_eq!(doc.fields.get("title"), Some(&json!("Hello")));

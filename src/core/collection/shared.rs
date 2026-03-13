@@ -12,9 +12,9 @@ pub struct McpConfig {
 }
 
 impl McpConfig {
-    /// Create a new default MCP configuration.
-    pub fn new() -> Self {
-        Self::default()
+    /// Create a new MCP configuration with the given description.
+    pub fn new(description: Option<String>) -> Self {
+        Self { description }
     }
 }
 
@@ -73,6 +73,59 @@ impl Access {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Create a builder for access control configuration.
+    pub fn builder() -> AccessBuilder {
+        AccessBuilder::new()
+    }
+}
+
+/// Builder for [`Access`]. Created via [`Access::builder`].
+pub struct AccessBuilder {
+    read: Option<String>,
+    create: Option<String>,
+    update: Option<String>,
+    delete: Option<String>,
+}
+
+impl AccessBuilder {
+    fn new() -> Self {
+        Self {
+            read: None,
+            create: None,
+            update: None,
+            delete: None,
+        }
+    }
+
+    pub fn read(mut self, read: Option<String>) -> Self {
+        self.read = read;
+        self
+    }
+
+    pub fn create(mut self, create: Option<String>) -> Self {
+        self.create = create;
+        self
+    }
+
+    pub fn update(mut self, update: Option<String>) -> Self {
+        self.update = update;
+        self
+    }
+
+    pub fn delete(mut self, delete: Option<String>) -> Self {
+        self.delete = delete;
+        self
+    }
+
+    pub fn build(self) -> Access {
+        Access {
+            read: self.read,
+            create: self.create,
+            update: self.update,
+            delete: self.delete,
+        }
+    }
 }
 
 /// Lua function references for lifecycle hooks.
@@ -109,6 +162,83 @@ impl Hooks {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Create a builder for hooks configuration.
+    pub fn builder() -> HooksBuilder {
+        HooksBuilder::new()
+    }
+}
+
+/// Builder for [`Hooks`]. Created via [`Hooks::builder`].
+#[derive(Default)]
+pub struct HooksBuilder {
+    before_validate: Vec<String>,
+    before_change: Vec<String>,
+    after_change: Vec<String>,
+    before_read: Vec<String>,
+    after_read: Vec<String>,
+    before_delete: Vec<String>,
+    after_delete: Vec<String>,
+    before_broadcast: Vec<String>,
+}
+
+impl HooksBuilder {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn before_validate(mut self, v: Vec<String>) -> Self {
+        self.before_validate = v;
+        self
+    }
+
+    pub fn before_change(mut self, v: Vec<String>) -> Self {
+        self.before_change = v;
+        self
+    }
+
+    pub fn after_change(mut self, v: Vec<String>) -> Self {
+        self.after_change = v;
+        self
+    }
+
+    pub fn before_read(mut self, v: Vec<String>) -> Self {
+        self.before_read = v;
+        self
+    }
+
+    pub fn after_read(mut self, v: Vec<String>) -> Self {
+        self.after_read = v;
+        self
+    }
+
+    pub fn before_delete(mut self, v: Vec<String>) -> Self {
+        self.before_delete = v;
+        self
+    }
+
+    pub fn after_delete(mut self, v: Vec<String>) -> Self {
+        self.after_delete = v;
+        self
+    }
+
+    pub fn before_broadcast(mut self, v: Vec<String>) -> Self {
+        self.before_broadcast = v;
+        self
+    }
+
+    pub fn build(self) -> Hooks {
+        Hooks {
+            before_validate: self.before_validate,
+            before_change: self.before_change,
+            after_change: self.after_change,
+            before_read: self.before_read,
+            after_read: self.after_read,
+            before_delete: self.before_delete,
+            after_delete: self.after_delete,
+            before_broadcast: self.before_broadcast,
+        }
+    }
 }
 
 /// Human-readable singular/plural labels for the admin UI.
@@ -123,9 +253,9 @@ pub struct Labels {
 }
 
 impl Labels {
-    /// Create a new default labels configuration.
-    pub fn new() -> Self {
-        Self::default()
+    /// Create a new labels configuration with singular and plural forms.
+    pub fn new(singular: Option<LocalizedString>, plural: Option<LocalizedString>) -> Self {
+        Self { singular, plural }
     }
 }
 
@@ -150,6 +280,59 @@ impl AdminConfig {
     /// Create a new default admin configuration.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Create a builder for admin configuration.
+    pub fn builder() -> AdminConfigBuilder {
+        AdminConfigBuilder::new()
+    }
+}
+
+/// Builder for [`AdminConfig`]. Created via [`AdminConfig::builder`].
+pub struct AdminConfigBuilder {
+    use_as_title: Option<String>,
+    default_sort: Option<String>,
+    hidden: bool,
+    list_searchable_fields: Vec<String>,
+}
+
+impl AdminConfigBuilder {
+    fn new() -> Self {
+        Self {
+            use_as_title: None,
+            default_sort: None,
+            hidden: false,
+            list_searchable_fields: Vec::new(),
+        }
+    }
+
+    pub fn use_as_title(mut self, v: Option<String>) -> Self {
+        self.use_as_title = v;
+        self
+    }
+
+    pub fn default_sort(mut self, v: Option<String>) -> Self {
+        self.default_sort = v;
+        self
+    }
+
+    pub fn hidden(mut self, v: bool) -> Self {
+        self.hidden = v;
+        self
+    }
+
+    pub fn list_searchable_fields(mut self, v: Vec<String>) -> Self {
+        self.list_searchable_fields = v;
+        self
+    }
+
+    pub fn build(self) -> AdminConfig {
+        AdminConfig {
+            use_as_title: self.use_as_title,
+            default_sort: self.default_sort,
+            hidden: self.hidden,
+            list_searchable_fields: self.list_searchable_fields,
+        }
     }
 }
 

@@ -5,7 +5,6 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{Html, IntoResponse, Redirect, Response},
 };
-use rusqlite::Transaction;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
@@ -22,10 +21,10 @@ use crate::{
     core::{
         Document,
         auth::AuthUser,
-        collection::{CollectionDefinition, VersionsConfig},
+        collection::CollectionDefinition,
         document::VersionSnapshot,
         event::EventUser,
-        field::{self, FieldAdmin, FieldDefinition, FieldType},
+        field::{self, FieldAdmin, FieldType},
         validate::ValidationError,
     },
     db::{
@@ -429,31 +428,6 @@ pub(crate) fn fetch_version_sidebar_data(
     }
 }
 
-/// Execute the unpublish flow on an already-open transaction:
-/// set status to draft, build snapshot, create version, prune.
-pub(crate) fn do_unpublish(
-    tx: &Transaction,
-    table_name: &str,
-    parent_id: &str,
-    fields: &[FieldDefinition],
-    versions_config: Option<&VersionsConfig>,
-    doc: &Document,
-) -> anyhow::Result<()> {
-    query::set_document_status(tx, table_name, parent_id, "draft")?;
-
-    let snapshot = query::build_snapshot(tx, table_name, fields, doc)?;
-
-    query::create_version(tx, table_name, parent_id, "draft", &snapshot)?;
-
-    if let Some(vc) = versions_config
-        && vc.max_versions > 0
-    {
-        query::prune_versions(tx, table_name, parent_id, vc.max_versions)?;
-    }
-
-    Ok(())
-}
-
 /// Translate validation errors using the translation system.
 /// If a FieldError has a `key`, resolve it through `Translations::get_interpolated`;
 /// otherwise use the raw English `message` (custom Lua validator messages).
@@ -584,7 +558,7 @@ pub(crate) fn server_error(state: &AdminState, message: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::collection::*;
+    use crate::core::{collection::*, field::FieldDefinition};
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");

@@ -810,8 +810,8 @@ mod tests {
     fn context_builder_document_with_status() {
         let doc = DocumentBuilder::new("doc1")
             .fields(HashMap::from([("title".to_string(), json!("Hello"))]))
-            .created_at("2026-01-01".to_string())
-            .updated_at("2026-01-02".to_string())
+            .created_at(Some("2026-01-01"))
+            .updated_at(Some("2026-01-02"))
             .build();
         let data = Map::new();
         let builder = ContextBuilder { data };

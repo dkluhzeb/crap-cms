@@ -164,15 +164,10 @@ impl ContentService {
                 &runner,
                 &slug,
                 &def_owned,
-                WriteInput {
-                    data,
-                    join_data: &join_data,
-                    password: None,
-                    locale_ctx: locale_ctx.as_ref(),
-                    locale: None,
-                    draft: false,
-                    ui_locale,
-                },
+                WriteInput::builder(data, &join_data)
+                    .locale_ctx(locale_ctx.as_ref())
+                    .ui_locale(ui_locale)
+                    .build(),
                 user_doc.as_ref(),
             )
         })

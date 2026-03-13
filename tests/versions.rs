@@ -903,15 +903,7 @@ fn service_create_published_creates_version() {
         runner,
         "articles",
         &def,
-        service::WriteInput {
-            data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: false,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(data, &HashMap::new()).build(),
         None,
     )
     .unwrap();
@@ -940,15 +932,9 @@ fn service_create_draft_creates_draft_version() {
         runner,
         "articles",
         &def,
-        service::WriteInput {
-            data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: true,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(data, &HashMap::new())
+            .draft(true)
+            .build(),
         None,
     )
     .unwrap();
@@ -980,15 +966,7 @@ fn service_update_draft_is_version_only() {
         runner,
         "articles",
         &def,
-        service::WriteInput {
-            data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: false,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(data, &HashMap::new()).build(),
         None,
     )
     .unwrap();
@@ -1001,15 +979,9 @@ fn service_update_draft_is_version_only() {
         "articles",
         &doc.id,
         &def,
-        service::WriteInput {
-            data: update_data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: true,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(update_data, &HashMap::new())
+            .draft(true)
+            .build(),
         None,
     )
     .unwrap();
@@ -1051,15 +1023,9 @@ fn service_update_publish_updates_main_table() {
         runner,
         "articles",
         &def,
-        service::WriteInput {
-            data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: true,
-            ui_locale: None, // create as draft
-        },
+        service::WriteInput::builder(data, &HashMap::new())
+            .draft(true)
+            .build(), // create as draft
         None,
     )
     .unwrap();
@@ -1072,15 +1038,7 @@ fn service_update_publish_updates_main_table() {
         "articles",
         &doc.id,
         &def,
-        service::WriteInput {
-            data: update_data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: false,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(update_data, &HashMap::new()).build(),
         None,
     )
     .unwrap();
@@ -1105,15 +1063,7 @@ fn service_nonversioned_create_no_version_created() {
         runner,
         "notes",
         &def,
-        service::WriteInput {
-            data,
-            join_data: &HashMap::new(),
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: false,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(data, &HashMap::new()).build(),
         None,
     )
     .unwrap();
@@ -1156,15 +1106,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
         runner,
         "articles",
         &def,
-        service::WriteInput {
-            data,
-            join_data: &join_data,
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: false,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(data, &join_data).build(),
         None,
     )
     .unwrap();
@@ -1186,15 +1128,9 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
         "articles",
         &doc.id,
         &def,
-        service::WriteInput {
-            data: update_data,
-            join_data: &draft_join_data,
-            password: None,
-            locale_ctx: None,
-            locale: None,
-            draft: true,
-            ui_locale: None,
-        },
+        service::WriteInput::builder(update_data, &draft_join_data)
+            .draft(true)
+            .build(),
         None,
     )
     .unwrap();

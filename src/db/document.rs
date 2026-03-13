@@ -33,12 +33,11 @@ pub fn row_to_document(row: &Row, column_names: &[String]) -> rusqlite::Result<D
         }
     }
 
-    Ok(Document {
-        id,
-        fields,
-        created_at,
-        updated_at,
-    })
+    Ok(Document::builder(id)
+        .fields(fields)
+        .created_at(created_at)
+        .updated_at(updated_at)
+        .build())
 }
 
 /// Normalize legacy "YYYY-MM-DD HH:MM:SS" timestamps to ISO 8601 "YYYY-MM-DDTHH:MM:SS.000Z".

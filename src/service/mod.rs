@@ -12,6 +12,7 @@ mod versions;
 pub use collections::{create_document, delete_document, unpublish_document, update_document};
 pub use email::send_verification_email;
 pub use globals::update_global_document;
+pub use versions::unpublish_with_snapshot;
 
 use std::collections::HashMap;
 
@@ -20,17 +21,10 @@ use anyhow::{Result, anyhow};
 use serde_json::Value;
 
 use crate::{
-    config::PasswordPolicy,
     core::{CollectionDefinition, collection::Hooks, document::Document, field::FieldDefinition},
     db::query::{self, LocaleContext},
     hooks::lifecycle::{HookContext, HookEvent, HookRunner},
 };
-
-/// Validate a password against the configured policy. Call this before any
-/// password-setting operation (create, update, reset).
-pub fn validate_password(password: &str, policy: &PasswordPolicy) -> Result<()> {
-    policy.validate(password)
-}
 
 /// Result of a write operation: the document and the request-scoped hook context.
 pub type WriteResult = (Document, HashMap<String, Value>);
@@ -47,6 +41,78 @@ pub struct WriteInput<'a> {
     pub ui_locale: Option<String>,
 }
 
+impl<'a> WriteInput<'a> {
+    /// Create a builder with the required data and join_data fields.
+    pub fn builder(
+        data: HashMap<String, String>,
+        join_data: &'a HashMap<String, Value>,
+    ) -> WriteInputBuilder<'a> {
+        WriteInputBuilder::new(data, join_data)
+    }
+}
+
+/// Builder for [`WriteInput`]. Created via [`WriteInput::builder`].
+pub struct WriteInputBuilder<'a> {
+    data: HashMap<String, String>,
+    join_data: &'a HashMap<String, Value>,
+    password: Option<&'a str>,
+    locale_ctx: Option<&'a LocaleContext>,
+    locale: Option<String>,
+    draft: bool,
+    ui_locale: Option<String>,
+}
+
+impl<'a> WriteInputBuilder<'a> {
+    fn new(data: HashMap<String, String>, join_data: &'a HashMap<String, Value>) -> Self {
+        Self {
+            data,
+            join_data,
+            password: None,
+            locale_ctx: None,
+            locale: None,
+            draft: false,
+            ui_locale: None,
+        }
+    }
+
+    pub fn password(mut self, password: Option<&'a str>) -> Self {
+        self.password = password;
+        self
+    }
+
+    pub fn locale_ctx(mut self, locale_ctx: Option<&'a LocaleContext>) -> Self {
+        self.locale_ctx = locale_ctx;
+        self
+    }
+
+    pub fn locale(mut self, locale: Option<String>) -> Self {
+        self.locale = locale;
+        self
+    }
+
+    pub fn draft(mut self, draft: bool) -> Self {
+        self.draft = draft;
+        self
+    }
+
+    pub fn ui_locale(mut self, ui_locale: Option<String>) -> Self {
+        self.ui_locale = ui_locale;
+        self
+    }
+
+    pub fn build(self) -> WriteInput<'a> {
+        WriteInput {
+            data: self.data,
+            join_data: self.join_data,
+            password: self.password,
+            locale_ctx: self.locale_ctx,
+            locale: self.locale,
+            draft: self.draft,
+            ui_locale: self.ui_locale,
+        }
+    }
+}
+
 /// Build the hook data map from form data + structured join data.
 /// Converts string values to JSON strings and merges in blocks/arrays/has-many.
 pub(crate) fn build_hook_data(
@@ -61,28 +127,6 @@ pub(crate) fn build_hook_data(
         hook_data.insert(k.clone(), v.clone());
     }
     hook_data
-}
-
-/// Build a HookContext for a before-write hook invocation.
-pub(crate) fn build_before_ctx(
-    slug: &str,
-    operation: &str,
-    hook_data: HashMap<String, Value>,
-    locale: Option<String>,
-    is_draft: bool,
-    user: Option<&Document>,
-    ui_locale: Option<&str>,
-) -> HookContext {
-    let mut builder = HookContext::builder(slug, operation)
-        .data(hook_data)
-        .draft(is_draft)
-        .user(user)
-        .ui_locale(ui_locale);
-
-    if let Some(l) = locale {
-        builder = builder.locale(l);
-    }
-    builder.build()
 }
 
 /// Bundled parameters for after-change hook invocation.
@@ -177,17 +221,14 @@ pub(crate) fn run_after_change_hooks(
 ) -> Result<HashMap<String, Value>> {
     let mut after_data = doc.fields.clone();
     after_data.insert("id".to_string(), Value::String(doc.id.clone()));
-    let mut builder = HookContext::builder(input.slug, input.operation)
+    let after_ctx = HookContext::builder(input.slug, input.operation)
         .data(after_data)
         .draft(input.is_draft)
+        .locale(input.locale)
         .context(input.req_context)
         .user(input.user)
-        .ui_locale(input.ui_locale);
-
-    if let Some(l) = input.locale {
-        builder = builder.locale(l);
-    }
-    let after_ctx = builder.build();
+        .ui_locale(input.ui_locale)
+        .build();
     let after_result =
         runner.run_after_write(hooks, fields, HookEvent::AfterChange, after_ctx, tx)?;
     Ok(after_result.context)
@@ -269,13 +310,11 @@ pub fn persist_create(
     }
 
     if def.has_versions() {
-        let ctx = versions::VersionSnapshotCtx {
-            table: slug,
-            parent_id: &doc.id,
-            fields: &def.fields,
-            versions: def.versions.as_ref(),
-            has_drafts: def.has_drafts(),
-        };
+        let ctx = versions::VersionSnapshotCtx::builder(slug, &doc.id)
+            .fields(&def.fields)
+            .versions(def.versions.as_ref())
+            .has_drafts(def.has_drafts())
+            .build();
         versions::create_version_snapshot(conn, &ctx, status, &doc)?;
     }
 
@@ -304,13 +343,11 @@ pub fn persist_update(
     }
 
     if def.has_versions() {
-        let ctx = versions::VersionSnapshotCtx {
-            table: slug,
-            parent_id: &doc.id,
-            fields: &def.fields,
-            versions: def.versions.as_ref(),
-            has_drafts: def.has_drafts(),
-        };
+        let ctx = versions::VersionSnapshotCtx::builder(slug, &doc.id)
+            .fields(&def.fields)
+            .versions(def.versions.as_ref())
+            .has_drafts(def.has_drafts())
+            .build();
         versions::create_version_snapshot(conn, &ctx, "published", &doc)?;
     }
 
@@ -355,10 +392,7 @@ pub fn persist_unpublish(
     let doc = query::find_by_id_raw(conn, slug, def, id, None)?
         .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
 
-    query::set_document_status(conn, slug, id, "draft")?;
-    let snapshot = query::build_snapshot(conn, slug, &def.fields, &doc)?;
-    query::create_version(conn, slug, id, "draft", &snapshot)?;
-    versions::prune_versions(conn, slug, id, def.versions.as_ref())?;
+    versions::unpublish_with_snapshot(conn, slug, id, &def.fields, def.versions.as_ref(), &doc)?;
 
     Ok(doc)
 }

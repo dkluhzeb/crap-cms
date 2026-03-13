@@ -7,12 +7,11 @@ use rusqlite::TransactionBehavior;
 use crate::{
     core::{collection::GlobalDefinition, document::Document},
     db::{DbPool, query},
-    hooks::lifecycle::{HookRunner, ValidationCtx},
+    hooks::lifecycle::{HookContext, HookRunner, ValidationCtx},
 };
 
 use super::{
-    AfterChangeInput, WriteInput, WriteResult, build_before_ctx, build_hook_data,
-    run_after_change_hooks,
+    AfterChangeInput, WriteInput, WriteResult, build_hook_data, run_after_change_hooks,
     versions::{self, VersionSnapshotCtx},
 };
 
@@ -40,15 +39,13 @@ pub fn update_global_document(
 
     let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
-    let hook_ctx = build_before_ctx(
-        slug,
-        "update",
-        hook_data,
-        input.locale.clone(),
-        is_draft,
-        user,
-        ui_locale,
-    );
+    let hook_ctx = HookContext::builder(slug, "update")
+        .data(hook_data)
+        .locale(input.locale.clone())
+        .draft(is_draft)
+        .user(user)
+        .ui_locale(ui_locale)
+        .build();
     let val_ctx = ValidationCtx::builder(&tx, &global_table)
         .exclude_id(Some("default"))
         .draft(is_draft)
@@ -81,13 +78,11 @@ pub fn update_global_document(
         )?;
 
         if def.has_versions() {
-            let ctx = VersionSnapshotCtx {
-                table: &global_table,
-                parent_id: "default",
-                fields: &def.fields,
-                versions: def.versions.as_ref(),
-                has_drafts: def.has_drafts(),
-            };
+            let ctx = VersionSnapshotCtx::builder(&global_table, "default")
+                .fields(&def.fields)
+                .versions(def.versions.as_ref())
+                .has_drafts(def.has_drafts())
+                .build();
             versions::create_version_snapshot(&tx, &ctx, "published", &doc)?;
         }
         doc
