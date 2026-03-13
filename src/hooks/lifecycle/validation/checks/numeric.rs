@@ -52,7 +52,7 @@ pub(crate) fn check_numeric_bounds(
 #[cfg(test)]
 mod tests {
     use crate::core::field::{FieldDefinition, FieldType};
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -69,7 +69,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("score".to_string(), json!("-5"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("at least 0"));
     }
@@ -87,7 +98,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("score".to_string(), json!("150"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -110,7 +132,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("score".to_string(), json!("50"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -127,7 +160,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("score".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "min/max should not trigger on empty values");
     }
 
@@ -145,7 +189,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("score".to_string(), json!(15));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("at most 10"));
     }

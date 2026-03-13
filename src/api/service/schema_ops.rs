@@ -51,8 +51,15 @@ impl ContentService {
         let doc = tokio::task::spawn_blocking(move || {
             runner.fire_before_read(&hooks, &slug, "get_global", HashMap::new())?;
             let doc = ops::get_global(&pool, &slug, &def, locale_ctx.as_ref())?;
-            let doc =
-                runner.apply_after_read(&hooks, &fields, &slug, "get_global", doc, None, None);
+            let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+                hooks: &hooks,
+                fields: &fields,
+                collection: &slug,
+                operation: "get_global",
+                user: None,
+                ui_locale: None,
+            };
+            let doc = runner.apply_after_read(&ar_ctx, doc);
             Ok::<_, anyhow::Error>(doc)
         })
         .await

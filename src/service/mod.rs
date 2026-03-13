@@ -115,6 +115,14 @@ pub(crate) fn run_after_change_hooks(
     Ok(after_result.context)
 }
 
+/// Optional parameters for the persist_create operation.
+#[derive(Default)]
+pub struct PersistOptions<'a> {
+    pub password: Option<&'a str>,
+    pub locale_ctx: Option<&'a LocaleContext>,
+    pub is_draft: bool,
+}
+
 /// Persist the DB write phase of a create operation.
 /// Performs: insert → join data → password → version snapshot.
 pub fn persist_create(
@@ -123,31 +131,27 @@ pub fn persist_create(
     def: &CollectionDefinition,
     final_data: &HashMap<String, String>,
     hook_data: &HashMap<String, serde_json::Value>,
-    password: Option<&str>,
-    locale_ctx: Option<&LocaleContext>,
-    is_draft: bool,
+    opts: &PersistOptions<'_>,
 ) -> Result<Document> {
-    let status = if is_draft { "draft" } else { "published" };
-    let doc = query::create(conn, slug, def, final_data, locale_ctx)?;
-    query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, locale_ctx)?;
+    let status = if opts.is_draft { "draft" } else { "published" };
+    let doc = query::create(conn, slug, def, final_data, opts.locale_ctx)?;
+    query::save_join_table_data(conn, slug, &def.fields, &doc.id, hook_data, opts.locale_ctx)?;
 
-    if let Some(pw) = password
+    if let Some(pw) = opts.password
         && !pw.is_empty()
     {
         query::update_password(conn, slug, &doc.id, pw)?;
     }
 
     if def.has_versions() {
-        versions::create_version_snapshot(
-            conn,
-            slug,
-            &doc.id,
-            &def.fields,
-            def.versions.as_ref(),
-            def.has_drafts(),
-            status,
-            &doc,
-        )?;
+        let ctx = versions::VersionSnapshotCtx {
+            table: slug,
+            parent_id: &doc.id,
+            fields: &def.fields,
+            versions: def.versions.as_ref(),
+            has_drafts: def.has_drafts(),
+        };
+        versions::create_version_snapshot(conn, &ctx, status, &doc)?;
     }
 
     query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
@@ -177,16 +181,14 @@ pub fn persist_update(
     }
 
     if def.has_versions() {
-        versions::create_version_snapshot(
-            conn,
-            slug,
-            &doc.id,
-            &def.fields,
-            def.versions.as_ref(),
-            def.has_drafts(),
-            "published",
-            &doc,
-        )?;
+        let ctx = versions::VersionSnapshotCtx {
+            table: slug,
+            parent_id: &doc.id,
+            fields: &def.fields,
+            versions: def.versions.as_ref(),
+            has_drafts: def.has_drafts(),
+        };
+        versions::create_version_snapshot(conn, &ctx, "published", &doc)?;
     }
 
     query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
@@ -280,9 +282,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         assert!(!doc.id.is_empty());
@@ -302,9 +302,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         let id = doc.id.clone();
@@ -398,9 +396,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
 

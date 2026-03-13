@@ -342,8 +342,13 @@ fn init_lua_loadable() {
 #[test]
 fn make_collection_default() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false)
-        .unwrap();
+    scaffold::make_collection(
+        tmp.path(),
+        "posts",
+        None,
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
     assert!(content.contains("crap.collections.define(\"posts\""));
@@ -359,11 +364,7 @@ fn make_collection_fields_shorthand() {
         tmp.path(),
         "articles",
         Some("title:text:required,body:textarea"),
-        false,
-        false,
-        false,
-        false,
-        false,
+        &scaffold::CollectionOptions::default(),
     )
     .unwrap();
 
@@ -378,7 +379,11 @@ fn make_collection_fields_shorthand() {
 #[test]
 fn make_collection_no_timestamps() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_collection(tmp.path(), "logs", None, true, false, false, false, false).unwrap();
+    let opts = scaffold::CollectionOptions {
+        no_timestamps: true,
+        ..scaffold::CollectionOptions::default()
+    };
+    scaffold::make_collection(tmp.path(), "logs", None, &opts).unwrap();
 
     let content = std::fs::read_to_string(tmp.path().join("collections/logs.lua")).unwrap();
     assert!(content.contains("timestamps = false"));
@@ -387,10 +392,19 @@ fn make_collection_no_timestamps() {
 #[test]
 fn make_collection_refuses_overwrite() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false)
-        .unwrap();
-    let result =
-        scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false);
+    scaffold::make_collection(
+        tmp.path(),
+        "posts",
+        None,
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
+    let result = scaffold::make_collection(
+        tmp.path(),
+        "posts",
+        None,
+        &scaffold::CollectionOptions::default(),
+    );
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("--force"));
 }
@@ -398,50 +412,28 @@ fn make_collection_refuses_overwrite() {
 #[test]
 fn make_collection_force_overwrite() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, false)
-        .unwrap();
-    assert!(
-        scaffold::make_collection(tmp.path(), "posts", None, false, false, false, false, true)
-            .is_ok()
-    );
+    scaffold::make_collection(
+        tmp.path(),
+        "posts",
+        None,
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
+    let opts = scaffold::CollectionOptions {
+        force: true,
+        ..scaffold::CollectionOptions::default()
+    };
+    assert!(scaffold::make_collection(tmp.path(), "posts", None, &opts).is_ok());
 }
 
 #[test]
 fn make_collection_invalid_slug() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    assert!(
-        scaffold::make_collection(tmp.path(), "Posts", None, false, false, false, false, false)
-            .is_err()
-    );
-    assert!(
-        scaffold::make_collection(
-            tmp.path(),
-            "my-slug",
-            None,
-            false,
-            false,
-            false,
-            false,
-            false
-        )
-        .is_err()
-    );
-    assert!(
-        scaffold::make_collection(
-            tmp.path(),
-            "_private",
-            None,
-            false,
-            false,
-            false,
-            false,
-            false
-        )
-        .is_err()
-    );
-    assert!(
-        scaffold::make_collection(tmp.path(), "", None, false, false, false, false, false).is_err()
-    );
+    let opts = scaffold::CollectionOptions::default();
+    assert!(scaffold::make_collection(tmp.path(), "Posts", None, &opts).is_err());
+    assert!(scaffold::make_collection(tmp.path(), "my-slug", None, &opts).is_err());
+    assert!(scaffold::make_collection(tmp.path(), "_private", None, &opts).is_err());
+    assert!(scaffold::make_collection(tmp.path(), "", None, &opts).is_err());
 }
 
 #[test]
@@ -454,11 +446,7 @@ fn make_collection_roundtrip() {
         &config_dir,
         "articles",
         Some("title:text:required,body:richtext"),
-        false,
-        false,
-        false,
-        false,
-        false,
+        &scaffold::CollectionOptions::default(),
     )
     .unwrap();
 

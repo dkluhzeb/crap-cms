@@ -19,6 +19,16 @@ pub struct CollectionUpload {
     pub format_options: FormatOptions,
 }
 
+impl CollectionUpload {
+    /// Create a new enabled upload config with defaults for all other fields.
+    pub fn new() -> Self {
+        Self {
+            enabled: true,
+            ..Default::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

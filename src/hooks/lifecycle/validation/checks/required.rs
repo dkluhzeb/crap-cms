@@ -63,7 +63,7 @@ pub(crate) fn check_required(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -80,7 +80,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(err.errors.len(), 1);
@@ -100,7 +111,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!(null));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
     }
 
@@ -117,7 +139,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: true,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Drafts should skip required checks");
     }
 
@@ -135,7 +168,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!([]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("required"));
     }
@@ -154,7 +198,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(["t1", "t2"]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -170,8 +225,18 @@ mod tests {
                 .build(),
         ];
         let data = HashMap::new();
-        let result =
-            validate_fields_inner(&lua, &fields, &data, &conn, "test", Some("p1"), false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: Some("p1"),
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -187,7 +252,18 @@ mod tests {
                 .build(),
         ];
         let data = HashMap::new();
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -204,7 +280,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Empty array for required array field should fail"
@@ -225,7 +312,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"x": 1}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Non-empty array for required array field should pass"

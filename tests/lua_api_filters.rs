@@ -4,7 +4,7 @@ use crap_cms::config::CrapConfig;
 use crap_cms::core::SharedRegistry;
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
-use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -661,7 +661,17 @@ fn lua_validate_fields_with_custom_validator() {
     data.insert("title".to_string(), serde_json::json!("Valid Article"));
     data.insert("word_count".to_string(), serde_json::json!("100"));
 
-    let result = runner.validate_fields(&def.fields, &data, &tx, "articles", None, false, None);
+    let result = runner.validate_fields(
+        &def.fields,
+        &data,
+        &ValidationCtx {
+            conn: &tx,
+            table: "articles",
+            exclude_id: None,
+            is_draft: false,
+            locale_ctx: None,
+        },
+    );
     assert!(
         result.is_ok(),
         "Valid positive number should pass validation"
@@ -672,7 +682,17 @@ fn lua_validate_fields_with_custom_validator() {
     bad_data.insert("title".to_string(), serde_json::json!("Invalid Article"));
     bad_data.insert("word_count".to_string(), serde_json::json!("-5"));
 
-    let result = runner.validate_fields(&def.fields, &bad_data, &tx, "articles", None, false, None);
+    let result = runner.validate_fields(
+        &def.fields,
+        &bad_data,
+        &ValidationCtx {
+            conn: &tx,
+            table: "articles",
+            exclude_id: None,
+            is_draft: false,
+            locale_ctx: None,
+        },
+    );
     assert!(result.is_err(), "Negative number should fail validation");
     let err_msg = format!("{}", result.unwrap_err());
     assert!(

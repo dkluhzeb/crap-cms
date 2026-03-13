@@ -55,16 +55,12 @@ pub fn create_document(
         input.locale_ctx,
     )?;
     let final_data = final_ctx.to_string_map(&def.fields);
-    let doc = super::persist_create(
-        &tx,
-        slug,
-        def,
-        &final_data,
-        &final_ctx.data,
-        input.password,
-        input.locale_ctx,
+    let persist_opts = super::PersistOptions {
+        password: input.password,
+        locale_ctx: input.locale_ctx,
         is_draft,
-    )?;
+    };
+    let doc = super::persist_create(&tx, slug, def, &final_data, &final_ctx.data, &persist_opts)?;
 
     let ctx = run_after_change_hooks(
         runner,

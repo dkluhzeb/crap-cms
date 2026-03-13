@@ -12,9 +12,10 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            apply_display_conditions, build_field_contexts, build_locale_template_data,
-            check_access_or_forbid, enrich_field_contexts, extract_editor_locale, forbidden,
-            is_non_default_locale, not_found, render_or_error, split_sidebar_fields,
+            EnrichOptions, apply_display_conditions, build_field_contexts,
+            build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
+            extract_editor_locale, forbidden, is_non_default_locale, not_found, render_or_error,
+            split_sidebar_fields,
         },
     },
     core::auth::{AuthUser, Claims},
@@ -64,10 +65,10 @@ pub async fn create_form(
         &def.fields,
         &HashMap::new(),
         &state,
-        true,
-        non_default_locale,
-        &HashMap::new(),
-        None,
+        &EnrichOptions::builder(&HashMap::new())
+            .filter_hidden(true)
+            .non_default_locale(non_default_locale)
+            .build(),
     );
 
     // Evaluate display conditions (empty form data for create)

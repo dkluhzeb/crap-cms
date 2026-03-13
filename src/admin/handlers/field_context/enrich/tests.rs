@@ -27,10 +27,7 @@ fn enriched_sub_field_nested_array_populates_rows() {
         Some(&raw_value),
         "content",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
 
     assert_eq!(ctx["field_type"], "array");
@@ -77,10 +74,7 @@ fn enriched_sub_field_nested_blocks_populates_rows() {
         Some(&raw_value),
         "page",
         2,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
 
     assert_eq!(ctx["field_type"], "blocks");
@@ -117,10 +111,7 @@ fn enriched_sub_field_nested_group_populates_values() {
         Some(&raw_value),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
 
     assert_eq!(ctx["field_type"], "group");
@@ -143,10 +134,7 @@ fn enriched_sub_field_empty_nested_array() {
         None,
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
 
     assert_eq!(ctx["field_type"], "array");
@@ -170,10 +158,7 @@ fn enriched_sub_field_select_preserves_selected() {
         Some(&raw_value),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
 
     let opts = ctx["options"].as_array().unwrap();
@@ -214,10 +199,7 @@ fn enriched_sub_field_with_error() {
         Some(&serde_json::json!("val")),
         "content",
         0,
-        false,
-        false,
-        1,
-        &errors,
+        &SubFieldOpts::builder(&errors).depth(1).build(),
     );
     assert_eq!(ctx["error"], "Required");
 }
@@ -233,10 +215,9 @@ fn enriched_sub_field_max_depth_returns_early() {
         Some(&serde_json::json!([])),
         "parent",
         0,
-        false,
-        false,
-        MAX_FIELD_DEPTH,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new())
+            .depth(MAX_FIELD_DEPTH)
+            .build(),
     );
     // At max depth, array-specific fields should not be added
     assert!(ctx.get("rows").is_none());
@@ -254,10 +235,7 @@ fn enriched_sub_field_date_day_only() {
         Some(&raw),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["picker_appearance"], "dayOnly");
     assert_eq!(ctx["date_only_value"], "2026-03-15");
@@ -273,10 +251,7 @@ fn enriched_sub_field_date_day_and_time() {
         Some(&raw),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["picker_appearance"], "dayAndTime");
     assert_eq!(ctx["datetime_local_value"], "2026-03-15T10:30");
@@ -291,10 +266,7 @@ fn enriched_sub_field_date_short_value() {
         Some(&raw),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["date_only_value"], "short");
 }
@@ -311,10 +283,7 @@ fn enriched_sub_field_upload() {
         Some(&serde_json::json!("img123")),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["relationship_collection"], "media");
     assert_eq!(ctx["picker"], "drawer");
@@ -332,10 +301,7 @@ fn enriched_sub_field_relationship() {
         Some(&serde_json::json!("user1")),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["relationship_collection"], "users");
     assert_eq!(ctx["has_many"], true);
@@ -351,10 +317,7 @@ fn enriched_sub_field_null_value_empty_string() {
         Some(&serde_json::Value::Null),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["value"], "");
 }
@@ -367,10 +330,7 @@ fn enriched_sub_field_number_to_string() {
         Some(&serde_json::json!(42)),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["value"], "42");
 }
@@ -378,8 +338,13 @@ fn enriched_sub_field_number_to_string() {
 #[test]
 fn enriched_sub_field_no_value() {
     let sf = make_field("title", FieldType::Text);
-    let ctx =
-        build_enriched_sub_field_context(&sf, None, "items", 0, false, false, 1, &HashMap::new());
+    let ctx = build_enriched_sub_field_context(
+        &sf,
+        None,
+        "items",
+        0,
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
+    );
     assert_eq!(ctx["value"], "");
 }
 
@@ -398,10 +363,7 @@ fn enriched_sub_field_array_with_options() {
         Some(&serde_json::json!([])),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["min_rows"], 1);
     assert_eq!(ctx["max_rows"], 5);
@@ -428,10 +390,7 @@ fn enriched_sub_field_blocks_with_options() {
         Some(&serde_json::json!([])),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["min_rows"], 0);
     assert_eq!(ctx["max_rows"], 10);
@@ -459,10 +418,7 @@ fn enriched_sub_field_nested_array_row_errors() {
         Some(&raw_value),
         "parent",
         0,
-        false,
-        false,
-        1,
-        &errors,
+        &SubFieldOpts::builder(&errors).depth(1).build(),
     );
 
     let rows = ctx["rows"].as_array().unwrap();
@@ -493,10 +449,7 @@ fn enriched_sub_field_nested_blocks_row_errors() {
         Some(&raw_value),
         "parent",
         0,
-        false,
-        false,
-        1,
-        &errors,
+        &SubFieldOpts::builder(&errors).depth(1).build(),
     );
 
     let rows = ctx["rows"].as_array().unwrap();
@@ -517,10 +470,7 @@ fn enriched_sub_field_group_collapsed() {
         Some(&raw),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     assert_eq!(ctx["collapsed"], true);
 }
@@ -536,10 +486,7 @@ fn enriched_sub_field_group_with_null_value() {
         Some(&serde_json::Value::Null),
         "items",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
     // group_obj should be None so nested values are empty
     let sub_fields = ctx["sub_fields"].as_array().unwrap();
@@ -565,10 +512,7 @@ fn enriched_sub_field_nested_blocks_unknown_type() {
         Some(&raw_value),
         "parent",
         0,
-        false,
-        false,
-        1,
-        &HashMap::new(),
+        &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
     );
 
     let rows = ctx["rows"].as_array().unwrap();
@@ -970,10 +914,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         &field_defs,
         &doc_fields,
         &state,
-        false,
-        false,
-        &errors,
-        None,
+        &EnrichOptions::builder(&errors).build(),
     );
 
     // Verify: the blocks field inside the first tab should have populated rows
@@ -1056,10 +997,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         &field_defs,
         &doc_fields,
         &state,
-        false,
-        false,
-        &errors,
-        None,
+        &EnrichOptions::builder(&errors).build(),
     );
 
     let row_sub_fields = contexts[0]["sub_fields"].as_array().unwrap();
@@ -1149,10 +1087,7 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
         &fields,
         &doc_fields,
         &state,
-        false,
-        false,
-        &errors,
-        None,
+        &EnrichOptions::builder(&errors).build(),
     );
 
     // The array row should contain a Tabs sub-field whose tabs contain the actual fields
@@ -1212,10 +1147,7 @@ fn enriched_sub_field_row_in_array_transparent_names() {
         &fields,
         &doc_fields,
         &state,
-        false,
-        false,
-        &errors,
-        None,
+        &EnrichOptions::builder(&errors).build(),
     );
 
     let rows = contexts[0]["rows"].as_array().expect("should have rows");
@@ -1284,10 +1216,7 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
         &fields,
         &doc_fields,
         &state,
-        false,
-        false,
-        &errors,
-        None,
+        &EnrichOptions::builder(&errors).build(),
     );
 
     let rows = contexts[0]["rows"].as_array().expect("should have rows");

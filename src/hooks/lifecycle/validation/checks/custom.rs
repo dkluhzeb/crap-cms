@@ -39,7 +39,7 @@ pub(crate) fn check_custom_validate(
 #[cfg(test)]
 mod tests {
     use crate::core::field::FieldDefinition;
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -70,7 +70,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("bad"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -102,7 +113,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("anything"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().errors[0].message, "validation failed");
     }
@@ -130,7 +152,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("name".to_string(), json!("good"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 }

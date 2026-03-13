@@ -15,10 +15,11 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            apply_display_conditions, build_field_contexts, build_locale_template_data,
-            check_access_or_forbid, enrich_field_contexts, extract_editor_locale,
-            fetch_version_sidebar_data, forbidden, get_user_doc, is_non_default_locale, not_found,
-            render_or_error, server_error, split_sidebar_fields, strip_denied_fields,
+            EnrichOptions, apply_display_conditions, build_field_contexts,
+            build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
+            extract_editor_locale, fetch_version_sidebar_data, forbidden, get_user_doc,
+            is_non_default_locale, not_found, render_or_error, server_error, split_sidebar_fields,
+            strip_denied_fields,
         },
     },
     core::{
@@ -98,9 +99,15 @@ pub async fn edit_form(
             upload::assemble_sizes_object(d, upload_config);
         }
 
-        let doc = doc.map(|d| {
-            runner.apply_after_read(&hooks, &fields, &slug_owned, "find_by_id", d, None, None)
-        });
+        let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+            hooks: &hooks,
+            fields: &fields,
+            collection: &slug_owned,
+            operation: "find_by_id",
+            user: None,
+            ui_locale: None,
+        };
+        let doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));
 
         Ok::<_, Error>(doc)
     })
@@ -205,10 +212,11 @@ pub async fn edit_form(
         &def.fields,
         &document.fields,
         &state,
-        true,
-        non_default_locale,
-        &HashMap::new(),
-        Some(&id),
+        &EnrichOptions::builder(&HashMap::new())
+            .filter_hidden(true)
+            .non_default_locale(non_default_locale)
+            .doc_id(&id)
+            .build(),
     );
 
     // Evaluate display conditions with document data

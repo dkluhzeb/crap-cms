@@ -17,7 +17,7 @@ pub enum HookType {
 
 impl HookType {
     /// Parse from string (CLI input).
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "collection" => Some(Self::Collection),
             "field" => Some(Self::Field),
@@ -942,12 +942,18 @@ mod tests {
 
     #[test]
     fn test_hook_type_from_str() {
-        assert_eq!(HookType::from_str("collection"), Some(HookType::Collection));
-        assert_eq!(HookType::from_str("field"), Some(HookType::Field));
-        assert_eq!(HookType::from_str("access"), Some(HookType::Access));
-        assert_eq!(HookType::from_str("condition"), Some(HookType::Condition));
-        assert_eq!(HookType::from_str("COLLECTION"), Some(HookType::Collection));
-        assert_eq!(HookType::from_str("unknown"), None);
+        assert_eq!(
+            HookType::from_name("collection"),
+            Some(HookType::Collection)
+        );
+        assert_eq!(HookType::from_name("field"), Some(HookType::Field));
+        assert_eq!(HookType::from_name("access"), Some(HookType::Access));
+        assert_eq!(HookType::from_name("condition"), Some(HookType::Condition));
+        assert_eq!(
+            HookType::from_name("COLLECTION"),
+            Some(HookType::Collection)
+        );
+        assert_eq!(HookType::from_name("unknown"), None);
     }
 
     #[test]

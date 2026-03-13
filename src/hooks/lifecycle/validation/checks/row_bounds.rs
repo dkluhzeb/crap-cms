@@ -48,7 +48,7 @@ pub(crate) fn check_row_bounds(
 #[cfg(test)]
 mod tests {
     use crate::core::field::{FieldDefinition, FieldType};
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -65,7 +65,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"label": "one"}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("at least 2"));
     }
@@ -83,7 +94,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"a": 1}, {"a": 2}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("at most 1"));
     }
@@ -101,7 +123,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"x": 1}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: true,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "min_rows should not be checked for draft saves"
@@ -121,7 +154,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"a": 1}, {"a": 2}, {"a": 3}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: true,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "max_rows should not be checked for draft saves"
@@ -141,7 +185,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!("not-an-array"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Non-array value with min_rows=1 should fail (count=0)"

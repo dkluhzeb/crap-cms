@@ -3,6 +3,8 @@ use crate::core::validate::FieldError;
 use crate::db::query;
 use std::collections::HashMap;
 
+use super::super::ValidationCtx;
+
 /// Check unique constraint (only if value is non-empty and field has a parent column).
 /// `col_name` is the actual DB column to query (may differ from `data_key` for localized fields).
 pub(crate) fn check_unique(
@@ -11,9 +13,7 @@ pub(crate) fn check_unique(
     col_name: &str,
     value: Option<&serde_json::Value>,
     is_empty: bool,
-    conn: &rusqlite::Connection,
-    table: &str,
-    exclude_id: Option<&str>,
+    ctx: &ValidationCtx,
     errors: &mut Vec<FieldError>,
 ) {
     if !field.unique || is_empty || !field.has_parent_column() {
@@ -24,7 +24,7 @@ pub(crate) fn check_unique(
         Some(other) => other.to_string(),
         None => String::new(),
     };
-    match query::count_where_field_eq(conn, table, col_name, &value_str, exclude_id) {
+    match query::count_where_field_eq(ctx.conn, ctx.table, col_name, &value_str, ctx.exclude_id) {
         Ok(count) if count > 0 => {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
@@ -35,7 +35,7 @@ pub(crate) fn check_unique(
         }
         Ok(_) => {}
         Err(e) => {
-            tracing::warn!("Unique check failed for {}.{}: {}", table, data_key, e);
+            tracing::warn!("Unique check failed for {}.{}: {}", ctx.table, data_key, e);
         }
     }
 }
@@ -43,7 +43,7 @@ pub(crate) fn check_unique(
 #[cfg(test)]
 mod tests {
     use crate::core::field::{FieldDefinition, FieldType};
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -63,7 +63,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("taken@test.com"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("unique"));
     }
@@ -88,11 +99,13 @@ mod tests {
             &lua,
             &fields,
             &data,
-            &conn,
-            "test",
-            Some("self"),
-            false,
-            None,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: Some("self"),
+                is_draft: false,
+                locale_ctx: None,
+            },
         );
         assert!(result.is_ok());
     }
@@ -113,7 +126,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Unique check should not fire on empty value"
@@ -136,7 +160,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("rank".to_string(), json!(42));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Duplicate number value should fail unique check"
@@ -157,7 +192,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!(["a", "b"]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Array field with unique=true should not run unique check"
@@ -194,11 +240,13 @@ mod tests {
             &lua,
             &fields,
             &data,
-            &conn,
-            "test",
-            None,
-            false,
-            Some(&locale_ctx),
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: Some(&locale_ctx),
+            },
         );
         assert!(
             result.is_err(),
@@ -213,11 +261,13 @@ mod tests {
             &lua,
             &fields,
             &data,
-            &conn,
-            "test",
-            None,
-            false,
-            Some(&locale_ctx),
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: Some(&locale_ctx),
+            },
         );
         assert!(
             result.is_ok(),
@@ -259,11 +309,13 @@ mod tests {
             &lua,
             &fields,
             &data,
-            &conn,
-            "test",
-            None,
-            false,
-            Some(&locale_ctx),
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: Some(&locale_ctx),
+            },
         );
         assert!(
             result.is_err(),
@@ -277,11 +329,13 @@ mod tests {
             &lua,
             &fields,
             &data,
-            &conn,
-            "test",
-            None,
-            false,
-            Some(&locale_ctx),
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: Some(&locale_ctx),
+            },
         );
         assert_eq!(result.unwrap_err().errors[0].field, "seo__slug");
     }
@@ -305,7 +359,18 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("slug".to_string(), json!("taken"));
         // No locale_ctx → falls back to bare column
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Without locale context, should check bare column"

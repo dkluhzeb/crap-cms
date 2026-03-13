@@ -139,19 +139,19 @@ pub fn enqueue_conversions(
     document_id: &str,
     conversions: &[QueuedConversion],
 ) -> anyhow::Result<()> {
-    use crate::db::query::images::insert_image_queue_entry;
+    use crate::db::query::images::{NewImageEntry, insert_image_queue_entry};
     for c in conversions {
-        insert_image_queue_entry(
-            conn,
+        let entry = NewImageEntry {
             collection,
             document_id,
-            &c.source_path,
-            &c.target_path,
-            &c.format,
-            c.quality,
-            &c.url_column,
-            &c.url_value,
-        )?;
+            source_path: &c.source_path,
+            target_path: &c.target_path,
+            format: &c.format,
+            quality: c.quality,
+            url_column: &c.url_column,
+            url_value: &c.url_value,
+        };
+        insert_image_queue_entry(conn, &entry)?;
     }
     Ok(())
 }
@@ -168,8 +168,7 @@ mod tests {
     fn assemble_sizes_builds_structured_object() {
         use crate::core::Document;
 
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumbnail")
                 .width(300)
@@ -256,8 +255,7 @@ mod tests {
     fn assemble_sizes_empty_when_no_size_columns() {
         use crate::core::Document;
 
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumbnail")
                 .width(300)
@@ -281,8 +279,7 @@ mod tests {
     fn assemble_sizes_with_avif_format() {
         use crate::core::Document;
 
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")
                 .width(100)
@@ -333,8 +330,7 @@ mod tests {
     fn assemble_sizes_missing_url_cleans_format_columns() {
         use crate::core::Document;
 
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")
                 .width(100)
@@ -378,8 +374,7 @@ mod tests {
     fn assemble_sizes_partial_dimensions() {
         use crate::core::Document;
 
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")
                 .width(100)

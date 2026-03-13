@@ -7,7 +7,9 @@ use crap_cms::core::collection::Hooks;
 use crap_cms::core::field::FieldDefinition;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
-use crap_cms::hooks::lifecycle::{FieldHookEvent, HookContext, HookEvent, HookRunner};
+use crap_cms::hooks::lifecycle::{
+    AfterReadCtx, FieldHookEvent, HookContext, HookEvent, HookRunner,
+};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -118,8 +120,15 @@ fn field_after_read_hook_transforms_value() {
     drop(reg);
 
     // Apply after_read hooks (collection-level after_read adds _was_read marker)
-    let transformed =
-        runner.apply_after_read(&def.hooks, &def.fields, "articles", "find", doc, None, None);
+    let ar_ctx = AfterReadCtx {
+        hooks: &def.hooks,
+        fields: &def.fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let transformed = runner.apply_after_read(&ar_ctx, doc);
     assert_eq!(
         transformed.fields.get("_was_read").and_then(|v| v.as_str()),
         Some("true"),
@@ -293,15 +302,15 @@ fn after_read_hooks_fire() {
     drop(reg);
 
     // The articles collection has an after_read hook that adds _was_read = "true"
-    let transformed = runner.apply_after_read(
-        &def.hooks,
-        &def.fields,
-        "articles",
-        "find",
-        doc.clone(),
-        None,
-        None,
-    );
+    let ar_ctx = AfterReadCtx {
+        hooks: &def.hooks,
+        fields: &def.fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let transformed = runner.apply_after_read(&ar_ctx, doc.clone());
 
     // Verify the after_read hook ran
     assert_eq!(
@@ -382,8 +391,15 @@ fn field_after_read_hooks_transform_values() {
 
     // apply_after_read should run field-level after_read hooks (uppercase_value on title)
     // AND collection-level after_read hooks (_was_read marker)
-    let transformed =
-        runner.apply_after_read(&def.hooks, &def.fields, "articles", "find", doc, None, None);
+    let ar_ctx = AfterReadCtx {
+        hooks: &def.hooks,
+        fields: &def.fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let transformed = runner.apply_after_read(&ar_ctx, doc);
 
     // Field hook uppercases the title
     assert_eq!(
@@ -415,15 +431,15 @@ fn field_after_read_hooks_with_apply_after_read_many() {
     let def = reg.get_collection("articles").unwrap().clone();
     drop(reg);
 
-    let results = runner.apply_after_read_many(
-        &def.hooks,
-        &def.fields,
-        "articles",
-        "find",
-        vec![doc1, doc2],
-        None,
-        None,
-    );
+    let ar_ctx = AfterReadCtx {
+        hooks: &def.hooks,
+        fields: &def.fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let results = runner.apply_after_read_many(&ar_ctx, vec![doc1, doc2]);
 
     assert_eq!(results.len(), 2);
     assert_eq!(
@@ -768,8 +784,15 @@ fn apply_after_read_many_empty_hooks_passthrough() {
     let hooks = Hooks::default();
     let fields: Vec<FieldDefinition> = Vec::new();
     let docs = vec![doc.clone()];
-    let result =
-        runner.apply_after_read_many(&hooks, &fields, "articles", "find", docs, None, None);
+    let ar_ctx = AfterReadCtx {
+        hooks: &hooks,
+        fields: &fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let result = runner.apply_after_read_many(&ar_ctx, docs);
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].id, doc.id);
 }

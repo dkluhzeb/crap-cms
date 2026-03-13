@@ -22,7 +22,7 @@ impl JobStatus {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s {
             "pending" => Some(JobStatus::Pending),
             "running" => Some(JobStatus::Running),
@@ -49,18 +49,21 @@ mod tests {
 
     #[test]
     fn job_status_from_str_valid() {
-        assert_eq!(JobStatus::from_str("pending"), Some(JobStatus::Pending));
-        assert_eq!(JobStatus::from_str("running"), Some(JobStatus::Running));
-        assert_eq!(JobStatus::from_str("completed"), Some(JobStatus::Completed));
-        assert_eq!(JobStatus::from_str("failed"), Some(JobStatus::Failed));
-        assert_eq!(JobStatus::from_str("stale"), Some(JobStatus::Stale));
+        assert_eq!(JobStatus::from_name("pending"), Some(JobStatus::Pending));
+        assert_eq!(JobStatus::from_name("running"), Some(JobStatus::Running));
+        assert_eq!(
+            JobStatus::from_name("completed"),
+            Some(JobStatus::Completed)
+        );
+        assert_eq!(JobStatus::from_name("failed"), Some(JobStatus::Failed));
+        assert_eq!(JobStatus::from_name("stale"), Some(JobStatus::Stale));
     }
 
     #[test]
     fn job_status_from_str_invalid() {
-        assert_eq!(JobStatus::from_str("unknown"), None);
-        assert_eq!(JobStatus::from_str(""), None);
-        assert_eq!(JobStatus::from_str("PENDING"), None);
+        assert_eq!(JobStatus::from_name("unknown"), None);
+        assert_eq!(JobStatus::from_name(""), None);
+        assert_eq!(JobStatus::from_name("PENDING"), None);
     }
 
     #[test]
@@ -73,7 +76,7 @@ mod tests {
             JobStatus::Stale,
         ] {
             let s = status.as_str();
-            let parsed = JobStatus::from_str(s).expect("should roundtrip");
+            let parsed = JobStatus::from_name(s).expect("should roundtrip");
             assert_eq!(&parsed, status);
         }
     }

@@ -49,7 +49,7 @@ pub(crate) fn check_option_valid(
 #[cfg(test)]
 mod tests {
     use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -69,7 +69,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("color".to_string(), json!("red"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -89,7 +100,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("color".to_string(), json!("green"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -114,7 +136,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("color".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Empty select value should pass (not required)"
@@ -137,7 +170,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("size".to_string(), json!("sm"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Valid radio option should pass");
     }
 
@@ -157,7 +201,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("size".to_string(), json!("xl"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err(), "Invalid radio option should fail");
         assert!(
             result.unwrap_err().errors[0]
@@ -182,7 +237,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("size".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Empty radio value should skip option validation"
@@ -198,7 +264,18 @@ mod tests {
         let fields = vec![FieldDefinition::builder("status", FieldType::Select).build()];
         let mut data = HashMap::new();
         data.insert("status".to_string(), json!("anything"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Select with no options should not validate option values"

@@ -17,17 +17,16 @@ pub fn run(action: super::MakeAction) -> Result<()> {
             versions,
             no_input,
             force,
-        } => make_collection_command(
-            &config,
-            slug,
-            fields,
-            no_timestamps,
-            auth,
-            upload,
-            versions,
-            !no_input,
-            force,
-        ),
+        } => {
+            let opts = crate::scaffold::CollectionOptions {
+                no_timestamps,
+                auth,
+                upload,
+                versions,
+                force,
+            };
+            make_collection_command(&config, slug, fields, !no_input, &opts)
+        }
         super::MakeAction::Global {
             config,
             slug,
@@ -99,12 +98,8 @@ pub(crate) fn make_collection_command(
     config_dir: &Path,
     slug: Option<String>,
     fields: Option<String>,
-    no_timestamps: bool,
-    auth: bool,
-    upload: bool,
-    versions: bool,
     interactive: bool,
-    force: bool,
+    opts: &crate::scaffold::CollectionOptions,
 ) -> Result<()> {
     use dialoguer::{Confirm, Input, Select};
 
@@ -198,7 +193,7 @@ pub(crate) fn make_collection_command(
     };
 
     // 3. Resolve timestamps (only prompt in interactive mode)
-    let no_timestamps = if no_timestamps {
+    let no_timestamps = if opts.no_timestamps {
         true
     } else if interactive {
         let timestamps = Confirm::new()
@@ -212,7 +207,7 @@ pub(crate) fn make_collection_command(
     };
 
     // 4. Resolve auth (only prompt in interactive mode)
-    let auth = if auth {
+    let auth = if opts.auth {
         true
     } else if interactive {
         Confirm::new()
@@ -225,7 +220,7 @@ pub(crate) fn make_collection_command(
     };
 
     // 5. Resolve upload (only prompt in interactive mode)
-    let upload = if upload {
+    let upload = if opts.upload {
         true
     } else if interactive {
         Confirm::new()
@@ -238,7 +233,7 @@ pub(crate) fn make_collection_command(
     };
 
     // 6. Resolve versioning (only prompt in interactive mode)
-    let versions = if versions {
+    let versions = if opts.versions {
         true
     } else if interactive {
         Confirm::new()
@@ -250,16 +245,14 @@ pub(crate) fn make_collection_command(
         false
     };
 
-    crate::scaffold::make_collection(
-        config_dir,
-        &slug,
-        fields_shorthand.as_deref(),
+    let final_opts = crate::scaffold::CollectionOptions {
         no_timestamps,
         auth,
         upload,
         versions,
-        force,
-    )
+        force: opts.force,
+    };
+    crate::scaffold::make_collection(config_dir, &slug, fields_shorthand.as_deref(), &final_opts)
 }
 
 /// Handle the `make hook` subcommand — resolve missing flags via interactive survey.
@@ -277,7 +270,7 @@ fn make_hook_command(
 
     // 1. Resolve hook type
     let hook_type = match hook_type {
-        Some(t) => crate::scaffold::HookType::from_str(&t).ok_or_else(|| {
+        Some(t) => crate::scaffold::HookType::from_name(&t).ok_or_else(|| {
             anyhow::anyhow!(
                 "Unknown hook type '{}' — valid: collection, field, access, condition",
                 t

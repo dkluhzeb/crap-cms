@@ -77,16 +77,14 @@ pub fn update_global_document(
             input.locale_ctx,
         )?;
         if def.has_versions() {
-            crate::service::versions::create_version_snapshot(
-                &tx,
-                &global_table,
-                "default",
-                &def.fields,
-                def.versions.as_ref(),
-                def.has_drafts(),
-                "published",
-                &doc,
-            )?;
+            let ctx = crate::service::versions::VersionSnapshotCtx {
+                table: &global_table,
+                parent_id: "default",
+                fields: &def.fields,
+                versions: def.versions.as_ref(),
+                has_drafts: def.has_drafts(),
+            };
+            crate::service::versions::create_version_snapshot(&tx, &ctx, "published", &doc)?;
         }
         doc
     };

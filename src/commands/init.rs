@@ -84,16 +84,11 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             })
             .interact_text()
             .context("Failed to read auth slug")?;
-        crate::scaffold::make_collection(
-            &config_dir,
-            &slug,
-            None,
-            false,
-            true,
-            false,
-            false,
-            false,
-        )?;
+        let opts = crate::scaffold::CollectionOptions {
+            auth: true,
+            ..crate::scaffold::CollectionOptions::default()
+        };
+        crate::scaffold::make_collection(&config_dir, &slug, None, &opts)?;
         Some(slug)
     } else {
         None
@@ -142,16 +137,11 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             })
             .interact_text()
             .context("Failed to read upload slug")?;
-        crate::scaffold::make_collection(
-            &config_dir,
-            &slug,
-            None,
-            false,
-            false,
-            true,
-            false,
-            false,
-        )?;
+        let opts = crate::scaffold::CollectionOptions {
+            upload: true,
+            ..crate::scaffold::CollectionOptions::default()
+        };
+        crate::scaffold::make_collection(&config_dir, &slug, None, &opts)?;
     }
 
     // 5. Additional collections
@@ -169,12 +159,8 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             &config_dir,
             None,
             None,
-            false,
-            false,
-            false,
-            false,
             true, /* interactive */
-            false,
+            &crate::scaffold::CollectionOptions::default(),
         )?;
     }
 

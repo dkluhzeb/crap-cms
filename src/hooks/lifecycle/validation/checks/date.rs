@@ -105,7 +105,7 @@ pub(crate) fn is_valid_date_format(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -187,7 +187,18 @@ mod tests {
         let fields = vec![FieldDefinition::builder("d", FieldType::Date).build()];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!("not-a-date"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("valid date"));
     }
@@ -201,7 +212,18 @@ mod tests {
         let fields = vec![FieldDefinition::builder("d", FieldType::Date).build()];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!("2024-01-15"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -218,7 +240,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("start_date".to_string(), json!("2024-06-15T12:00:00.000Z"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Date after min_date should pass");
     }
 
@@ -235,7 +268,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("start_date".to_string(), json!("2024-01-15T12:00:00.000Z"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -257,7 +301,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("end_date".to_string(), json!("2026-03-15T12:00:00.000Z"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -280,7 +335,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Empty date with bounds should pass (not required)"
@@ -300,7 +366,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!("2024-01"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Month-only date before min_date should fail"
@@ -325,7 +402,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("d".to_string(), json!("2024-12"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Month-only date after max_date should fail"

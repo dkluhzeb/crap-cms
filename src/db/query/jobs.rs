@@ -44,7 +44,7 @@ pub fn claim_pending_jobs(
          LIMIT ?1",
     )?;
 
-    let rows: Vec<(
+    type PendingJobRow = (
         String,
         String,
         String,
@@ -53,7 +53,9 @@ pub fn claim_pending_jobs(
         u32,
         Option<String>,
         Option<String>,
-    )> = stmt
+    );
+
+    let rows: Vec<PendingJobRow> = stmt
         .query_map([limit as i64 * 2], |row| {
             Ok((
                 row.get(0)?,
@@ -353,7 +355,7 @@ fn row_to_job_run(row: &rusqlite::Row) -> rusqlite::Result<JobRun> {
     let id: String = row.get(0)?;
     let slug: String = row.get(1)?;
     let status_str: String = row.get(2)?;
-    let status = JobStatus::from_str(&status_str).unwrap_or(JobStatus::Pending);
+    let status = JobStatus::from_name(&status_str).unwrap_or(JobStatus::Pending);
     let mut b = JobRun::builder(id, slug)
         .status(status)
         .queue(row.get::<_, String>(3)?)

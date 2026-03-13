@@ -1109,9 +1109,7 @@ fn persist_create_published() {
         &def,
         &final_data,
         &hook_data,
-        None,
-        None,
-        false,
+        &service::PersistOptions::default(),
     )
     .unwrap();
     assert_eq!(doc.get_str("title"), Some("Persist Published"));
@@ -1142,17 +1140,12 @@ fn persist_create_draft() {
         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
         .collect();
 
-    let doc = service::persist_create(
-        &conn,
-        "articles",
-        &def,
-        &final_data,
-        &hook_data,
-        None,
-        None,
-        true,
-    )
-    .unwrap();
+    let opts = service::PersistOptions {
+        is_draft: true,
+        ..service::PersistOptions::default()
+    };
+    let doc =
+        service::persist_create(&conn, "articles", &def, &final_data, &hook_data, &opts).unwrap();
 
     // Document should exist with _status = "draft"
     let status = query::get_document_status(&conn, "articles", &doc.id).unwrap();

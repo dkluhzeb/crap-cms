@@ -12,10 +12,10 @@ use crate::{
         AdminState,
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
-            apply_display_conditions, build_field_contexts, build_locale_template_data,
-            check_access_or_forbid, enrich_field_contexts, extract_editor_locale,
-            fetch_version_sidebar_data, forbidden, get_user_doc, is_non_default_locale, not_found,
-            render_or_error, server_error, split_sidebar_fields,
+            EnrichOptions, apply_display_conditions, build_field_contexts,
+            build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
+            extract_editor_locale, fetch_version_sidebar_data, forbidden, get_user_doc,
+            is_non_default_locale, not_found, render_or_error, server_error, split_sidebar_fields,
         },
     },
     core::{
@@ -62,8 +62,15 @@ pub async fn edit_form(
     let read_result = task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "get_global", HashMap::new())?;
         let doc = ops::get_global(&pool, &slug_owned, &def_owned, locale_ctx.as_ref())?;
-        let doc =
-            runner.apply_after_read(&hooks, &fields, &slug_owned, "get_global", doc, None, None);
+        let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+            hooks: &hooks,
+            fields: &fields,
+            collection: &slug_owned,
+            operation: "get_global",
+            user: None,
+            ui_locale: None,
+        };
+        let doc = runner.apply_after_read(&ar_ctx, doc);
         Ok::<_, anyhow::Error>(doc)
     })
     .await;
@@ -160,10 +167,9 @@ pub async fn edit_form(
         &def.fields,
         &doc_fields,
         &state,
-        false,
-        non_default_locale,
-        &HashMap::new(),
-        None,
+        &EnrichOptions::builder(&HashMap::new())
+            .non_default_locale(non_default_locale)
+            .build(),
     );
 
     let form_data_json = json!(doc_fields);

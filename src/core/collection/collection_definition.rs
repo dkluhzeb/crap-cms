@@ -241,9 +241,7 @@ mod tests {
     fn is_upload_collection() {
         use crate::core::upload::CollectionUpload;
         let mut col = make_collection("media", None, None, None);
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
-        col.upload = Some(upload);
+        col.upload = Some(CollectionUpload::new());
         assert!(col.is_upload_collection());
     }
 

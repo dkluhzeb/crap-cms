@@ -16,6 +16,19 @@ use crate::core::{CollectionDefinition, Document};
 /// Uses DashMap for concurrent cross-request sharing with interior mutability.
 pub type PopulateCache = DashMap<(String, String), Document>;
 
+/// Bundled parameters for inner population helpers, reducing argument count.
+///
+/// Carries the connection, registry, effective depth, locale context, and cache
+/// that every recursive population function needs. The remaining per-call params
+/// (doc/docs, field_name, rel_collection, rel_def, visited) stay as regular args.
+pub(crate) struct PopulateCtx<'a> {
+    pub conn: &'a rusqlite::Connection,
+    pub registry: &'a crate::core::Registry,
+    pub effective_depth: i32,
+    pub locale_ctx: Option<&'a super::LocaleContext>,
+    pub cache: &'a PopulateCache,
+}
+
 /// Collection and registry context for population.
 pub struct PopulateContext<'a> {
     pub conn: &'a rusqlite::Connection,

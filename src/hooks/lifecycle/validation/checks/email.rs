@@ -44,7 +44,7 @@ pub(crate) fn is_valid_email_format(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -57,7 +57,18 @@ mod tests {
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("user@example.com"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok());
     }
 
@@ -70,7 +81,18 @@ mod tests {
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("not-an-email"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -88,7 +110,18 @@ mod tests {
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!("user@"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
     }
 
@@ -101,7 +134,18 @@ mod tests {
         let fields = vec![FieldDefinition::builder("email", FieldType::Email).build()];
         let mut data = HashMap::new();
         data.insert("email".to_string(), json!(""));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Email validation should skip empty values");
     }
 

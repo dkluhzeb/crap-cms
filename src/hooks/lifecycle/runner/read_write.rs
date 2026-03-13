@@ -10,9 +10,9 @@ use crate::core::field::FieldDefinition;
 use crate::core::validate::{FieldError, ValidationError};
 use crate::db::query::LocaleContext;
 use crate::hooks::lifecycle::context::HookContext;
-use crate::hooks::lifecycle::execution::apply_after_read_inner;
+use crate::hooks::lifecycle::execution::{AfterReadCtx, apply_after_read_inner};
 use crate::hooks::lifecycle::types::{FieldHookEvent, HookEvent};
-use crate::hooks::lifecycle::validation::validate_fields_inner;
+use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
 
 use super::HookRunner;
 
@@ -37,16 +37,7 @@ impl HookRunner {
     /// Fire after_read hooks on a single document. Returns transformed doc.
     /// Field-level after_read hooks run first, then collection-level, then global registered.
     /// On error: logs warning, returns original doc unmodified.
-    pub fn apply_after_read(
-        &self,
-        hooks: &Hooks,
-        fields: &[FieldDefinition],
-        collection: &str,
-        operation: &str,
-        doc: Document,
-        user: Option<&Document>,
-        ui_locale: Option<&str>,
-    ) -> Document {
+    pub fn apply_after_read(&self, ctx: &AfterReadCtx, doc: Document) -> Document {
         let lua = match self.pool.acquire() {
             Ok(l) => l,
             Err(e) => {
@@ -54,25 +45,14 @@ impl HookRunner {
                 return doc;
             }
         };
-        apply_after_read_inner(
-            &lua, hooks, fields, collection, operation, doc, user, ui_locale,
-        )
+        apply_after_read_inner(&lua, ctx, doc)
     }
 
     /// Fire after_read hooks on a list of documents.
     /// Acquires a single VM for the entire batch instead of one per document.
-    pub fn apply_after_read_many(
-        &self,
-        hooks: &Hooks,
-        fields: &[FieldDefinition],
-        collection: &str,
-        operation: &str,
-        docs: Vec<Document>,
-        user: Option<&Document>,
-        ui_locale: Option<&str>,
-    ) -> Vec<Document> {
-        let has_field_hooks = fields.iter().any(|f| !f.hooks.after_read.is_empty());
-        let has_collection_hooks = !hooks.after_read.is_empty();
+    pub fn apply_after_read_many(&self, ctx: &AfterReadCtx, docs: Vec<Document>) -> Vec<Document> {
+        let has_field_hooks = ctx.fields.iter().any(|f| !f.hooks.after_read.is_empty());
+        let has_collection_hooks = !ctx.hooks.after_read.is_empty();
         let has_registered = self.has_registered_hooks_for("after_read");
 
         // No hooks at all — skip VM acquisition entirely
@@ -89,11 +69,7 @@ impl HookRunner {
         };
 
         docs.into_iter()
-            .map(|doc| {
-                apply_after_read_inner(
-                    &lua, hooks, fields, collection, operation, doc, user, ui_locale,
-                )
-            })
+            .map(|doc| apply_after_read_inner(&lua, ctx, doc))
             .collect()
     }
 
@@ -132,9 +108,14 @@ impl HookRunner {
         // Collection-level before_validate
         let ctx = self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, conn)?;
         // Validation (skip required checks for drafts)
-        self.validate_fields(
-            fields, &ctx.data, conn, table, exclude_id, is_draft, locale_ctx,
-        )?;
+        let val_ctx = ValidationCtx {
+            conn,
+            table,
+            exclude_id,
+            is_draft,
+            locale_ctx,
+        };
+        self.validate_fields(fields, &ctx.data, &val_ctx)?;
         // Field-level before_change (post-validation transforms, CRUD available)
         let mut ctx = ctx;
         self.run_field_hooks_with_conn(
@@ -192,18 +173,12 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         data: &HashMap<String, serde_json::Value>,
-        conn: &rusqlite::Connection,
-        table: &str,
-        exclude_id: Option<&str>,
-        is_draft: bool,
-        locale_ctx: Option<&LocaleContext>,
+        ctx: &ValidationCtx,
     ) -> Result<(), ValidationError> {
         let lua = self
             .pool
             .acquire()
             .map_err(|_| ValidationError::new(vec![FieldError::new("_system", "VM pool error")]))?;
-        validate_fields_inner(
-            &lua, fields, data, conn, table, exclude_id, is_draft, locale_ctx,
-        )
+        validate_fields_inner(&lua, fields, data, ctx)
     }
 }

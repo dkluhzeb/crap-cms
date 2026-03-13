@@ -11,11 +11,7 @@ use super::helpers::*;
 pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload> {
     let val: Value = config.get("upload").ok()?;
     match val {
-        Value::Boolean(true) => {
-            let mut upload = CollectionUpload::default();
-            upload.enabled = true;
-            Some(upload)
-        }
+        Value::Boolean(true) => Some(CollectionUpload::new()),
         Value::Boolean(false) | Value::Nil => None,
         Value::Table(tbl) => {
             let mime_types = if let Ok(mt_tbl) = get_table(&tbl, "mime_types") {
@@ -45,8 +41,7 @@ pub(super) fn parse_collection_upload(config: &Table) -> Option<CollectionUpload
             let admin_thumbnail = get_string(&tbl, "admin_thumbnail");
             let format_options = parse_format_options(&tbl);
 
-            let mut upload = CollectionUpload::default();
-            upload.enabled = true;
+            let mut upload = CollectionUpload::new();
             upload.mime_types = mime_types;
             upload.max_file_size = max_file_size;
             upload.image_sizes = image_sizes;
@@ -282,8 +277,7 @@ mod tests {
     fn test_inject_upload_fields_basic() {
         let mut fields =
             vec![FieldDefinition::builder("alt_text", crate::core::field::FieldType::Text).build()];
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let upload = CollectionUpload::new();
         inject_upload_fields(&mut fields, &upload);
         assert_eq!(fields.len(), 9);
         assert_eq!(fields[0].name, "filename");
@@ -300,8 +294,7 @@ mod tests {
     #[test]
     fn test_inject_upload_fields_with_image_sizes() {
         let mut fields = Vec::new();
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("thumb")
                 .width(200)
@@ -319,8 +312,7 @@ mod tests {
     #[test]
     fn test_inject_upload_fields_with_format_variants() {
         let mut fields = Vec::new();
-        let mut upload = CollectionUpload::default();
-        upload.enabled = true;
+        let mut upload = CollectionUpload::new();
         upload.image_sizes = vec![
             ImageSizeBuilder::new("card")
                 .width(400)

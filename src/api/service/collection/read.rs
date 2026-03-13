@@ -167,15 +167,15 @@ impl ContentService {
                     upload::assemble_sizes_object(doc, upload_config);
                 }
             }
-            let docs = runner.apply_after_read_many(
-                &hooks,
-                &fields,
-                &collection,
-                "find",
-                docs,
-                None,
-                None,
-            );
+            let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+                hooks: &hooks,
+                fields: &fields,
+                collection: &collection,
+                operation: "find",
+                user: None,
+                ui_locale: None,
+            };
+            let docs = runner.apply_after_read_many(&ar_ctx, docs);
             // Populate relationships if depth > 0 (batch for efficiency)
             if depth > 0 {
                 let mut docs = docs;
@@ -311,9 +311,15 @@ impl ContentService {
             {
                 upload::assemble_sizes_object(d, upload_config);
             }
-            let mut doc = doc.map(|d| {
-                runner.apply_after_read(&hooks, &fields, &collection, "find_by_id", d, None, None)
-            });
+            let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+                hooks: &hooks,
+                fields: &fields,
+                collection: &collection,
+                operation: "find_by_id",
+                user: None,
+                ui_locale: None,
+            };
+            let mut doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));
             let select_slice = select.as_deref();
             // Populate relationships if depth > 0
             if depth > 0

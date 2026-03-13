@@ -436,7 +436,7 @@ mod tests {
             NodeAttrType::Checkbox,
             NodeAttrType::Textarea,
         ] {
-            assert_eq!(NodeAttrType::from_str(t.as_str()), *t);
+            assert_eq!(NodeAttrType::from_name(t.as_str()), *t);
         }
     }
 }

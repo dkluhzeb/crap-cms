@@ -16,6 +16,18 @@ pub struct ImageQueueEntry {
     pub url_value: String,
 }
 
+/// Parameters for inserting a new image queue entry.
+pub struct NewImageEntry<'a> {
+    pub collection: &'a str,
+    pub document_id: &'a str,
+    pub source_path: &'a str,
+    pub target_path: &'a str,
+    pub format: &'a str,
+    pub quality: u8,
+    pub url_column: &'a str,
+    pub url_value: &'a str,
+}
+
 /// Summary entry for listing queue contents.
 #[derive(Debug, Clone)]
 pub struct ImageQueueListEntry {
@@ -32,20 +44,13 @@ pub struct ImageQueueListEntry {
 /// Insert a pending image conversion into the queue.
 pub fn insert_image_queue_entry(
     conn: &rusqlite::Connection,
-    collection: &str,
-    document_id: &str,
-    source_path: &str,
-    target_path: &str,
-    format: &str,
-    quality: u8,
-    url_column: &str,
-    url_value: &str,
+    entry: &NewImageEntry<'_>,
 ) -> Result<String> {
     let id = nanoid::nanoid!();
     conn.execute(
         "INSERT INTO _crap_image_queue (id, collection, document_id, source_path, target_path, format, quality, url_column, url_value)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        rusqlite::params![id, collection, document_id, source_path, target_path, format, quality, url_column, url_value],
+        rusqlite::params![id, entry.collection, entry.document_id, entry.source_path, entry.target_path, entry.format, entry.quality, entry.url_column, entry.url_value],
     ).context("Failed to insert image queue entry")?;
     Ok(id)
 }
@@ -230,19 +235,43 @@ mod tests {
         conn
     }
 
+    fn entry<'a>(
+        collection: &'a str,
+        document_id: &'a str,
+        source_path: &'a str,
+        target_path: &'a str,
+        format: &'a str,
+        quality: u8,
+        url_column: &'a str,
+        url_value: &'a str,
+    ) -> NewImageEntry<'a> {
+        NewImageEntry {
+            collection,
+            document_id,
+            source_path,
+            target_path,
+            format,
+            quality,
+            url_column,
+            url_value,
+        }
+    }
+
     #[test]
     fn insert_and_claim() {
         let conn = setup_db();
         let id = insert_image_queue_entry(
             &conn,
-            "media",
-            "doc1",
-            "/tmp/src.jpg",
-            "/tmp/dst.webp",
-            "webp",
-            80,
-            "thumb_webp_url",
-            "/uploads/media/thumb.webp",
+            &entry(
+                "media",
+                "doc1",
+                "/tmp/src.jpg",
+                "/tmp/dst.webp",
+                "webp",
+                80,
+                "thumb_webp_url",
+                "/uploads/media/thumb.webp",
+            ),
         )
         .unwrap();
         assert!(!id.is_empty());
@@ -260,12 +289,16 @@ mod tests {
     #[test]
     fn complete_and_fail() {
         let conn = setup_db();
-        let id1 =
-            insert_image_queue_entry(&conn, "media", "d1", "/a", "/b", "webp", 80, "col", "url")
-                .unwrap();
-        let id2 =
-            insert_image_queue_entry(&conn, "media", "d2", "/c", "/d", "avif", 60, "col", "url")
-                .unwrap();
+        let id1 = insert_image_queue_entry(
+            &conn,
+            &entry("media", "d1", "/a", "/b", "webp", 80, "col", "url"),
+        )
+        .unwrap();
+        let id2 = insert_image_queue_entry(
+            &conn,
+            &entry("media", "d2", "/c", "/d", "avif", 60, "col", "url"),
+        )
+        .unwrap();
 
         complete_image_entry(&conn, &id1).unwrap();
         fail_image_entry(&conn, &id2, "decode error").unwrap();
@@ -294,8 +327,10 @@ mod tests {
         let conn = setup_db();
         assert_eq!(count_pending_images(&conn).unwrap(), 0);
 
-        insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
-        insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+            .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
+            .unwrap();
         assert_eq!(count_pending_images(&conn).unwrap(), 2);
 
         claim_pending_images(&conn, 1).unwrap();
@@ -307,8 +342,10 @@ mod tests {
         let conn = setup_db();
         assert_eq!(count_image_entries_by_status(&conn, "pending").unwrap(), 0);
 
-        insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
-        insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+            .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
+            .unwrap();
         assert_eq!(count_image_entries_by_status(&conn, "pending").unwrap(), 2);
 
         let claimed = claim_pending_images(&conn, 1).unwrap();
@@ -323,8 +360,10 @@ mod tests {
     #[test]
     fn list_entries_all() {
         let conn = setup_db();
-        insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
-        insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+            .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
+            .unwrap();
 
         let entries = list_image_entries(&conn, None, 100).unwrap();
         assert_eq!(entries.len(), 2);
@@ -334,8 +373,10 @@ mod tests {
     fn list_entries_filtered() {
         let conn = setup_db();
         let id =
-            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
-        insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
+            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+                .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
+            .unwrap();
 
         complete_image_entry(&conn, &id).unwrap();
 
@@ -350,7 +391,8 @@ mod tests {
     fn retry_single_entry() {
         let conn = setup_db();
         let id =
-            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+                .unwrap();
         fail_image_entry(&conn, &id, "test error").unwrap();
 
         assert!(retry_image_entry(&conn, &id).unwrap());
@@ -362,7 +404,8 @@ mod tests {
     fn retry_non_failed_returns_false() {
         let conn = setup_db();
         let id =
-            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+                .unwrap();
         // Still pending, not failed
         assert!(!retry_image_entry(&conn, &id).unwrap());
     }
@@ -371,10 +414,13 @@ mod tests {
     fn retry_all_failed() {
         let conn = setup_db();
         let id1 =
-            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+                .unwrap();
         let id2 =
-            insert_image_queue_entry(&conn, "m", "d2", "/c", "/d", "avif", 60, "c", "u").unwrap();
-        insert_image_queue_entry(&conn, "m", "d3", "/e", "/f", "webp", 80, "c", "u").unwrap();
+            insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
+                .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d3", "/e", "/f", "webp", 80, "c", "u"))
+            .unwrap();
 
         fail_image_entry(&conn, &id1, "err1").unwrap();
         fail_image_entry(&conn, &id2, "err2").unwrap();
@@ -389,7 +435,8 @@ mod tests {
     fn purge_old_entries() {
         let conn = setup_db();
         let id =
-            insert_image_queue_entry(&conn, "m", "d1", "/a", "/b", "webp", 80, "c", "u").unwrap();
+            insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+                .unwrap();
         complete_image_entry(&conn, &id).unwrap();
 
         // Set completed_at to 2 days ago

@@ -7,7 +7,7 @@ mod poly;
 use anyhow::Result;
 use std::collections::HashSet;
 
-use super::{PopulateCache, PopulateContext, PopulateOpts};
+use super::{PopulateCache, PopulateContext, PopulateCtx, PopulateOpts};
 use crate::core::Document;
 use crate::core::field::FieldType;
 
@@ -63,30 +63,20 @@ pub fn populate_relationships_cached(
             continue;
         }
 
+        let pctx = PopulateCtx {
+            conn,
+            registry,
+            effective_depth,
+            locale_ctx,
+            cache,
+        };
+
         if rel.is_polymorphic() {
             // Polymorphic: values are "collection/id" composite strings
             if rel.has_many {
-                poly::populate_poly_has_many(
-                    conn,
-                    registry,
-                    doc,
-                    &field.name,
-                    visited,
-                    effective_depth,
-                    locale_ctx,
-                    cache,
-                )?;
+                poly::populate_poly_has_many(&pctx, doc, &field.name, visited)?;
             } else {
-                poly::populate_poly_has_one(
-                    conn,
-                    registry,
-                    doc,
-                    &field.name,
-                    visited,
-                    effective_depth,
-                    locale_ctx,
-                    cache,
-                )?;
+                poly::populate_poly_has_one(&pctx, doc, &field.name, visited)?;
             }
         } else {
             // Non-polymorphic: look up the target collection definition
@@ -97,29 +87,21 @@ pub fn populate_relationships_cached(
 
             if rel.has_many {
                 nonpoly::populate_nonpoly_has_many(
-                    conn,
-                    registry,
+                    &pctx,
                     doc,
                     &field.name,
                     &rel.collection,
                     &rel_def,
                     visited,
-                    effective_depth,
-                    locale_ctx,
-                    cache,
                 )?;
             } else {
                 nonpoly::populate_nonpoly_has_one(
-                    conn,
-                    registry,
+                    &pctx,
                     doc,
                     &field.name,
                     &rel.collection,
                     &rel_def,
                     visited,
-                    effective_depth,
-                    locale_ctx,
-                    cache,
                 )?;
             }
         }

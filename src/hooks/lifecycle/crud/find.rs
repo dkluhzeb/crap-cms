@@ -13,7 +13,7 @@ use mlua::{Lua, Value};
 use super::get_tx_conn;
 use crate::hooks::lifecycle::access::{check_access_with_lua, check_field_read_access_with_lua};
 use crate::hooks::lifecycle::converters::*;
-use crate::hooks::lifecycle::execution::{apply_after_read_inner, run_hooks_inner};
+use crate::hooks::lifecycle::execution::{AfterReadCtx, apply_after_read_inner, run_hooks_inner};
 use crate::hooks::lifecycle::{HookContext, HookEvent, UiLocaleContext, UserContext};
 
 /// Register `crap.collections.find(collection, query?)`.
@@ -215,20 +215,17 @@ pub(super) fn register_find(
             }
 
             // Run after_read hooks
+            let ar_ctx = AfterReadCtx {
+                hooks: &def.hooks,
+                fields: &def.fields,
+                collection: &collection,
+                operation: "find",
+                user: hook_user.as_ref(),
+                ui_locale: hook_ui_locale.as_deref(),
+            };
             let docs: Vec<_> = docs
                 .into_iter()
-                .map(|doc| {
-                    apply_after_read_inner(
-                        lua,
-                        &def.hooks,
-                        &def.fields,
-                        &collection,
-                        "find",
-                        doc,
-                        hook_user.as_ref(),
-                        hook_ui_locale.as_deref(),
-                    )
-                })
+                .map(|doc| apply_after_read_inner(lua, &ar_ctx, doc))
                 .collect();
 
             let limit = find_query.limit.unwrap_or(pg_default);
@@ -447,18 +444,15 @@ pub(super) fn register_find_by_id(
             }
 
             // Run after_read hooks
-            let doc = doc.map(|d| {
-                apply_after_read_inner(
-                    lua,
-                    &def.hooks,
-                    &def.fields,
-                    &collection,
-                    "find_by_id",
-                    d,
-                    hook_user.as_ref(),
-                    hook_ui_locale.as_deref(),
-                )
-            });
+            let ar_ctx = AfterReadCtx {
+                hooks: &def.hooks,
+                fields: &def.fields,
+                collection: &collection,
+                operation: "find_by_id",
+                user: hook_user.as_ref(),
+                ui_locale: hook_ui_locale.as_deref(),
+            };
+            let doc = doc.map(|d| apply_after_read_inner(lua, &ar_ctx, d));
 
             match doc {
                 Some(d) => Ok(Value::Table(document_to_lua_table(lua, &d)?)),

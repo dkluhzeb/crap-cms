@@ -6,7 +6,6 @@ use super::{
 };
 use crate::{
     admin::{
-        AdminState,
         handlers::field_context::builder::{apply_field_type_extras, build_single_field_context},
         handlers::{
             field_context::{count_errors_in_fields, safe_template_id},
@@ -132,11 +131,14 @@ pub(super) fn sub_array(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    locale_locked: bool,
-    non_default_locale: bool,
-    depth: usize,
-    errors: &HashMap<String, String>,
+    opts: &super::SubFieldOpts,
 ) {
+    let nested_opts = super::SubFieldOpts::builder(opts.errors)
+        .locale_locked(opts.locale_locked)
+        .non_default_locale(opts.non_default_locale)
+        .depth(opts.depth + 1)
+        .build();
+
     let nested_rows: Vec<Value> = match raw_value {
         Some(Value::Array(arr)) => arr
             .iter()
@@ -161,10 +163,7 @@ pub(super) fn sub_array(
                             nested_raw,
                             indexed_name,
                             nested_idx,
-                            locale_locked,
-                            non_default_locale,
-                            depth + 1,
-                            errors,
+                            &nested_opts,
                         )
                     })
                     .collect();
@@ -199,8 +198,8 @@ pub(super) fn sub_array(
                 &HashMap::new(),
                 &HashMap::new(),
                 &template_prefix,
-                non_default_locale,
-                depth + 1,
+                opts.non_default_locale,
+                opts.depth + 1,
             )
         })
         .collect();
@@ -230,11 +229,14 @@ pub(super) fn sub_blocks(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    locale_locked: bool,
-    non_default_locale: bool,
-    depth: usize,
-    errors: &HashMap<String, String>,
+    opts: &super::SubFieldOpts,
 ) {
+    let nested_opts = super::SubFieldOpts::builder(opts.errors)
+        .locale_locked(opts.locale_locked)
+        .non_default_locale(opts.non_default_locale)
+        .depth(opts.depth + 1)
+        .build();
+
     let nested_rows: Vec<Value> = match raw_value {
         Some(Value::Array(arr)) => arr
             .iter()
@@ -275,10 +277,7 @@ pub(super) fn sub_blocks(
                                     nested_raw,
                                     indexed_name,
                                     nested_idx,
-                                    locale_locked,
-                                    non_default_locale,
-                                    depth + 1,
-                                    errors,
+                                    &nested_opts,
                                 )
                             })
                             .collect()
@@ -321,8 +320,8 @@ pub(super) fn sub_blocks(
                         &HashMap::new(),
                         &HashMap::new(),
                         &template_prefix,
-                        non_default_locale,
-                        depth + 1,
+                        opts.non_default_locale,
+                        opts.depth + 1,
                     )
                 })
                 .collect();
@@ -425,16 +424,18 @@ pub(super) fn sub_group(
                 "description": nested_sf.admin.description.as_ref().map(|ls| ls.resolve_default()),
             });
 
-            apply_field_type_extras(
-                nested_sf,
-                &nested_val,
-                &mut nested_ctx,
-                &HashMap::new(),
-                &HashMap::new(),
-                &nested_name,
-                non_default_locale,
-                depth + 1,
-            );
+            let empty_vals = HashMap::new();
+            let empty_errs = HashMap::new();
+            let extras_ctx =
+                crate::admin::handlers::field_context::builder::FieldRecursionCtx::builder(
+                    &empty_vals,
+                    &empty_errs,
+                    &nested_name,
+                )
+                .non_default_locale(non_default_locale)
+                .depth(depth + 1)
+                .build();
+            apply_field_type_extras(nested_sf, &nested_val, &mut nested_ctx, &extras_ctx);
 
             nested_ctx
         })
@@ -450,19 +451,16 @@ pub(super) fn sub_row_collapsible(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    locale_locked: bool,
-    non_default_locale: bool,
-    depth: usize,
-    errors: &HashMap<String, String>,
+    opts: &super::SubFieldOpts,
 ) {
     let nested_sub_fields = build_enriched_children_from_data(
         &sf.fields,
         raw_value,
         indexed_name,
-        locale_locked,
-        non_default_locale,
-        depth + 1,
-        errors,
+        opts.locale_locked,
+        opts.non_default_locale,
+        opts.depth + 1,
+        opts.errors,
     );
 
     sub_ctx["sub_fields"] = json!(nested_sub_fields);
@@ -478,10 +476,7 @@ pub(super) fn sub_tabs(
     sf: &FieldDefinition,
     raw_value: Option<&Value>,
     indexed_name: &str,
-    locale_locked: bool,
-    non_default_locale: bool,
-    depth: usize,
-    errors: &HashMap<String, String>,
+    opts: &super::SubFieldOpts,
 ) {
     let tabs_ctx: Vec<_> = sf
         .tabs
@@ -491,10 +486,10 @@ pub(super) fn sub_tabs(
                 &tab.fields,
                 raw_value,
                 indexed_name,
-                locale_locked,
-                non_default_locale,
-                depth + 1,
-                errors,
+                opts.locale_locked,
+                opts.non_default_locale,
+                opts.depth + 1,
+                opts.errors,
             );
 
             let error_count = count_errors_in_fields(&tab_sub_fields);
@@ -617,13 +612,14 @@ pub(super) fn enrich_array(
     ctx: &mut Value,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
-    state: &AdminState,
-    non_default_locale: bool,
-    errors: &HashMap<String, String>,
-    conn: &Connection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
+    enrich: &super::EnrichCtx,
 ) {
+    let state = enrich.state;
+    let non_default_locale = enrich.non_default_locale;
+    let errors = enrich.errors;
+    let conn = enrich.conn;
+    let reg = enrich.reg;
+    let rel_locale_ctx = enrich.rel_locale_ctx;
     let locale_locked = non_default_locale && !field_def.localized;
     let rows: Vec<Value> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
@@ -644,15 +640,17 @@ pub(super) fn enrich_array(
                             row_obj.and_then(|m| m.get(&sf.name))
                         };
 
+                        let sub_opts = super::SubFieldOpts::builder(errors)
+                            .locale_locked(locale_locked)
+                            .non_default_locale(non_default_locale)
+                            .depth(1)
+                            .build();
                         build_enriched_sub_field_context(
                             sf,
                             raw_value,
                             &field_def.name,
                             idx,
-                            locale_locked,
-                            non_default_locale,
-                            1,
-                            errors,
+                            &sub_opts,
                         )
                     })
                     .collect();
@@ -842,13 +840,14 @@ pub(super) fn enrich_blocks(
     ctx: &mut Value,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
-    state: &AdminState,
-    non_default_locale: bool,
-    errors: &HashMap<String, String>,
-    conn: &Connection,
-    reg: &Registry,
-    rel_locale_ctx: Option<&LocaleContext>,
+    enrich: &super::EnrichCtx,
 ) {
+    let state = enrich.state;
+    let non_default_locale = enrich.non_default_locale;
+    let errors = enrich.errors;
+    let conn = enrich.conn;
+    let reg = enrich.reg;
+    let rel_locale_ctx = enrich.rel_locale_ctx;
     let locale_locked = non_default_locale && !field_def.localized;
     let rows: Vec<Value> = match doc_fields.get(&field_def.name) {
         Some(Value::Array(arr)) => arr
@@ -885,15 +884,17 @@ pub(super) fn enrich_blocks(
                                     row_obj.and_then(|m| m.get(&sf.name))
                                 };
 
+                                let sub_opts = super::SubFieldOpts::builder(errors)
+                                    .locale_locked(locale_locked)
+                                    .non_default_locale(non_default_locale)
+                                    .depth(1)
+                                    .build();
                                 build_enriched_sub_field_context(
                                     sf,
                                     raw_value,
                                     &field_def.name,
                                     idx,
-                                    locale_locked,
-                                    non_default_locale,
-                                    1,
-                                    errors,
+                                    &sub_opts,
                                 )
                             })
                             .collect()

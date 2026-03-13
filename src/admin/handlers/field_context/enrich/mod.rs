@@ -25,6 +25,125 @@ use serde_json::{Value, json};
 
 use std::collections::HashMap;
 
+/// Bundled parameters for sub-field enrichment functions (`sub_array`, `sub_blocks`,
+/// `sub_row_collapsible`, `sub_tabs`, `build_enriched_sub_field_context`) to avoid
+/// too many arguments.
+pub struct SubFieldOpts<'a> {
+    pub locale_locked: bool,
+    pub non_default_locale: bool,
+    pub depth: usize,
+    pub errors: &'a HashMap<String, String>,
+}
+
+impl<'a> SubFieldOpts<'a> {
+    pub fn builder(errors: &'a HashMap<String, String>) -> SubFieldOptsBuilder<'a> {
+        SubFieldOptsBuilder {
+            locale_locked: false,
+            non_default_locale: false,
+            depth: 0,
+            errors,
+        }
+    }
+}
+
+/// Builder for [`SubFieldOpts`].
+pub struct SubFieldOptsBuilder<'a> {
+    locale_locked: bool,
+    non_default_locale: bool,
+    depth: usize,
+    errors: &'a HashMap<String, String>,
+}
+
+impl<'a> SubFieldOptsBuilder<'a> {
+    pub fn locale_locked(mut self, v: bool) -> Self {
+        self.locale_locked = v;
+        self
+    }
+
+    pub fn non_default_locale(mut self, v: bool) -> Self {
+        self.non_default_locale = v;
+        self
+    }
+
+    pub fn depth(mut self, v: usize) -> Self {
+        self.depth = v;
+        self
+    }
+
+    pub fn build(self) -> SubFieldOpts<'a> {
+        SubFieldOpts {
+            locale_locked: self.locale_locked,
+            non_default_locale: self.non_default_locale,
+            depth: self.depth,
+            errors: self.errors,
+        }
+    }
+}
+
+/// Bundled parameters for top-level enrichment functions (`enrich_array`, `enrich_blocks`)
+/// that need DB and state access.
+pub(super) struct EnrichCtx<'a> {
+    pub state: &'a AdminState,
+    pub non_default_locale: bool,
+    pub errors: &'a HashMap<String, String>,
+    pub conn: &'a Connection,
+    pub reg: &'a Registry,
+    pub rel_locale_ctx: Option<&'a LocaleContext>,
+}
+
+/// Bundled parameters for [`enrich_field_contexts`] to avoid too many arguments.
+pub struct EnrichOptions<'a> {
+    pub filter_hidden: bool,
+    pub non_default_locale: bool,
+    pub errors: &'a HashMap<String, String>,
+    pub doc_id: Option<&'a str>,
+}
+
+impl<'a> EnrichOptions<'a> {
+    pub fn builder(errors: &'a HashMap<String, String>) -> EnrichOptionsBuilder<'a> {
+        EnrichOptionsBuilder {
+            filter_hidden: false,
+            non_default_locale: false,
+            errors,
+            doc_id: None,
+        }
+    }
+}
+
+/// Builder for [`EnrichOptions`].
+pub struct EnrichOptionsBuilder<'a> {
+    filter_hidden: bool,
+    non_default_locale: bool,
+    errors: &'a HashMap<String, String>,
+    doc_id: Option<&'a str>,
+}
+
+impl<'a> EnrichOptionsBuilder<'a> {
+    pub fn filter_hidden(mut self, v: bool) -> Self {
+        self.filter_hidden = v;
+        self
+    }
+
+    pub fn non_default_locale(mut self, v: bool) -> Self {
+        self.non_default_locale = v;
+        self
+    }
+
+    pub fn doc_id(mut self, v: &'a str) -> Self {
+        self.doc_id = Some(v);
+        self
+    }
+
+    pub fn build(self) -> EnrichOptions<'a> {
+        EnrichOptions {
+            filter_hidden: self.filter_hidden,
+            non_default_locale: self.non_default_locale,
+            errors: self.errors,
+            doc_id: self.doc_id,
+        }
+    }
+}
+
 /// Build a sub-field context for a single field within an array/blocks row,
 /// recursively handling nested composite sub-fields.
 ///
@@ -163,16 +282,17 @@ pub fn build_enriched_children_from_data(
                     child_ctx["tabs"] = json!(tabs_ctx);
                 }
                 _ => {
-                    apply_field_type_extras(
-                        child,
-                        &child_val,
-                        &mut child_ctx,
-                        &HashMap::new(),
-                        errors,
-                        &child_name,
-                        non_default_locale,
-                        depth + 1,
-                    );
+                    let empty = HashMap::new();
+                    let extras_ctx =
+                        crate::admin::handlers::field_context::builder::FieldRecursionCtx::builder(
+                            &empty,
+                            errors,
+                            &child_name,
+                        )
+                        .non_default_locale(non_default_locale)
+                        .depth(depth + 1)
+                        .build();
+                    apply_field_type_extras(child, &child_val, &mut child_ctx, &extras_ctx);
                 }
             }
 
@@ -194,11 +314,12 @@ pub fn build_enriched_sub_field_context(
     raw_value: Option<&Value>,
     parent_name: &str,
     idx: usize,
-    locale_locked: bool,
-    non_default_locale: bool,
-    depth: usize,
-    errors: &HashMap<String, String>,
+    opts: &SubFieldOpts,
 ) -> Value {
+    let locale_locked = opts.locale_locked;
+    let non_default_locale = opts.non_default_locale;
+    let depth = opts.depth;
+    let errors = opts.errors;
     let indexed_name = if matches!(
         sf.field_type,
         FieldType::Tabs | FieldType::Row | FieldType::Collapsible
@@ -260,26 +381,12 @@ pub fn build_enriched_sub_field_context(
         FieldType::Date => field_types::sub_date(&mut sub_ctx, sf, &val),
         FieldType::Relationship => field_types::sub_relationship(&mut sub_ctx, sf),
         FieldType::Upload => field_types::sub_upload(&mut sub_ctx, sf),
-        FieldType::Array => field_types::sub_array(
-            &mut sub_ctx,
-            sf,
-            raw_value,
-            &indexed_name,
-            locale_locked,
-            non_default_locale,
-            depth,
-            errors,
-        ),
-        FieldType::Blocks => field_types::sub_blocks(
-            &mut sub_ctx,
-            sf,
-            raw_value,
-            &indexed_name,
-            locale_locked,
-            non_default_locale,
-            depth,
-            errors,
-        ),
+        FieldType::Array => {
+            field_types::sub_array(&mut sub_ctx, sf, raw_value, &indexed_name, opts)
+        }
+        FieldType::Blocks => {
+            field_types::sub_blocks(&mut sub_ctx, sf, raw_value, &indexed_name, opts)
+        }
         FieldType::Group => field_types::sub_group(
             &mut sub_ctx,
             sf,
@@ -289,26 +396,10 @@ pub fn build_enriched_sub_field_context(
             non_default_locale,
             depth,
         ),
-        FieldType::Row | FieldType::Collapsible => field_types::sub_row_collapsible(
-            &mut sub_ctx,
-            sf,
-            raw_value,
-            &indexed_name,
-            locale_locked,
-            non_default_locale,
-            depth,
-            errors,
-        ),
-        FieldType::Tabs => field_types::sub_tabs(
-            &mut sub_ctx,
-            sf,
-            raw_value,
-            &indexed_name,
-            locale_locked,
-            non_default_locale,
-            depth,
-            errors,
-        ),
+        FieldType::Row | FieldType::Collapsible => {
+            field_types::sub_row_collapsible(&mut sub_ctx, sf, raw_value, &indexed_name, opts)
+        }
+        FieldType::Tabs => field_types::sub_tabs(&mut sub_ctx, sf, raw_value, &indexed_name, opts),
         FieldType::Text | FieldType::Number if sf.has_many => {
             field_types::sub_has_many_tags(&mut sub_ctx, &val)
         }
@@ -398,11 +489,13 @@ pub fn enrich_field_contexts(
     field_defs: &[FieldDefinition],
     doc_fields: &HashMap<String, Value>,
     state: &AdminState,
-    filter_hidden: bool,
-    non_default_locale: bool,
-    errors: &HashMap<String, String>,
-    doc_id: Option<&str>,
+    opts: &EnrichOptions,
 ) {
+    let filter_hidden = opts.filter_hidden;
+    let non_default_locale = opts.non_default_locale;
+    let errors = opts.errors;
+    let doc_id = opts.doc_id;
+
     let reg = &state.registry;
     let conn = match state.pool.get() {
         Ok(c) => c,
@@ -410,6 +503,15 @@ pub fn enrich_field_contexts(
     };
 
     let rel_locale_ctx = LocaleContext::from_locale_string(None, &state.config.locale);
+
+    let enrich_ctx = EnrichCtx {
+        state,
+        non_default_locale,
+        errors,
+        conn: &conn,
+        reg,
+        rel_locale_ctx: rel_locale_ctx.as_ref(),
+    };
 
     let defs_iter: Box<dyn Iterator<Item = &FieldDefinition>> = if filter_hidden {
         Box::new(field_defs.iter().filter(|f| !f.admin.hidden))
@@ -430,17 +532,7 @@ pub fn enrich_field_contexts(
                 );
             }
             FieldType::Array => {
-                field_types::enrich_array(
-                    ctx,
-                    field_def,
-                    doc_fields,
-                    state,
-                    non_default_locale,
-                    errors,
-                    &conn,
-                    reg,
-                    rel_locale_ctx.as_ref(),
-                );
+                field_types::enrich_array(ctx, field_def, doc_fields, &enrich_ctx);
             }
             FieldType::Upload => {
                 field_types::enrich_upload(
@@ -453,30 +545,11 @@ pub fn enrich_field_contexts(
                 );
             }
             FieldType::Blocks => {
-                field_types::enrich_blocks(
-                    ctx,
-                    field_def,
-                    doc_fields,
-                    state,
-                    non_default_locale,
-                    errors,
-                    &conn,
-                    reg,
-                    rel_locale_ctx.as_ref(),
-                );
+                field_types::enrich_blocks(ctx, field_def, doc_fields, &enrich_ctx);
             }
             FieldType::Row | FieldType::Collapsible => {
                 if let Some(sub_arr) = ctx.get_mut("sub_fields").and_then(|v| v.as_array_mut()) {
-                    enrich_field_contexts(
-                        sub_arr,
-                        &field_def.fields,
-                        doc_fields,
-                        state,
-                        filter_hidden,
-                        non_default_locale,
-                        errors,
-                        doc_id,
-                    );
+                    enrich_field_contexts(sub_arr, &field_def.fields, doc_fields, state, opts);
                 }
             }
             FieldType::Group => {
@@ -501,10 +574,7 @@ pub fn enrich_field_contexts(
                                 &tab_def.fields,
                                 doc_fields,
                                 state,
-                                filter_hidden,
-                                non_default_locale,
-                                errors,
-                                doc_id,
+                                opts,
                             );
                         }
                     }

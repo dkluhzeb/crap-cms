@@ -9,6 +9,15 @@ use crate::core::document::Document;
 use crate::core::field::FieldDefinition;
 use crate::db::query;
 
+/// Context for creating a version snapshot, bundling the table/document metadata.
+pub(crate) struct VersionSnapshotCtx<'a> {
+    pub table: &'a str,
+    pub parent_id: &'a str,
+    pub fields: &'a [FieldDefinition],
+    pub versions: Option<&'a VersionsConfig>,
+    pub has_drafts: bool,
+}
+
 /// Recursively merge join-table data (blocks, arrays, relationships) into a snapshot,
 /// handling Tabs/Row/Collapsible layout wrappers.
 fn merge_join_data_into_snapshot(
@@ -71,20 +80,16 @@ pub(crate) fn save_draft_version(
 /// Set document status, create a version snapshot, and prune.
 pub(crate) fn create_version_snapshot(
     conn: &rusqlite::Connection,
-    table: &str,
-    parent_id: &str,
-    fields: &[FieldDefinition],
-    versions: Option<&VersionsConfig>,
-    has_drafts: bool,
+    ctx: &VersionSnapshotCtx<'_>,
     status: &str,
     doc: &Document,
 ) -> Result<()> {
-    if has_drafts {
-        query::set_document_status(conn, table, parent_id, status)?;
+    if ctx.has_drafts {
+        query::set_document_status(conn, ctx.table, ctx.parent_id, status)?;
     }
-    let snapshot = query::build_snapshot(conn, table, fields, doc)?;
-    query::create_version(conn, table, parent_id, status, &snapshot)?;
-    prune_versions(conn, table, parent_id, versions)?;
+    let snapshot = query::build_snapshot(conn, ctx.table, ctx.fields, doc)?;
+    query::create_version(conn, ctx.table, ctx.parent_id, status, &snapshot)?;
+    prune_versions(conn, ctx.table, ctx.parent_id, ctx.versions)?;
     Ok(())
 }
 
@@ -109,7 +114,7 @@ mod tests {
     use crate::core::field::*;
     use crate::db::query;
     use crate::service::{
-        persist_create, persist_draft_version, persist_unpublish, persist_update,
+        PersistOptions, persist_create, persist_draft_version, persist_unpublish, persist_update,
     };
     use rusqlite::Connection;
     use std::collections::HashMap;
@@ -165,9 +170,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         assert_eq!(doc.get_str("title"), Some("Versioned"));
@@ -183,17 +186,11 @@ mod tests {
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Draft Post".to_string());
 
-        let doc = persist_create(
-            &conn,
-            "posts",
-            &def,
-            &data,
-            &HashMap::new(),
-            None,
-            None,
-            true,
-        )
-        .unwrap();
+        let opts = PersistOptions {
+            is_draft: true,
+            ..PersistOptions::default()
+        };
+        let doc = persist_create(&conn, "posts", &def, &data, &HashMap::new(), &opts).unwrap();
         assert_eq!(doc.get_str("title"), Some("Draft Post"));
 
         let status = query::get_document_status(&conn, "posts", &doc.id).unwrap();
@@ -213,9 +210,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         let id = doc.id.clone();
@@ -251,9 +246,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         let id = doc.id.clone();
@@ -288,9 +281,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         let id = doc.id.clone();
@@ -325,9 +316,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         let id = doc.id.clone();
@@ -402,9 +391,7 @@ mod tests {
             &def,
             &data,
             &HashMap::new(),
-            None,
-            None,
-            false,
+            &PersistOptions::default(),
         )
         .unwrap();
         let id = doc.id.clone();

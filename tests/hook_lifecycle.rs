@@ -8,7 +8,7 @@ use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
-use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::hooks::lifecycle::{AfterReadCtx, HookRunner};
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -622,15 +622,15 @@ fn apply_after_read_transforms_doc() {
     drop(reg);
 
     // apply_after_read should run the after_read hook which adds _was_read marker
-    let transformed = runner.apply_after_read(
-        &def.hooks,
-        &def.fields,
-        "articles",
-        "find",
-        doc.clone(),
-        None,
-        None,
-    );
+    let ar_ctx = AfterReadCtx {
+        hooks: &def.hooks,
+        fields: &def.fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let transformed = runner.apply_after_read(&ar_ctx, doc.clone());
 
     assert_eq!(
         transformed.fields.get("_was_read").and_then(|v| v.as_str()),
@@ -664,15 +664,15 @@ fn apply_after_read_many_transforms_all() {
     drop(reg);
 
     let docs = vec![doc1, doc2];
-    let transformed = runner.apply_after_read_many(
-        &def.hooks,
-        &def.fields,
-        "articles",
-        "find",
-        docs,
-        None,
-        None,
-    );
+    let ar_ctx = AfterReadCtx {
+        hooks: &def.hooks,
+        fields: &def.fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let transformed = runner.apply_after_read_many(&ar_ctx, docs);
 
     assert_eq!(transformed.len(), 2, "Should return same number of docs");
     for doc in &transformed {
@@ -700,15 +700,15 @@ fn apply_after_read_no_hooks_returns_same() {
     let original_id = doc.id.clone();
     let original_title = doc.fields.get("title").cloned();
 
-    let result = runner.apply_after_read(
-        &empty_hooks,
-        &empty_fields,
-        "articles",
-        "find",
-        doc,
-        None,
-        None,
-    );
+    let ar_ctx = AfterReadCtx {
+        hooks: &empty_hooks,
+        fields: &empty_fields,
+        collection: "articles",
+        operation: "find",
+        user: None,
+        ui_locale: None,
+    };
+    let result = runner.apply_after_read(&ar_ctx, doc);
 
     assert_eq!(result.id, original_id, "ID should be unchanged");
     assert_eq!(

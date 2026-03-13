@@ -5,11 +5,11 @@ use crate::{
         handlers::{
             collections::forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
-                apply_display_conditions, auto_label_from_name, build_field_contexts,
-                build_list_url, check_access_or_forbid, enrich_field_contexts, forbidden,
-                get_event_user, get_user_doc, html_with_toast, htmx_redirect, is_column_eligible,
-                redirect_response, server_error, split_sidebar_fields, translate_validation_errors,
-                url_decode,
+                EnrichOptions, apply_display_conditions, auto_label_from_name,
+                build_field_contexts, build_list_url, check_access_or_forbid,
+                enrich_field_contexts, forbidden, get_event_user, get_user_doc, html_with_toast,
+                htmx_redirect, is_column_eligible, redirect_response, server_error,
+                split_sidebar_fields, translate_validation_errors, url_decode,
             },
         },
     },
@@ -403,10 +403,9 @@ pub(super) fn render_upload_error(
         &def.fields,
         &HashMap::new(),
         state,
-        true,
-        false,
-        &HashMap::new(),
-        None,
+        &EnrichOptions::builder(&HashMap::new())
+            .filter_hidden(true)
+            .build(),
     );
 
     let empty_data = json!({});
@@ -475,10 +474,10 @@ pub(super) fn render_edit_upload_error(
         &def.fields,
         &HashMap::new(),
         state,
-        true,
-        false,
-        &HashMap::new(),
-        Some(id),
+        &EnrichOptions::builder(&HashMap::new())
+            .filter_hidden(true)
+            .doc_id(id)
+            .build(),
     );
 
     let form_json = json!(
@@ -780,10 +779,10 @@ pub(super) async fn do_update(
                     &def.fields,
                     &join_data_clone,
                     state,
-                    true,
-                    false,
-                    &error_map,
-                    Some(id),
+                    &EnrichOptions::builder(&error_map)
+                        .filter_hidden(true)
+                        .doc_id(id)
+                        .build(),
                 );
 
                 let form_json = json!(

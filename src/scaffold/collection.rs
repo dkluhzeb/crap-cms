@@ -28,6 +28,33 @@ pub const VALID_FIELD_TYPES: &[&str] = &[
     "join",
 ];
 
+/// Boolean flags for collection scaffolding.
+pub struct CollectionOptions {
+    pub no_timestamps: bool,
+    pub auth: bool,
+    pub upload: bool,
+    pub versions: bool,
+    pub force: bool,
+}
+
+impl CollectionOptions {
+    pub fn new() -> Self {
+        Self {
+            no_timestamps: false,
+            auth: false,
+            upload: false,
+            versions: false,
+            force: false,
+        }
+    }
+}
+
+impl Default for CollectionOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub(crate) struct FieldStub {
     pub(crate) name: String,
     pub(crate) field_type: String,
@@ -42,11 +69,7 @@ pub fn make_collection(
     config_dir: &Path,
     slug: &str,
     fields_shorthand: Option<&str>,
-    no_timestamps: bool,
-    auth: bool,
-    upload: bool,
-    versions: bool,
-    force: bool,
+    opts: &CollectionOptions,
 ) -> Result<()> {
     super::validate_slug(slug)?;
 
@@ -54,7 +77,7 @@ pub fn make_collection(
     fs::create_dir_all(&collections_dir).context("Failed to create collections/ directory")?;
 
     let file_path = collections_dir.join(format!("{}.lua", slug));
-    if file_path.exists() && !force {
+    if file_path.exists() && !opts.force {
         anyhow::bail!(
             "File '{}' already exists — use --force to overwrite",
             file_path.display()
@@ -64,11 +87,11 @@ pub fn make_collection(
     let singular_slug = singularize(slug);
     let label_singular = super::to_title_case(&singular_slug);
     let label_plural = pluralize(&label_singular);
-    let timestamps = if no_timestamps { "false" } else { "true" };
+    let timestamps = if opts.no_timestamps { "false" } else { "true" };
 
     let fields = match fields_shorthand {
         Some(s) => parse_fields_shorthand(s)?,
-        None if upload => vec![FieldStub {
+        None if opts.upload => vec![FieldStub {
             name: "alt".to_string(),
             field_type: "text".to_string(),
             required: false,
@@ -91,7 +114,7 @@ pub fn make_collection(
     lua.push_str(&format!("        plural = \"{}\",\n", label_plural));
     lua.push_str("    },\n");
     lua.push_str(&format!("    timestamps = {},\n", timestamps));
-    if auth {
+    if opts.auth {
         lua.push_str("    auth = true,\n");
         lua.push_str("    -- Full auth config (uncomment and customize):\n");
         lua.push_str("    -- auth = {\n");
@@ -99,7 +122,7 @@ pub fn make_collection(
         lua.push_str("    --     strategies = {},\n");
         lua.push_str("    -- },\n");
     }
-    if upload {
+    if opts.upload {
         lua.push_str("    upload = true,\n");
         lua.push_str("    -- Full upload config (uncomment and customize):\n");
         lua.push_str("    -- upload = {\n");
@@ -110,13 +133,13 @@ pub fn make_collection(
         lua.push_str("    --     },\n");
         lua.push_str("    -- },\n");
     }
-    if versions {
+    if opts.versions {
         lua.push_str("    versions = true,\n");
     }
-    let use_as_title = if auth { "email" } else { title_field };
+    let use_as_title = if opts.auth { "email" } else { title_field };
     lua.push_str("    admin = {\n");
     lua.push_str(&format!("        use_as_title = \"{}\",\n", use_as_title));
-    if !no_timestamps {
+    if !opts.no_timestamps {
         lua.push_str("        default_sort = \"-created_at\",\n");
     }
     lua.push_str(&format!(
@@ -358,7 +381,7 @@ mod tests {
     #[test]
     fn test_make_collection_default() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
+        make_collection(tmp.path(), "posts", None, &CollectionOptions::default()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
         assert!(content.contains("crap.collections.define(\"posts\""));
@@ -373,15 +396,15 @@ mod tests {
     #[test]
     fn test_make_collection_with_fields() {
         let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = CollectionOptions {
+            no_timestamps: true,
+            ..CollectionOptions::default()
+        };
         make_collection(
             tmp.path(),
             "articles",
             Some("headline:text:required,body:richtext,draft:checkbox"),
-            true,
-            false,
-            false,
-            false,
-            false,
+            &opts,
         )
         .unwrap();
 
@@ -432,7 +455,11 @@ mod tests {
     #[test]
     fn test_make_collection_auth() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "users", None, false, true, false, false, false).unwrap();
+        let opts = CollectionOptions {
+            auth: true,
+            ..CollectionOptions::default()
+        };
+        make_collection(tmp.path(), "users", None, &opts).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/users.lua")).unwrap();
         assert!(content.contains("auth = true"));
@@ -442,7 +469,11 @@ mod tests {
     #[test]
     fn test_make_collection_upload() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "media", None, false, false, true, false, false).unwrap();
+        let opts = CollectionOptions {
+            upload: true,
+            ..CollectionOptions::default()
+        };
+        make_collection(tmp.path(), "media", None, &opts).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/media.lua")).unwrap();
         assert!(content.contains("upload = true"));
@@ -452,7 +483,11 @@ mod tests {
     #[test]
     fn test_make_collection_versions() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, false, false, false, true, false).unwrap();
+        let opts = CollectionOptions {
+            versions: true,
+            ..CollectionOptions::default()
+        };
+        make_collection(tmp.path(), "posts", None, &opts).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
         assert!(content.contains("versions = true"));
@@ -465,11 +500,7 @@ mod tests {
             tmp.path(),
             "posts",
             Some("title:text:required:localized,body:textarea:localized"),
-            false,
-            false,
-            false,
-            false,
-            false,
+            &CollectionOptions::default(),
         )
         .unwrap();
 
@@ -495,24 +526,15 @@ mod tests {
     #[test]
     fn test_make_collection_invalid_slug() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let result = make_collection(
-            tmp.path(),
-            "Bad Slug",
-            None,
-            false,
-            false,
-            false,
-            false,
-            false,
-        );
+        let result = make_collection(tmp.path(), "Bad Slug", None, &CollectionOptions::default());
         assert!(result.is_err());
     }
 
     #[test]
     fn test_make_collection_refuses_overwrite() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
-        let result = make_collection(tmp.path(), "posts", None, false, false, false, false, false);
+        make_collection(tmp.path(), "posts", None, &CollectionOptions::default()).unwrap();
+        let result = make_collection(tmp.path(), "posts", None, &CollectionOptions::default());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("--force"));
     }
@@ -520,10 +542,12 @@ mod tests {
     #[test]
     fn test_make_collection_force_overwrite() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
-        assert!(
-            make_collection(tmp.path(), "posts", None, false, false, false, false, true).is_ok()
-        );
+        make_collection(tmp.path(), "posts", None, &CollectionOptions::default()).unwrap();
+        let opts = CollectionOptions {
+            force: true,
+            ..CollectionOptions::default()
+        };
+        assert!(make_collection(tmp.path(), "posts", None, &opts).is_ok());
     }
 
     #[test]
@@ -532,7 +556,7 @@ mod tests {
         make_collection(
             tmp.path(), "posts",
             Some("author:relationship,status:select,body:array,layout:blocks,meta:group,content:tabs,snippet:code,related:join,pic:upload,style:radio,section:collapsible,cols:row"),
-            false, false, false, false, false,
+            &CollectionOptions::default(),
         ).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
@@ -574,7 +598,7 @@ mod tests {
     #[test]
     fn test_access_block_in_output() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
+        make_collection(tmp.path(), "posts", None, &CollectionOptions::default()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
         assert!(content.contains("-- access = {"));
@@ -586,7 +610,7 @@ mod tests {
     #[test]
     fn test_admin_block_expanded() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
+        make_collection(tmp.path(), "posts", None, &CollectionOptions::default()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
         assert!(content.contains("default_sort = \"-created_at\""));
@@ -596,7 +620,11 @@ mod tests {
     #[test]
     fn test_admin_block_no_default_sort_without_timestamps() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, true, false, false, false, false).unwrap();
+        let opts = CollectionOptions {
+            no_timestamps: true,
+            ..CollectionOptions::default()
+        };
+        make_collection(tmp.path(), "posts", None, &opts).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
         assert!(
@@ -609,7 +637,11 @@ mod tests {
     #[test]
     fn test_upload_comment_block() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "media", None, false, false, true, false, false).unwrap();
+        let opts = CollectionOptions {
+            upload: true,
+            ..CollectionOptions::default()
+        };
+        make_collection(tmp.path(), "media", None, &opts).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/media.lua")).unwrap();
         assert!(content.contains("upload = true"));
@@ -622,7 +654,11 @@ mod tests {
     #[test]
     fn test_auth_comment_block() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "users", None, false, true, false, false, false).unwrap();
+        let opts = CollectionOptions {
+            auth: true,
+            ..CollectionOptions::default()
+        };
+        make_collection(tmp.path(), "users", None, &opts).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/users.lua")).unwrap();
         assert!(content.contains("auth = true"));
@@ -650,7 +686,7 @@ mod tests {
     #[test]
     fn test_indexes_comment_in_output() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(tmp.path(), "posts", None, false, false, false, false, false).unwrap();
+        make_collection(tmp.path(), "posts", None, &CollectionOptions::default()).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
         assert!(content.contains("-- indexes = {"));

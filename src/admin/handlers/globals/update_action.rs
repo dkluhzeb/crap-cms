@@ -14,10 +14,10 @@ use crate::{
         handlers::{
             collections::forms::{extract_join_data_from_form, transform_select_has_many},
             shared::{
-                apply_display_conditions, build_field_contexts, check_access_or_forbid,
-                do_unpublish, enrich_field_contexts, forbidden, get_event_user, get_user_doc,
-                html_with_toast, htmx_redirect, redirect_response, server_error,
-                split_sidebar_fields, translate_validation_errors,
+                EnrichOptions, apply_display_conditions, build_field_contexts,
+                check_access_or_forbid, do_unpublish, enrich_field_contexts, forbidden,
+                get_event_user, get_user_doc, html_with_toast, htmx_redirect, redirect_response,
+                server_error, split_sidebar_fields, translate_validation_errors,
             },
         },
     },
@@ -193,10 +193,7 @@ pub async fn update_action(
                     &def.fields,
                     &doc_fields,
                     &state,
-                    false,
-                    false,
-                    &error_map,
-                    None,
+                    &EnrichOptions::builder(&error_map).build(),
                 );
 
                 let form_data_json = json!(doc_fields);

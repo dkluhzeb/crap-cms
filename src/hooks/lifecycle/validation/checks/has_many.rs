@@ -127,7 +127,7 @@ pub(crate) fn check_has_many_elements(
 #[cfg(test)]
 mod tests {
     use crate::core::field::{FieldDefinition, FieldType, LocalizedString, SelectOption};
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -148,7 +148,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["red","blue"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Valid has_many select values should pass");
     }
 
@@ -169,7 +180,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["red","invalid"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -195,7 +217,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!("[]"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Empty array for has_many select should pass"
@@ -215,7 +248,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["rust","lua","python"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Valid has_many text values should pass");
     }
 
@@ -233,7 +277,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["rust","ab"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -256,7 +311,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["a","b","c"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -278,7 +344,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10","20","30"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Valid has_many number values should pass");
     }
 
@@ -296,7 +373,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10","75"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("at most 50"));
     }
@@ -315,7 +403,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!("[]"));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err(), "Empty array should fail required check");
         assert!(result.unwrap_err().errors[0].message.contains("required"));
     }
@@ -334,7 +433,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["rust"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_ok(), "Non-empty array should pass required check");
     }
 
@@ -352,7 +462,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["abcdefgh","abcdefgh"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "max_length should check per-value, not JSON string length"
@@ -373,7 +494,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["a","b"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "has_many text with fewer items than min_rows should fail"
@@ -395,7 +527,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "has_many number with fewer items than min_rows should fail"
@@ -417,7 +560,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("scores".to_string(), json!(r#"["10","2"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "has_many number with value below min should fail"
@@ -439,7 +593,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("tags".to_string(), json!(r#"["ab","toolong"]"#));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "has_many text with value exceeding max_length should fail"

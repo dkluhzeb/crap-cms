@@ -15,29 +15,34 @@ use crate::core::field::FieldDefinition;
 use crate::core::validate::ValidationError;
 use crate::db::query::LocaleContext;
 
+/// Context for field validation, bundling database and request parameters.
+pub struct ValidationCtx<'a> {
+    pub conn: &'a rusqlite::Connection,
+    pub table: &'a str,
+    pub exclude_id: Option<&'a str>,
+    pub is_draft: bool,
+    pub locale_ctx: Option<&'a LocaleContext>,
+}
+
 /// Inner implementation of `validate_fields` — operates on a locked `&Lua`.
 /// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
 pub(crate) fn validate_fields_inner(
     lua: &mlua::Lua,
     fields: &[FieldDefinition],
     data: &HashMap<String, serde_json::Value>,
-    conn: &rusqlite::Connection,
-    table: &str,
-    exclude_id: Option<&str>,
-    is_draft: bool,
-    locale_ctx: Option<&LocaleContext>,
+    ctx: &ValidationCtx,
 ) -> Result<(), ValidationError> {
     let mut errors = Vec::new();
     recursive::validate_fields_recursive(
         lua,
         fields,
         data,
-        conn,
-        table,
-        exclude_id,
-        is_draft,
+        ctx.conn,
+        ctx.table,
+        ctx.exclude_id,
+        ctx.is_draft,
         "",
-        locale_ctx,
+        ctx.locale_ctx,
         false,
         &mut errors,
     );

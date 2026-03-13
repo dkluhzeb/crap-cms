@@ -9,6 +9,14 @@ use super::super::{LocaleContext, coerce_value, locale_write_column};
 use crate::core::field::FieldType;
 use crate::core::{CollectionDefinition, Document};
 
+/// Accumulator for INSERT column/placeholder/param collection during recursive field traversal.
+pub(super) struct InsertCollector {
+    pub columns: Vec<String>,
+    pub placeholders: Vec<String>,
+    pub params: Vec<Box<dyn rusqlite::types::ToSql>>,
+    pub idx: usize,
+}
+
 /// Create a new document. Returns the created document.
 pub fn create(
     conn: &rusqlite::Connection,
@@ -22,41 +30,35 @@ pub fn create(
         .format("%Y-%m-%dT%H:%M:%S.000Z")
         .to_string();
 
-    let mut columns = vec!["id".to_string()];
-    let mut placeholders = vec!["?1".to_string()];
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = vec![Box::new(id.clone())];
-    let mut idx = 2;
+    let mut collector = InsertCollector {
+        columns: vec!["id".to_string()],
+        placeholders: vec!["?1".to_string()],
+        params: vec![Box::new(id.clone())],
+        idx: 2,
+    };
 
-    collect_insert_params(
-        &def.fields,
-        data,
-        &locale_ctx,
-        &mut columns,
-        &mut placeholders,
-        &mut params,
-        &mut idx,
-        "",
-    );
+    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, "");
 
     if def.timestamps {
-        columns.push("created_at".to_string());
-        placeholders.push(format!("?{}", idx));
-        params.push(Box::new(now.clone()));
-        idx += 1;
+        collector.columns.push("created_at".to_string());
+        collector.placeholders.push(format!("?{}", collector.idx));
+        collector.params.push(Box::new(now.clone()));
+        collector.idx += 1;
 
-        columns.push("updated_at".to_string());
-        placeholders.push(format!("?{}", idx));
-        params.push(Box::new(now));
+        collector.columns.push("updated_at".to_string());
+        collector.placeholders.push(format!("?{}", collector.idx));
+        collector.params.push(Box::new(now));
     }
 
     let sql = format!(
         "INSERT INTO {} ({}) VALUES ({})",
         slug,
-        columns.join(", "),
-        placeholders.join(", ")
+        collector.columns.join(", "),
+        collector.placeholders.join(", ")
     );
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+        collector.params.iter().map(|p| p.as_ref()).collect();
 
     conn.execute(&sql, params_from_iter(param_refs.iter()))
         .with_context(|| format!("Failed to insert into '{}'", slug))?;
@@ -72,10 +74,7 @@ pub(super) fn collect_insert_params(
     fields: &[crate::core::field::FieldDefinition],
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
-    columns: &mut Vec<String>,
-    placeholders: &mut Vec<String>,
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
-    idx: &mut usize,
+    collector: &mut InsertCollector,
     prefix: &str,
 ) {
     for field in fields {
@@ -86,41 +85,14 @@ pub(super) fn collect_insert_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                collect_insert_params(
-                    &field.fields,
-                    data,
-                    locale_ctx,
-                    columns,
-                    placeholders,
-                    params,
-                    idx,
-                    &new_prefix,
-                );
+                collect_insert_params(&field.fields, data, locale_ctx, collector, &new_prefix);
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_insert_params(
-                    &field.fields,
-                    data,
-                    locale_ctx,
-                    columns,
-                    placeholders,
-                    params,
-                    idx,
-                    prefix,
-                );
+                collect_insert_params(&field.fields, data, locale_ctx, collector, prefix);
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_insert_params(
-                        &tab.fields,
-                        data,
-                        locale_ctx,
-                        columns,
-                        placeholders,
-                        params,
-                        idx,
-                        prefix,
-                    );
+                    collect_insert_params(&tab.fields, data, locale_ctx, collector, prefix);
                 }
             }
             _ => {
@@ -134,15 +106,17 @@ pub(super) fn collect_insert_params(
                 };
                 let col_name = locale_write_column(&data_key, field, locale_ctx);
                 if let Some(value) = data.get(&data_key) {
-                    columns.push(col_name);
-                    placeholders.push(format!("?{}", *idx));
-                    params.push(coerce_value(&field.field_type, value));
-                    *idx += 1;
+                    collector.columns.push(col_name);
+                    collector.placeholders.push(format!("?{}", collector.idx));
+                    collector
+                        .params
+                        .push(coerce_value(&field.field_type, value));
+                    collector.idx += 1;
                 } else if field.field_type == FieldType::Checkbox {
-                    columns.push(col_name);
-                    placeholders.push(format!("?{}", *idx));
-                    params.push(Box::new(0i32));
-                    *idx += 1;
+                    collector.columns.push(col_name);
+                    collector.placeholders.push(format!("?{}", collector.idx));
+                    collector.params.push(Box::new(0i32));
+                    collector.idx += 1;
                 }
             }
         }

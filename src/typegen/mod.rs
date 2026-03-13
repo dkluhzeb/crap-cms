@@ -32,7 +32,7 @@ pub enum Language {
 }
 
 impl Language {
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "lua" => Some(Self::Lua),
             "ts" | "typescript" => Some(Self::Typescript),
@@ -241,27 +241,33 @@ mod tests {
 
     #[test]
     fn language_from_str_all_variants() {
-        assert_eq!(Language::from_str("lua"), Some(Language::Lua));
-        assert_eq!(Language::from_str("ts"), Some(Language::Typescript));
-        assert_eq!(Language::from_str("typescript"), Some(Language::Typescript));
-        assert_eq!(Language::from_str("go"), Some(Language::Go));
-        assert_eq!(Language::from_str("golang"), Some(Language::Go));
-        assert_eq!(Language::from_str("py"), Some(Language::Python));
-        assert_eq!(Language::from_str("python"), Some(Language::Python));
-        assert_eq!(Language::from_str("rs"), Some(Language::Rust));
-        assert_eq!(Language::from_str("rust"), Some(Language::Rust));
+        assert_eq!(Language::from_name("lua"), Some(Language::Lua));
+        assert_eq!(Language::from_name("ts"), Some(Language::Typescript));
+        assert_eq!(
+            Language::from_name("typescript"),
+            Some(Language::Typescript)
+        );
+        assert_eq!(Language::from_name("go"), Some(Language::Go));
+        assert_eq!(Language::from_name("golang"), Some(Language::Go));
+        assert_eq!(Language::from_name("py"), Some(Language::Python));
+        assert_eq!(Language::from_name("python"), Some(Language::Python));
+        assert_eq!(Language::from_name("rs"), Some(Language::Rust));
+        assert_eq!(Language::from_name("rust"), Some(Language::Rust));
     }
 
     #[test]
     fn language_from_str_case_insensitive() {
-        assert_eq!(Language::from_str("LUA"), Some(Language::Lua));
-        assert_eq!(Language::from_str("TypeScript"), Some(Language::Typescript));
+        assert_eq!(Language::from_name("LUA"), Some(Language::Lua));
+        assert_eq!(
+            Language::from_name("TypeScript"),
+            Some(Language::Typescript)
+        );
     }
 
     #[test]
     fn language_from_str_invalid() {
-        assert_eq!(Language::from_str("java"), None);
-        assert_eq!(Language::from_str(""), None);
+        assert_eq!(Language::from_name("java"), None);
+        assert_eq!(Language::from_name(""), None);
     }
 
     #[test]

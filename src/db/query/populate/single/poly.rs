@@ -3,24 +3,17 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
-use super::super::{
-    PopulateCache, PopulateContext, PopulateOpts, document_to_json, parse_poly_ref,
-};
+use super::super::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref};
 use super::populate_relationships_cached;
 use crate::core::Document;
-use crate::db::query::LocaleContext;
 use crate::db::query::read::{find_by_id, find_by_ids};
 
 /// Populate a polymorphic has-many field.
 pub(super) fn populate_poly_has_many(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
+    ctx: &PopulateCtx<'_>,
     doc: &mut Document,
     field_name: &str,
     visited: &mut HashSet<(String, String)>,
-    effective_depth: i32,
-    locale_ctx: Option<&LocaleContext>,
-    cache: &PopulateCache,
 ) -> Result<()> {
     let items: Vec<String> = match doc.fields.get(field_name) {
         Some(serde_json::Value::Array(arr)) => arr
@@ -43,9 +36,9 @@ pub(super) fn populate_poly_has_many(
     // Batch fetch per collection
     let mut fetched_map: HashMap<String, HashMap<String, Document>> = HashMap::new();
     for (col, col_ids) in &ids_by_collection {
-        if let Some(item_def) = registry.get_collection(col) {
+        if let Some(item_def) = ctx.registry.get_collection(col) {
             let item_def = item_def.clone();
-            let fetched = find_by_ids(conn, col, &item_def, col_ids, locale_ctx)?;
+            let fetched = find_by_ids(ctx.conn, col, &item_def, col_ids, ctx.locale_ctx)?;
             let doc_map: HashMap<String, Document> =
                 fetched.into_iter().map(|d| (d.id.clone(), d)).collect();
             fetched_map.insert(col.clone(), doc_map);
@@ -61,7 +54,7 @@ pub(super) fn populate_poly_has_many(
                 continue;
             }
             if let Some(col_map) = fetched_map.get_mut(&col) {
-                if let Some(item_def) = registry.get_collection(&col) {
+                if let Some(item_def) = ctx.registry.get_collection(&col) {
                     let item_def = item_def.clone();
                     if let Some(mut rd) = col_map.remove(&id) {
                         if let Some(ref uc) = item_def.upload
@@ -71,21 +64,21 @@ pub(super) fn populate_poly_has_many(
                         }
                         populate_relationships_cached(
                             &PopulateContext {
-                                conn,
-                                registry,
+                                conn: ctx.conn,
+                                registry: ctx.registry,
                                 collection_slug: &col,
                                 def: &item_def,
                             },
                             &mut rd,
                             visited,
                             &PopulateOpts {
-                                depth: effective_depth - 1,
+                                depth: ctx.effective_depth - 1,
                                 select: None,
-                                locale_ctx,
+                                locale_ctx: ctx.locale_ctx,
                             },
-                            cache,
+                            ctx.cache,
                         )?;
-                        cache.insert((col.clone(), rd.id.clone()), rd.clone());
+                        ctx.cache.insert((col.clone(), rd.id.clone()), rd.clone());
                         populated.push(document_to_json(&rd, &col));
                     } else {
                         populated.push(serde_json::Value::String(item.clone()));
@@ -107,14 +100,10 @@ pub(super) fn populate_poly_has_many(
 
 /// Populate a polymorphic has-one field.
 pub(super) fn populate_poly_has_one(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
+    ctx: &PopulateCtx<'_>,
     doc: &mut Document,
     field_name: &str,
     visited: &mut HashSet<(String, String)>,
-    effective_depth: i32,
-    locale_ctx: Option<&LocaleContext>,
-    cache: &PopulateCache,
 ) -> Result<()> {
     let raw = match doc.fields.get(field_name) {
         Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
@@ -124,15 +113,16 @@ pub(super) fn populate_poly_has_one(
         if visited.contains(&(col.clone(), id.clone())) {
             return Ok(());
         }
-        if let Some(item_def) = registry.get_collection(&col) {
+        if let Some(item_def) = ctx.registry.get_collection(&col) {
             let item_def = item_def.clone();
             let poly_cache_key = (col.clone(), id.clone());
-            if let Some(cached) = cache.get(&poly_cache_key) {
+            if let Some(cached) = ctx.cache.get(&poly_cache_key) {
                 doc.fields.insert(
                     field_name.to_string(),
                     document_to_json(cached.value(), &col),
                 );
-            } else if let Some(mut rd) = find_by_id(conn, &col, &item_def, &id, locale_ctx)? {
+            } else if let Some(mut rd) = find_by_id(ctx.conn, &col, &item_def, &id, ctx.locale_ctx)?
+            {
                 if let Some(ref uc) = item_def.upload
                     && uc.enabled
                 {
@@ -140,21 +130,21 @@ pub(super) fn populate_poly_has_one(
                 }
                 populate_relationships_cached(
                     &PopulateContext {
-                        conn,
-                        registry,
+                        conn: ctx.conn,
+                        registry: ctx.registry,
                         collection_slug: &col,
                         def: &item_def,
                     },
                     &mut rd,
                     visited,
                     &PopulateOpts {
-                        depth: effective_depth - 1,
+                        depth: ctx.effective_depth - 1,
                         select: None,
-                        locale_ctx,
+                        locale_ctx: ctx.locale_ctx,
                     },
-                    cache,
+                    ctx.cache,
                 )?;
-                cache.insert(poly_cache_key, rd.clone());
+                ctx.cache.insert(poly_cache_key, rd.clone());
                 doc.fields
                     .insert(field_name.to_string(), document_to_json(&rd, &col));
             }

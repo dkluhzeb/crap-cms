@@ -84,8 +84,7 @@ mod tests {
         let mut def = crate::core::CollectionDefinition::new("media");
         def.timestamps = true;
         {
-            let mut upload = crate::core::upload::CollectionUpload::default();
-            upload.enabled = true;
+            let mut upload = crate::core::upload::CollectionUpload::new();
             upload.mime_types = vec!["image/png".to_string()];
             upload.max_file_size = Some(1000000);
             upload.image_sizes = vec![
@@ -122,11 +121,7 @@ mod tests {
         let lua = mlua::Lua::new();
         let mut def = crate::core::CollectionDefinition::new("media");
         def.timestamps = false;
-        {
-            let mut upload = crate::core::upload::CollectionUpload::default();
-            upload.enabled = true;
-            def.upload = Some(upload);
-        }
+        def.upload = Some(crate::core::upload::CollectionUpload::new());
         let tbl = collection_config_to_lua(&lua, &def).unwrap();
         let upload_val: bool = tbl.get("upload").unwrap();
         assert!(upload_val, "Simple upload should serialize as true");
@@ -138,8 +133,7 @@ mod tests {
         let mut def = crate::core::CollectionDefinition::new("media");
         def.timestamps = false;
         {
-            let mut upload = crate::core::upload::CollectionUpload::default();
-            upload.enabled = true;
+            let mut upload = crate::core::upload::CollectionUpload::new();
             upload.format_options = crate::core::upload::FormatOptions {
                 webp: None,
                 avif: Some(crate::core::upload::FormatQuality::new(60, false)),
@@ -170,8 +164,7 @@ mod tests {
             use crate::core::upload::ImageSizeBuilder;
             let mut def = crate::core::CollectionDefinition::new("media");
             def.timestamps = false;
-            let mut upload = CollectionUpload::default();
-            upload.enabled = true;
+            let mut upload = CollectionUpload::new();
             upload.image_sizes = vec![
                 ImageSizeBuilder::new("thumb")
                     .width(100)

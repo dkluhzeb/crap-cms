@@ -10,6 +10,63 @@ use crate::{
     core::field::{FieldDefinition, FieldType},
 };
 
+/// Parameters for recursive child-field building inside composite types
+/// (Group, Array, Blocks, Tabs, etc.).
+pub struct FieldRecursionCtx<'a> {
+    pub values: &'a HashMap<String, String>,
+    pub errors: &'a HashMap<String, String>,
+    pub name_prefix: &'a str,
+    pub non_default_locale: bool,
+    pub depth: usize,
+}
+
+impl<'a> FieldRecursionCtx<'a> {
+    pub fn builder(
+        values: &'a HashMap<String, String>,
+        errors: &'a HashMap<String, String>,
+        name_prefix: &'a str,
+    ) -> FieldRecursionCtxBuilder<'a> {
+        FieldRecursionCtxBuilder {
+            values,
+            errors,
+            name_prefix,
+            non_default_locale: false,
+            depth: 0,
+        }
+    }
+}
+
+/// Builder for [`FieldRecursionCtx`].
+pub struct FieldRecursionCtxBuilder<'a> {
+    values: &'a HashMap<String, String>,
+    errors: &'a HashMap<String, String>,
+    name_prefix: &'a str,
+    non_default_locale: bool,
+    depth: usize,
+}
+
+impl<'a> FieldRecursionCtxBuilder<'a> {
+    pub fn non_default_locale(mut self, v: bool) -> Self {
+        self.non_default_locale = v;
+        self
+    }
+
+    pub fn depth(mut self, v: usize) -> Self {
+        self.depth = v;
+        self
+    }
+
+    pub fn build(self) -> FieldRecursionCtx<'a> {
+        FieldRecursionCtx {
+            values: self.values,
+            errors: self.errors,
+            name_prefix: self.name_prefix,
+            non_default_locale: self.non_default_locale,
+            depth: self.depth,
+        }
+    }
+}
+
 /// Build a field context for a single field definition, recursing into composite sub-fields.
 ///
 /// `name_prefix`: the full form-name prefix for this field (e.g. `"content[0]"` for a
@@ -232,7 +289,11 @@ pub fn build_single_field_context(
                     });
 
                     // Recurse for nested composites
-                    apply_field_type_extras(sf, &sub_value, &mut sub_ctx, values, errors, &col_name, non_default_locale, depth + 1);
+                    let extras_ctx = FieldRecursionCtx::builder(values, errors, &col_name)
+                        .non_default_locale(non_default_locale)
+                        .depth(depth + 1)
+                        .build();
+                    apply_field_type_extras(sf, &sub_value, &mut sub_ctx, &extras_ctx);
 
                     sub_ctx
                 }).collect()
@@ -534,12 +595,13 @@ pub fn apply_field_type_extras(
     sf: &FieldDefinition,
     value: &str,
     sub_ctx: &mut Value,
-    values: &HashMap<String, String>,
-    errors: &HashMap<String, String>,
-    name_prefix: &str,
-    non_default_locale: bool,
-    depth: usize,
+    extras: &FieldRecursionCtx,
 ) {
+    let values = extras.values;
+    let errors = extras.errors;
+    let name_prefix = extras.name_prefix;
+    let non_default_locale = extras.non_default_locale;
+    let depth = extras.depth;
     // Validation property context for sub-fields
     if let Some(ml) = sf.min_length {
         sub_ctx["min_length"] = json!(ml);

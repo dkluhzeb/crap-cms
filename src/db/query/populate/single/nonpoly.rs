@@ -3,24 +3,19 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
-use super::super::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
+use super::super::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
 use super::populate_relationships_cached;
 use crate::core::Document;
-use crate::db::query::LocaleContext;
 use crate::db::query::read::{find_by_id, find_by_ids};
 
 /// Populate a non-polymorphic has-many field.
 pub(super) fn populate_nonpoly_has_many(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
+    ctx: &PopulateCtx<'_>,
     doc: &mut Document,
     field_name: &str,
     rel_collection: &str,
     rel_def: &crate::core::CollectionDefinition,
     visited: &mut HashSet<(String, String)>,
-    effective_depth: i32,
-    locale_ctx: Option<&LocaleContext>,
-    cache: &PopulateCache,
 ) -> Result<()> {
     let ids: Vec<String> = match doc.fields.get(field_name) {
         Some(serde_json::Value::Array(arr)) => arr
@@ -36,7 +31,13 @@ pub(super) fn populate_nonpoly_has_many(
         .cloned()
         .collect();
 
-    let fetched = find_by_ids(conn, rel_collection, rel_def, &fetch_ids, locale_ctx)?;
+    let fetched = find_by_ids(
+        ctx.conn,
+        rel_collection,
+        rel_def,
+        &fetch_ids,
+        ctx.locale_ctx,
+    )?;
     let mut fetched_map: HashMap<String, Document> =
         fetched.into_iter().map(|d| (d.id.clone(), d)).collect();
 
@@ -47,7 +48,7 @@ pub(super) fn populate_nonpoly_has_many(
             continue;
         }
         let hm_cache_key = (rel_collection.to_string(), id.clone());
-        if let Some(cached) = cache.get(&hm_cache_key) {
+        if let Some(cached) = ctx.cache.get(&hm_cache_key) {
             populated.push(document_to_json(cached.value(), rel_collection));
         } else {
             match fetched_map.remove(id) {
@@ -59,21 +60,21 @@ pub(super) fn populate_nonpoly_has_many(
                     }
                     populate_relationships_cached(
                         &PopulateContext {
-                            conn,
-                            registry,
+                            conn: ctx.conn,
+                            registry: ctx.registry,
                             collection_slug: rel_collection,
                             def: rel_def,
                         },
                         &mut related_doc,
                         visited,
                         &PopulateOpts {
-                            depth: effective_depth - 1,
+                            depth: ctx.effective_depth - 1,
                             select: None,
-                            locale_ctx,
+                            locale_ctx: ctx.locale_ctx,
                         },
-                        cache,
+                        ctx.cache,
                     )?;
-                    cache.insert(hm_cache_key, related_doc.clone());
+                    ctx.cache.insert(hm_cache_key, related_doc.clone());
                     populated.push(document_to_json(&related_doc, rel_collection));
                 }
                 None => {
@@ -89,16 +90,12 @@ pub(super) fn populate_nonpoly_has_many(
 
 /// Populate a non-polymorphic has-one field.
 pub(super) fn populate_nonpoly_has_one(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
+    ctx: &PopulateCtx<'_>,
     doc: &mut Document,
     field_name: &str,
     rel_collection: &str,
     rel_def: &crate::core::CollectionDefinition,
     visited: &mut HashSet<(String, String)>,
-    effective_depth: i32,
-    locale_ctx: Option<&LocaleContext>,
-    cache: &PopulateCache,
 ) -> Result<()> {
     let id = match doc.fields.get(field_name) {
         Some(serde_json::Value::String(s)) if !s.is_empty() => s.clone(),
@@ -110,13 +107,13 @@ pub(super) fn populate_nonpoly_has_one(
     }
 
     let ho_cache_key = (rel_collection.to_string(), id.clone());
-    if let Some(cached) = cache.get(&ho_cache_key) {
+    if let Some(cached) = ctx.cache.get(&ho_cache_key) {
         doc.fields.insert(
             field_name.to_string(),
             document_to_json(cached.value(), rel_collection),
         );
     } else if let Some(mut related_doc) =
-        find_by_id(conn, rel_collection, rel_def, &id, locale_ctx)?
+        find_by_id(ctx.conn, rel_collection, rel_def, &id, ctx.locale_ctx)?
     {
         if let Some(ref uc) = rel_def.upload
             && uc.enabled
@@ -125,21 +122,21 @@ pub(super) fn populate_nonpoly_has_one(
         }
         populate_relationships_cached(
             &PopulateContext {
-                conn,
-                registry,
+                conn: ctx.conn,
+                registry: ctx.registry,
                 collection_slug: rel_collection,
                 def: rel_def,
             },
             &mut related_doc,
             visited,
             &PopulateOpts {
-                depth: effective_depth - 1,
+                depth: ctx.effective_depth - 1,
                 select: None,
-                locale_ctx,
+                locale_ctx: ctx.locale_ctx,
             },
-            cache,
+            ctx.cache,
         )?;
-        cache.insert(ho_cache_key, related_doc.clone());
+        ctx.cache.insert(ho_cache_key, related_doc.clone());
         doc.fields.insert(
             field_name.to_string(),
             document_to_json(&related_doc, rel_collection),

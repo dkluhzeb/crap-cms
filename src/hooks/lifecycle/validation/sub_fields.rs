@@ -231,7 +231,7 @@ fn validate_leaf_sub_field(
 #[cfg(test)]
 mod tests {
     use crate::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType};
-    use crate::hooks::lifecycle::validation::validate_fields_inner;
+    use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -252,7 +252,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"label": ""}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.errors[0].field.contains("items[0][label]"));
@@ -281,7 +292,18 @@ mod tests {
             "content".to_string(),
             json!([{"_block_type": "text", "body": ""}]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -316,7 +338,18 @@ mod tests {
                 {"inner": [{"value": ""}]}
             ]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.errors[0].field.contains("outer[0][inner][0][value]"));
@@ -348,7 +381,18 @@ mod tests {
                 {"meta__title": ""}
             ]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.errors[0].field.contains("items[0][meta__title]"));
@@ -374,7 +418,18 @@ mod tests {
                 {"date": "not-a-date"}
             ]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("valid date"));
     }
@@ -414,7 +469,18 @@ mod tests {
                 {"val": "invalid"}
             ]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -447,7 +513,18 @@ mod tests {
                 {"meta__publish_date": "bad-date"}
             ]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().errors[0].message.contains("valid date"));
     }
@@ -488,7 +565,18 @@ mod tests {
                 {"meta__slug": "test-slug"}
             ]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(result.is_err());
         assert!(
             result.unwrap_err().errors[0]
@@ -514,7 +602,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"label": ""}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, true, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: true,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Array sub-field required check should be skipped for drafts"
@@ -544,7 +643,18 @@ mod tests {
             "content".to_string(),
             json!([{"_block_type": "image", "url": ""}]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Unknown block type rows should be silently skipped"
@@ -568,7 +678,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!(["plain-string", 42, null]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Non-object array rows should be silently skipped"
@@ -596,7 +717,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"note": ""}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Collapsible sub-field inside array should be validated"
@@ -627,7 +759,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("events".to_string(), json!([{"start": "not-a-date"}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Invalid date inside collapsible in array should fail"
@@ -659,7 +802,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"title": ""}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Required field inside tabs inside array should be validated"
@@ -691,7 +845,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"pub_date": "bad-date"}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Invalid date inside tabs inside array should fail"
@@ -735,7 +900,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"slug": "bad"}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Custom validator inside tabs inside array should fire"
@@ -768,7 +944,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"label": ""}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Required field inside row inside array should be validated"
@@ -799,7 +986,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"event_date": "not-a-date"}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Invalid date inside row inside array should fail"
@@ -840,7 +1038,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"code": "forbidden"}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Custom validator inside row inside array should fire"
@@ -881,7 +1090,18 @@ mod tests {
                 {"sections": [{"_block_type": "heading", "text": ""}]}
             ]),
         );
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Required field inside blocks inside array should be validated"
@@ -926,7 +1146,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{"val": "nope"}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_err(),
             "Custom validator inside collapsible inside array should fire"
@@ -955,7 +1186,18 @@ mod tests {
         ];
         let mut data = HashMap::new();
         data.insert("items".to_string(), json!([{}]));
-        let result = validate_fields_inner(&lua, &fields, &data, &conn, "test", None, false, None);
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx {
+                conn: &conn,
+                table: "test",
+                exclude_id: None,
+                is_draft: false,
+                locale_ctx: None,
+            },
+        );
         assert!(
             result.is_ok(),
             "Checkbox inside array should not be required even when required=true"

@@ -13,22 +13,23 @@ use super::context::HookContext;
 use super::types::{DisplayConditionResult, FieldHookEvent, HookEvent};
 use super::validation::evaluate_condition_table;
 
+/// Context for after-read hook execution, bundling the shared parameters.
+pub struct AfterReadCtx<'a> {
+    pub hooks: &'a Hooks,
+    pub fields: &'a [FieldDefinition],
+    pub collection: &'a str,
+    pub operation: &'a str,
+    pub user: Option<&'a Document>,
+    pub ui_locale: Option<&'a str>,
+}
+
 /// Inner implementation of `apply_after_read` — operates on a locked `&Lua`.
 /// Runs field-level after_read hooks, then collection-level, then global registered.
 /// On error: logs warning, returns original doc unmodified.
-pub(crate) fn apply_after_read_inner(
-    lua: &Lua,
-    hooks: &Hooks,
-    fields: &[FieldDefinition],
-    collection: &str,
-    operation: &str,
-    doc: Document,
-    user: Option<&Document>,
-    ui_locale: Option<&str>,
-) -> Document {
-    let has_field_hooks = fields.iter().any(|f| !f.hooks.after_read.is_empty());
+pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Document) -> Document {
+    let has_field_hooks = ctx.fields.iter().any(|f| !f.hooks.after_read.is_empty());
 
-    let has_collection_hooks = !hooks.after_read.is_empty();
+    let has_collection_hooks = !ctx.hooks.after_read.is_empty();
     let has_registered = has_registered_hooks(lua, "after_read");
 
     if !has_field_hooks && !has_collection_hooks && !has_registered {
@@ -54,27 +55,27 @@ pub(crate) fn apply_after_read_inner(
     if has_field_hooks
         && let Err(e) = run_field_hooks_inner(
             lua,
-            fields,
+            ctx.fields,
             &FieldHookEvent::AfterRead,
             &mut data,
-            collection,
-            operation,
+            ctx.collection,
+            ctx.operation,
         )
     {
-        tracing::warn!("field after_read hook error for {}: {}", collection, e);
+        tracing::warn!("field after_read hook error for {}: {}", ctx.collection, e);
         return doc;
     }
 
-    let ctx = HookContext::builder(collection, operation)
+    let hook_ctx = HookContext::builder(ctx.collection, ctx.operation)
         .data(data)
-        .user(user)
-        .ui_locale(ui_locale)
+        .user(ctx.user)
+        .ui_locale(ctx.ui_locale)
         .build();
 
     // Run collection-level + global registered hooks
-    let hook_refs = get_hook_refs(hooks, &HookEvent::AfterRead);
+    let hook_refs = get_hook_refs(ctx.hooks, &HookEvent::AfterRead);
     let result = (|| -> Result<HookContext> {
-        let mut context = ctx;
+        let mut context = hook_ctx;
         for hook_ref in hook_refs {
             context = call_hook_ref(lua, hook_ref, context)?;
         }
@@ -105,7 +106,7 @@ pub(crate) fn apply_after_read_inner(
             builder.build()
         }
         Err(e) => {
-            tracing::warn!("after_read hook error for {}: {}", collection, e);
+            tracing::warn!("after_read hook error for {}: {}", ctx.collection, e);
             doc
         }
     }
@@ -550,16 +551,15 @@ mod tests {
         doc.created_at = Some("2024-01-01".to_string());
         doc.updated_at = Some("2024-01-02".to_string());
 
-        let result = apply_after_read_inner(
-            &lua,
-            &hooks,
-            &fields,
-            "posts",
-            "find",
-            doc.clone(),
-            None,
-            None,
-        );
+        let ctx = AfterReadCtx {
+            hooks: &hooks,
+            fields: &fields,
+            collection: "posts",
+            operation: "find",
+            user: None,
+            ui_locale: None,
+        };
+        let result = apply_after_read_inner(&lua, &ctx, doc.clone());
         assert_eq!(result.id, "doc1");
         assert_eq!(result.get_str("title"), Some("Hello"));
     }

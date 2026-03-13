@@ -15,7 +15,7 @@ pub mod templates;
 pub use self::blueprint::{
     blueprint_list, blueprint_remove, blueprint_save, blueprint_use, list_blueprint_names,
 };
-pub use self::collection::{VALID_FIELD_TYPES, make_collection};
+pub use self::collection::{CollectionOptions, VALID_FIELD_TYPES, make_collection};
 pub use self::global::make_global;
 pub use self::hook::{ConditionFieldInfo, HookType, MakeHookOptions, make_hook};
 pub use self::init::{InitOptions, init};

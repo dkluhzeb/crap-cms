@@ -834,16 +834,9 @@ fn build_field_contexts_date_short_value_day_and_time() {
 fn apply_extras_checkbox_checked() {
     let sf = make_field("active", FieldType::Checkbox);
     let mut ctx = serde_json::json!({"name": "group__active"});
-    apply_field_type_extras(
-        &sf,
-        "true",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__active",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
+    apply_field_type_extras(&sf, "true", &mut ctx, &extras);
     assert_eq!(ctx["checked"], true);
 }
 
@@ -851,16 +844,9 @@ fn apply_extras_checkbox_checked() {
 fn apply_extras_checkbox_unchecked() {
     let sf = make_field("active", FieldType::Checkbox);
     let mut ctx = serde_json::json!({"name": "group__active"});
-    apply_field_type_extras(
-        &sf,
-        "0",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__active",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__active").build();
+    apply_field_type_extras(&sf, "0", &mut ctx, &extras);
     assert_eq!(ctx["checked"], false);
 }
 
@@ -872,16 +858,9 @@ fn apply_extras_select() {
         SelectOption::new(LocalizedString::Plain("Green".to_string()), "green"),
     ];
     let mut ctx = serde_json::json!({"name": "group__color"});
-    apply_field_type_extras(
-        &sf,
-        "green",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__color",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__color").build();
+    apply_field_type_extras(&sf, "green", &mut ctx, &extras);
     let opts = ctx["options"].as_array().unwrap();
     assert_eq!(opts[0]["selected"], false);
     assert_eq!(opts[1]["selected"], true);
@@ -891,16 +870,9 @@ fn apply_extras_select() {
 fn apply_extras_date_day_only() {
     let sf = make_field("d", FieldType::Date);
     let mut ctx = serde_json::json!({"name": "group__d"});
-    apply_field_type_extras(
-        &sf,
-        "2026-01-15T12:00:00Z",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__d",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
+    apply_field_type_extras(&sf, "2026-01-15T12:00:00Z", &mut ctx, &extras);
     assert_eq!(ctx["picker_appearance"], "dayOnly");
     assert_eq!(ctx["date_only_value"], "2026-01-15");
 }
@@ -910,16 +882,9 @@ fn apply_extras_date_day_and_time() {
     let mut sf = make_field("d", FieldType::Date);
     sf.picker_appearance = Some("dayAndTime".to_string());
     let mut ctx = serde_json::json!({"name": "group__d"});
-    apply_field_type_extras(
-        &sf,
-        "2026-01-15T09:30:00Z",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__d",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__d").build();
+    apply_field_type_extras(&sf, "2026-01-15T09:30:00Z", &mut ctx, &extras);
     assert_eq!(ctx["picker_appearance"], "dayAndTime");
     assert_eq!(ctx["datetime_local_value"], "2026-01-15T09:30");
 }
@@ -928,31 +893,17 @@ fn apply_extras_date_day_and_time() {
 fn apply_extras_date_short_values() {
     let sf = make_field("d", FieldType::Date);
     let mut ctx = serde_json::json!({"name": "g__d"});
-    apply_field_type_extras(
-        &sf,
-        "short",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "g__d",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "g__d").build();
+    apply_field_type_extras(&sf, "short", &mut ctx, &extras);
     assert_eq!(ctx["date_only_value"], "short");
 
     let mut sf2 = make_field("d2", FieldType::Date);
     sf2.picker_appearance = Some("dayAndTime".to_string());
     let mut ctx2 = serde_json::json!({"name": "g__d2"});
-    apply_field_type_extras(
-        &sf2,
-        "short",
-        &mut ctx2,
-        &HashMap::new(),
-        &HashMap::new(),
-        "g__d2",
-        false,
-        0,
-    );
+    let (vals2, errs2) = (HashMap::new(), HashMap::new());
+    let extras2 = FieldRecursionCtx::builder(&vals2, &errs2, "g__d2").build();
+    apply_field_type_extras(&sf2, "short", &mut ctx2, &extras2);
     assert_eq!(ctx2["datetime_local_value"], "short");
 }
 
@@ -962,16 +913,9 @@ fn apply_extras_relationship() {
     let mut sf = make_field("author", FieldType::Relationship);
     sf.relationship = Some(RelationshipConfig::new("users", true));
     let mut ctx = serde_json::json!({"name": "group__author"});
-    apply_field_type_extras(
-        &sf,
-        "",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__author",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__author").build();
+    apply_field_type_extras(&sf, "", &mut ctx, &extras);
     assert_eq!(ctx["relationship_collection"], "users");
     assert_eq!(ctx["has_many"], true);
 }
@@ -982,16 +926,9 @@ fn apply_extras_upload() {
     let mut sf = make_field("image", FieldType::Upload);
     sf.relationship = Some(RelationshipConfig::new("media", false));
     let mut ctx = serde_json::json!({"name": "group__image"});
-    apply_field_type_extras(
-        &sf,
-        "",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__image",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__image").build();
+    apply_field_type_extras(&sf, "", &mut ctx, &extras);
     assert_eq!(ctx["relationship_collection"], "media");
     assert_eq!(ctx["picker"], "drawer");
 }
@@ -1006,16 +943,9 @@ fn apply_extras_array_in_group() {
     arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
     arr.admin.label_field = Some("name".to_string());
     let mut ctx = serde_json::json!({"name": "group__tags"});
-    apply_field_type_extras(
-        &arr,
-        "",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__tags",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__tags").build();
+    apply_field_type_extras(&arr, "", &mut ctx, &extras);
     assert!(ctx["sub_fields"].as_array().is_some());
     assert_eq!(ctx["row_count"], 0);
     assert_eq!(ctx["min_rows"], 1);
@@ -1031,16 +961,9 @@ fn apply_extras_group_in_group() {
     inner.fields = vec![make_field("author", FieldType::Text)];
     inner.admin.collapsed = true;
     let mut ctx = serde_json::json!({"name": "outer__meta"});
-    apply_field_type_extras(
-        &inner,
-        "",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "outer__meta",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "outer__meta").build();
+    apply_field_type_extras(&inner, "", &mut ctx, &extras);
     assert!(ctx["sub_fields"].as_array().is_some());
     assert_eq!(ctx["collapsed"], true);
 }
@@ -1058,16 +981,9 @@ fn apply_extras_blocks_in_group() {
     blk.admin.collapsed = true;
     blk.admin.labels_singular = Some(LocalizedString::Plain("Section".to_string()));
     let mut ctx = serde_json::json!({"name": "group__sections"});
-    apply_field_type_extras(
-        &blk,
-        "",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__sections",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__sections").build();
+    apply_field_type_extras(&blk, "", &mut ctx, &extras);
     assert!(ctx["block_definitions"].as_array().is_some());
     assert_eq!(ctx["row_count"], 0);
     assert_eq!(ctx["min_rows"], 0);
@@ -1083,16 +999,11 @@ fn apply_extras_max_depth_stops_recursion() {
     let mut arr = make_field("deep", FieldType::Array);
     arr.fields = vec![make_field("leaf", FieldType::Text)];
     let mut ctx = serde_json::json!({"name": "group__deep"});
-    apply_field_type_extras(
-        &arr,
-        "",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__deep",
-        false,
-        MAX_FIELD_DEPTH,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__deep")
+        .depth(MAX_FIELD_DEPTH)
+        .build();
+    apply_field_type_extras(&arr, "", &mut ctx, &extras);
     // At max depth, no sub_fields should be added
     assert!(ctx.get("sub_fields").is_none());
 }
@@ -1101,16 +1012,9 @@ fn apply_extras_max_depth_stops_recursion() {
 fn apply_extras_unknown_type_is_noop() {
     let sf = make_field("body", FieldType::Richtext);
     let mut ctx = serde_json::json!({"name": "group__body", "field_type": "richtext"});
-    apply_field_type_extras(
-        &sf,
-        "hello",
-        &mut ctx,
-        &HashMap::new(),
-        &HashMap::new(),
-        "group__body",
-        false,
-        0,
-    );
+    let (vals, errs) = (HashMap::new(), HashMap::new());
+    let extras = FieldRecursionCtx::builder(&vals, &errs, "group__body").build();
+    apply_field_type_extras(&sf, "hello", &mut ctx, &extras);
     // Should not add any extra fields
     assert!(ctx.get("options").is_none());
     assert!(ctx.get("checked").is_none());

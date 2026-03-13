@@ -14,7 +14,7 @@ mod enrich;
 // Re-export public API so external imports (e.g. `super::field_context::build_field_contexts`)
 // continue to work unchanged.
 pub(super) use builder::build_field_contexts;
-pub(super) use enrich::enrich_field_contexts;
+pub(super) use enrich::{EnrichOptions, enrich_field_contexts};
 
 /// Make a template-ID-safe string from a field name (replaces `[`, `]` with `-`).
 pub(super) fn safe_template_id(name: &str) -> String {

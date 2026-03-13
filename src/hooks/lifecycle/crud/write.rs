@@ -12,7 +12,7 @@ use super::get_tx_conn;
 use crate::hooks::lifecycle::access::{check_access_with_lua, check_field_write_access_with_lua};
 use crate::hooks::lifecycle::converters::*;
 use crate::hooks::lifecycle::execution::{run_field_hooks_inner, run_hooks_inner};
-use crate::hooks::lifecycle::validation::validate_fields_inner;
+use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
 use crate::hooks::lifecycle::{FieldHookEvent, HookContext, HookEvent};
 use crate::hooks::lifecycle::{HookDepth, MaxHookDepth, UiLocaleContext, UserContext};
 
@@ -176,17 +176,15 @@ pub(super) fn register_create(
 
             // Validation (always runs unless hooks=false)
             if run_hooks {
-                validate_fields_inner(
-                    lua,
-                    &def.fields,
-                    &hook_data,
+                let val_ctx = ValidationCtx {
                     conn,
-                    &collection,
-                    None,
+                    table: &collection,
+                    exclude_id: None,
                     is_draft,
-                    locale_ctx.as_ref(),
-                )
-                .map_err(|e| mlua::Error::RuntimeError(format!("validation error: {}", e)))?;
+                    locale_ctx: locale_ctx.as_ref(),
+                };
+                validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("validation error: {}", e)))?;
             }
 
             if hooks_enabled {
@@ -226,15 +224,18 @@ pub(super) fn register_create(
                 .build()
                 .to_string_map(&def.fields);
 
+            let persist_opts = crate::service::PersistOptions {
+                password: password.as_deref(),
+                locale_ctx: locale_ctx.as_ref(),
+                is_draft,
+            };
             let doc = crate::service::persist_create(
                 conn,
                 &collection,
                 &def,
                 &final_data,
                 &hook_data,
-                password.as_deref(),
-                locale_ctx.as_ref(),
-                is_draft,
+                &persist_opts,
             )
             .map_err(|e| mlua::Error::RuntimeError(format!("create error: {}", e)))?;
 
@@ -509,17 +510,15 @@ pub(super) fn register_update(
             }
 
             if run_hooks {
-                validate_fields_inner(
-                    lua,
-                    &def.fields,
-                    &hook_data,
+                let val_ctx = ValidationCtx {
                     conn,
-                    &collection,
-                    Some(&id),
+                    table: &collection,
+                    exclude_id: Some(&id),
                     is_draft,
-                    locale_ctx.as_ref(),
-                )
-                .map_err(|e| mlua::Error::RuntimeError(format!("validation error: {}", e)))?;
+                    locale_ctx: locale_ctx.as_ref(),
+                };
+                validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("validation error: {}", e)))?;
             }
 
             if hooks_enabled {

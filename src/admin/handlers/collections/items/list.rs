@@ -132,8 +132,15 @@ pub async fn list_items(
             }
         }
 
-        let docs =
-            runner.apply_after_read_many(&hooks, &fields, &slug_owned, "find", docs, None, None);
+        let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+            hooks: &hooks,
+            fields: &fields,
+            collection: &slug_owned,
+            operation: "find",
+            user: None,
+            ui_locale: None,
+        };
+        let docs = runner.apply_after_read_many(&ar_ctx, docs);
 
         Ok::<_, anyhow::Error>((docs, total))
     })

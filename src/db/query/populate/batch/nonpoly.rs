@@ -3,24 +3,19 @@
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
-use super::super::{PopulateCache, PopulateContext, PopulateOpts, document_to_json};
+use super::super::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
 use super::populate_relationships_batch_cached;
 use crate::core::Document;
-use crate::db::query::LocaleContext;
 use crate::db::query::read::find_by_ids;
 
 /// Batch fetch and distribute for non-polymorphic has-many fields.
 pub(super) fn batch_nonpoly_has_many(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
+    ctx: &PopulateCtx<'_>,
     docs: &mut [Document],
     field_name: &str,
     rel_collection: &str,
     rel_def: &crate::core::CollectionDefinition,
     visited: &HashSet<(String, String)>,
-    effective_depth: i32,
-    locale_ctx: Option<&LocaleContext>,
-    cache: &PopulateCache,
 ) -> Result<()> {
     // Collect all unique IDs across all docs for this has-many field
     let mut all_ids: Vec<String> = Vec::new();
@@ -38,16 +33,7 @@ pub(super) fn batch_nonpoly_has_many(
     all_ids.sort();
     all_ids.dedup();
 
-    let doc_map = batch_fetch_single_collection(
-        conn,
-        registry,
-        rel_collection,
-        rel_def,
-        &all_ids,
-        effective_depth,
-        locale_ctx,
-        cache,
-    )?;
+    let doc_map = batch_fetch_single_collection(ctx, rel_collection, rel_def, &all_ids)?;
 
     // Distribute back to each document preserving order
     for doc in docs.iter_mut() {
@@ -74,16 +60,12 @@ pub(super) fn batch_nonpoly_has_many(
 
 /// Batch fetch and distribute for non-polymorphic has-one fields.
 pub(super) fn batch_nonpoly_has_one(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
+    ctx: &PopulateCtx<'_>,
     docs: &mut [Document],
     field_name: &str,
     rel_collection: &str,
     rel_def: &crate::core::CollectionDefinition,
     visited: &HashSet<(String, String)>,
-    effective_depth: i32,
-    locale_ctx: Option<&LocaleContext>,
-    cache: &PopulateCache,
 ) -> Result<()> {
     let mut all_ids: Vec<String> = Vec::new();
     for doc in docs.iter() {
@@ -97,16 +79,7 @@ pub(super) fn batch_nonpoly_has_one(
     all_ids.sort();
     all_ids.dedup();
 
-    let doc_map = batch_fetch_single_collection(
-        conn,
-        registry,
-        rel_collection,
-        rel_def,
-        &all_ids,
-        effective_depth,
-        locale_ctx,
-        cache,
-    )?;
+    let doc_map = batch_fetch_single_collection(ctx, rel_collection, rel_def, &all_ids)?;
 
     // Distribute back
     for doc in docs.iter_mut() {
@@ -127,27 +100,25 @@ pub(super) fn batch_nonpoly_has_one(
 /// Shared helper: fetch documents from a single collection with cache support.
 /// Used by non-polymorphic batch population.
 pub(super) fn batch_fetch_single_collection(
-    conn: &rusqlite::Connection,
-    registry: &crate::core::Registry,
+    ctx: &PopulateCtx<'_>,
     collection: &str,
     rel_def: &crate::core::CollectionDefinition,
     all_ids: &[String],
-    effective_depth: i32,
-    locale_ctx: Option<&LocaleContext>,
-    cache: &PopulateCache,
 ) -> Result<HashMap<String, Document>> {
     let mut doc_map: HashMap<String, Document> = HashMap::new();
     let mut uncached_ids: Vec<String> = Vec::new();
     for id in all_ids {
         let key = (collection.to_string(), id.clone());
-        if let Some(cached) = cache.get(&key) {
+        if let Some(cached) = ctx.cache.get(&key) {
             doc_map.insert(id.clone(), cached.value().clone());
         } else {
             uncached_ids.push(id.clone());
         }
     }
+
     if !uncached_ids.is_empty() {
-        let mut fetched = find_by_ids(conn, collection, rel_def, &uncached_ids, locale_ctx)?;
+        let mut fetched =
+            find_by_ids(ctx.conn, collection, rel_def, &uncached_ids, ctx.locale_ctx)?;
         for d in &mut fetched {
             if let Some(ref uc) = rel_def.upload
                 && uc.enabled
@@ -155,25 +126,26 @@ pub(super) fn batch_fetch_single_collection(
                 crate::core::upload::assemble_sizes_object(d, uc);
             }
         }
-        if effective_depth - 1 > 0 {
+        if ctx.effective_depth - 1 > 0 {
             populate_relationships_batch_cached(
                 &PopulateContext {
-                    conn,
-                    registry,
+                    conn: ctx.conn,
+                    registry: ctx.registry,
                     collection_slug: collection,
                     def: rel_def,
                 },
                 &mut fetched,
                 &PopulateOpts {
-                    depth: effective_depth - 1,
+                    depth: ctx.effective_depth - 1,
                     select: None,
-                    locale_ctx,
+                    locale_ctx: ctx.locale_ctx,
                 },
-                cache,
+                ctx.cache,
             )?;
         }
         for d in fetched {
-            cache.insert((collection.to_string(), d.id.clone()), d.clone());
+            ctx.cache
+                .insert((collection.to_string(), d.id.clone()), d.clone());
             doc_map.insert(d.id.clone(), d);
         }
     }

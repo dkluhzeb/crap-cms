@@ -161,7 +161,7 @@ fn parse_node_attrs(lua: &Lua, attrs_tbl: &Table) -> mlua::Result<Vec<NodeAttr>>
         };
 
         let mut node_attr_builder = NodeAttr::builder(name, label)
-            .attr_type(NodeAttrType::from_str(&attr_type_str))
+            .attr_type(NodeAttrType::from_name(&attr_type_str))
             .required(required)
             .options(options);
         if let Some(dv) = default_value {

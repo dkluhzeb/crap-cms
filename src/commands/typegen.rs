@@ -24,7 +24,7 @@ pub fn run(config_dir: &Path, lang_str: &str, output_dir: Option<&Path>) -> Resu
             println!("{}", path.display());
         }
     } else {
-        let lang = crate::typegen::Language::from_str(lang_str).ok_or_else(|| {
+        let lang = crate::typegen::Language::from_name(lang_str).ok_or_else(|| {
             anyhow::anyhow!(
                 "Unknown language '{}'. Valid: lua, ts, go, py, rs, all",
                 lang_str

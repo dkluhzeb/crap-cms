@@ -21,10 +21,10 @@ use crate::{
                 },
             },
             shared::{
-                apply_display_conditions, build_field_contexts, check_access_or_forbid,
-                enrich_field_contexts, forbidden, get_event_user, get_user_doc, html_with_toast,
-                htmx_redirect, redirect_response, server_error, split_sidebar_fields,
-                translate_validation_errors,
+                EnrichOptions, apply_display_conditions, build_field_contexts,
+                check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
+                get_user_doc, html_with_toast, htmx_redirect, redirect_response, server_error,
+                split_sidebar_fields, translate_validation_errors,
             },
         },
     },
@@ -268,10 +268,9 @@ pub async fn create_action(
                     &def.fields,
                     &join_data_clone,
                     &state,
-                    true,
-                    false,
-                    &error_map,
-                    None,
+                    &EnrichOptions::builder(&error_map)
+                        .filter_hidden(true)
+                        .build(),
                 );
 
                 let form_json = json!(

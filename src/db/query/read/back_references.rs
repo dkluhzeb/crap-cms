@@ -793,7 +793,7 @@ fn check_ids_exist(
     let mut missing = HashSet::new();
     for (collection, check_ids) in &by_collection {
         // Verify the collection exists in the registry
-        if registry.collections.get(collection).is_none() {
+        if !registry.collections.contains_key(collection) {
             // Collection doesn't exist at all — all IDs are missing
             for id in check_ids {
                 let display = if rc.is_polymorphic() {
