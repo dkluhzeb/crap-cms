@@ -382,7 +382,10 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     remove_pid_file(&config_dir);
     info!("All servers stopped. Goodbye.");
 
-    Ok(())
+    // Force-exit: the tokio runtime's blocking pool shutdown waits indefinitely
+    // for any lingering spawn_blocking threads (e.g. image processing, Lua hooks).
+    // All business logic is complete at this point — let the OS reclaim resources.
+    process::exit(0);
 }
 
 #[cfg(test)]

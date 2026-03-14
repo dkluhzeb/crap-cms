@@ -5,6 +5,7 @@
   <h1>{{global.display_name}}</h1>
 </div>
 </crap-sticky-header>
+<crap-validate-form validate-url="/admin/globals/{{global.slug}}/validate">
 <crap-dirty-form>
 <crap-scroll-restore>
 <crap-conditions collection="{{global.slug}}">
@@ -33,4 +34,5 @@
 </crap-conditions>
 </crap-scroll-restore>
 </crap-dirty-form>
+</crap-validate-form>
 {{/layout/base}}

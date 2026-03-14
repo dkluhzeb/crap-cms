@@ -388,8 +388,6 @@ pub(super) async fn do_update(
             htmx_redirect(&format!("/admin/collections/{}/{}", slug, id))
         }
         Ok(Err(e)) => {
-            cleanup_created_files(&created_files);
-
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let locale = auth_user
                     .as_ref()
@@ -448,6 +446,7 @@ pub(super) async fn do_update(
 
                 html_with_toast(state, "collections/edit", &data, toast_msg).into_response()
             } else {
+                cleanup_created_files(&created_files);
                 tracing::error!("Update error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/{}", slug, id))
             }

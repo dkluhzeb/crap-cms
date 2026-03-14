@@ -14,3 +14,5 @@ pub mod shared;
 pub mod static_assets;
 /// File upload handlers.
 pub mod uploads;
+/// Shared types for validation endpoints.
+pub mod validate;

@@ -1,0 +1,124 @@
+//! Validation-only endpoint for globals.
+//!
+//! Runs the full before_validate → validate pipeline inside a rolled-back transaction,
+//! returning JSON `{ valid: true }` or `{ valid: false, errors: { ... } }`.
+
+use axum::{
+    Extension, Json,
+    extract::{Path, State},
+    response::{IntoResponse, Response},
+};
+use tokio::task;
+
+use crate::{
+    admin::{
+        AdminState,
+        handlers::{
+            collections::forms::{extract_join_data_from_form, transform_select_has_many},
+            shared::{get_user_doc, strip_write_denied_string_fields},
+            validate::{
+                ValidateRequest, validation_error_response, validation_ok_response,
+                values_to_string_map,
+            },
+        },
+    },
+    core::{auth::AuthUser, validate::ValidationError},
+    db::query::LocaleContext,
+    hooks::{HookContext, ValidationCtx},
+    service,
+};
+
+/// POST /admin/globals/{slug}/validate — validate fields for global update
+#[tracing::instrument(skip(state, auth_user, payload), name = "globals::validate_global")]
+pub async fn validate_global(
+    State(state): State<AdminState>,
+    Path(slug): Path<String>,
+    auth_user: Option<Extension<AuthUser>>,
+    Json(payload): Json<ValidateRequest>,
+) -> Response {
+    let def = match state.registry.get_global(&slug) {
+        Some(d) => d.clone(),
+        None => return validation_error_response_simple("Global not found"),
+    };
+
+    let mut form_data = values_to_string_map(&payload.data);
+
+    // Strip field-level update-denied fields
+    if let Err(_resp) =
+        strip_write_denied_string_fields(&state, &auth_user, &def.fields, "update", &mut form_data)
+    {
+        return validation_error_response_simple("Access check failed");
+    }
+
+    transform_select_has_many(&mut form_data, &def.fields);
+    let join_data = extract_join_data_from_form(&form_data, &def.fields);
+
+    let is_draft = payload.draft && def.has_drafts();
+    let locale_ctx =
+        LocaleContext::from_locale_string(payload.locale.as_deref(), &state.config.locale);
+
+    let global_table = format!("_global_{}", slug);
+    let pool = state.pool.clone();
+    let runner = state.hook_runner.clone();
+    let slug_owned = slug.clone();
+    let def_owned = def.clone();
+    let user_doc = get_user_doc(&auth_user).cloned();
+
+    let result = task::spawn_blocking(move || {
+        let mut conn = pool.get()?;
+        let tx = conn.transaction()?;
+
+        let hook_data = service::build_hook_data(&form_data, &join_data);
+        let hook_ctx = HookContext::builder(&slug_owned, "update")
+            .data(hook_data)
+            .locale(locale_ctx.as_ref().and_then(|ctx| {
+                if let crate::db::query::LocaleMode::Single(l) = &ctx.mode {
+                    Some(l.clone())
+                } else {
+                    None
+                }
+            }))
+            .draft(is_draft)
+            .user(user_doc.as_ref())
+            .build();
+        let val_ctx = ValidationCtx::builder(&tx, &global_table)
+            .exclude_id(Some("default"))
+            .draft(is_draft)
+            .locale_ctx(locale_ctx.as_ref())
+            .build();
+
+        let result =
+            runner.run_before_write(&def_owned.hooks, &def_owned.fields, hook_ctx, &val_ctx);
+
+        // Always rollback — this is validation only
+        drop(tx);
+
+        result
+    })
+    .await;
+
+    match result {
+        Ok(Ok(_)) => validation_ok_response(),
+        Ok(Err(e)) => {
+            if let Some(ve) = e.downcast_ref::<ValidationError>() {
+                let locale = auth_user
+                    .as_ref()
+                    .map(|Extension(au)| au.ui_locale.as_str())
+                    .unwrap_or("en");
+                validation_error_response(ve, &state.translations, locale)
+            } else {
+                validation_error_response_simple(&format!("Validation error: {}", e))
+            }
+        }
+        Err(e) => validation_error_response_simple(&format!("Internal error: {}", e)),
+    }
+}
+
+/// Quick error response for non-validation failures.
+fn validation_error_response_simple(msg: &str) -> Response {
+    Json(serde_json::json!({
+        "valid": false,
+        "errors": { "_form": msg },
+    }))
+    .into_response()
+}

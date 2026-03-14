@@ -205,5 +205,6 @@
   "validation.has_many_min_length": "{{field}}: '{{value}}' must be at least {{min}} characters",
   "validation.has_many_max_length": "{{field}}: '{{value}}' must be at most {{max}} characters",
   "validation.has_many_min_value": "{{field}}: {{value}} must be at least {{min}}",
-  "validation.has_many_max_value": "{{field}}: {{value}} must be at most {{max}}"
+  "validation.has_many_max_value": "{{field}}: {{value}} must be at most {{max}}",
+  "validation.server_error": "Server error during validation."
 }

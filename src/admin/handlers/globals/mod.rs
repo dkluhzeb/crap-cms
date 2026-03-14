@@ -4,6 +4,8 @@
 pub mod edit_form;
 /// Handler for updating a global.
 pub mod update_action;
+/// Validation-only endpoint for globals.
+pub mod validate;
 /// Handlers for global versions.
 pub mod versions;
 

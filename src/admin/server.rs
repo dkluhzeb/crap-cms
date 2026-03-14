@@ -187,6 +187,14 @@ pub fn build_router(state: AdminState) -> Router {
             get(collections::restore_confirm).post(collections::restore_version),
         )
         .route(
+            "/admin/collections/{slug}/validate",
+            post(collections::items::validate::validate_create),
+        )
+        .route(
+            "/admin/collections/{slug}/{id}/validate",
+            post(collections::items::validate::validate_update),
+        )
+        .route(
             "/admin/collections/{slug}/evaluate-conditions",
             post(collections::evaluate_conditions),
         )
@@ -199,6 +207,10 @@ pub fn build_router(state: AdminState) -> Router {
             post(collections::save_user_settings),
         )
         .route("/admin/globals/{slug}", globals_methods)
+        .route(
+            "/admin/globals/{slug}/validate",
+            post(globals::validate::validate_global),
+        )
         .route(
             "/admin/globals/{slug}/versions",
             get(globals::list_versions_page),

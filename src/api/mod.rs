@@ -97,12 +97,15 @@ pub async fn start_server(
         && let Some(cache) = content_service.populate_cache_handle()
     {
         let interval_secs = populate_cache_max_age;
+        let cache_shutdown = shutdown.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             interval.tick().await; // skip first immediate tick
             loop {
-                interval.tick().await;
-                cache.clear();
+                tokio::select! {
+                    _ = interval.tick() => cache.clear(),
+                    _ = cache_shutdown.cancelled() => break,
+                }
             }
         });
     }

@@ -8,3 +8,5 @@ pub mod create_form;
 pub mod evaluate_conditions;
 /// Handler for listing collection items.
 pub mod list;
+/// Validation-only endpoints for collection items.
+pub mod validate;

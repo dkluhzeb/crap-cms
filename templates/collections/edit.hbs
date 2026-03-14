@@ -5,6 +5,7 @@
   <h1>{{#if editing}}{{t "edit"}}{{else}}{{t "create"}}{{/if}} {{collection.singular_name}}</h1>
 </div>
 </crap-sticky-header>
+<crap-validate-form validate-url="/admin/collections/{{collection.slug}}{{#if editing}}/{{document.id}}{{/if}}/validate">
 <crap-dirty-form>
 <crap-scroll-restore>
 <crap-conditions collection="{{collection.slug}}">
@@ -46,4 +47,5 @@
 </crap-conditions>
 </crap-scroll-restore>
 </crap-dirty-form>
+</crap-validate-form>
 {{/layout/base}}

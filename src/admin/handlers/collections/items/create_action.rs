@@ -226,7 +226,6 @@ pub async fn create_action(
             htmx_redirect(&format!("/admin/collections/{}", slug))
         }
         Ok(Err(e)) => {
-            cleanup_created_files(&created_files);
             if let Some(ve) = e.downcast_ref::<ValidationError>() {
                 let locale = auth_user
                     .as_ref()
@@ -283,6 +282,7 @@ pub async fn create_action(
 
                 html_with_toast(&state, "collections/edit", &data, toast_msg)
             } else {
+                cleanup_created_files(&created_files);
                 tracing::error!("Create error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/create", slug))
             }
