@@ -13,15 +13,13 @@ use crate::{
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, fetch_version_sidebar_data, forbidden, get_user_doc,
-            is_non_default_locale, not_found, render_or_error, server_error, split_sidebar_fields,
+            build_locale_template_data, check_access_or_forbid, compute_denied_read_fields,
+            enrich_field_contexts, extract_editor_locale, fetch_version_sidebar_data,
+            flatten_document_values, forbidden, is_non_default_locale, not_found, render_or_error,
+            server_error, split_sidebar_fields, strip_denied_fields,
         },
     },
-    core::{
-        auth::{AuthUser, Claims},
-        field::FieldType,
-    },
+    core::auth::{AuthUser, Claims},
     db::{ops, query::AccessResult},
 };
 use serde_json::{Value, json};
@@ -89,68 +87,13 @@ pub async fn edit_form(
 
     // Strip field-level read-denied fields
     let mut doc_fields = document.fields.clone();
+    let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
+    };
+    strip_denied_fields(&mut doc_fields, &denied);
 
-    if def.fields.iter().any(|f| f.access.read.is_some()) {
-        let user_doc = get_user_doc(&auth_user);
-
-        let mut conn = match state.pool.get() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Field access check pool error: {}", e);
-                return server_error(&state, "Database error");
-            }
-        };
-        let tx = match conn.transaction() {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Field access check tx error: {}", e);
-                return server_error(&state, "Database error");
-            }
-        };
-        let denied = state
-            .hook_runner
-            .check_field_read_access(&def.fields, user_doc, &tx);
-        let _ = tx.commit();
-
-        for name in &denied {
-            doc_fields.remove(name);
-        }
-    }
-
-    let values: HashMap<String, String> = doc_fields
-        .iter()
-        .flat_map(|(k, v)| {
-            if let Value::Object(obj) = v
-                && def
-                    .fields
-                    .iter()
-                    .any(|f| f.name == *k && f.field_type == FieldType::Group)
-            {
-                return obj
-                    .iter()
-                    .map(|(sub_k, sub_v)| {
-                        let col = format!("{}__{}", k, sub_k);
-                        let s = match sub_v {
-                            Value::String(s) => s.clone(),
-                            Value::Number(n) => n.to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => String::new(),
-                            other => other.to_string(),
-                        };
-                        (col, s)
-                    })
-                    .collect::<Vec<_>>();
-            }
-            let s = match v {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            vec![(k.clone(), s)]
-        })
-        .collect();
+    let values = flatten_document_values(&doc_fields, &def.fields);
 
     let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
 

@@ -9,35 +9,79 @@ use crate::{
     db::migrate::helpers::{collect_column_specs, get_table_columns, sanitize_locale},
 };
 
-pub(super) fn alter_collection_table(
-    conn: &rusqlite::Connection,
-    slug: &str,
-    def: &CollectionDefinition,
-    locale_config: &LocaleConfig,
-) -> Result<()> {
-    // Get existing columns
-    let existing_columns = get_table_columns(conn, slug)?;
+/// Shared context for ALTER TABLE operations.
+struct AlterCtx<'a> {
+    conn: &'a rusqlite::Connection,
+    slug: &'a str,
+    def: &'a CollectionDefinition,
+    existing: &'a HashSet<String>,
+}
 
-    for spec in &collect_column_specs(&def.fields, locale_config) {
+impl<'a> AlterCtx<'a> {
+    fn builder(conn: &'a rusqlite::Connection, slug: &'a str) -> AlterCtxBuilder<'a> {
+        AlterCtxBuilder {
+            conn,
+            slug,
+            def: None,
+            existing: None,
+        }
+    }
+}
+
+/// Builder for [`AlterCtx`].
+struct AlterCtxBuilder<'a> {
+    conn: &'a rusqlite::Connection,
+    slug: &'a str,
+    def: Option<&'a CollectionDefinition>,
+    existing: Option<&'a HashSet<String>>,
+}
+
+impl<'a> AlterCtxBuilder<'a> {
+    fn def(mut self, v: &'a CollectionDefinition) -> Self {
+        self.def = Some(v);
+        self
+    }
+
+    fn existing(mut self, v: &'a HashSet<String>) -> Self {
+        self.existing = Some(v);
+        self
+    }
+
+    fn build(self) -> AlterCtx<'a> {
+        AlterCtx {
+            conn: self.conn,
+            slug: self.slug,
+            def: self.def.expect("AlterCtx requires def"),
+            existing: self.existing.expect("AlterCtx requires existing"),
+        }
+    }
+}
+
+/// Add missing user-defined field columns (including localized variants).
+fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()> {
+    for spec in &collect_column_specs(&ctx.def.fields, locale_config) {
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
 
-                if !existing_columns.contains(&col_name) {
+                if !ctx.existing.contains(&col_name) {
                     let mut col_def = spec.field.field_type.sqlite_type().to_string();
                     super::create::append_default_value(
                         &mut col_def,
                         &spec.field.default_value,
                         &spec.field.field_type,
                     );
-                    let sql = format!("ALTER TABLE {} ADD COLUMN {} {}", slug, col_name, col_def);
-                    tracing::info!("Adding column to {}: {}", slug, col_name);
-                    conn.execute(&sql, []).with_context(|| {
-                        format!("Failed to add column {} to {}", col_name, slug)
+                    let sql = format!(
+                        "ALTER TABLE {} ADD COLUMN {} {}",
+                        ctx.slug, col_name, col_def
+                    );
+                    tracing::info!("Adding column to {}: {}", ctx.slug, col_name);
+                    ctx.conn.execute(&sql, []).with_context(|| {
+                        format!("Failed to add column {} to {}", col_name, ctx.slug)
                     })?;
                 }
             }
-        } else if !existing_columns.contains(&spec.col_name) {
+        } else if !ctx.existing.contains(&spec.col_name) {
             let mut col_def = spec.field.field_type.sqlite_type().to_string();
             super::create::append_default_value(
                 &mut col_def,
@@ -46,27 +90,34 @@ pub(super) fn alter_collection_table(
             );
             let sql = format!(
                 "ALTER TABLE {} ADD COLUMN {} {}",
-                slug, spec.col_name, col_def
+                ctx.slug, spec.col_name, col_def
             );
-            tracing::info!("Adding column to {}: {}", slug, spec.col_name);
-            conn.execute(&sql, [])
-                .with_context(|| format!("Failed to add column {} to {}", spec.col_name, slug))?;
+            tracing::info!("Adding column to {}: {}", ctx.slug, spec.col_name);
+            ctx.conn.execute(&sql, []).with_context(|| {
+                format!("Failed to add column {} to {}", spec.col_name, ctx.slug)
+            })?;
         }
     }
 
+    Ok(())
+}
+
+/// Add system columns (_status, auth, timestamps) as needed.
+fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
     // Versioned collections with drafts: ensure _status column exists
-    if def.has_drafts() && !existing_columns.contains("_status") {
+    if ctx.def.has_drafts() && !ctx.existing.contains("_status") {
         let sql = format!(
             "ALTER TABLE {} ADD COLUMN _status TEXT NOT NULL DEFAULT 'published'",
-            slug
+            ctx.slug
         );
-        tracing::info!("Adding _status column to {}", slug);
-        conn.execute(&sql, [])
-            .with_context(|| format!("Failed to add _status to {}", slug))?;
+        tracing::info!("Adding _status column to {}", ctx.slug);
+        ctx.conn
+            .execute(&sql, [])
+            .with_context(|| format!("Failed to add _status to {}", ctx.slug))?;
     }
 
     // Auth collections: ensure system columns exist
-    if def.is_auth_collection() {
+    if ctx.def.is_auth_collection() {
         for col in [
             "_password_hash TEXT",
             "_reset_token TEXT",
@@ -79,14 +130,15 @@ pub(super) fn alter_collection_table(
                 .next()
                 .expect("static column definition");
 
-            if !existing_columns.contains(col_name) {
-                let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
-                tracing::info!("Adding {} column to {}", col_name, slug);
-                conn.execute(&sql, [])
-                    .with_context(|| format!("Failed to add {} to {}", col_name, slug))?;
+            if !ctx.existing.contains(col_name) {
+                let sql = format!("ALTER TABLE {} ADD COLUMN {}", ctx.slug, col);
+                tracing::info!("Adding {} column to {}", col_name, ctx.slug);
+                ctx.conn
+                    .execute(&sql, [])
+                    .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
             }
         }
-        if def.auth.as_ref().is_some_and(|a| a.verify_email) {
+        if ctx.def.auth.as_ref().is_some_and(|a| a.verify_email) {
             for col in [
                 "_verified INTEGER DEFAULT 0",
                 "_verification_token TEXT",
@@ -97,32 +149,42 @@ pub(super) fn alter_collection_table(
                     .next()
                     .expect("static column definition");
 
-                if !existing_columns.contains(col_name) {
-                    let sql = format!("ALTER TABLE {} ADD COLUMN {}", slug, col);
-                    tracing::info!("Adding {} column to {}", col_name, slug);
-                    conn.execute(&sql, [])
-                        .with_context(|| format!("Failed to add {} to {}", col_name, slug))?;
+                if !ctx.existing.contains(col_name) {
+                    let sql = format!("ALTER TABLE {} ADD COLUMN {}", ctx.slug, col);
+                    tracing::info!("Adding {} column to {}", col_name, ctx.slug);
+                    ctx.conn
+                        .execute(&sql, [])
+                        .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
                 }
             }
         }
     }
 
-    // Timestamps: ensure created_at/updated_at exist when timestamps are enabled
+    // Timestamps: ensure created_at/updated_at exist
     // Note: SQLite ALTER TABLE cannot use non-constant defaults like datetime('now'),
     // so we add with no default (NULL for existing rows) — new inserts set these explicitly.
-    if def.timestamps {
+    if ctx.def.timestamps {
         for col_name in ["created_at", "updated_at"] {
-            if !existing_columns.contains(col_name) {
-                let sql = format!("ALTER TABLE {} ADD COLUMN {} TEXT", slug, col_name);
-                tracing::info!("Adding {} column to {}", col_name, slug);
-                conn.execute(&sql, [])
-                    .with_context(|| format!("Failed to add {} to {}", col_name, slug))?;
+            if !ctx.existing.contains(col_name) {
+                let sql = format!("ALTER TABLE {} ADD COLUMN {} TEXT", ctx.slug, col_name);
+                tracing::info!("Adding {} column to {}", col_name, ctx.slug);
+                ctx.conn
+                    .execute(&sql, [])
+                    .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
             }
         }
     }
 
-    // Warn about removed columns (SQLite can't DROP COLUMN easily)
-    let mut field_names: HashSet<String> = HashSet::new();
+    Ok(())
+}
+
+/// Build the set of expected column names from field definitions (for orphan detection).
+fn collect_expected_column_names(
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> HashSet<String> {
+    let mut field_names = HashSet::new();
+
     for f in &def.fields {
         if f.field_type == FieldType::Group {
             for sub in &f.fields {
@@ -173,23 +235,47 @@ pub(super) fn alter_collection_table(
             }
         }
     }
-    let system_columns: HashSet<&str> = [
-        "id",
-        "created_at",
-        "updated_at",
-        "_password_hash",
-        "_reset_token",
-        "_reset_token_exp",
-        "_verified",
-        "_verification_token",
-        "_verification_token_exp",
-        "_locked",
-        "_status",
-        "_settings",
-    ]
-    .into();
-    for col in &existing_columns {
-        if !field_names.contains(col) && !system_columns.contains(col.as_str()) {
+
+    field_names
+}
+
+/// System columns that are always valid (not flagged as orphans).
+const SYSTEM_COLUMNS: &[&str] = &[
+    "id",
+    "created_at",
+    "updated_at",
+    "_password_hash",
+    "_reset_token",
+    "_reset_token_exp",
+    "_verified",
+    "_verification_token",
+    "_verification_token_exp",
+    "_locked",
+    "_status",
+    "_settings",
+];
+
+pub(super) fn alter_collection_table(
+    conn: &rusqlite::Connection,
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    let existing = get_table_columns(conn, slug)?;
+    let ctx = AlterCtx::builder(conn, slug)
+        .def(def)
+        .existing(&existing)
+        .build();
+
+    add_field_columns(&ctx, locale_config)?;
+    add_system_columns(&ctx)?;
+
+    // Warn about removed columns (SQLite can't DROP COLUMN easily)
+    let expected = collect_expected_column_names(def, locale_config);
+    let system: HashSet<&str> = SYSTEM_COLUMNS.iter().copied().collect();
+
+    for col in &existing {
+        if !expected.contains(col) && !system.contains(col.as_str()) {
             tracing::warn!(
                 "Column '{}' exists in table '{}' but not in Lua definition (not removed)",
                 col,

@@ -18,8 +18,8 @@ use crate::{
     },
     config::LocaleConfig,
     core::{
-        AuthUser, Document, FieldAdmin, document::VersionSnapshot, event::EventUser, field,
-        validate::ValidationError,
+        AuthUser, Document, FieldAdmin, FieldDefinition, document::VersionSnapshot,
+        event::EventUser, field, validate::ValidationError,
     },
     db::{AccessResult, DbPool, LocaleContext, query},
     hooks::HookRunner,
@@ -276,6 +276,121 @@ pub(crate) fn translate_validation_errors(
             (e.field.clone(), msg)
         })
         .collect()
+}
+
+/// Returns field names denied for the current user's read access, or a server error response.
+/// Skips the check entirely (returns empty vec) if no field has read access configured.
+pub(crate) fn compute_denied_read_fields(
+    state: &AdminState,
+    auth_user: &Option<Extension<AuthUser>>,
+    fields: &[FieldDefinition],
+) -> Result<Vec<String>, Box<Response>> {
+    if !fields.iter().any(|f| f.access.read.is_some()) {
+        return Ok(Vec::new());
+    }
+
+    let user_doc = get_user_doc(auth_user);
+
+    let mut conn = state.pool.get().map_err(|e| {
+        tracing::error!("Field access check pool error: {}", e);
+        Box::new(server_error(state, "Database error"))
+    })?;
+
+    let tx = conn.transaction().map_err(|e| {
+        tracing::error!("Field access check tx error: {}", e);
+        Box::new(server_error(state, "Database error"))
+    })?;
+
+    let denied = state
+        .hook_runner
+        .check_field_read_access(fields, user_doc, &tx);
+
+    // Read-only access check — commit result is irrelevant, rollback on drop is safe
+    let _ = tx.commit();
+
+    Ok(denied)
+}
+
+/// Strips fields denied for write access from a `HashMap<String, String>` form in-place.
+/// Returns `Err(response)` on pool/tx failure, `Ok(())` on success.
+pub(crate) fn strip_write_denied_string_fields(
+    state: &AdminState,
+    auth_user: &Option<Extension<AuthUser>>,
+    fields: &[FieldDefinition],
+    operation: &str,
+    form_data: &mut HashMap<String, String>,
+) -> Result<(), Box<Response>> {
+    let has_access = fields.iter().any(|f| match operation {
+        "create" => f.access.create.is_some(),
+        "update" => f.access.update.is_some(),
+        _ => false,
+    });
+    if !has_access {
+        return Ok(());
+    }
+
+    let user_doc = get_user_doc(auth_user);
+
+    let mut conn = state.pool.get().map_err(|e| {
+        tracing::error!("Field access check pool error: {}", e);
+        Box::new(server_error(state, "Database error"))
+    })?;
+
+    let tx = conn.transaction().map_err(|e| {
+        tracing::error!("Field access check tx error: {}", e);
+        Box::new(server_error(state, "Database error"))
+    })?;
+
+    let denied = state
+        .hook_runner
+        .check_field_write_access(fields, user_doc, operation, &tx);
+
+    // Read-only access check — commit result is irrelevant, rollback on drop is safe
+    let _ = tx.commit();
+
+    for name in &denied {
+        form_data.remove(name);
+    }
+
+    Ok(())
+}
+
+/// Flattens document fields for form rendering. Group fields become `parent__child` keys.
+pub(crate) fn flatten_document_values(
+    fields: &HashMap<String, Value>,
+    field_defs: &[FieldDefinition],
+) -> HashMap<String, String> {
+    fields
+        .iter()
+        .flat_map(|(k, v)| {
+            if let Value::Object(obj) = v
+                && field_defs
+                    .iter()
+                    .any(|f| f.name == *k && f.field_type == field::FieldType::Group)
+            {
+                return obj
+                    .iter()
+                    .map(|(sub_k, sub_v)| {
+                        let col = format!("{}__{}", k, sub_k);
+                        let s = value_to_form_string(sub_v);
+                        (col, s)
+                    })
+                    .collect::<Vec<_>>();
+            }
+            vec![(k.clone(), value_to_form_string(v))]
+        })
+        .collect()
+}
+
+/// Convert a serde_json Value to a string suitable for form rendering.
+fn value_to_form_string(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        Value::Null => String::new(),
+        other => other.to_string(),
+    }
 }
 
 /// Render a 403 Forbidden page with the given message.

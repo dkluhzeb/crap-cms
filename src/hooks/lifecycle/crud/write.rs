@@ -8,7 +8,7 @@ use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::{CollectionDefinition, Document, SharedRegistry},
     db::{AccessResult, LocaleContext, query},
     hooks::{
         HookContext, HookEvent, ValidationCtx,
@@ -24,6 +24,82 @@ use crate::{
 };
 
 use super::get_tx_conn;
+
+use super::unpublish_ctx_builder::UnpublishCtxBuilder;
+
+/// Parameters for the unpublish operation.
+pub(super) struct UnpublishCtx<'a> {
+    pub(super) collection: &'a str,
+    pub(super) id: &'a str,
+    pub(super) def: &'a CollectionDefinition,
+    pub(super) run_hooks: bool,
+    pub(super) locale_str: Option<&'a str>,
+    pub(super) hook_user: Option<&'a Document>,
+    pub(super) hook_ui_locale: Option<&'a str>,
+}
+
+impl<'a> UnpublishCtx<'a> {
+    fn builder(
+        collection: &'a str,
+        id: &'a str,
+        def: &'a CollectionDefinition,
+    ) -> UnpublishCtxBuilder<'a> {
+        UnpublishCtxBuilder::new(collection, id, def)
+    }
+}
+
+/// Handle the unpublish code path: revert to draft, fire hooks, return document.
+fn handle_unpublish(
+    lua: &Lua,
+    conn: &rusqlite::Connection,
+    ctx: &UnpublishCtx,
+) -> mlua::Result<mlua::Table> {
+    let existing_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None)
+        .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?
+        .ok_or_else(|| {
+            mlua::Error::RuntimeError(format!(
+                "Document {} not found in {}",
+                ctx.id, ctx.collection
+            ))
+        })?;
+
+    let current_depth = lua.app_data_ref::<HookDepth>().map(|d| d.0).unwrap_or(0);
+    let max_depth = lua.app_data_ref::<MaxHookDepth>().map(|d| d.0).unwrap_or(3);
+    let hooks_enabled = ctx.run_hooks && current_depth < max_depth;
+
+    if hooks_enabled {
+        lua.set_app_data(HookDepth(current_depth + 1));
+
+        let before_ctx = HookContext::builder(ctx.collection, "update")
+            .data(existing_doc.fields.clone())
+            .draft(false)
+            .locale(ctx.locale_str)
+            .user(ctx.hook_user)
+            .ui_locale(ctx.hook_ui_locale)
+            .build();
+        run_hooks_inner(lua, &ctx.def.hooks, HookEvent::BeforeChange, before_ctx)
+            .map_err(|e| mlua::Error::RuntimeError(format!("before_change hook error: {}", e)))?;
+    }
+
+    service::persist_unpublish(conn, ctx.collection, ctx.id, ctx.def)
+        .map_err(|e| mlua::Error::RuntimeError(format!("unpublish error: {}", e)))?;
+
+    if hooks_enabled {
+        let after_ctx = HookContext::builder(ctx.collection, "update")
+            .data(existing_doc.fields.clone())
+            .draft(false)
+            .locale(ctx.locale_str)
+            .user(ctx.hook_user)
+            .ui_locale(ctx.hook_ui_locale)
+            .build();
+        run_hooks_inner(lua, &ctx.def.hooks, HookEvent::AfterChange, after_ctx)
+            .map_err(|e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)))?;
+
+        lua.set_app_data(HookDepth(current_depth));
+    }
+
+    document_to_lua_table(lua, &existing_doc)
+}
 
 /// Register `crap.collections.create(collection, data, opts?)`.
 #[cfg(not(tarpaulin_include))]
@@ -399,51 +475,16 @@ pub(super) fn register_update(
 
             // Handle unpublish: set status to draft, create version, return
             if unpublish && def.has_versions() {
-                let existing_doc = query::find_by_id_raw(conn, &collection, &def, &id, None)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?
-                    .ok_or_else(|| {
-                        mlua::Error::RuntimeError(format!(
-                            "Document {} not found in {}",
-                            id, collection
-                        ))
-                    })?;
-
-                let current_depth = lua.app_data_ref::<HookDepth>().map(|d| d.0).unwrap_or(0);
-                let max_depth = lua.app_data_ref::<MaxHookDepth>().map(|d| d.0).unwrap_or(3);
-                let hooks_enabled = run_hooks && current_depth < max_depth;
-
-                if hooks_enabled {
-                    lua.set_app_data(HookDepth(current_depth + 1));
-                    let before_ctx = HookContext::builder(collection.clone(), "update")
-                        .data(existing_doc.fields.clone())
-                        .draft(false)
-                        .locale(locale_str.clone())
-                        .user(hook_user.as_ref())
-                        .ui_locale(hook_ui_locale.as_deref())
-                        .build();
-                    run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, before_ctx).map_err(
-                        |e| mlua::Error::RuntimeError(format!("before_change hook error: {}", e)),
-                    )?;
-                }
-
-                service::persist_unpublish(conn, &collection, &id, &def)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("unpublish error: {}", e)))?;
-
-                if hooks_enabled {
-                    let after_ctx = HookContext::builder(collection.clone(), "update")
-                        .data(existing_doc.fields.clone())
-                        .draft(false)
-                        .locale(locale_str.clone())
-                        .user(hook_user.as_ref())
-                        .ui_locale(hook_ui_locale.as_deref())
-                        .build();
-                    run_hooks_inner(lua, &def.hooks, HookEvent::AfterChange, after_ctx).map_err(
-                        |e| mlua::Error::RuntimeError(format!("after_change hook error: {}", e)),
-                    )?;
-                    lua.set_app_data(HookDepth(current_depth));
-                }
-
-                return document_to_lua_table(lua, &existing_doc);
+                return handle_unpublish(
+                    lua,
+                    conn,
+                    &UnpublishCtx::builder(&collection, &id, &def)
+                        .run_hooks(run_hooks)
+                        .locale_str(locale_str.as_deref())
+                        .hook_user(hook_user.as_ref())
+                        .hook_ui_locale(hook_ui_locale.as_deref())
+                        .build(),
+                );
             }
 
             // Build hook data (JSON values for hooks to see)

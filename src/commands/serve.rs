@@ -11,8 +11,8 @@ use tracing::{error, info, warn};
 
 use crate::{
     admin, api,
-    config::CrapConfig,
-    core::{Registry, event::EventBus, upload::format_filesize},
+    config::{AuthConfig, CrapConfig},
+    core::{Registry, SharedRegistry, event::EventBus, upload::format_filesize},
     db::{migrate, pool},
     hooks,
     hooks::HookRunner,
@@ -83,6 +83,137 @@ pub fn detach(config_dir: &Path) -> Result<()> {
     let pid = child.id();
     write_pid_file(&config_dir, pid)?;
     println!("Started crap-cms in background (PID {})", pid);
+    Ok(())
+}
+
+/// Resolve the JWT secret: load from file, generate + persist, or use config value.
+fn resolve_jwt_secret(auth_cfg: &AuthConfig, config_dir: &Path) -> String {
+    if auth_cfg.secret.is_empty() {
+        let secret_path = config_dir.join("data").join(".jwt_secret");
+
+        // Try loading existing secret
+        if let Ok(s) = fs::read_to_string(&secret_path)
+            && !s.trim().is_empty()
+        {
+            info!("Using persisted JWT secret from {}", secret_path.display());
+            return s.trim().to_string();
+        }
+
+        // Generate and persist a new secret
+        let secret = nanoid::nanoid!(64);
+        let _ = fs::create_dir_all(secret_path.parent().expect("path has parent"));
+
+        if let Err(e) = fs::write(&secret_path, &secret) {
+            warn!(
+                "Failed to write JWT secret to {}: {}",
+                secret_path.display(),
+                e
+            );
+        } else {
+            warn!(
+                "Generated and persisted JWT secret to {}",
+                secret_path.display()
+            );
+        }
+
+        secret
+    } else {
+        auth_cfg.secret.clone().into_inner()
+    }
+}
+
+/// Spawn a task that listens for shutdown signals (SIGINT/SIGTERM) and cancels the token.
+fn spawn_shutdown_signal(shutdown: CancellationToken) {
+    tokio::spawn(async move {
+        // First signal: graceful shutdown
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    info!("Received SIGINT, shutting down gracefully...");
+                }
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, shutting down gracefully...");
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+            info!("Received shutdown signal, shutting down gracefully...");
+        }
+
+        shutdown.cancel();
+
+        // Second signal: force exit
+        #[cfg(unix)]
+        {
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {
+                    warn!("Received second SIGINT, forcing exit");
+                }
+                _ = sigterm.recv() => {
+                    warn!("Received second SIGTERM, forcing exit");
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+            warn!("Received second shutdown signal, forcing exit");
+        }
+
+        process::exit(1);
+    });
+}
+
+/// Log information about loaded collections, type definitions, and auth status.
+fn log_startup_info(registry: &SharedRegistry, cfg: &CrapConfig) -> Result<()> {
+    let reg = registry
+        .read()
+        .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
+
+    let auth_collections: Vec<_> = reg
+        .collections
+        .values()
+        .filter(|d| d.is_auth_collection())
+        .map(|d| &*d.slug)
+        .collect();
+
+    if auth_collections.is_empty() {
+        info!("No auth collections — admin UI and API are open");
+    } else {
+        info!(
+            "Auth collections: {:?} — admin login required",
+            auth_collections
+        );
+    }
+
+    // Warn about per-collection max_file_size exceeding the global body limit
+    let global_max = cfg.upload.max_file_size;
+    for (slug, def) in &reg.collections {
+        if let Some(ref upload_cfg) = def.upload
+            && let Some(collection_max) = upload_cfg.max_file_size
+            && collection_max > global_max
+        {
+            warn!(
+                "Collection '{}' has max_file_size ({}) exceeding global limit ({}). \
+                         Axum's body limit will reject uploads before the per-collection check.",
+                slug,
+                format_filesize(collection_max),
+                format_filesize(global_max),
+            );
+        }
+    }
+
     Ok(())
 }
 
@@ -165,100 +296,10 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     }
 
     // Resolve JWT secret
-    let jwt_secret = if cfg.auth.secret.is_empty() {
-        // Persist auto-generated secret so sessions survive restarts
-        let secret_path = config_dir.join("data").join(".jwt_secret");
+    let jwt_secret = resolve_jwt_secret(&cfg.auth, &config_dir);
 
-        if secret_path.exists() {
-            match fs::read_to_string(&secret_path) {
-                Ok(s) if !s.trim().is_empty() => {
-                    info!("Using persisted JWT secret from {}", secret_path.display());
-                    s.trim().to_string()
-                }
-                _ => {
-                    let secret = nanoid::nanoid!(64);
-                    let _ = fs::create_dir_all(secret_path.parent().expect("path has parent"));
-
-                    if let Err(e) = fs::write(&secret_path, &secret) {
-                        warn!(
-                            "Failed to write JWT secret to {}: {}",
-                            secret_path.display(),
-                            e
-                        );
-                    } else {
-                        warn!(
-                            "Generated and persisted JWT secret to {}",
-                            secret_path.display()
-                        );
-                    }
-                    secret
-                }
-            }
-        } else {
-            let secret = nanoid::nanoid!(64);
-            let _ = fs::create_dir_all(secret_path.parent().expect("path has parent"));
-
-            if let Err(e) = fs::write(&secret_path, &secret) {
-                warn!(
-                    "Failed to write JWT secret to {}: {}",
-                    secret_path.display(),
-                    e
-                );
-            } else {
-                warn!(
-                    "Generated and persisted JWT secret to {}",
-                    secret_path.display()
-                );
-            }
-            secret
-        }
-    } else {
-        cfg.auth.secret.clone().into_inner()
-    };
-
-    // Log auth collection info
-    {
-        let reg = registry
-            .read()
-            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-        let auth_collections: Vec<_> = reg
-            .collections
-            .values()
-            .filter(|d| d.is_auth_collection())
-            .map(|d| &*d.slug)
-            .collect();
-
-        if auth_collections.is_empty() {
-            info!("No auth collections — admin UI and API are open");
-        } else {
-            info!(
-                "Auth collections: {:?} — admin login required",
-                auth_collections
-            );
-        }
-    }
-
-    // Warn about per-collection max_file_size exceeding the global body limit
-    {
-        let reg = registry
-            .read()
-            .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
-        let global_max = cfg.upload.max_file_size;
-        for (slug, def) in &reg.collections {
-            if let Some(ref upload_cfg) = def.upload
-                && let Some(collection_max) = upload_cfg.max_file_size
-                && collection_max > global_max
-            {
-                warn!(
-                    "Collection '{}' has max_file_size ({}) exceeding global limit ({}). \
-                             Axum's body limit will reject uploads before the per-collection check.",
-                    slug,
-                    format_filesize(collection_max),
-                    format_filesize(global_max),
-                );
-            }
-        }
-    }
+    // Log auth collection info and validate upload limits
+    log_startup_info(&registry, &cfg)?;
 
     // Snapshot the registry for hot-path consumers (admin UI + gRPC).
     // HookRunner + scheduler keep the SharedRegistry (which is only read at runtime anyway).
@@ -279,58 +320,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
 
     // Graceful shutdown: CancellationToken shared across all servers
     let shutdown = CancellationToken::new();
-
-    // Spawn signal handler task
-    let shutdown_signal = shutdown.clone();
-    tokio::spawn(async move {
-        // First signal: graceful shutdown
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sigterm =
-                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Received SIGINT, shutting down gracefully...");
-                }
-                _ = sigterm.recv() => {
-                    info!("Received SIGTERM, shutting down gracefully...");
-                }
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            let _ = tokio::signal::ctrl_c().await;
-            info!("Received shutdown signal, shutting down gracefully...");
-        }
-
-        shutdown_signal.cancel();
-
-        // Second signal: force exit
-        #[cfg(unix)]
-        {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sigterm =
-                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
-            tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    warn!("Received second SIGINT, forcing exit");
-                }
-                _ = sigterm.recv() => {
-                    warn!("Received second SIGTERM, forcing exit");
-                }
-            }
-        }
-
-        #[cfg(not(unix))]
-        {
-            let _ = tokio::signal::ctrl_c().await;
-            warn!("Received second shutdown signal, forcing exit");
-        }
-
-        process::exit(1);
-    });
+    spawn_shutdown_signal(shutdown.clone());
 
     // Start servers
     let admin_addr = format!("{}:{}", cfg.server.host, cfg.server.admin_port);

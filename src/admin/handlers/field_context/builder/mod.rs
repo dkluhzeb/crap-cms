@@ -1,13 +1,49 @@
 //! Build field context objects for template rendering (no DB access).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use serde_json::Value;
+use serde_json::{Value, from_str, json};
 
 use crate::core::FieldDefinition;
 
 mod field_type_extras;
 mod single;
+
+/// Build select/radio options with `selected` flags, handling both single and multi-select.
+/// Returns `(options_json, is_has_many)`.
+pub(super) fn build_select_options(field: &FieldDefinition, value: &str) -> (Vec<Value>, bool) {
+    if field.has_many {
+        let selected_values: HashSet<String> = from_str(value).unwrap_or_default();
+
+        let options: Vec<_> = field
+            .options
+            .iter()
+            .map(|opt| {
+                json!({
+                    "label": opt.label.resolve_default(),
+                    "value": opt.value,
+                    "selected": selected_values.contains(&opt.value),
+                })
+            })
+            .collect();
+
+        (options, true)
+    } else {
+        let options: Vec<_> = field
+            .options
+            .iter()
+            .map(|opt| {
+                json!({
+                    "label": opt.label.resolve_default(),
+                    "value": opt.value,
+                    "selected": opt.value == value,
+                })
+            })
+            .collect();
+
+        (options, false)
+    }
+}
 
 pub use field_type_extras::{FieldRecursionCtx, apply_field_type_extras};
 pub use single::build_single_field_context;

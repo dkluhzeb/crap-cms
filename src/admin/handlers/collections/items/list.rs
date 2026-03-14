@@ -18,17 +18,19 @@ use crate::{
                 resolve_columns,
             },
             shared::{
-                PaginationParams, build_list_url, check_access_or_forbid, extract_editor_locale,
-                extract_where_params, forbidden, get_user_doc, not_found, parse_where_params,
-                render_or_error, server_error, validate_sort,
+                PaginationParams, build_list_url, check_access_or_forbid,
+                compute_denied_read_fields, extract_editor_locale, extract_where_params, forbidden,
+                not_found, parse_where_params, render_or_error, server_error, validate_sort,
             },
         },
     },
     core::{
+        CollectionDefinition, Document,
         auth::{AuthUser, Claims},
         upload,
     },
     db::query::{self, AccessResult, FilterClause, FindQuery, LocaleContext},
+    hooks::lifecycle::AfterReadCtx,
 };
 
 /// GET /admin/collections/{slug} — list items in a collection
@@ -132,7 +134,7 @@ pub async fn list_items(
             }
         }
 
-        let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+        let ar_ctx = AfterReadCtx {
             hooks: &hooks,
             fields: &fields,
             collection: &slug_owned,
@@ -159,29 +161,9 @@ pub async fn list_items(
     };
 
     // Strip field-level read-denied fields from documents
-    let denied_fields = if def.fields.iter().any(|f| f.access.read.is_some()) {
-        let user_doc = get_user_doc(&auth_user);
-
-        let mut conn = match state.pool.get() {
-            Ok(c) => c,
-            Err(_) => return server_error(&state, "Database error"),
-        };
-
-        let tx = match conn.transaction() {
-            Ok(t) => t,
-            Err(_) => return server_error(&state, "Database error"),
-        };
-
-        let denied = state
-            .hook_runner
-            .check_field_read_access(&def.fields, user_doc, &tx);
-
-        // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
-
-        denied
-    } else {
-        Vec::new()
+    let denied_fields = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
     };
 
     let documents: Vec<_> = documents
@@ -268,61 +250,9 @@ pub async fn list_items(
         })
         .unwrap_or(false);
 
-    let is_upload = def.is_upload_collection();
-
-    let admin_thumbnail = def
-        .upload
-        .as_ref()
-        .and_then(|u| u.admin_thumbnail.as_ref().cloned());
-
     let items: Vec<_> = documents
         .iter()
-        .map(|doc| {
-            let title_value = title_field
-                .as_ref()
-                .and_then(|f| doc.get_str(f))
-                .unwrap_or_else(|| {
-                    if is_upload {
-                        doc.get_str("filename").unwrap_or(&doc.id)
-                    } else {
-                        &doc.id
-                    }
-                });
-
-            let cells = compute_cells(doc, &table_columns, &def);
-
-            let mut item = json!({
-                "id": doc.id,
-                "title_value": title_value,
-                "created_at": doc.created_at,
-                "updated_at": doc.updated_at,
-                "cells": cells,
-            });
-
-            // Add thumbnail URL for upload collections
-            if is_upload {
-                let mime = doc.get_str("mime_type").unwrap_or("");
-                if mime.starts_with("image/") {
-                    let thumb_url = admin_thumbnail
-                        .as_ref()
-                        .and_then(|thumb_name| {
-                            doc.fields
-                                .get("sizes")
-                                .and_then(|v| v.get(thumb_name))
-                                .and_then(|v| v.get("url"))
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string())
-                        })
-                        .or_else(|| doc.get_str("url").map(|s| s.to_string()));
-
-                    if let Some(url) = thumb_url {
-                        item["thumbnail_url"] = json!(url);
-                    }
-                }
-            }
-
-            item
-        })
+        .map(|doc| build_item_row(doc, &table_columns, &def))
         .collect();
 
     // Build pagination URLs preserving sort + where params
@@ -369,4 +299,56 @@ pub async fn list_items(
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/items", &data)
+}
+
+/// Build a single item row for the collection list table.
+fn build_item_row(doc: &Document, table_columns: &[Value], def: &CollectionDefinition) -> Value {
+    let is_upload = def.is_upload_collection();
+    let title_field = def.title_field();
+
+    let title_value = title_field.and_then(|f| doc.get_str(f)).unwrap_or_else(|| {
+        if is_upload {
+            doc.get_str("filename").unwrap_or(&doc.id)
+        } else {
+            &doc.id
+        }
+    });
+
+    let cells = compute_cells(doc, table_columns, def);
+
+    let mut item = json!({
+        "id": doc.id,
+        "title_value": title_value,
+        "created_at": doc.created_at,
+        "updated_at": doc.updated_at,
+        "cells": cells,
+    });
+
+    // Add thumbnail URL for upload collections
+    if is_upload {
+        let admin_thumbnail = def
+            .upload
+            .as_ref()
+            .and_then(|u| u.admin_thumbnail.as_deref());
+        let mime = doc.get_str("mime_type").unwrap_or("");
+
+        if mime.starts_with("image/") {
+            let thumb_url = admin_thumbnail
+                .and_then(|thumb_name| {
+                    doc.fields
+                        .get("sizes")
+                        .and_then(|v| v.get(thumb_name))
+                        .and_then(|v| v.get("url"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                })
+                .or_else(|| doc.get_str("url").map(|s| s.to_string()));
+
+            if let Some(url) = thumb_url {
+                item["thumbnail_url"] = json!(url);
+            }
+        }
+    }
+
+    item
 }

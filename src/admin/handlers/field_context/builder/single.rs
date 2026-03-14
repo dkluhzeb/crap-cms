@@ -1,6 +1,6 @@
 //! Build a single field context for template rendering.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde_json::{Value, from_str, json};
 
@@ -10,22 +10,12 @@ use crate::{
 };
 
 use super::super::{MAX_FIELD_DEPTH, count_errors_in_fields, safe_template_id};
+use super::build_select_options;
 use super::field_type_extras::{FieldRecursionCtx, apply_field_type_extras};
 
-/// Build a field context for a single field definition, recursing into composite sub-fields.
-///
-/// `name_prefix`: the full form-name prefix for this field (e.g. `"content[0]"` for a
-/// field inside a blocks row at index 0). Top-level fields use an empty prefix.
-/// `depth`: current nesting depth (0 = top-level). Stops recursing at MAX_FIELD_DEPTH.
-pub fn build_single_field_context(
-    field: &FieldDefinition,
-    values: &HashMap<String, String>,
-    errors: &HashMap<String, String>,
-    name_prefix: &str,
-    non_default_locale: bool,
-    depth: usize,
-) -> Value {
-    let full_name = if name_prefix.is_empty() {
+/// Resolve the full form name for a field, accounting for layout transparency.
+fn resolve_full_name(field: &FieldDefinition, name_prefix: &str) -> String {
+    if name_prefix.is_empty() {
         field.name.clone()
     } else if matches!(
         field.field_type,
@@ -34,8 +24,19 @@ pub fn build_single_field_context(
         name_prefix.to_string() // transparent — layout wrappers don't add their name
     } else {
         format!("{}[{}]", name_prefix, field.name)
-    };
+    }
+}
 
+/// Build base field context with common properties and validation attributes.
+/// Returns (ctx, full_name, value).
+fn build_base_field_context(
+    field: &FieldDefinition,
+    values: &HashMap<String, String>,
+    errors: &HashMap<String, String>,
+    name_prefix: &str,
+    non_default_locale: bool,
+) -> (Value, String, String) {
+    let full_name = resolve_full_name(field, name_prefix);
     let value = values.get(&full_name).cloned().unwrap_or_default();
 
     let label = field
@@ -63,12 +64,11 @@ pub fn build_single_field_context(
     if let Some(ref pos) = field.admin.position {
         ctx["position"] = json!(pos);
     }
-
     if let Some(err) = errors.get(&full_name) {
         ctx["error"] = json!(err);
     }
 
-    // Validation property context: min_length, max_length, min, max, step, rows
+    // Validation properties
     if let Some(ml) = field.min_length {
         ctx["min_length"] = json!(ml);
     }
@@ -83,17 +83,12 @@ pub fn build_single_field_context(
         ctx["max"] = json!(v);
         ctx["has_max"] = json!(true);
     }
-    // Number step: use admin.step or default "any"
     if field.field_type == FieldType::Number {
-        let step = field.admin.step.as_deref().unwrap_or("any");
-        ctx["step"] = json!(step);
+        ctx["step"] = json!(field.admin.step.as_deref().unwrap_or("any"));
     }
-    // Textarea rows: use admin.rows or default 8
     if field.field_type == FieldType::Textarea {
-        let rows = field.admin.rows.unwrap_or(8);
-        ctx["rows"] = json!(rows);
+        ctx["rows"] = json!(field.admin.rows.unwrap_or(8));
     }
-    // Date bounds: min_date / max_date
     if field.field_type == FieldType::Date {
         if let Some(ref md) = field.min_date {
             ctx["min_date"] = json!(md);
@@ -102,11 +97,28 @@ pub fn build_single_field_context(
             ctx["max_date"] = json!(md);
         }
     }
-    // Code language: use admin.language or default "json"
     if field.field_type == FieldType::Code {
-        let lang = field.admin.language.as_deref().unwrap_or("json");
-        ctx["language"] = json!(lang);
+        ctx["language"] = json!(field.admin.language.as_deref().unwrap_or("json"));
     }
+
+    (ctx, full_name, value)
+}
+
+/// Build a field context for a single field definition, recursing into composite sub-fields.
+///
+/// `name_prefix`: the full form-name prefix for this field (e.g. `"content[0]"` for a
+/// field inside a blocks row at index 0). Top-level fields use an empty prefix.
+/// `depth`: current nesting depth (0 = top-level). Stops recursing at MAX_FIELD_DEPTH.
+pub fn build_single_field_context(
+    field: &FieldDefinition,
+    values: &HashMap<String, String>,
+    errors: &HashMap<String, String>,
+    name_prefix: &str,
+    non_default_locale: bool,
+    depth: usize,
+) -> Value {
+    let (mut ctx, full_name, value) =
+        build_base_field_context(field, values, errors, name_prefix, non_default_locale);
 
     // Beyond max depth, render as a simple text input
     if depth >= MAX_FIELD_DEPTH {
@@ -115,38 +127,10 @@ pub fn build_single_field_context(
 
     match &field.field_type {
         FieldType::Select | FieldType::Radio => {
-            if field.has_many {
-                // Multi-select: value is a JSON array like ["val1","val2"]
-                let selected_values: HashSet<String> = from_str(&value).unwrap_or_default();
-
-                let options: Vec<_> = field
-                    .options
-                    .iter()
-                    .map(|opt| {
-                        json!({
-                            "label": opt.label.resolve_default(),
-                            "value": opt.value,
-                            "selected": selected_values.contains(&opt.value),
-                        })
-                    })
-                    .collect();
-
-                ctx["options"] = json!(options);
+            let (options, has_many) = build_select_options(field, &value);
+            ctx["options"] = json!(options);
+            if has_many {
                 ctx["has_many"] = json!(true);
-            } else {
-                let options: Vec<_> = field
-                    .options
-                    .iter()
-                    .map(|opt| {
-                        json!({
-                            "label": opt.label.resolve_default(),
-                            "value": opt.value,
-                            "selected": opt.value == value,
-                        })
-                    })
-                    .collect();
-
-                ctx["options"] = json!(options);
             }
         }
         FieldType::Checkbox => {

@@ -1,12 +1,13 @@
 //! Apply type-specific extras to sub-field contexts (for composite field types).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use serde_json::{Value, from_str, json};
 
 use crate::core::{FieldDefinition, FieldType};
 
 use super::super::{MAX_FIELD_DEPTH, count_errors_in_fields, safe_template_id};
+use super::build_select_options;
 use super::single::build_single_field_context;
 
 /// Parameters for recursive child-field building inside composite types
@@ -129,37 +130,10 @@ pub fn apply_field_type_extras(
             sub_ctx["checked"] = json!(checked);
         }
         FieldType::Select | FieldType::Radio => {
-            if sf.has_many {
-                let selected_values: HashSet<String> = from_str(value).unwrap_or_default();
-
-                let options: Vec<_> = sf
-                    .options
-                    .iter()
-                    .map(|opt| {
-                        json!({
-                            "label": opt.label.resolve_default(),
-                            "value": opt.value,
-                            "selected": selected_values.contains(&opt.value),
-                        })
-                    })
-                    .collect();
-
-                sub_ctx["options"] = json!(options);
+            let (options, has_many) = build_select_options(sf, value);
+            sub_ctx["options"] = json!(options);
+            if has_many {
                 sub_ctx["has_many"] = json!(true);
-            } else {
-                let options: Vec<_> = sf
-                    .options
-                    .iter()
-                    .map(|opt| {
-                        json!({
-                            "label": opt.label.resolve_default(),
-                            "value": opt.value,
-                            "selected": opt.value == value,
-                        })
-                    })
-                    .collect();
-
-                sub_ctx["options"] = json!(options);
             }
         }
         FieldType::Date => {

@@ -10,8 +10,9 @@ use crate::{
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
-                get_user_doc, html_with_toast, htmx_redirect, redirect_response, server_error,
-                split_sidebar_fields, translate_validation_errors,
+                get_user_doc, html_with_toast, htmx_redirect, redirect_response,
+                split_sidebar_fields, strip_write_denied_string_fields,
+                translate_validation_errors,
             },
         },
     },
@@ -269,33 +270,10 @@ pub(super) async fn do_update(
     }
 
     // Strip field-level update-denied fields (fail closed on pool exhaustion)
-    if def.fields.iter().any(|f| f.access.update.is_some()) {
-        let user_doc = get_user_doc(auth_user);
-
-        let mut conn = match state.pool.get() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Field access check pool error: {}", e);
-                return server_error(state, "Database error").into_response();
-            }
-        };
-        let tx = match conn.transaction() {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Field access check tx error: {}", e);
-                return server_error(state, "Database error").into_response();
-            }
-        };
-        let denied =
-            state
-                .hook_runner
-                .check_field_write_access(&def.fields, user_doc, "update", &tx);
-        // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
-
-        for name in &denied {
-            form_data.remove(name);
-        }
+    if let Err(resp) =
+        strip_write_denied_string_fields(state, auth_user, &def.fields, "update", &mut form_data)
+    {
+        return (*resp).into_response();
     }
 
     // Extract password and locked before they enter hooks/regular data flow

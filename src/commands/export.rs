@@ -7,7 +7,11 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{config::CrapConfig, core::FieldType, db::query};
+use crate::{
+    config::CrapConfig,
+    core::{CollectionDefinition, FieldType},
+    db::query,
+};
 
 /// Export collection data to JSON.
 // Excluded from coverage: requires full Lua + DB setup via load_config_and_sync.
@@ -83,6 +87,118 @@ pub fn export(
     Ok(())
 }
 
+/// Collected columns for a single document import row.
+struct ImportRow {
+    parent_cols: Vec<String>,
+    parent_vals: Vec<String>,
+    join_data: HashMap<String, Value>,
+}
+
+/// Collect parent columns and join data for a single document from its JSON representation.
+fn collect_import_columns(
+    doc_obj: &Map<String, Value>,
+    def: &CollectionDefinition,
+    id: &str,
+) -> ImportRow {
+    let mut parent_cols: Vec<String> = vec!["id".to_string()];
+    let mut parent_vals: Vec<String> = vec![id.to_string()];
+    let mut join_data: HashMap<String, Value> = HashMap::new();
+
+    // Handle timestamps
+    if def.timestamps {
+        if let Some(v) = doc_obj.get("created_at").and_then(|v| v.as_str()) {
+            parent_cols.push("created_at".to_string());
+            parent_vals.push(v.to_string());
+        }
+        if let Some(v) = doc_obj.get("updated_at").and_then(|v| v.as_str()) {
+            parent_cols.push("updated_at".to_string());
+            parent_vals.push(v.to_string());
+        }
+    }
+
+    for field in &def.fields {
+        if field.has_parent_column() && field.field_type != FieldType::Group {
+            if let Some(val) = doc_obj.get(&field.name) {
+                let str_val = match val {
+                    Value::String(s) => s.clone(),
+                    Value::Null => continue,
+                    other => other.to_string(),
+                };
+                parent_cols.push(field.name.clone());
+                parent_vals.push(str_val);
+            }
+        } else if !field.has_parent_column() {
+            // Join table fields (array, blocks, has-many relationship)
+            if let Some(val) = doc_obj.get(&field.name)
+                && !val.is_null()
+            {
+                join_data.insert(field.name.clone(), val.clone());
+            }
+        }
+
+        // Handle group sub-fields (they use parent columns with prefix)
+        if field.field_type == FieldType::Group {
+            for sub in &field.fields {
+                let col_name = format!("{}__{}", field.name, sub.name);
+                // Try nested object first (hydrated export format)
+                let val = doc_obj
+                    .get(&field.name)
+                    .and_then(|g| g.get(&sub.name))
+                    // Then try flattened format
+                    .or_else(|| doc_obj.get(&col_name));
+
+                if let Some(val) = val {
+                    let str_val = match val {
+                        Value::String(s) => s.clone(),
+                        Value::Null => continue,
+                        other => other.to_string(),
+                    };
+                    parent_cols.push(col_name);
+                    parent_vals.push(str_val);
+                }
+            }
+        }
+
+        // Handle row/collapsible sub-fields (parent columns, no prefix)
+        if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
+            for sub in &field.fields {
+                if let Some(val) = doc_obj.get(&sub.name) {
+                    let str_val = match val {
+                        Value::String(s) => s.clone(),
+                        Value::Null => continue,
+                        other => other.to_string(),
+                    };
+                    parent_cols.push(sub.name.clone());
+                    parent_vals.push(str_val);
+                }
+            }
+        }
+
+        // Handle tabs sub-fields (parent columns, no prefix, across all tabs)
+        if field.field_type == FieldType::Tabs {
+            for tab in &field.tabs {
+                for sub in &tab.fields {
+                    if let Some(val) = doc_obj.get(&sub.name) {
+                        let str_val = match val {
+                            Value::String(s) => s.clone(),
+                            Value::Null => continue,
+                            other => other.to_string(),
+                        };
+                        parent_cols.push(sub.name.clone());
+                        parent_vals.push(str_val);
+                    }
+                }
+            }
+        }
+    }
+
+    ImportRow {
+        parent_cols,
+        parent_vals,
+        join_data,
+    }
+}
+
 /// Import collection data from JSON.
 // Excluded from coverage: requires full Lua + DB setup via load_config_and_sync.
 // Tested via CLI integration tests in tests/cli_integration.rs.
@@ -152,104 +268,10 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| anyhow!("Document missing 'id' in '{}'", slug))?;
 
-            // Separate parent-column fields from join-table fields
-            let mut parent_cols: Vec<String> = vec!["id".to_string()];
-            let mut parent_vals: Vec<String> = vec![id.to_string()];
-            let mut join_data: HashMap<String, Value> = HashMap::new();
-
-            // Handle timestamps
-            if def.timestamps {
-                if let Some(v) = doc_obj.get("created_at").and_then(|v| v.as_str()) {
-                    parent_cols.push("created_at".to_string());
-                    parent_vals.push(v.to_string());
-                }
-                if let Some(v) = doc_obj.get("updated_at").and_then(|v| v.as_str()) {
-                    parent_cols.push("updated_at".to_string());
-                    parent_vals.push(v.to_string());
-                }
-            }
-
-            for field in &def.fields {
-                if field.has_parent_column() {
-                    if field.field_type == FieldType::Group {
-                        // Group fields have prefixed columns: group__sub
-                        continue; // handled below
-                    }
-                    // Try direct key first, then flattened
-                    if let Some(val) = doc_obj.get(&field.name) {
-                        let str_val = match val {
-                            Value::String(s) => s.clone(),
-                            Value::Null => continue,
-                            other => other.to_string(),
-                        };
-                        parent_cols.push(field.name.clone());
-                        parent_vals.push(str_val);
-                    }
-                } else {
-                    // Join table fields (array, blocks, has-many relationship)
-                    if let Some(val) = doc_obj.get(&field.name)
-                        && !val.is_null()
-                    {
-                        join_data.insert(field.name.clone(), val.clone());
-                    }
-                }
-
-                // Handle group sub-fields (they use parent columns with prefix)
-                if field.field_type == FieldType::Group {
-                    for sub in &field.fields {
-                        let col_name = format!("{}__{}", field.name, sub.name);
-                        // Try nested object first (hydrated export format)
-                        let val = doc_obj
-                            .get(&field.name)
-                            .and_then(|g| g.get(&sub.name))
-                            // Then try flattened format
-                            .or_else(|| doc_obj.get(&col_name));
-
-                        if let Some(val) = val {
-                            let str_val = match val {
-                                Value::String(s) => s.clone(),
-                                Value::Null => continue,
-                                other => other.to_string(),
-                            };
-                            parent_cols.push(col_name);
-                            parent_vals.push(str_val);
-                        }
-                    }
-                }
-
-                // Handle row/collapsible sub-fields (they use parent columns with no prefix)
-                if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible
-                {
-                    for sub in &field.fields {
-                        if let Some(val) = doc_obj.get(&sub.name) {
-                            let str_val = match val {
-                                Value::String(s) => s.clone(),
-                                Value::Null => continue,
-                                other => other.to_string(),
-                            };
-                            parent_cols.push(sub.name.clone());
-                            parent_vals.push(str_val);
-                        }
-                    }
-                }
-
-                // Handle tabs sub-fields (they use parent columns with no prefix, across all tabs)
-                if field.field_type == FieldType::Tabs {
-                    for tab in &field.tabs {
-                        for sub in &tab.fields {
-                            if let Some(val) = doc_obj.get(&sub.name) {
-                                let str_val = match val {
-                                    Value::String(s) => s.clone(),
-                                    Value::Null => continue,
-                                    other => other.to_string(),
-                                };
-                                parent_cols.push(sub.name.clone());
-                                parent_vals.push(str_val);
-                            }
-                        }
-                    }
-                }
-            }
+            let row = collect_import_columns(doc_obj, def, id);
+            let parent_cols = row.parent_cols;
+            let parent_vals = row.parent_vals;
+            let join_data = row.join_data;
 
             // INSERT OR REPLACE
             let placeholders: Vec<String> = (0..parent_cols.len())

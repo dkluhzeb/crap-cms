@@ -16,18 +16,19 @@ use crate::{
         context::{Breadcrumb, ContextBuilder, PageType},
         handlers::shared::{
             EnrichOptions, apply_display_conditions, build_field_contexts,
-            build_locale_template_data, check_access_or_forbid, enrich_field_contexts,
-            extract_editor_locale, fetch_version_sidebar_data, forbidden, get_user_doc,
-            is_non_default_locale, not_found, render_or_error, server_error, split_sidebar_fields,
-            strip_denied_fields,
+            build_locale_template_data, check_access_or_forbid, compute_denied_read_fields,
+            enrich_field_contexts, extract_editor_locale, fetch_version_sidebar_data,
+            flatten_document_values, forbidden, is_non_default_locale, not_found, render_or_error,
+            server_error, split_sidebar_fields, strip_denied_fields,
         },
     },
     core::{
+        CollectionDefinition, Document,
         auth::{AuthUser, Claims},
-        field::FieldType,
         upload,
     },
     db::{ops, query, query::AccessResult},
+    hooks::lifecycle::AfterReadCtx,
 };
 
 /// GET /admin/collections/{slug}/{id} — show edit form
@@ -99,7 +100,7 @@ pub async fn edit_form(
             upload::assemble_sizes_object(d, upload_config);
         }
 
-        let ar_ctx = crate::hooks::lifecycle::AfterReadCtx {
+        let ar_ctx = AfterReadCtx {
             hooks: &hooks,
             fields: &fields,
             collection: &slug_owned,
@@ -129,73 +130,13 @@ pub async fn edit_form(
     };
 
     // Strip field-level read-denied fields (fail closed on pool exhaustion)
-    if def.fields.iter().any(|f| f.access.read.is_some()) {
-        let user_doc = get_user_doc(&auth_user);
+    let denied = match compute_denied_read_fields(&state, &auth_user, &def.fields) {
+        Ok(d) => d,
+        Err(resp) => return *resp,
+    };
+    strip_denied_fields(&mut document.fields, &denied);
 
-        let mut conn = match state.pool.get() {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Field access check pool error: {}", e);
-                return server_error(&state, "Database error");
-            }
-        };
-
-        let tx = match conn.transaction() {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::error!("Field access check tx error: {}", e);
-                return server_error(&state, "Database error");
-            }
-        };
-
-        let denied = state
-            .hook_runner
-            .check_field_read_access(&def.fields, user_doc, &tx);
-
-        // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
-
-        strip_denied_fields(&mut document.fields, &denied);
-    }
-
-    let values: HashMap<String, String> = document
-        .fields
-        .iter()
-        .flat_map(|(k, v)| {
-            // Group fields are hydrated as nested objects — flatten back to
-            // prefixed column names (e.g. location → location__venue_name)
-            // so that build_field_contexts can find the sub-field values.
-            if let Value::Object(obj) = v
-                && def
-                    .fields
-                    .iter()
-                    .any(|f| f.name == *k && f.field_type == FieldType::Group)
-            {
-                return obj
-                    .iter()
-                    .map(|(sub_k, sub_v)| {
-                        let col = format!("{}__{}", k, sub_k);
-                        let s = match sub_v {
-                            Value::String(s) => s.clone(),
-                            Value::Number(n) => n.to_string(),
-                            Value::Bool(b) => b.to_string(),
-                            Value::Null => String::new(),
-                            other => other.to_string(),
-                        };
-                        (col, s)
-                    })
-                    .collect::<Vec<_>>();
-            }
-            let s = match v {
-                Value::String(s) => s.clone(),
-                Value::Number(n) => n.to_string(),
-                Value::Bool(b) => b.to_string(),
-                Value::Null => String::new(),
-                other => other.to_string(),
-            };
-            vec![(k.clone(), s)]
-        })
-        .collect();
+    let values = flatten_document_values(&document.fields, &def.fields);
 
     let non_default_locale = is_non_default_locale(&state, editor_locale.as_deref());
     let mut fields = build_field_contexts(
@@ -319,81 +260,82 @@ pub async fn edit_form(
 
     // Add upload context for upload collections
     if def.is_upload_collection() {
-        let mut upload_ctx = json!({});
-        if let Some(ref u) = def.upload
-            && !u.mime_types.is_empty()
-        {
-            upload_ctx["accept"] = json!(u.mime_types.join(","));
-        }
-
-        // Upload preview and file info from existing document
-        let url = document.fields.get("url").and_then(|v| v.as_str());
-        let mime_type = document.fields.get("mime_type").and_then(|v| v.as_str());
-        let filename = document.fields.get("filename").and_then(|v| v.as_str());
-        let filesize = document
-            .fields
-            .get("filesize")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u64);
-        let width = document
-            .fields
-            .get("width")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u32);
-        let height = document
-            .fields
-            .get("height")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as u32);
-
-        // Pass focal point values
-        let focal_x = document.fields.get("focal_x").and_then(|v| v.as_f64());
-        let focal_y = document.fields.get("focal_y").and_then(|v| v.as_f64());
-        if let Some(fx) = focal_x {
-            upload_ctx["focal_x"] = json!(fx);
-        }
-        if let Some(fy) = focal_y {
-            upload_ctx["focal_y"] = json!(fy);
-        }
-
-        // Show preview for images
-        if let (Some(url), Some(mime)) = (url, mime_type)
-            && mime.starts_with("image/")
-        {
-            // Use admin_thumbnail size if available
-            let preview_url = def
-                .upload
-                .as_ref()
-                .and_then(|u| u.admin_thumbnail.as_ref())
-                .and_then(|thumb_name| {
-                    document
-                        .fields
-                        .get("sizes")
-                        .and_then(|v| v.get(thumb_name))
-                        .and_then(|v| v.get("url"))
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                })
-                .unwrap_or_else(|| url.to_string());
-            upload_ctx["preview"] = json!(preview_url);
-        }
-
-        if let Some(fname) = filename {
-            let mut info = json!({
-                "filename": fname,
-            });
-            if let Some(size) = filesize {
-                info["filesize_display"] = json!(upload::format_filesize(size));
-            }
-            if let (Some(w), Some(h)) = (width, height) {
-                info["dimensions"] = json!(format!("{}x{}", w, h));
-            }
-            upload_ctx["info"] = info;
-        }
-        data["upload"] = upload_ctx;
+        data["upload"] = build_upload_context(&def, &document);
     }
 
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/edit", &data)
+}
+
+/// Build upload preview/info context for upload collection edit forms.
+fn build_upload_context(def: &CollectionDefinition, document: &Document) -> Value {
+    let mut ctx = json!({});
+
+    if let Some(ref u) = def.upload
+        && !u.mime_types.is_empty()
+    {
+        ctx["accept"] = json!(u.mime_types.join(","));
+    }
+
+    let url = document.fields.get("url").and_then(|v| v.as_str());
+    let mime_type = document.fields.get("mime_type").and_then(|v| v.as_str());
+    let filename = document.fields.get("filename").and_then(|v| v.as_str());
+    let filesize = document
+        .fields
+        .get("filesize")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as u64);
+    let width = document
+        .fields
+        .get("width")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as u32);
+    let height = document
+        .fields
+        .get("height")
+        .and_then(|v| v.as_f64())
+        .map(|v| v as u32);
+
+    // Focal point values
+    if let Some(fx) = document.fields.get("focal_x").and_then(|v| v.as_f64()) {
+        ctx["focal_x"] = json!(fx);
+    }
+    if let Some(fy) = document.fields.get("focal_y").and_then(|v| v.as_f64()) {
+        ctx["focal_y"] = json!(fy);
+    }
+
+    // Show preview for images
+    if let (Some(url), Some(mime)) = (url, mime_type)
+        && mime.starts_with("image/")
+    {
+        let preview_url = def
+            .upload
+            .as_ref()
+            .and_then(|u| u.admin_thumbnail.as_ref())
+            .and_then(|thumb_name| {
+                document
+                    .fields
+                    .get("sizes")
+                    .and_then(|v| v.get(thumb_name))
+                    .and_then(|v| v.get("url"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| url.to_string());
+        ctx["preview"] = json!(preview_url);
+    }
+
+    if let Some(fname) = filename {
+        let mut info = json!({ "filename": fname });
+        if let Some(size) = filesize {
+            info["filesize_display"] = json!(upload::format_filesize(size));
+        }
+        if let (Some(w), Some(h)) = (width, height) {
+            info["dimensions"] = json!(format!("{}x{}", w, h));
+        }
+        ctx["info"] = info;
+    }
+
+    ctx
 }
