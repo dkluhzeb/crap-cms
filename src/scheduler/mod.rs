@@ -231,7 +231,7 @@ async fn poll_and_execute(
             .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
         reg.jobs
             .iter()
-            .map(|(slug, def)| (slug.clone(), def.concurrency))
+            .map(|(slug, def)| (slug.to_string(), def.concurrency))
             .collect::<HashMap<String, u32>>()
     };
 

@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::core::{
-    FieldDefinition,
+    FieldDefinition, Slug,
     collection::{
         Access, AdminConfig, Auth, Hooks, IndexDefinition, Labels, LiveSetting, McpConfig,
         VersionsConfig,
@@ -19,7 +19,7 @@ fn default_true() -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionDefinition {
     /// Unique identifier for the collection, used in URLs and database table names.
-    pub slug: String,
+    pub slug: Slug,
     /// Human-readable labels for the collection (singular and plural).
     #[serde(default)]
     pub labels: Labels,
@@ -61,7 +61,7 @@ pub struct CollectionDefinition {
 impl Default for CollectionDefinition {
     fn default() -> Self {
         Self {
-            slug: String::new(),
+            slug: Slug::new(""),
             labels: Labels::default(),
             timestamps: true,
             fields: Vec::new(),
@@ -80,7 +80,7 @@ impl Default for CollectionDefinition {
 
 impl CollectionDefinition {
     /// Create a new `CollectionDefinition` with the given slug and default settings.
-    pub fn new(slug: impl Into<String>) -> Self {
+    pub fn new(slug: impl Into<Slug>) -> Self {
         Self {
             slug: slug.into(),
             ..Default::default()
@@ -88,7 +88,7 @@ impl CollectionDefinition {
     }
 
     /// Create a builder for `CollectionDefinition`.
-    pub fn builder(slug: impl Into<String>) -> super::CollectionDefinitionBuilder {
+    pub fn builder(slug: impl Into<Slug>) -> super::CollectionDefinitionBuilder {
         super::CollectionDefinitionBuilder::new(slug)
     }
 

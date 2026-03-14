@@ -30,7 +30,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
         match r.get_global(&slug) {
             Some(def) => {
                 let tbl = lua.create_table()?;
-                tbl.set("slug", def.slug.as_str())?;
+                tbl.set("slug", &*def.slug)?;
                 let labels = lua.create_table()?;
 
                 if let Some(ref s) = def.labels.singular {
@@ -62,7 +62,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
         for def in r.collections.values() {
             i += 1;
             let item = lua.create_table()?;
-            item.set("slug", def.slug.as_str())?;
+            item.set("slug", &*def.slug)?;
             let labels = lua.create_table()?;
 
             if let Some(ref s) = def.labels.singular {
@@ -88,7 +88,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
         for def in r.globals.values() {
             i += 1;
             let item = lua.create_table()?;
-            item.set("slug", def.slug.as_str())?;
+            item.set("slug", &*def.slug)?;
             let labels = lua.create_table()?;
 
             if let Some(ref s) = def.labels.singular {
@@ -112,7 +112,7 @@ pub(super) fn register_schema(lua: &Lua, crap: &Table, registry: SharedRegistry)
 /// Convert a CollectionDefinition to a Lua table for crap.schema.get_collection().
 fn collection_def_to_lua_table(lua: &Lua, def: &CollectionDefinition) -> mlua::Result<Table> {
     let tbl = lua.create_table()?;
-    tbl.set("slug", def.slug.as_str())?;
+    tbl.set("slug", &*def.slug)?;
     let labels = lua.create_table()?;
 
     if let Some(ref s) = def.labels.singular {
@@ -151,11 +151,11 @@ fn field_def_to_lua_table(lua: &Lua, f: &FieldDefinition) -> mlua::Result<Table>
         if rc.is_polymorphic() {
             let arr = lua.create_table()?;
             for (i, slug) in rc.polymorphic.iter().enumerate() {
-                arr.set(i + 1, slug.as_str())?;
+                arr.set(i + 1, &**slug)?;
             }
             rel.set("collection", arr)?;
         } else {
-            rel.set("collection", rc.collection.as_str())?;
+            rel.set("collection", &*rc.collection)?;
         }
         rel.set("has_many", rc.has_many)?;
 
@@ -206,7 +206,7 @@ fn field_def_to_lua_table(lua: &Lua, f: &FieldDefinition) -> mlua::Result<Table>
     }
 
     if let Some(ref jc) = f.join {
-        tbl.set("collection", jc.collection.as_str())?;
+        tbl.set("collection", &*jc.collection)?;
         tbl.set("on", jc.on.as_str())?;
     }
 
@@ -418,7 +418,7 @@ mod tests {
     fn field_def_to_lua_table_polymorphic_relationship() {
         let lua = Lua::new();
         let mut rel_cfg = RelationshipConfig::new("articles", true);
-        rel_cfg.polymorphic = vec!["articles".to_string(), "pages".to_string()];
+        rel_cfg.polymorphic = vec!["articles".into(), "pages".into()];
         let field = FieldDefinition::builder("refs", FieldType::Relationship)
             .relationship(rel_cfg)
             .build();

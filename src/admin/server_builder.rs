@@ -4,7 +4,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, event::EventBus},
+    core::{JwtSecret, Registry, event::EventBus},
     db::DbPool,
     hooks::HookRunner,
 };
@@ -18,7 +18,7 @@ pub struct AdminStartParamsBuilder {
     pool: Option<DbPool>,
     registry: Option<Arc<Registry>>,
     hook_runner: Option<HookRunner>,
-    jwt_secret: Option<String>,
+    jwt_secret: Option<JwtSecret>,
     event_bus: Option<EventBus>,
 }
 
@@ -60,8 +60,8 @@ impl AdminStartParamsBuilder {
         self
     }
 
-    pub fn jwt_secret(mut self, jwt_secret: String) -> Self {
-        self.jwt_secret = Some(jwt_secret);
+    pub fn jwt_secret(mut self, jwt_secret: impl Into<JwtSecret>) -> Self {
+        self.jwt_secret = Some(jwt_secret.into());
         self
     }
 

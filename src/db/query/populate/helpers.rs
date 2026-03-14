@@ -19,7 +19,7 @@ pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
 /// Convert a Document into a JSON Value for embedding in a parent's fields.
 pub(crate) fn document_to_json(doc: &Document, collection: &str) -> Value {
     let mut map = Map::new();
-    map.insert("id".to_string(), Value::String(doc.id.clone()));
+    map.insert("id".to_string(), Value::String(doc.id.to_string()));
     map.insert(
         "collection".to_string(),
         Value::String(collection.to_string()),

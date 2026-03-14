@@ -74,7 +74,7 @@ pub fn build_cursors(
 /// Extract cursor data from a document.
 fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: &str) -> Option<String> {
     let sort_val = if sort_col == "id" {
-        Value::String(doc.id.clone())
+        Value::String(doc.id.to_string())
     } else if sort_col == "created_at" {
         match &doc.created_at {
             Some(v) => Value::String(v.clone()),
@@ -93,7 +93,7 @@ fn cursor_from_doc(doc: &Document, sort_col: &str, sort_dir: &str) -> Option<Str
         sort_col: sort_col.to_string(),
         sort_dir: sort_dir.to_string(),
         sort_val,
-        id: doc.id.clone(),
+        id: doc.id.to_string(),
     };
     cursor.encode().ok()
 }

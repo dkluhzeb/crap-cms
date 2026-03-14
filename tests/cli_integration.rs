@@ -882,9 +882,12 @@ fn user_password_verify() {
     let hash = query::get_password_hash(&conn, "users", &doc.id)
         .unwrap()
         .expect("password hash should exist");
-    assert!(hash.starts_with("$argon2"), "should be argon2 hash");
-    assert!(auth::verify_password("mypassword", &hash).unwrap());
-    assert!(!auth::verify_password("wrongpassword", &hash).unwrap());
+    assert!(
+        hash.as_ref().starts_with("$argon2"),
+        "should be argon2 hash"
+    );
+    assert!(auth::verify_password("mypassword", hash.as_ref()).unwrap());
+    assert!(!auth::verify_password("wrongpassword", hash.as_ref()).unwrap());
 }
 
 #[test]
@@ -1001,8 +1004,8 @@ fn user_change_password() {
     let hash = query::get_password_hash(&conn, "users", &doc.id)
         .unwrap()
         .unwrap();
-    assert!(auth::verify_password("newpassword", &hash).unwrap());
-    assert!(!auth::verify_password("oldpassword", &hash).unwrap());
+    assert!(auth::verify_password("newpassword", hash.as_ref()).unwrap());
+    assert!(!auth::verify_password("oldpassword", hash.as_ref()).unwrap());
 }
 
 #[test]
@@ -1061,7 +1064,7 @@ fn export_all() {
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        collections_data.insert(slug.clone(), serde_json::Value::Array(docs_json));
+        collections_data.insert(slug.to_string(), serde_json::Value::Array(docs_json));
     }
 
     assert!(collections_data.contains_key("posts"));

@@ -201,9 +201,9 @@ crap.collections.define("users", {
     assert!(hash.is_some(), "Password hash should exist in DB");
     let hash = hash.unwrap();
     assert!(
-        hash.starts_with("$argon2"),
+        hash.as_ref().starts_with("$argon2"),
         "Hash should be argon2: {}",
-        hash
+        hash.as_ref()
     );
 }
 
@@ -286,23 +286,24 @@ crap.collections.define("users", {
         .expect("hash exists");
 
     assert_ne!(
-        old_hash, new_hash,
+        old_hash.as_ref(),
+        new_hash.as_ref(),
         "Password hash should have changed after update"
     );
     assert!(
-        new_hash.starts_with("$argon2"),
+        new_hash.as_ref().starts_with("$argon2"),
         "New hash should be argon2: {}",
-        new_hash
+        new_hash.as_ref()
     );
 
     // Verify the new password works
     assert!(
-        crap_cms::core::auth::verify_password("newpass456", &new_hash).expect("verify"),
+        crap_cms::core::auth::verify_password("newpass456", new_hash.as_ref()).expect("verify"),
         "New password should verify"
     );
     // Verify the old password no longer works
     assert!(
-        !crap_cms::core::auth::verify_password("oldpass123", &new_hash).expect("verify"),
+        !crap_cms::core::auth::verify_password("oldpass123", new_hash.as_ref()).expect("verify"),
         "Old password should NOT verify against new hash"
     );
 }

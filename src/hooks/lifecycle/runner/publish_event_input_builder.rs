@@ -4,7 +4,10 @@ use std::collections::HashMap;
 
 use serde_json::Value as JsonValue;
 
-use crate::core::event::{EventOperation, EventTarget, EventUser};
+use crate::core::{
+    DocumentId, Slug,
+    event::{EventOperation, EventTarget, EventUser},
+};
 
 use super::broadcast::PublishEventInput;
 
@@ -12,8 +15,8 @@ use super::broadcast::PublishEventInput;
 pub struct PublishEventInputBuilder {
     target: EventTarget,
     operation: EventOperation,
-    collection: Option<String>,
-    document_id: Option<String>,
+    collection: Option<Slug>,
+    document_id: Option<DocumentId>,
     data: HashMap<String, JsonValue>,
     edited_by: Option<EventUser>,
 }
@@ -30,12 +33,12 @@ impl PublishEventInputBuilder {
         }
     }
 
-    pub fn collection(mut self, collection: impl Into<String>) -> Self {
+    pub fn collection(mut self, collection: impl Into<Slug>) -> Self {
         self.collection = Some(collection.into());
         self
     }
 
-    pub fn document_id(mut self, document_id: impl Into<String>) -> Self {
+    pub fn document_id(mut self, document_id: impl Into<DocumentId>) -> Self {
         self.document_id = Some(document_id.into());
         self
     }

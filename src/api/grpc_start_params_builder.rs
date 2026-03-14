@@ -5,7 +5,7 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     api::GrpcStartParams,
     config::CrapConfig,
-    core::{Registry, event::EventBus},
+    core::{JwtSecret, Registry, event::EventBus},
     db::DbPool,
     hooks::HookRunner,
 };
@@ -15,7 +15,7 @@ pub struct GrpcStartParamsBuilder {
     pool: Option<DbPool>,
     registry: Option<Arc<Registry>>,
     hook_runner: Option<HookRunner>,
-    jwt_secret: Option<String>,
+    jwt_secret: Option<JwtSecret>,
     config: Option<CrapConfig>,
     config_dir: Option<PathBuf>,
     event_bus: Option<EventBus>,
@@ -49,8 +49,8 @@ impl GrpcStartParamsBuilder {
         self
     }
 
-    pub fn jwt_secret(mut self, jwt_secret: String) -> Self {
-        self.jwt_secret = Some(jwt_secret);
+    pub fn jwt_secret(mut self, jwt_secret: impl Into<JwtSecret>) -> Self {
+        self.jwt_secret = Some(jwt_secret.into());
         self
     }
 

@@ -150,8 +150,8 @@ pub(super) fn batch_fetch_single_collection(
         }
         for d in fetched {
             ctx.cache
-                .insert((collection.to_string(), d.id.clone()), d.clone());
-            doc_map.insert(d.id.clone(), d);
+                .insert((collection.to_string(), d.id.to_string()), d.clone());
+            doc_map.insert(d.id.to_string(), d);
         }
     }
     Ok(doc_map)

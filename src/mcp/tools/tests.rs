@@ -3,7 +3,7 @@ use std::{fs, path::Path};
 use super::*;
 use crate::{
     config::{CrapConfig, McpConfig},
-    core::{CollectionDefinition, collection::GlobalDefinition, document::Document},
+    core::{CollectionDefinition, DocumentId, collection::GlobalDefinition, document::Document},
     db::{migrate, pool, query},
     hooks::lifecycle::HookRunner,
 };
@@ -710,7 +710,7 @@ fn doc_to_json_includes_all_fields() {
     fields.insert("title".to_string(), json!("Hello"));
     fields.insert("count".to_string(), json!(42));
     let doc = Document {
-        id: "abc123".to_string(),
+        id: DocumentId::new("abc123"),
         fields,
         created_at: Some("2024-01-01T00:00:00Z".to_string()),
         updated_at: Some("2024-06-01T00:00:00Z".to_string()),
@@ -727,7 +727,7 @@ fn doc_to_json_includes_all_fields() {
 fn doc_to_json_without_timestamps() {
     use std::collections::HashMap;
     let doc = Document {
-        id: "xyz".to_string(),
+        id: DocumentId::new("xyz"),
         fields: HashMap::new(),
         created_at: None,
         updated_at: None,

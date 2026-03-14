@@ -42,7 +42,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
     }
 
     let mut data: HashMap<String, JsonValue> = doc.fields.clone();
-    data.insert("id".to_string(), JsonValue::String(doc.id.clone()));
+    data.insert("id".to_string(), JsonValue::String(doc.id.to_string()));
 
     if let Some(ref ts) = doc.created_at {
         data.insert("created_at".to_string(), JsonValue::String(ts.clone()));

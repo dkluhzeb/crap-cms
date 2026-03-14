@@ -8,6 +8,7 @@ use serde_json::Value as JsonValue;
 
 use crate::{
     core::{
+        DocumentId, Slug,
         collection::{Hooks, LiveSetting},
         event::{EventBus, EventOperation, EventTarget, EventUser},
     },
@@ -26,8 +27,8 @@ use super::publish_event_input_builder::PublishEventInputBuilder;
 pub struct PublishEventInput {
     pub target: EventTarget,
     pub operation: EventOperation,
-    pub collection: String,
-    pub document_id: String,
+    pub collection: Slug,
+    pub document_id: DocumentId,
     pub data: HashMap<String, JsonValue>,
     pub edited_by: Option<EventUser>,
 }

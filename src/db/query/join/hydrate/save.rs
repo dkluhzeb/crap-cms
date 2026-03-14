@@ -309,7 +309,7 @@ mod tests {
         .unwrap();
 
         let mut refs_rel = RelationshipConfig::new("articles", true);
-        refs_rel.polymorphic = vec!["articles".to_string(), "pages".to_string()];
+        refs_rel.polymorphic = vec!["articles".into(), "pages".into()];
         let fields = vec![
             FieldDefinition::builder("refs", FieldType::Relationship)
                 .relationship(refs_rel)

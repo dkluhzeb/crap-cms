@@ -169,7 +169,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        Document,
+        Document, DocumentId,
         upload::{
             FormatOptions, FormatQuality, FormatResult, ImageSizeBuilder, ProcessedUploadBuilder,
             SizeResultBuilder,
@@ -191,7 +191,7 @@ mod tests {
             avif: None,
         };
 
-        let mut doc = Document::new("test-id".into());
+        let mut doc = Document::new(DocumentId::new("test-id"));
         doc.fields
             .insert("url".into(), json!("/uploads/media/orig.png"));
         doc.fields
@@ -261,7 +261,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut doc = Document::new("test-id".into());
+        let mut doc = Document::new(DocumentId::new("test-id"));
         doc.fields
             .insert("url".into(), json!("/uploads/media/orig.pdf"));
 
@@ -287,7 +287,7 @@ mod tests {
             avif: Some(FormatQuality::new(50, false)),
         };
 
-        let mut doc = Document::new("id1".into());
+        let mut doc = Document::new(DocumentId::new("id1"));
         doc.fields
             .insert("thumb_url".into(), json!("/uploads/m/t.png"));
         doc.fields.insert("thumb_width".into(), json!(100));
@@ -332,7 +332,7 @@ mod tests {
             avif: Some(FormatQuality::new(50, false)),
         };
 
-        let mut doc = Document::new("id1".into());
+        let mut doc = Document::new(DocumentId::new("id1"));
         // No thumb_url, but format columns exist (edge case: orphaned format columns)
         doc.fields
             .insert("thumb_webp_url".into(), json!("/uploads/m/t.webp"));
@@ -366,7 +366,7 @@ mod tests {
                 .build(),
         ];
 
-        let mut doc = Document::new("id1".into());
+        let mut doc = Document::new(DocumentId::new("id1"));
         doc.fields
             .insert("thumb_url".into(), json!("/uploads/m/t.png"));
         // Only width, no height

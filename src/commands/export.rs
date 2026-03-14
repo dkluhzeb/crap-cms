@@ -34,13 +34,13 @@ pub fn export(
         }
         vec![slug.clone()]
     } else {
-        let mut s: Vec<_> = reg.collections.keys().cloned().collect();
+        let mut s: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
         s.sort();
         s
     };
 
     for slug in &slugs {
-        let def = &reg.collections[slug];
+        let def = &reg.collections[slug.as_str()];
 
         let find_query = query::FindQuery::default();
 

@@ -43,14 +43,14 @@ fn make_versioned_def() -> CollectionDefinition {
 
 fn make_versioned_no_drafts_def() -> CollectionDefinition {
     let mut def = make_versioned_def();
-    def.slug = "docs".to_string();
+    def.slug = "docs".into();
     def.versions = Some(VersionsConfig::new(false, 5));
     def
 }
 
 fn make_nonversioned_def() -> CollectionDefinition {
     let mut def = make_versioned_def();
-    def.slug = "notes".to_string();
+    def.slug = "notes".into();
     def.versions = None;
     def
 }

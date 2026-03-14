@@ -8,7 +8,10 @@ use tokio::task;
 use super::{LoginForm, login_error, session_cookies};
 use crate::{
     admin::AdminState,
-    core::auth::{ClaimsBuilder, create_token, dummy_verify, verify_password},
+    core::{
+        Slug,
+        auth::{ClaimsBuilder, create_token, dummy_verify, verify_password},
+    },
     db::query,
 };
 
@@ -53,7 +56,7 @@ pub async fn login_action(
             return Ok(None);
         };
 
-        if !verify_password(&password, &hash)? {
+        if !verify_password(&password, hash.as_ref())? {
             return Ok(None);
         }
 
@@ -113,12 +116,12 @@ pub async fn login_action(
         .unwrap_or(state.config.auth.token_expiry);
 
     // Create JWT
-    let claims = ClaimsBuilder::new(&user.id, &form.collection)
+    let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
         .email(user_email)
         .exp((chrono::Utc::now().timestamp() as u64) + expiry)
         .build();
 
-    let token = match create_token(&claims, &state.jwt_secret) {
+    let token = match create_token(&claims, state.jwt_secret.as_ref()) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!("Token creation error: {}", e);

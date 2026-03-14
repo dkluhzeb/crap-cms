@@ -189,7 +189,7 @@ fn cmd_user_lock_by_id() {
     );
 
     // Lock via ID
-    commands::user::user_lock(&pool, &registry, "users", None, Some(doc.id.clone())).unwrap();
+    commands::user::user_lock(&pool, &registry, "users", None, Some(doc.id.to_string())).unwrap();
 
     let conn = pool.get().unwrap();
     assert!(query::is_locked(&conn, "users", &doc.id).unwrap());
@@ -279,7 +279,7 @@ fn cmd_user_delete_with_confirm_by_id() {
         "pw",
         &[("name", "Delete By ID")],
     );
-    let id = doc.id.clone();
+    let id = doc.id.to_string();
 
     // Delete by ID with confirm=true
     commands::user::user_delete(&pool, &registry, "users", None, Some(id.clone()), true).unwrap();
@@ -340,8 +340,8 @@ fn cmd_user_change_password_by_email() {
     let hash = query::get_password_hash(&conn, "users", &doc.id)
         .unwrap()
         .unwrap();
-    assert!(auth::verify_password("newpw123", &hash).unwrap());
-    assert!(!auth::verify_password("oldpw", &hash).unwrap());
+    assert!(auth::verify_password("newpw123", hash.as_ref()).unwrap());
+    assert!(!auth::verify_password("oldpw", hash.as_ref()).unwrap());
 }
 
 #[test]
@@ -364,7 +364,7 @@ fn cmd_user_change_password_by_id() {
         &registry,
         "users",
         None,
-        Some(doc.id.clone()),
+        Some(doc.id.to_string()),
         Some("newpw456".to_string()),
         &crap_cms::config::PasswordPolicy::default(),
     )
@@ -374,7 +374,7 @@ fn cmd_user_change_password_by_id() {
     let hash = query::get_password_hash(&conn, "users", &doc.id)
         .unwrap()
         .unwrap();
-    assert!(auth::verify_password("newpw456", &hash).unwrap());
+    assert!(auth::verify_password("newpw456", hash.as_ref()).unwrap());
 }
 
 #[test]

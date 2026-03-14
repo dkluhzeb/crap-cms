@@ -263,7 +263,7 @@ pub async fn edit_form(
         .title_field()
         .and_then(|f| document.get_str(f))
         .map(|s| s.to_string())
-        .unwrap_or_else(|| document.id.clone());
+        .unwrap_or_else(|| document.id.to_string());
 
     // Fetch document status and version history for versioned collections
     let has_versions = def.has_versions();

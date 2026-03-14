@@ -255,7 +255,7 @@ pub fn run(action: super::JobsAction) -> Result<()> {
 
                     if last.is_none() {
                         // Scheduled job has never completed
-                        no_recent_runs.push(slug.clone());
+                        no_recent_runs.push(slug.to_string());
                     }
                 }
             }

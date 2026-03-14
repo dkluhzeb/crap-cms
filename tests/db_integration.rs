@@ -426,7 +426,7 @@ fn update_password_and_get_hash() {
     let hash = query::get_password_hash(&conn, "users", &user.id).expect("Get hash failed");
     assert!(hash.is_some());
     let hash_str = hash.unwrap();
-    assert!(hash_str.starts_with("$argon2"));
+    assert!(hash_str.as_ref().starts_with("$argon2"));
 }
 
 #[test]

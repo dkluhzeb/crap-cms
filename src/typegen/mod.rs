@@ -15,7 +15,7 @@ mod typescript;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
-use crate::core::{FieldDefinition, FieldType, Registry};
+use crate::core::{FieldDefinition, FieldType, Registry, Slug};
 
 /// Embedded Lua API type definitions — kept in sync with the CMS binary version.
 const LUA_API_TYPES: &str = include_str!("../../types/crap.lua");
@@ -147,15 +147,15 @@ pub(crate) fn rel_has_many(field: &FieldDefinition) -> bool {
 }
 
 /// Get sorted collection slugs from the registry.
-pub(crate) fn sorted_collection_slugs(registry: &Registry) -> Vec<&String> {
-    let mut slugs: Vec<&String> = registry.collections.keys().collect();
+pub(crate) fn sorted_collection_slugs(registry: &Registry) -> Vec<&Slug> {
+    let mut slugs: Vec<&Slug> = registry.collections.keys().collect();
     slugs.sort();
     slugs
 }
 
 /// Get sorted global slugs from the registry.
-pub(crate) fn sorted_global_slugs(registry: &Registry) -> Vec<&String> {
-    let mut slugs: Vec<&String> = registry.globals.keys().collect();
+pub(crate) fn sorted_global_slugs(registry: &Registry) -> Vec<&Slug> {
+    let mut slugs: Vec<&Slug> = registry.globals.keys().collect();
     slugs.sort();
     slugs
 }
@@ -313,14 +313,8 @@ mod tests {
             .collections
             .insert("middle".into(), make_collection("middle"));
         let slugs = sorted_collection_slugs(&registry);
-        assert_eq!(
-            slugs,
-            vec![
-                &"alpha".to_string(),
-                &"middle".to_string(),
-                &"zebra".to_string()
-            ]
-        );
+        let expected: Vec<Slug> = vec!["alpha".into(), "middle".into(), "zebra".into()];
+        assert_eq!(slugs, expected.iter().collect::<Vec<&Slug>>());
     }
 
     #[test]
@@ -333,6 +327,7 @@ mod tests {
             .globals
             .insert("about".into(), make_global("about"));
         let slugs = sorted_global_slugs(&registry);
-        assert_eq!(slugs, vec![&"about".to_string(), &"settings".to_string()]);
+        let expected: Vec<Slug> = vec!["about".into(), "settings".into()];
+        assert_eq!(slugs, expected.iter().collect::<Vec<&Slug>>());
     }
 }

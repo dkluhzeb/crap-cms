@@ -313,7 +313,7 @@ dev_mode = false
     #[test]
     fn validate_short_auth_secret_warns_but_passes() {
         let mut config = CrapConfig::default();
-        config.auth.secret = "short".to_string();
+        config.auth.secret = crate::core::JwtSecret::new("short");
         assert!(config.validate().is_ok());
     }
 

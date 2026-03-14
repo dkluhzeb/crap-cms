@@ -48,7 +48,7 @@ pub fn read_resource(
                 }
                 let schema = collection_input_schema(def, CrudOp::Create);
                 schemas.insert(
-                    slug.clone(),
+                    slug.to_string(),
                     json!({
                         "label": def.display_name(),
                         "timestamps": def.timestamps,
@@ -70,7 +70,7 @@ pub fn read_resource(
             for (slug, def) in &registry.globals {
                 let schema = global_input_schema(def, CrudOp::Update);
                 schemas.insert(
-                    slug.clone(),
+                    slug.to_string(),
                     json!({
                         "label": def.display_name(),
                         "schema": schema,
@@ -88,18 +88,7 @@ pub fn read_resource(
             let mut config_json = serde_json::to_value(config).unwrap_or(Value::Null);
 
             if let Some(obj) = config_json.as_object_mut() {
-                // Redact auth secret
-                if let Some(auth) = obj.get_mut("auth").and_then(|a| a.as_object_mut())
-                    && auth.contains_key("secret")
-                {
-                    auth.insert("secret".to_string(), Value::String("***".to_string()));
-                }
-                // Redact email password
-                if let Some(email) = obj.get_mut("email").and_then(|e| e.as_object_mut())
-                    && email.contains_key("smtp_pass")
-                {
-                    email.insert("smtp_pass".to_string(), Value::String("***".to_string()));
-                }
+                // auth.secret and email.smtp_pass are auto-redacted via Serialize impls
                 // Redact MCP API key
                 if let Some(mcp) = obj.get_mut("mcp").and_then(|m| m.as_object_mut())
                     && let Some(key) = mcp.get("api_key").and_then(|k| k.as_str())
@@ -158,10 +147,10 @@ mod tests {
     fn read_config_sanitizes_secrets() {
         let reg = Registry::new();
         let mut config = CrapConfig::default();
-        config.auth.secret = "super-secret".to_string();
+        config.auth.secret = crate::core::JwtSecret::new("super-secret");
         let content = read_resource("crap://config", &reg, &config).unwrap();
         assert!(!content.text.contains("super-secret"));
-        assert!(content.text.contains("***"));
+        assert!(content.text.contains("[REDACTED]"));
     }
 
     #[test]

@@ -95,7 +95,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Resul
     // relationship
     if let Some(ref rc) = f.relationship {
         let rel = lua.create_table()?;
-        rel.set("collection", rc.collection.as_str())?;
+        rel.set("collection", &*rc.collection)?;
 
         if rc.has_many {
             rel.set("has_many", true)?;

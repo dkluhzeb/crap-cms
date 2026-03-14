@@ -46,7 +46,7 @@ pub(super) fn register_collections(
             .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
         let map = lua.create_table()?;
         for (slug, def) in reg.collections.iter() {
-            map.set(slug.as_str(), collection_config_to_lua(lua, def)?)?;
+            map.set(slug.as_ref(), collection_config_to_lua(lua, def)?)?;
         }
         Ok(map)
     })?;

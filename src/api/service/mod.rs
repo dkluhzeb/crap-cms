@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter},
+    core::{
+        JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
+    },
     db::DbPool,
     hooks::HookRunner,
 };
@@ -25,7 +27,7 @@ pub struct ContentServiceDeps {
     pub pool: DbPool,
     pub registry: Arc<Registry>,
     pub hook_runner: HookRunner,
-    pub jwt_secret: String,
+    pub jwt_secret: JwtSecret,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
     pub email_renderer: Arc<EmailRenderer>,

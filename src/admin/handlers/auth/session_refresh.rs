@@ -59,7 +59,7 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
         .exp((Utc::now().timestamp() as u64) + expiry)
         .build();
 
-    let token = match create_token(&new_claims, &state.jwt_secret) {
+    let token = match create_token(&new_claims, state.jwt_secret.as_ref()) {
         Ok(t) => t,
         Err(e) => {
             tracing::error!("Session refresh token creation: {}", e);

@@ -243,7 +243,7 @@ pub async fn create_action(
                     state.email_renderer.clone(),
                     state.config.server.clone(),
                     slug.clone(),
-                    doc.id.clone(),
+                    doc.id.to_string(),
                     user_email.to_string(),
                 );
             }

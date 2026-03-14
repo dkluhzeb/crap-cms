@@ -3,7 +3,10 @@
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::parsing::{serde_duration, serde_duration_option, serde_filesize};
+use super::{
+    SmtpPassword,
+    parsing::{serde_duration, serde_duration_option, serde_filesize},
+};
 
 /// SMTP TLS mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -30,7 +33,7 @@ pub struct EmailConfig {
     /// SMTP username for authentication.
     pub smtp_user: String,
     /// SMTP password for authentication.
-    pub smtp_pass: String,
+    pub smtp_pass: SmtpPassword,
     /// "From" email address (default "noreply@example.com").
     pub from_address: String,
     /// "From" display name (default "Crap CMS").
@@ -52,7 +55,7 @@ impl Default for EmailConfig {
             smtp_host: String::new(),
             smtp_port: 587,
             smtp_user: String::new(),
-            smtp_pass: String::new(),
+            smtp_pass: SmtpPassword::new(""),
             from_address: "noreply@example.com".to_string(),
             from_name: "Crap CMS".to_string(),
             smtp_tls: SmtpTls::default(),

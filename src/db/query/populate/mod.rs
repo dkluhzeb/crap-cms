@@ -44,7 +44,7 @@ pub fn populate_relationships_batch(
 pub(crate) mod test_helpers {
     use rusqlite::Connection;
 
-    use crate::core::{Registry, collection::*, field::*};
+    use crate::core::{Registry, Slug, collection::*, field::*};
 
     pub fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
         FieldDefinition::builder(name, ft).build()
@@ -133,7 +133,7 @@ pub(crate) mod test_helpers {
     pub fn make_authors_def_with_join() -> CollectionDefinition {
         let mut join_field = make_field("posts", FieldType::Join);
         join_field.join = Some(JoinConfig {
-            collection: "posts".to_string(),
+            collection: Slug::new("posts"),
             on: "author".to_string(),
         });
         make_collection_def(
@@ -192,7 +192,7 @@ pub(crate) mod test_helpers {
     pub fn make_entries_def_poly_has_one() -> CollectionDefinition {
         let mut related_field = make_field("related", FieldType::Relationship);
         let mut rel = RelationshipConfig::new("articles", false);
-        rel.polymorphic = vec!["articles".to_string(), "pages".to_string()];
+        rel.polymorphic = vec!["articles".into(), "pages".into()];
         related_field.relationship = Some(rel);
         make_collection_def(
             "entries",
@@ -203,7 +203,7 @@ pub(crate) mod test_helpers {
     pub fn make_entries_def_poly_has_many() -> CollectionDefinition {
         let mut refs_field = make_field("refs", FieldType::Relationship);
         let mut rel = RelationshipConfig::new("articles", true);
-        rel.polymorphic = vec!["articles".to_string(), "pages".to_string()];
+        rel.polymorphic = vec!["articles".into(), "pages".into()];
         refs_field.relationship = Some(rel);
         make_collection_def(
             "entries",

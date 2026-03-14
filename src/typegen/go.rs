@@ -260,7 +260,7 @@ mod tests {
     #[test]
     fn go_polymorphic_has_one() {
         let mut rc = RelationshipConfig::new("posts", false);
-        rc.polymorphic = vec!["posts".to_string(), "pages".to_string()];
+        rc.polymorphic = vec!["posts".into(), "pages".into()];
         let col = make_col(
             "comments",
             vec![
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn go_polymorphic_has_many() {
         let mut rc = RelationshipConfig::new("articles", true);
-        rc.polymorphic = vec!["articles".to_string(), "videos".to_string()];
+        rc.polymorphic = vec!["articles".into(), "videos".into()];
         let col = make_col(
             "posts",
             vec![
@@ -705,7 +705,7 @@ mod tests {
     fn go_polymorphic_has_one_optional() {
         // Optional polymorphic has-one should use *string
         let mut rc = RelationshipConfig::new("pages", false);
-        rc.polymorphic = vec!["pages".to_string(), "posts".to_string()];
+        rc.polymorphic = vec!["pages".into(), "posts".into()];
         let col = make_col(
             "posts",
             vec![

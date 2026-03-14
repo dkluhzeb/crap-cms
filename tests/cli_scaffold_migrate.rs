@@ -107,7 +107,7 @@ fn roundtrip_data_preserved() {
         .map(serde_json::to_value)
         .collect::<Result<Vec<_>, _>>()
         .unwrap();
-    let ids: Vec<String> = exported.iter().map(|d| d.id.clone()).collect();
+    let ids: Vec<String> = exported.iter().map(|d| d.id.to_string()).collect();
     drop(conn);
 
     // Delete all
@@ -151,7 +151,7 @@ fn roundtrip_data_preserved() {
     assert_eq!(reimported.len(), 3);
     for doc in &reimported {
         assert!(
-            ids.contains(&doc.id),
+            ids.contains(&doc.id.to_string()),
             "re-imported doc should have original ID"
         );
         assert_eq!(doc.get_str("status"), Some("published"));
@@ -193,7 +193,7 @@ fn roundtrip_multiple_collections() {
             .map(serde_json::to_value)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        collections_data.insert(slug.clone(), serde_json::Value::Array(docs_json));
+        collections_data.insert(slug.to_string(), serde_json::Value::Array(docs_json));
     }
 
     assert!(collections_data.contains_key("posts"));

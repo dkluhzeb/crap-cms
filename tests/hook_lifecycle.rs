@@ -452,7 +452,7 @@ fn check_access_with_user_context() {
     let mut admin_fields = HashMap::new();
     admin_fields.insert("role".to_string(), serde_json::json!("admin"));
     let admin_user = Document {
-        id: "user-1".to_string(),
+        id: "user-1".into(),
         fields: admin_fields,
         created_at: None,
         updated_at: None,
@@ -476,7 +476,7 @@ fn check_access_with_user_context() {
     let mut regular_fields = HashMap::new();
     regular_fields.insert("role".to_string(), serde_json::json!("editor"));
     let regular_user = Document {
-        id: "user-2".to_string(),
+        id: "user-2".into(),
         fields: regular_fields,
         created_at: None,
         updated_at: None,

@@ -222,7 +222,7 @@ impl ContentService {
             .collections
             .values()
             .map(|def| content::CollectionInfo {
-                slug: def.slug.clone(),
+                slug: def.slug.to_string(),
                 singular_label: def
                     .labels
                     .singular
@@ -245,7 +245,7 @@ impl ContentService {
             .globals
             .values()
             .map(|def| content::GlobalInfo {
-                slug: def.slug.clone(),
+                slug: def.slug.to_string(),
                 singular_label: def
                     .labels
                     .singular
@@ -276,7 +276,7 @@ impl ContentService {
         if req.is_global {
             let def = self.get_global_def(&req.slug)?;
             Ok(Response::new(content::DescribeCollectionResponse {
-                slug: def.slug.clone(),
+                slug: def.slug.to_string(),
                 singular_label: def
                     .labels
                     .singular
@@ -296,7 +296,7 @@ impl ContentService {
         } else {
             let def = self.get_collection_def(&req.slug)?;
             Ok(Response::new(content::DescribeCollectionResponse {
-                slug: def.slug.clone(),
+                slug: def.slug.to_string(),
                 singular_label: def
                     .labels
                     .singular
@@ -333,7 +333,7 @@ impl ContentService {
 
         // Authenticate subscriber
         let auth_user = if !req.token.is_empty() {
-            let claims = validate_token(&req.token, &self.jwt_secret)
+            let claims = validate_token(&req.token, self.jwt_secret.as_ref())
                 .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
             let pool = self.pool.clone();
             let registry = self.registry.clone();
@@ -367,7 +367,11 @@ impl ContentService {
 
             // Check collection read access
             let target_collections: Vec<String> = if req.collections.is_empty() {
-                self.registry.collections.keys().cloned().collect()
+                self.registry
+                    .collections
+                    .keys()
+                    .map(|s| s.to_string())
+                    .collect()
             } else {
                 req.collections
             };
@@ -399,7 +403,11 @@ impl ContentService {
             }
 
             let target_globals: Vec<String> = if req.globals.is_empty() {
-                self.registry.globals.keys().cloned().collect()
+                self.registry
+                    .globals
+                    .keys()
+                    .map(|s| s.to_string())
+                    .collect()
             } else {
                 req.globals
             };
@@ -436,8 +444,12 @@ impl ContentService {
                 Ok(event) => {
                     // Filter by target type + collection access
                     let allowed = match event.target {
-                        EventTarget::Collection => allowed_collections.contains(&event.collection),
-                        EventTarget::Global => allowed_globals.contains(&event.collection),
+                        EventTarget::Collection => {
+                            allowed_collections.contains(event.collection.as_ref() as &str)
+                        }
+                        EventTarget::Global => {
+                            allowed_globals.contains(event.collection.as_ref() as &str)
+                        }
                     };
 
                     if !allowed {
@@ -472,8 +484,8 @@ impl ContentService {
                         timestamp: event.timestamp,
                         target: target_str.to_string(),
                         operation: op_str.to_string(),
-                        collection: event.collection,
-                        document_id: event.document_id,
+                        collection: event.collection.to_string(),
+                        document_id: event.document_id.to_string(),
                         data: Some(prost_types::Struct { fields }),
                     }))
                 }
@@ -633,7 +645,7 @@ impl ContentService {
             .jobs
             .iter()
             .map(|(slug, def)| content::JobDefinitionInfo {
-                slug: slug.clone(),
+                slug: slug.to_string(),
                 handler: def.handler.clone(),
                 schedule: def.schedule.clone(),
                 queue: def.queue.clone(),

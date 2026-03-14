@@ -47,7 +47,7 @@ pub fn upload_router(state: AdminState) -> Router<AdminState> {
 fn extract_bearer_user(state: &AdminState, headers: &HeaderMap) -> Option<AuthUser> {
     let auth_header = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
     let token = auth_header.strip_prefix("Bearer ")?;
-    let claims = auth::validate_token(token, &state.jwt_secret).ok()?;
+    let claims = auth::validate_token(token, state.jwt_secret.as_ref()).ok()?;
 
     load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
 }

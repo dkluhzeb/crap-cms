@@ -14,11 +14,13 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::core::DocumentId;
+
 /// A single content document with an ID, user-defined fields, and optional timestamps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     /// The unique identifier for this document.
-    pub id: String,
+    pub id: DocumentId,
     /// A map of field names to their JSON-serialized values.
     #[serde(flatten)]
     pub fields: HashMap<String, Value>,
@@ -33,9 +35,9 @@ pub struct Document {
 #[allow(dead_code)]
 impl Document {
     /// Create an empty document with the given ID and no fields or timestamps.
-    pub fn new(id: String) -> Self {
+    pub fn new(id: impl Into<DocumentId>) -> Self {
         Self {
-            id,
+            id: id.into(),
             fields: HashMap::new(),
             created_at: None,
             updated_at: None,
@@ -43,7 +45,7 @@ impl Document {
     }
 
     /// Returns a new `DocumentBuilder` for constructing a document with the given ID.
-    pub fn builder(id: impl Into<String>) -> DocumentBuilder {
+    pub fn builder(id: impl Into<DocumentId>) -> DocumentBuilder {
         DocumentBuilder::new(id)
     }
 
@@ -66,7 +68,7 @@ mod tests {
 
     #[test]
     fn new_creates_empty_document() {
-        let doc = Document::new("abc123".to_string());
+        let doc = Document::new("abc123");
         assert_eq!(doc.id, "abc123");
         assert!(doc.fields.is_empty());
         assert!(doc.created_at.is_none());
@@ -75,7 +77,7 @@ mod tests {
 
     #[test]
     fn get_returns_field_value() {
-        let mut doc = Document::new("id1".to_string());
+        let mut doc = Document::new("id1");
         doc.fields.insert("title".to_string(), json!("Hello"));
         assert_eq!(doc.get("title"), Some(&json!("Hello")));
         assert_eq!(doc.get("missing"), None);
@@ -83,7 +85,7 @@ mod tests {
 
     #[test]
     fn get_str_returns_string_value() {
-        let mut doc = Document::new("id1".to_string());
+        let mut doc = Document::new("id1");
         doc.fields.insert("title".to_string(), json!("Hello"));
         doc.fields.insert("count".to_string(), json!(42));
         assert_eq!(doc.get_str("title"), Some("Hello"));

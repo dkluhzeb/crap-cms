@@ -19,7 +19,7 @@ pub(super) fn parse_field_relationship(
             let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
             let mut rc = RelationshipConfig::new(collection, has_many);
             rc.max_depth = max_depth;
-            rc.polymorphic = polymorphic;
+            rc.polymorphic = polymorphic.into_iter().map(|s| s.into()).collect();
             Ok(Some(rc))
         } else {
             // Legacy flat syntax: relation_to + has_many on the field itself

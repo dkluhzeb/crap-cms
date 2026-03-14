@@ -70,7 +70,7 @@ fn seed_items(
         let mut conn = pool.get().unwrap();
         let tx = conn.transaction().unwrap();
         let doc = query::create(&tx, "items", &def, &data, None).unwrap();
-        ids.push(doc.id);
+        ids.push(doc.id.to_string());
         tx.commit().unwrap();
     }
     ids

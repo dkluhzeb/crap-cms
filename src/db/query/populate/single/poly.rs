@@ -45,7 +45,7 @@ pub(super) fn populate_poly_has_many(
             let item_def = item_def.clone();
             let fetched = find_by_ids(ctx.conn, col, &item_def, col_ids, ctx.locale_ctx)?;
             let doc_map: HashMap<String, Document> =
-                fetched.into_iter().map(|d| (d.id.clone(), d)).collect();
+                fetched.into_iter().map(|d| (d.id.to_string(), d)).collect();
             fetched_map.insert(col.clone(), doc_map);
         }
     }
@@ -84,7 +84,8 @@ pub(super) fn populate_poly_has_many(
                             },
                             ctx.cache,
                         )?;
-                        ctx.cache.insert((col.clone(), rd.id.clone()), rd.clone());
+                        ctx.cache
+                            .insert((col.clone(), rd.id.to_string()), rd.clone());
                         populated.push(document_to_json(&rd, &col));
                     } else {
                         populated.push(Value::String(item.clone()));

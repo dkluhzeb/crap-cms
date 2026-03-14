@@ -4,6 +4,10 @@
 pub mod claims;
 /// Builder for JWT claims.
 pub mod claims_builder;
+/// Newtype wrapper for Argon2id password hashes.
+pub mod hashed_password;
+/// Newtype wrapper for JWT signing secrets.
+pub mod jwt_secret;
 
 use std::sync::LazyLock;
 
@@ -14,27 +18,29 @@ use argon2::{
 };
 pub use claims::Claims;
 pub use claims_builder::ClaimsBuilder;
+pub use hashed_password::HashedPassword;
+pub use jwt_secret::JwtSecret;
 
 /// Pre-computed Argon2 hash used to burn CPU time on user-not-found paths,
 /// preventing timing oracles that leak whether an email exists.
-static DUMMY_HASH: LazyLock<String> =
+static DUMMY_HASH: LazyLock<HashedPassword> =
     LazyLock::new(|| hash_password("__crap_dummy_timing__").expect("dummy hash"));
 
 /// Perform a dummy password verification to equalize timing with real verifications.
 /// Call this on login paths where user-not-found or hash-missing would otherwise
 /// return fast, enabling email enumeration via response timing.
 pub fn dummy_verify() {
-    let _ = verify_password("x", &DUMMY_HASH);
+    let _ = verify_password("x", DUMMY_HASH.as_ref());
 }
 
 /// Hash a password using Argon2id.
-pub fn hash_password(password: &str) -> Result<String> {
+pub fn hash_password(password: &str) -> Result<HashedPassword> {
     let salt = SaltString::generate(&mut OsRng);
     let argon2 = Argon2::default();
     let hash = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| anyhow!("Password hashing failed: {}", e))?;
-    Ok(hash.to_string())
+    Ok(HashedPassword::new(hash.to_string()))
 }
 
 /// Verify a password against a stored hash.
@@ -94,8 +100,8 @@ mod tests {
     #[test]
     fn hash_and_verify_password() {
         let hash = hash_password("secret123").unwrap();
-        assert!(verify_password("secret123", &hash).unwrap());
-        assert!(!verify_password("wrong", &hash).unwrap());
+        assert!(verify_password("secret123", hash.as_ref()).unwrap());
+        assert!(!verify_password("wrong", hash.as_ref()).unwrap());
     }
 
     #[test]
@@ -122,7 +128,7 @@ mod tests {
 
     #[test]
     fn dummy_hash_is_valid_argon2() {
-        assert!(DUMMY_HASH.starts_with("$argon2"));
+        assert!(DUMMY_HASH.as_ref().starts_with("$argon2"));
     }
 
     #[test]
@@ -170,10 +176,10 @@ mod tests {
     fn hash_password_empty_string_succeeds() {
         // An empty password is technically valid and should produce a usable hash.
         let hash = hash_password("").unwrap();
-        assert!(hash.starts_with("$argon2"));
+        assert!(hash.as_ref().starts_with("$argon2"));
         // And we can round-trip verify it.
-        assert!(verify_password("", &hash).unwrap());
-        assert!(!verify_password("notempty", &hash).unwrap());
+        assert!(verify_password("", hash.as_ref()).unwrap());
+        assert!(!verify_password("notempty", hash.as_ref()).unwrap());
     }
 
     #[test]

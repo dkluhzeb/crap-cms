@@ -80,7 +80,7 @@ fn setup_service(
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
@@ -488,7 +488,7 @@ return M
 
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let mut def = CollectionDefinition::new("scored");
     def.labels = Labels {
@@ -601,7 +601,7 @@ return M
 
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let mut def = CollectionDefinition::new("pages");
     def.labels = Labels {
@@ -699,7 +699,7 @@ return M
 
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let mut def = CollectionDefinition::new("entries");
     def.labels = Labels {
@@ -805,7 +805,7 @@ return M
 
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let mut def = CollectionDefinition::new("notes");
     def.labels = Labels {
@@ -910,7 +910,7 @@ return M
 
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let mut def = CollectionDefinition::new("moderated");
     def.labels = Labels {

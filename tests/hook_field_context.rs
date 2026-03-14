@@ -741,7 +741,7 @@ fn run_before_write_with_user_context() {
     let mut user_fields = HashMap::new();
     user_fields.insert("role".to_string(), serde_json::json!("admin"));
     let user = Document {
-        id: "user-1".to_string(),
+        id: "user-1".into(),
         fields: user_fields,
         created_at: None,
         updated_at: None,

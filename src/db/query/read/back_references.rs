@@ -68,7 +68,7 @@ pub fn find_back_references(
 
     // Scan collections
     for (slug, def) in &registry.collections {
-        let table = slug.as_str();
+        let table: &str = slug;
         let scan = BackRefScan {
             conn,
             target_collection,
@@ -518,9 +518,9 @@ fn query_ids_blocks(
 mod tests {
     use super::*;
     use crate::config::{CrapConfig, DatabaseConfig, LocaleConfig};
-    use crate::core::Registry;
     use crate::core::collection::*;
     use crate::core::field::*;
+    use crate::core::{Registry, Slug};
     use crate::db::{DbPool, migrate, pool};
 
     fn no_locale() -> LocaleConfig {
@@ -683,10 +683,10 @@ mod tests {
         posts.fields = vec![
             FieldDefinition::builder("featured", FieldType::Relationship)
                 .relationship(RelationshipConfig {
-                    collection: "media".to_string(),
+                    collection: Slug::new("media"),
                     has_many: false,
                     max_depth: None,
-                    polymorphic: vec!["media".to_string(), "pages".to_string()],
+                    polymorphic: vec![Slug::new("media"), Slug::new("pages")],
                 })
                 .build(),
         ];
@@ -713,10 +713,10 @@ mod tests {
         posts.fields = vec![
             FieldDefinition::builder("related", FieldType::Relationship)
                 .relationship(RelationshipConfig {
-                    collection: "media".to_string(),
+                    collection: Slug::new("media"),
                     has_many: true,
                     max_depth: None,
-                    polymorphic: vec!["media".to_string(), "pages".to_string()],
+                    polymorphic: vec![Slug::new("media"), Slug::new("pages")],
                 })
                 .build(),
         ];

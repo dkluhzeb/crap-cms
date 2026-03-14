@@ -1,7 +1,7 @@
 //! Builder for [`CollectionDefinition`](super::CollectionDefinition).
 
 use crate::core::{
-    FieldDefinition,
+    FieldDefinition, Slug,
     collection::{
         Access, AdminConfig, Auth, CollectionDefinition, Hooks, IndexDefinition, Labels,
         LiveSetting, McpConfig, VersionsConfig,
@@ -19,7 +19,7 @@ pub struct CollectionDefinitionBuilder {
 
 impl CollectionDefinitionBuilder {
     /// Create a new `CollectionDefinitionBuilder` with the given slug.
-    pub fn new(slug: impl Into<String>) -> Self {
+    pub fn new(slug: impl Into<Slug>) -> Self {
         Self {
             inner: CollectionDefinition {
                 slug: slug.into(),

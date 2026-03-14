@@ -169,8 +169,8 @@ pub(super) fn batch_fetch_with_cache(
                     )?;
                 }
                 for d in fetched {
-                    ctx.cache.insert((col.clone(), d.id.clone()), d.clone());
-                    doc_map.insert(d.id.clone(), d);
+                    ctx.cache.insert((col.clone(), d.id.to_string()), d.clone());
+                    doc_map.insert(d.id.to_string(), d);
                 }
             }
             fetched_map.insert(col.clone(), doc_map);

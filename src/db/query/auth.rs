@@ -3,7 +3,7 @@
 use anyhow::{Context as _, Result};
 
 use crate::{
-    core::{CollectionDefinition, Document, auth::hash_password},
+    core::{CollectionDefinition, Document, HashedPassword, auth::hash_password},
     db::{document::row_to_document, query::get_column_names},
 };
 
@@ -36,13 +36,13 @@ pub fn get_password_hash(
     conn: &rusqlite::Connection,
     slug: &str,
     id: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<HashedPassword>> {
     let sql = format!("SELECT _password_hash FROM {} WHERE id = ?1", slug);
 
     let result = conn.query_row(&sql, [id], |row| row.get::<_, Option<String>>(0));
 
     match result {
-        Ok(hash) => Ok(hash),
+        Ok(hash) => Ok(hash.map(HashedPassword::new)),
         Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
         Err(e) => Err(e).context(format!(
             "Failed to get password hash for {} in {}",
@@ -61,7 +61,7 @@ pub fn update_password(
 ) -> Result<()> {
     let hash = hash_password(password)?;
     let sql = format!("UPDATE {} SET _password_hash = ?1 WHERE id = ?2", slug);
-    conn.execute(&sql, rusqlite::params![hash, id])
+    conn.execute(&sql, rusqlite::params![hash.as_ref() as &str, id])
         .with_context(|| format!("Failed to update password for {} in {}", id, slug))?;
     Ok(())
 }
@@ -375,7 +375,8 @@ mod tests {
         update_password(&conn, "users", "user1", "secret123").unwrap();
         let hash = get_password_hash(&conn, "users", "user1").unwrap();
         assert!(hash.is_some(), "Should return Some after setting password");
-        let hash_str = hash.unwrap();
+        let hash_val = hash.unwrap();
+        let hash_str: &str = hash_val.as_ref();
         assert!(!hash_str.is_empty(), "Hash should be non-empty");
         // Argon2 hashes start with $argon2
         assert!(

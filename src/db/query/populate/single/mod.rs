@@ -35,7 +35,7 @@ pub fn populate_relationships_cached(
         return Ok(());
     }
 
-    let visit_key = (collection_slug.to_string(), doc.id.clone());
+    let visit_key = (collection_slug.to_string(), doc.id.to_string());
 
     if visited.contains(&visit_key) {
         return Ok(());

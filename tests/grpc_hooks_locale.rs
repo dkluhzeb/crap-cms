@@ -100,7 +100,7 @@ fn setup_service(
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
@@ -159,7 +159,7 @@ fn setup_service_with_locale(
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.locale.locales = locales.iter().map(|s| s.to_string()).collect();
     config.locale.default_locale = locales.first().unwrap_or(&"en").to_string();
     config.locale.fallback = true;

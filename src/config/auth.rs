@@ -4,6 +4,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::parsing::serde_duration;
+use crate::core::JwtSecret;
 
 /// JWT authentication settings.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -11,7 +12,7 @@ use super::parsing::serde_duration;
 pub struct AuthConfig {
     /// JWT secret. If empty, a random secret is generated at startup (tokens
     /// won't survive restarts).
-    pub secret: String,
+    pub secret: JwtSecret,
     /// Default token expiry in seconds (can be overridden per-collection).
     /// Accepts integer seconds or human-readable string ("2h", "7200").
     #[serde(with = "serde_duration")]
@@ -40,7 +41,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            secret: String::new(),
+            secret: JwtSecret::new(""),
             token_expiry: 7200,
             max_login_attempts: 5,
             login_lockout_seconds: 300,

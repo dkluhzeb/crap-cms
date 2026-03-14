@@ -148,7 +148,10 @@ fn send_email_smtp(
             .context("Failed to build email message")?
     };
 
-    let creds = Credentials::new(config.smtp_user.clone(), config.smtp_pass.clone());
+    let creds = Credentials::new(
+        config.smtp_user.clone(),
+        config.smtp_pass.as_ref().to_string(),
+    );
     let timeout = std::time::Duration::from_secs(config.smtp_timeout);
 
     let transport = match config.smtp_tls {

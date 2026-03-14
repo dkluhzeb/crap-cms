@@ -5,7 +5,9 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     api::service::ContentServiceDeps,
     config::CrapConfig,
-    core::{Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter},
+    core::{
+        JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
+    },
     db::DbPool,
     hooks::HookRunner,
 };
@@ -15,7 +17,7 @@ pub struct ContentServiceDepsBuilder {
     pool: Option<DbPool>,
     registry: Option<Arc<Registry>>,
     hook_runner: Option<HookRunner>,
-    jwt_secret: Option<String>,
+    jwt_secret: Option<JwtSecret>,
     config: Option<CrapConfig>,
     config_dir: Option<PathBuf>,
     email_renderer: Option<Arc<EmailRenderer>>,
@@ -55,7 +57,7 @@ impl ContentServiceDepsBuilder {
         self
     }
 
-    pub fn jwt_secret(mut self, jwt_secret: impl Into<String>) -> Self {
+    pub fn jwt_secret(mut self, jwt_secret: impl Into<JwtSecret>) -> Self {
         self.jwt_secret = Some(jwt_secret.into());
         self
     }

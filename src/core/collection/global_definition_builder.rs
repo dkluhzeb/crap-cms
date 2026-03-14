@@ -1,7 +1,7 @@
 //! Builder for [`GlobalDefinition`](super::GlobalDefinition).
 
 use crate::core::{
-    FieldDefinition,
+    FieldDefinition, Slug,
     collection::{Access, GlobalDefinition, Hooks, Labels, LiveSetting, McpConfig, VersionsConfig},
 };
 
@@ -15,7 +15,7 @@ pub struct GlobalDefinitionBuilder {
 
 impl GlobalDefinitionBuilder {
     /// Create a new builder for a global with the given slug.
-    pub fn new(slug: impl Into<String>) -> Self {
+    pub fn new(slug: impl Into<Slug>) -> Self {
         Self {
             inner: GlobalDefinition {
                 slug: slug.into(),

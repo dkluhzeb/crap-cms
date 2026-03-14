@@ -48,7 +48,7 @@ pub(super) fn populate_join_fields(
         let mut fq = FindQuery::new();
         fq.filters = vec![FilterClause::Single(Filter {
             field: jc.on.clone(),
-            op: FilterOp::Equals(doc.id.clone()),
+            op: FilterOp::Equals(doc.id.to_string()),
         })];
         let fq = fq;
 

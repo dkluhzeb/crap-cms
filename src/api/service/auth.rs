@@ -7,6 +7,7 @@ use tonic::{Request, Response, Status};
 use crate::{
     api::content,
     core::{
+        Slug,
         auth::{self, ClaimsBuilder},
         email,
     },
@@ -69,7 +70,7 @@ impl ContentService {
                 }
             };
 
-            if !auth::verify_password(&password, &hash)? {
+            if !auth::verify_password(&password, hash.as_ref())? {
                 return Ok(None);
             }
             Ok::<_, anyhow::Error>(Some(doc))
@@ -152,12 +153,12 @@ impl ContentService {
 
         let expiry = def.auth.as_ref().map(|a| a.token_expiry).unwrap_or(7200);
 
-        let claims = ClaimsBuilder::new(&user.id, &req.collection)
+        let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
             .email(user_email)
             .exp((chrono::Utc::now().timestamp() as u64) + expiry)
             .build();
 
-        let token = auth::create_token(&claims, &self.jwt_secret).map_err(|e| {
+        let token = auth::create_token(&claims, self.jwt_secret.as_ref()).map_err(|e| {
             tracing::error!("Token creation error: {}", e);
             Status::internal("Internal error")
         })?;
@@ -178,7 +179,7 @@ impl ContentService {
     ) -> Result<Response<content::MeResponse>, Status> {
         let req = request.into_inner();
 
-        let claims = auth::validate_token(&req.token, &self.jwt_secret)
+        let claims = auth::validate_token(&req.token, self.jwt_secret.as_ref())
             .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
 
         let def = self.get_collection_def(&claims.collection)?;

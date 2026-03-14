@@ -217,13 +217,13 @@ pub fn fts_upsert_with_registry(
     // Delete existing row
     conn.execute(
         &format!("DELETE FROM {} WHERE id = ?1", fts_table),
-        [&doc.id],
+        [doc.id.as_ref()],
     )
     .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
 
     // Insert new row
     let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    values.push(Box::new(doc.id.clone()));
+    values.push(Box::new(doc.id.to_string()));
 
     for col_name in &fts_cols {
         let raw = doc

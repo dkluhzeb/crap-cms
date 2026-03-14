@@ -285,7 +285,7 @@ pub(crate) fn document_to_lua_table(
     doc: &crate::core::Document,
 ) -> mlua::Result<mlua::Table> {
     let tbl = lua.create_table()?;
-    tbl.set("id", doc.id.as_str())?;
+    tbl.set("id", &*doc.id)?;
     for (k, v) in &doc.fields {
         tbl.set(k.as_str(), api::json_to_lua(lua, v)?)?;
     }

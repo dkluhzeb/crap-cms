@@ -15,11 +15,11 @@ use crap_cms::admin::server::build_router;
 use crap_cms::admin::templates;
 use crap_cms::admin::translations::Translations;
 use crap_cms::config::{CrapConfig, LocaleConfig};
-use crap_cms::core::Registry;
 use crap_cms::core::auth;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
+use crap_cms::core::{JwtSecret, Registry};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -76,13 +76,13 @@ struct TestApp {
     router: axum::Router,
     pool: crap_cms::db::DbPool,
     registry: crap_cms::core::SharedRegistry,
-    jwt_secret: String,
+    jwt_secret: JwtSecret,
 }
 
 fn setup_app(collections: Vec<CollectionDefinition>, globals: Vec<GlobalDefinition>) -> TestApp {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
     setup_app_with_config(collections, globals, config)
 }
@@ -134,7 +134,7 @@ fn setup_app_with_config(
         registry: Registry::snapshot(&registry),
         handlebars,
         hook_runner,
-        jwt_secret: "test-jwt-secret".to_string(),
+        jwt_secret: "test-jwt-secret".into(),
         email_renderer,
         event_bus: None,
         login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
@@ -155,7 +155,7 @@ fn setup_app_with_config(
         router,
         pool: db_pool,
         registry,
-        jwt_secret: "test-jwt-secret".to_string(),
+        jwt_secret: "test-jwt-secret".into(),
     }
 }
 
@@ -173,7 +173,7 @@ fn create_test_user(app: &TestApp, email: &str, password: &str) -> String {
     let doc = query::create(&tx, "users", &def, &data, None).unwrap();
     query::update_password(&tx, "users", &doc.id, password).unwrap();
     tx.commit().unwrap();
-    doc.id
+    doc.id.to_string()
 }
 
 fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
@@ -181,7 +181,7 @@ fn make_auth_cookie(app: &TestApp, user_id: &str, email: &str) -> String {
         .email(email)
         .exp((chrono::Utc::now().timestamp() as u64) + 3600)
         .build();
-    let token = auth::create_token(&claims, &app.jwt_secret).unwrap();
+    let token = auth::create_token(&claims, app.jwt_secret.as_ref()).unwrap();
     format!("crap_session={}", token)
 }
 
@@ -253,7 +253,7 @@ fn tiny_png() -> Vec<u8> {
 async fn global_update_with_locale() {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
 
     let app = setup_app_with_config(
@@ -813,7 +813,7 @@ async fn global_restore_nonversioned_redirects() {
 async fn global_edit_with_locale() {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.locale = make_locale_config();
 
     let app = setup_app_with_config(
@@ -1040,7 +1040,7 @@ async fn cors_disabled_by_default() {
 async fn cors_preflight_returns_headers() {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["http://localhost:8080".to_string()];
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
@@ -1072,7 +1072,7 @@ async fn cors_preflight_returns_headers() {
 async fn cors_wildcard_returns_star() {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["*".to_string()];
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
@@ -1101,7 +1101,7 @@ async fn cors_wildcard_returns_star() {
 async fn cors_non_matching_origin_not_reflected() {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.cors.allowed_origins = vec!["http://allowed.com".to_string()];
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
@@ -1129,7 +1129,7 @@ async fn cors_non_matching_origin_not_reflected() {
 async fn require_auth_blocks_when_no_auth_collection() {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = true;
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);
@@ -1154,7 +1154,7 @@ async fn require_auth_blocks_when_no_auth_collection() {
 async fn require_auth_false_allows_open_admin() {
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
     config.admin.require_auth = false;
 
     let app = setup_app_with_config(vec![make_posts_def()], vec![], config);

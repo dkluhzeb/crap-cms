@@ -588,7 +588,7 @@ fn populate_depth_0_leaves_ids() {
 
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "My Post".to_string());
-    post_data.insert("category".to_string(), cat.id.clone());
+    post_data.insert("category".to_string(), cat.id.to_string());
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post failed");
     tx.commit().expect("Commit");
@@ -605,7 +605,7 @@ fn populate_depth_0_leaves_ids() {
     .expect("Populate failed");
 
     // category should still be an ID string
-    assert_eq!(post.get_str("category"), Some(cat.id.as_str()));
+    assert_eq!(post.get_str("category"), Some(cat.id.as_ref()));
 }
 
 #[test]
@@ -620,7 +620,7 @@ fn populate_depth_1_hydrates_has_one() {
 
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "My Post".to_string());
-    post_data.insert("category".to_string(), cat.id.clone());
+    post_data.insert("category".to_string(), cat.id.to_string());
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
@@ -643,7 +643,10 @@ fn populate_depth_1_hydrates_has_one() {
         cat_val
     );
     assert_eq!(cat_val.get("name").unwrap().as_str().unwrap(), "Tech");
-    assert_eq!(cat_val.get("id").unwrap().as_str().unwrap(), cat.id);
+    assert_eq!(
+        cat_val.get("id").unwrap().as_str().unwrap(),
+        cat.id.as_ref()
+    );
 }
 
 #[test]
@@ -671,7 +674,7 @@ fn populate_depth_1_hydrates_has_many() {
         "posts_v2",
         "secondary_categories",
         &post.id,
-        &[cat1.id.clone(), cat2.id.clone()],
+        &[cat1.id.to_string(), cat2.id.to_string()],
         None,
     )
     .expect("Set related failed");
@@ -713,12 +716,12 @@ fn populate_circular_ref_stops() {
 
     let mut b_data = HashMap::new();
     b_data.insert("name".to_string(), "B".to_string());
-    b_data.insert("parent".to_string(), cat_a.id.clone());
+    b_data.insert("parent".to_string(), cat_a.id.to_string());
     let cat_b = query::create(&tx, "categories", &cats_def, &b_data, None).expect("Create B");
 
     // Update A to point to B
     let mut update = HashMap::new();
-    update.insert("parent".to_string(), cat_b.id.clone());
+    update.insert("parent".to_string(), cat_b.id.to_string());
     let mut cat_a =
         query::update(&tx, "categories", &cats_def, &cat_a.id, &update, None).expect("Update A");
     tx.commit().expect("Commit");
@@ -776,7 +779,7 @@ fn populate_respects_field_max_depth() {
 
     let mut post_data = HashMap::new();
     post_data.insert("title".to_string(), "Post".to_string());
-    post_data.insert("limited_cat".to_string(), cat.id.clone());
+    post_data.insert("limited_cat".to_string(), cat.id.to_string());
     let mut post =
         query::create(&tx, "posts_v2", &posts_def, &post_data, None).expect("Create post");
     tx.commit().expect("Commit");
@@ -793,7 +796,7 @@ fn populate_respects_field_max_depth() {
     .expect("Populate failed");
 
     // limited_cat should remain as string ID (max_depth=0 prevents population)
-    assert_eq!(post.get_str("limited_cat"), Some(cat.id.as_str()));
+    assert_eq!(post.get_str("limited_cat"), Some(cat.id.as_ref()));
 }
 
 // Regression: populate_relationships with localized fields on the related collection
@@ -854,7 +857,7 @@ fn populate_with_localized_related_collection() {
     // Create an article referencing the media
     let mut article_data = HashMap::new();
     article_data.insert("title".to_string(), "My Article".to_string());
-    article_data.insert("image".to_string(), media_doc.id.clone());
+    article_data.insert("image".to_string(), media_doc.id.to_string());
     let mut article =
         query::create(&tx, "articles", &articles_def, &article_data, None).expect("Create article");
     tx.commit().expect("Commit");

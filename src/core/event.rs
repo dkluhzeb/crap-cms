@@ -12,6 +12,8 @@ use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::broadcast;
 
+use crate::core::{DocumentId, Slug};
+
 /// The type of entity that was mutated.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -65,9 +67,9 @@ pub struct MutationEvent {
     /// The type of operation performed.
     pub operation: EventOperation,
     /// The slug of the collection or global.
-    pub collection: String,
+    pub collection: Slug,
     /// The ID of the document or global name.
-    pub document_id: String,
+    pub document_id: DocumentId,
     /// The data that was changed or the full state.
     pub data: HashMap<String, Value>,
     /// The user who performed the action, if known.
@@ -99,8 +101,8 @@ impl EventBus {
         &self,
         target: EventTarget,
         operation: EventOperation,
-        collection: String,
-        document_id: String,
+        collection: Slug,
+        document_id: DocumentId,
         data: HashMap<String, Value>,
         edited_by: Option<EventUser>,
     ) -> Option<MutationEvent> {
@@ -147,8 +149,8 @@ mod tests {
         let result = bus.publish(
             EventTarget::Collection,
             EventOperation::Create,
-            "posts".to_string(),
-            "id1".to_string(),
+            Slug::new("posts"),
+            DocumentId::new("id1"),
             HashMap::new(),
             None,
         );
@@ -162,8 +164,8 @@ mod tests {
         let result = bus.publish(
             EventTarget::Collection,
             EventOperation::Create,
-            "posts".to_string(),
-            "id1".to_string(),
+            Slug::new("posts"),
+            DocumentId::new("id1"),
             HashMap::new(),
             Some(EventUser {
                 id: "u1".into(),
@@ -188,8 +190,8 @@ mod tests {
             .publish(
                 EventTarget::Collection,
                 EventOperation::Create,
-                "a".into(),
-                "1".into(),
+                Slug::new("a"),
+                DocumentId::new("1"),
                 HashMap::new(),
                 None,
             )
@@ -198,8 +200,8 @@ mod tests {
             .publish(
                 EventTarget::Collection,
                 EventOperation::Update,
-                "a".into(),
-                "2".into(),
+                Slug::new("a"),
+                DocumentId::new("2"),
                 HashMap::new(),
                 None,
             )
@@ -214,8 +216,8 @@ mod tests {
         bus.publish(
             EventTarget::Global,
             EventOperation::Update,
-            "settings".into(),
-            "default".into(),
+            Slug::new("settings"),
+            DocumentId::new("default"),
             HashMap::new(),
             None,
         );

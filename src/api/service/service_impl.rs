@@ -10,7 +10,7 @@ use crate::{
     api::content::{self, content_api_server::ContentApi},
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
-        AuthUser, CollectionDefinition, FieldDefinition, Registry,
+        AuthUser, CollectionDefinition, FieldDefinition, JwtSecret, Registry,
         auth::validate_token,
         collection::GlobalDefinition,
         email::EmailRenderer,
@@ -31,7 +31,7 @@ pub struct ContentService {
     pub(in crate::api::service) pool: DbPool,
     pub(in crate::api::service) registry: Arc<Registry>,
     pub(in crate::api::service) hook_runner: HookRunner,
-    pub(in crate::api::service) jwt_secret: String,
+    pub(in crate::api::service) jwt_secret: JwtSecret,
     pub(in crate::api::service) default_depth: i32,
     pub(in crate::api::service) max_depth: i32,
     pub(in crate::api::service) email_config: EmailConfig,
@@ -128,7 +128,7 @@ impl ContentService {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))?;
-        let claims = validate_token(token, &self.jwt_secret).ok()?;
+        let claims = validate_token(token, self.jwt_secret.as_ref()).ok()?;
         let def = self.registry.get_collection(&claims.collection)?.clone();
         let conn = self.pool.get().ok()?;
         let doc = query::find_by_id(&conn, &claims.collection, &def, &claims.sub, None).ok()??;

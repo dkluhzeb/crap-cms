@@ -386,7 +386,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
             sort_val: json!(last.get_str("title").unwrap()),
-            id: last.id.clone(),
+            id: last.id.to_string(),
         };
         let mut q2 = FindQuery::new();
         q2.order_by = Some("title".to_string());
@@ -403,7 +403,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
             sort_val: json!(last2.get_str("title").unwrap()),
-            id: last2.id.clone(),
+            id: last2.id.to_string(),
         };
         let mut q3 = FindQuery::new();
         q3.order_by = Some("title".to_string());
@@ -439,7 +439,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "DESC".to_string(),
             sort_val: json!(last.get_str("title").unwrap()),
-            id: last.id.clone(),
+            id: last.id.to_string(),
         };
         let mut q2 = FindQuery::new();
         q2.order_by = Some("-title".to_string());
@@ -490,7 +490,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
             sort_val: json!(last_p1.get_str("title").unwrap()),
-            id: last_p1.id.clone(),
+            id: last_p1.id.to_string(),
         };
         let mut p2q = FindQuery::new();
         p2q.order_by = Some("title".to_string());
@@ -506,7 +506,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
             sort_val: json!(first_p2.get_str("title").unwrap()),
-            id: first_p2.id.clone(),
+            id: first_p2.id.to_string(),
         };
         let mut bq = FindQuery::new();
         bq.order_by = Some("title".to_string());
@@ -545,7 +545,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "DESC".to_string(),
             sort_val: json!(last_p1.get_str("title").unwrap()),
-            id: last_p1.id.clone(),
+            id: last_p1.id.to_string(),
         };
         let mut p2q = FindQuery::new();
         p2q.order_by = Some("-title".to_string());
@@ -561,7 +561,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "DESC".to_string(),
             sort_val: json!(first_p2.get_str("title").unwrap()),
-            id: first_p2.id.clone(),
+            id: first_p2.id.to_string(),
         };
         let mut bq = FindQuery::new();
         bq.order_by = Some("-title".to_string());
@@ -624,7 +624,7 @@ mod tests {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
             sort_val: json!(99i64), // Number variant
-            id: page1[0].id.clone(),
+            id: page1[0].id.to_string(),
         };
         let mut q2 = FindQuery::new();
         q2.order_by = Some("title".to_string());

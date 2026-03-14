@@ -42,7 +42,7 @@ pub(super) fn populate_nonpoly_has_many(
         ctx.locale_ctx,
     )?;
     let mut fetched_map: HashMap<String, Document> =
-        fetched.into_iter().map(|d| (d.id.clone(), d)).collect();
+        fetched.into_iter().map(|d| (d.id.to_string(), d)).collect();
 
     let mut populated = Vec::new();
     for id in &ids {

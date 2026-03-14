@@ -45,7 +45,7 @@ pub fn register_api(
     globals::register_globals(lua, &crap, registry.clone())?;
     log::register_log(lua, &crap)?;
     utils::register_util(lua, &crap)?;
-    crypto::register_crypto(lua, &crap, &config.auth.secret)?;
+    crypto::register_crypto(lua, &crap, config.auth.secret.as_ref())?;
     schema::register_schema(lua, &crap, registry.clone())?;
     hooks::register_hooks(lua, &crap)?;
     auth::register_auth(lua, &crap)?;

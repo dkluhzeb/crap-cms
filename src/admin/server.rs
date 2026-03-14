@@ -32,7 +32,7 @@ use crate::{
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig, LocaleConfig},
     core::{
-        AuthUser, Registry,
+        AuthUser, JwtSecret, Registry,
         auth::{self, ClaimsBuilder},
         email::EmailRenderer,
         event::EventBus,
@@ -53,7 +53,7 @@ pub struct AdminStartParams {
     pub pool: DbPool,
     pub registry: Arc<Registry>,
     pub hook_runner: HookRunner,
-    pub jwt_secret: String,
+    pub jwt_secret: JwtSecret,
     pub event_bus: Option<EventBus>,
 }
 
@@ -548,7 +548,7 @@ async fn auth_middleware(
     // Fast path: valid JWT cookie
     let token = extract_cookie(cookie_header, "crap_session");
     if let Some(t) = token
-        && let Ok(claims) = auth::validate_token(t, &state.jwt_secret)
+        && let Ok(claims) = auth::validate_token(t, state.jwt_secret.as_ref())
     {
         // Try to load full user document for access control
         if let Some(auth_user) =
@@ -618,7 +618,7 @@ async fn auth_middleware(
                                 .unwrap_or("")
                                 .to_string();
                             let expiry = auth_config.token_expiry;
-                            let claims = ClaimsBuilder::new(&user.id, slug)
+                            let claims = ClaimsBuilder::new(user.id.clone(), slug.clone())
                                 .email(user_email)
                                 .exp((chrono::Utc::now().timestamp() as u64) + expiry)
                                 .build();

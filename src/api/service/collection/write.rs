@@ -152,7 +152,7 @@ impl ContentService {
                     self.email_renderer.clone(),
                     self.server_config.clone(),
                     req.collection.clone(),
-                    doc.id.clone(),
+                    doc.id.to_string(),
                     user_email.to_string(),
                 );
             }

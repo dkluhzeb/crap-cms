@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::document::VersionSnapshotBuilder;
+use crate::core::{DocumentId, document::VersionSnapshotBuilder};
 
 /// A version snapshot of a document, stored in the `_versions_{slug}` table.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,7 +11,7 @@ pub struct VersionSnapshot {
     /// The unique identifier for this version snapshot.
     pub id: String,
     /// The parent document ID in the main collection table.
-    pub parent: String,
+    pub parent: DocumentId,
     /// Sequential version number (1, 2, 3...).
     pub version: i64,
     /// Status at the time of this snapshot (`"draft"` or `"published"`).
@@ -28,7 +28,7 @@ pub struct VersionSnapshot {
 
 impl VersionSnapshot {
     /// Returns a new `VersionSnapshotBuilder` for constructing a snapshot.
-    pub fn builder(id: impl Into<String>, parent: impl Into<String>) -> VersionSnapshotBuilder {
+    pub fn builder(id: impl Into<String>, parent: impl Into<DocumentId>) -> VersionSnapshotBuilder {
         VersionSnapshotBuilder::new(id, parent)
     }
 }

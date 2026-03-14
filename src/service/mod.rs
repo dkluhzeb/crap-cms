@@ -65,7 +65,7 @@ pub(crate) fn run_after_change_hooks(
     tx: &rusqlite::Connection,
 ) -> Result<HashMap<String, Value>> {
     let mut after_data = doc.fields.clone();
-    after_data.insert("id".to_string(), Value::String(doc.id.clone()));
+    after_data.insert("id".to_string(), Value::String(doc.id.to_string()));
     let after_ctx = HookContext::builder(input.slug, input.operation)
         .data(after_data)
         .draft(input.is_draft)

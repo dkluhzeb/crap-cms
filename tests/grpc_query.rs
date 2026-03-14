@@ -80,7 +80,7 @@ fn setup_service(
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     let db_pool = pool::create_pool(tmp.path(), &config).expect("create pool");
 
@@ -136,7 +136,7 @@ fn setup_service_with_hook(collections: Vec<CollectionDefinition>, init_lua: &st
     let tmp = tempfile::tempdir().expect("tempdir");
     let mut config = CrapConfig::default();
     config.database.path = "test.db".to_string();
-    config.auth.secret = "test-jwt-secret".to_string();
+    config.auth.secret = "test-jwt-secret".into();
 
     // Write init.lua so HookRunner picks up the registered hook
     std::fs::write(tmp.path().join("init.lua"), init_lua).expect("write init.lua");

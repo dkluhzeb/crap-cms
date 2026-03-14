@@ -129,11 +129,12 @@ impl<'a> PaginationBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::DocumentId;
     use std::collections::HashMap;
 
     fn make_doc(id: &str) -> Document {
         Document {
-            id: id.to_string(),
+            id: DocumentId::new(id),
             fields: HashMap::new(),
             created_at: None,
             updated_at: None,

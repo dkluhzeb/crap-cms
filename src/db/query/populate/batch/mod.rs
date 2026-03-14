@@ -53,7 +53,7 @@ pub fn populate_relationships_batch_cached(
     let mut visited: HashSet<(String, String)> = HashSet::new();
     // Mark all parent documents as visited to prevent circular population
     for doc in docs.iter() {
-        visited.insert((collection_slug.to_string(), doc.id.clone()));
+        visited.insert((collection_slug.to_string(), doc.id.to_string()));
     }
 
     // -- Non-join relationship/upload fields --
@@ -152,7 +152,7 @@ pub fn populate_relationships_batch_cached(
                 let mut fq = FindQuery::new();
                 fq.filters = vec![FilterClause::Single(Filter {
                     field: jc.on.clone(),
-                    op: FilterOp::Equals(doc.id.clone()),
+                    op: FilterOp::Equals(doc.id.to_string()),
                 })];
                 let fq = fq;
 

@@ -4,11 +4,11 @@
 /// `version`, `status`, `latest`, and `snapshot` are required via chained methods.
 use serde_json::Value;
 
-use crate::core::document::VersionSnapshot;
+use crate::core::{DocumentId, document::VersionSnapshot};
 
 pub struct VersionSnapshotBuilder {
     id: String,
-    parent: String,
+    parent: DocumentId,
     version: Option<i64>,
     status: Option<String>,
     latest: Option<bool>,
@@ -19,7 +19,7 @@ pub struct VersionSnapshotBuilder {
 
 impl VersionSnapshotBuilder {
     /// Create a new builder for a snapshot with the given ID and parent document ID.
-    pub fn new(id: impl Into<String>, parent: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<String>, parent: impl Into<DocumentId>) -> Self {
         Self {
             id: id.into(),
             parent: parent.into(),

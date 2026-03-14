@@ -77,7 +77,7 @@ pub async fn list_versions_page(
         .title_field()
         .and_then(|f| document.get_str(f))
         .map(|s| s.to_string())
-        .unwrap_or_else(|| document.id.clone());
+        .unwrap_or_else(|| document.id.to_string());
 
     let page = params.page.unwrap_or(1).max(1);
     let per_page = params

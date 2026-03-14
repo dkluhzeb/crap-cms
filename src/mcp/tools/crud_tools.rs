@@ -114,7 +114,7 @@ pub(super) fn parse_where_filters(args: &Value) -> Vec<query::FilterClause> {
 
 pub(super) fn doc_to_json(doc: &Document) -> Value {
     let mut obj = Map::new();
-    obj.insert("id".to_string(), Value::String(doc.id.clone()));
+    obj.insert("id".to_string(), Value::String(doc.id.to_string()));
     for (k, v) in &doc.fields {
         obj.insert(k.clone(), v.clone());
     }

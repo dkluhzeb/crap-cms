@@ -176,7 +176,11 @@ pub fn recover_stale_jobs(conn: &rusqlite::Connection, registry: &SharedRegistry
     let stale = job_query::find_stale_jobs(conn, 0)?;
 
     for job in &stale {
-        let timeout = reg.jobs.get(&job.slug).map(|d| d.timeout).unwrap_or(60);
+        let timeout = reg
+            .jobs
+            .get(job.slug.as_str())
+            .map(|d| d.timeout)
+            .unwrap_or(60);
         let threshold = max(timeout * 2, 300);
 
         // Any job that was running when we started is stale

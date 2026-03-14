@@ -43,7 +43,7 @@ fn make_versioned_def() -> CollectionDefinition {
 
 fn make_nonversioned_def() -> CollectionDefinition {
     let mut def = make_versioned_def();
-    def.slug = "notes".to_string();
+    def.slug = "notes".into();
     def.versions = None;
     def
 }
@@ -551,7 +551,7 @@ fn restore_version_clears_locale_columns() {
     let de_raw: Option<String> = conn
         .query_row(
             "SELECT title__de FROM articles WHERE id = ?1",
-            [&doc.id],
+            [doc.id.as_ref()],
             |row| row.get(0),
         )
         .unwrap();

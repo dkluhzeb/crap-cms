@@ -636,7 +636,7 @@ fn seed_filterable_products(
         "Best widget".to_string(),
     );
     let doc1 = query::create(&tx, "products", def, &data1, None).unwrap();
-    let id1 = doc1.id.clone();
+    let id1 = doc1.id.to_string();
 
     // Array rows for product 1
     let rows1 = vec![HashMap::from([
@@ -690,7 +690,7 @@ fn seed_filterable_products(
         "Cool gadget".to_string(),
     );
     let doc2 = query::create(&tx2, "products", def, &data2, None).unwrap();
-    let id2 = doc2.id.clone();
+    let id2 = doc2.id.to_string();
 
     let rows2 = vec![HashMap::from([
         ("sku".to_string(), "G-001".to_string()),

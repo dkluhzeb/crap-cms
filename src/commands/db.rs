@@ -620,7 +620,7 @@ pub fn find_orphan_columns(
 
         if !orphan_cols.is_empty() {
             orphan_cols.sort();
-            results.push((slug.clone(), orphan_cols));
+            results.push((slug.to_string(), orphan_cols));
         }
     }
 
@@ -673,7 +673,7 @@ mod tests {
 
         let mut reg = Registry::default();
         reg.collections.insert(
-            "posts".to_string(),
+            "posts".into(),
             simple_collection("posts", vec![text_field("title")]),
         );
 
@@ -688,7 +688,7 @@ mod tests {
 
         let mut reg = Registry::default();
         reg.collections.insert(
-            "posts".to_string(),
+            "posts".into(),
             simple_collection("posts", vec![text_field("title")]),
         );
 
@@ -708,7 +708,7 @@ mod tests {
 
         let mut reg = Registry::default();
         reg.collections.insert(
-            "users".to_string(),
+            "users".into(),
             simple_collection("users", vec![text_field("email")]),
         );
 
@@ -726,7 +726,7 @@ mod tests {
 
         let mut reg = Registry::default();
         reg.collections.insert(
-            "posts".to_string(),
+            "posts".into(),
             simple_collection(
                 "posts",
                 vec![
@@ -751,7 +751,7 @@ mod tests {
 
         let mut reg = Registry::default();
         reg.collections.insert(
-            "posts".to_string(),
+            "posts".into(),
             simple_collection(
                 "posts",
                 vec![
@@ -776,7 +776,7 @@ mod tests {
 
         let mut reg = Registry::default();
         reg.collections.insert(
-            "posts".to_string(),
+            "posts".into(),
             simple_collection(
                 "posts",
                 vec![

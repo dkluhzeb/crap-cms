@@ -1,21 +1,21 @@
 //! Builder for `crate::core::auth::Claims`.
 
-use crate::core::Claims;
+use crate::core::{Claims, DocumentId, Slug};
 
 /// Builder for [`Claims`].
 ///
 /// `sub` and `collection` are taken in `new()` (always required).
 /// `email` and `exp` are set via chained methods.
 pub struct ClaimsBuilder {
-    sub: String,
-    collection: String,
+    sub: DocumentId,
+    collection: Slug,
     email: Option<String>,
     exp: Option<u64>,
 }
 
 impl ClaimsBuilder {
     /// Create a new `ClaimsBuilder` with the required `sub` and `collection` fields.
-    pub fn new(sub: impl Into<String>, collection: impl Into<String>) -> Self {
+    pub fn new(sub: impl Into<DocumentId>, collection: impl Into<Slug>) -> Self {
         Self {
             sub: sub.into(),
             collection: collection.into(),

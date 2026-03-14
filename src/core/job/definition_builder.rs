@@ -1,6 +1,9 @@
 //! Builders for `crate::core::job::JobDefinition` and `crate::core::job::JobRun`.
 
-use crate::core::job::{JobDefinition, JobLabels, JobRun, JobStatus};
+use crate::core::{
+    Slug,
+    job::{JobDefinition, JobLabels, JobRun, JobStatus},
+};
 
 /// Builder for [`JobDefinition`].
 ///
@@ -11,7 +14,7 @@ pub struct JobDefinitionBuilder {
 }
 
 impl JobDefinitionBuilder {
-    pub fn new(slug: impl Into<String>, handler: impl Into<String>) -> Self {
+    pub fn new(slug: impl Into<Slug>, handler: impl Into<String>) -> Self {
         Self {
             inner: JobDefinition {
                 slug: slug.into(),

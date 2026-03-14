@@ -20,7 +20,9 @@ use serde_json::Value;
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter},
+    core::{
+        JwtSecret, Registry, email::EmailRenderer, event::EventBus, rate_limit::LoginRateLimiter,
+    },
     db::DbPool,
     hooks::HookRunner,
 };
@@ -42,7 +44,7 @@ pub struct AdminState {
     /// The runner for executing lifecycle hooks.
     pub hook_runner: HookRunner,
     /// The secret key used for signing and verifying JWTs.
-    pub jwt_secret: String,
+    pub jwt_secret: JwtSecret,
     /// The renderer for email notifications.
     pub email_renderer: Arc<EmailRenderer>,
     /// The event bus for asynchronous event handling, if enabled.

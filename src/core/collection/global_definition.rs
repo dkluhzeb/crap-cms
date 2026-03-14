@@ -1,16 +1,16 @@
 //! Global definitions — single-document collections.
 
 use crate::core::{
-    FieldDefinition,
+    FieldDefinition, Slug,
     collection::{Access, Hooks, Labels, LiveSetting, McpConfig, VersionsConfig},
 };
 use serde::{Deserialize, Serialize};
 
 /// Global definitions are simpler — single-document collections.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalDefinition {
     /// Unique identifier for the global.
-    pub slug: String,
+    pub slug: Slug,
     /// Human-readable labels for the global.
     #[serde(default)]
     pub labels: Labels,
@@ -34,9 +34,24 @@ pub struct GlobalDefinition {
     pub versions: Option<VersionsConfig>,
 }
 
+impl Default for GlobalDefinition {
+    fn default() -> Self {
+        Self {
+            slug: Slug::new(""),
+            labels: Labels::default(),
+            fields: Vec::new(),
+            hooks: Hooks::default(),
+            access: Access::default(),
+            mcp: McpConfig::default(),
+            live: None,
+            versions: None,
+        }
+    }
+}
+
 impl GlobalDefinition {
     /// Create a new `GlobalDefinition` with the given slug and default settings.
-    pub fn new(slug: impl Into<String>) -> Self {
+    pub fn new(slug: impl Into<Slug>) -> Self {
         Self {
             slug: slug.into(),
             ..Default::default()
@@ -44,7 +59,7 @@ impl GlobalDefinition {
     }
 
     /// Create a builder for `GlobalDefinition`.
-    pub fn builder(slug: impl Into<String>) -> super::GlobalDefinitionBuilder {
+    pub fn builder(slug: impl Into<Slug>) -> super::GlobalDefinitionBuilder {
         super::GlobalDefinitionBuilder::new(slug)
     }
 

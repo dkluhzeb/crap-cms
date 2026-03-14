@@ -304,7 +304,7 @@ fn cmd_user_create_via_library() {
     let hash = query::get_password_hash(&conn, "users", &found.id)
         .unwrap()
         .expect("password hash should exist");
-    assert!(auth::verify_password("password123", &hash).unwrap());
+    assert!(auth::verify_password("password123", hash.as_ref()).unwrap());
 }
 
 #[test]

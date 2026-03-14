@@ -231,7 +231,7 @@ mod tests {
         create(&conn, "posts", &def, &d3, None).unwrap();
 
         // Fetch only first two
-        let ids = vec![doc1.id.clone(), doc2.id.clone()];
+        let ids = vec![doc1.id.to_string(), doc2.id.to_string()];
         let result = find_by_ids(&conn, "posts", &def, &ids, None).unwrap();
         assert_eq!(result.len(), 2);
 
@@ -253,7 +253,7 @@ mod tests {
         d1.insert("title".to_string(), "Exists".to_string());
         let doc1 = create(&conn, "posts", &def, &d1, None).unwrap();
 
-        let ids = vec![doc1.id.clone(), "nonexistent-id".to_string()];
+        let ids = vec![doc1.id.to_string(), "nonexistent-id".to_string()];
         let result = find_by_ids(&conn, "posts", &def, &ids, None).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].id, doc1.id);

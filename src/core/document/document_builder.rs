@@ -4,11 +4,11 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::core::Document;
+use crate::core::{Document, DocumentId};
 
 /// Builder for [`Document`].
 pub struct DocumentBuilder {
-    id: String,
+    id: DocumentId,
     fields: HashMap<String, Value>,
     created_at: Option<String>,
     updated_at: Option<String>,
@@ -16,7 +16,7 @@ pub struct DocumentBuilder {
 
 impl DocumentBuilder {
     /// Creates a new `DocumentBuilder` with the specified ID.
-    pub fn new(id: impl Into<String>) -> Self {
+    pub fn new(id: impl Into<DocumentId>) -> Self {
         Self {
             id: id.into(),
             fields: HashMap::new(),

@@ -210,7 +210,7 @@ fn check_ids_exist(
     let mut by_collection: HashMap<String, Vec<String>> = HashMap::new();
     for (col, id) in ids {
         let target = if col.is_empty() {
-            rc.collection.clone()
+            rc.collection.to_string()
         } else {
             col.clone()
         };
@@ -220,7 +220,7 @@ fn check_ids_exist(
     let mut missing = HashSet::new();
     for (collection, check_ids) in &by_collection {
         // Verify the collection exists in the registry
-        if !registry.collections.contains_key(collection) {
+        if !registry.collections.contains_key(collection.as_str()) {
             // Collection doesn't exist at all — all IDs are missing
             for id in check_ids {
                 let display = if rc.is_polymorphic() {
@@ -398,7 +398,7 @@ mod tests {
     use super::*;
     use crate::{
         config::{CrapConfig, DatabaseConfig, LocaleConfig},
-        core::{Registry, collection::*, field::*},
+        core::{Registry, Slug, collection::*, field::*},
         db::{DbPool, migrate, pool},
     };
 
@@ -519,10 +519,10 @@ mod tests {
         let fields = vec![
             FieldDefinition::builder("featured", FieldType::Relationship)
                 .relationship(RelationshipConfig {
-                    collection: "media".to_string(),
+                    collection: Slug::new("media"),
                     has_many: false,
                     max_depth: None,
-                    polymorphic: vec!["media".to_string(), "pages".to_string()],
+                    polymorphic: vec![Slug::new("media"), Slug::new("pages")],
                 })
                 .build(),
         ];

@@ -42,7 +42,7 @@ pub(super) fn register_globals(lua: &Lua, crap: &Table, registry: SharedRegistry
             .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
         let map = lua.create_table()?;
         for (slug, def) in reg.globals.iter() {
-            map.set(slug.as_str(), global_config_to_lua(lua, def)?)?;
+            map.set(&**slug, global_config_to_lua(lua, def)?)?;
         }
         Ok(map)
     })?;

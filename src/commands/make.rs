@@ -500,7 +500,7 @@ pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
     let cfg = CrapConfig::load(&config_dir).ok()?;
     let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
     let reg = registry.read().ok()?;
-    let mut slugs: Vec<String> = reg.collections.keys().cloned().collect();
+    let mut slugs: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
     slugs.sort();
     Some(slugs)
 }
@@ -511,7 +511,7 @@ pub fn try_load_global_slugs(config_dir: &Path) -> Option<Vec<String>> {
     let cfg = CrapConfig::load(&config_dir).ok()?;
     let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
     let reg = registry.read().ok()?;
-    let mut slugs: Vec<String> = reg.globals.keys().cloned().collect();
+    let mut slugs: Vec<String> = reg.globals.keys().map(|s| s.to_string()).collect();
     slugs.sort();
     Some(slugs)
 }

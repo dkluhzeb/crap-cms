@@ -213,7 +213,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             secret
         }
     } else {
-        cfg.auth.secret.clone()
+        cfg.auth.secret.clone().into_inner()
     };
 
     // Log auth collection info
@@ -225,7 +225,7 @@ pub async fn run(config_dir: &Path) -> Result<()> {
             .collections
             .values()
             .filter(|d| d.is_auth_collection())
-            .map(|d| d.slug.as_str())
+            .map(|d| &*d.slug)
             .collect();
 
         if auth_collections.is_empty() {

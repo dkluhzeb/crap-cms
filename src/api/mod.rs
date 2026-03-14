@@ -15,7 +15,7 @@ use tonic::transport::Server;
 use crate::{
     config::CrapConfig,
     core::{
-        Registry,
+        JwtSecret, Registry,
         email::EmailRenderer,
         event::EventBus,
         rate_limit::{GrpcRateLimiter, LoginRateLimiter},
@@ -38,7 +38,7 @@ pub struct GrpcStartParams {
     pub pool: DbPool,
     pub registry: Arc<Registry>,
     pub hook_runner: HookRunner,
-    pub jwt_secret: String,
+    pub jwt_secret: JwtSecret,
     pub config: CrapConfig,
     pub config_dir: PathBuf,
     pub event_bus: Option<EventBus>,

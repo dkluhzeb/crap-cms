@@ -1,13 +1,13 @@
-use crate::core::auth::ClaimsBuilder;
+use crate::core::{DocumentId, Slug, auth::ClaimsBuilder};
 use serde::{Deserialize, Serialize};
 
 /// JWT claims for auth tokens.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     /// Subject — the document ID of the user.
-    pub sub: String,
+    pub sub: DocumentId,
     /// Which auth collection this user belongs to.
-    pub collection: String,
+    pub collection: Slug,
     /// User email.
     pub email: String,
     /// Expiration time (Unix timestamp).
@@ -16,7 +16,7 @@ pub struct Claims {
 
 impl Claims {
     /// Start building a new `Claims` instance.
-    pub fn builder(sub: impl Into<String>, collection: impl Into<String>) -> ClaimsBuilder {
+    pub fn builder(sub: impl Into<DocumentId>, collection: impl Into<Slug>) -> ClaimsBuilder {
         ClaimsBuilder::new(sub, collection)
     }
 }

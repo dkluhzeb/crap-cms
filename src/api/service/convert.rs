@@ -21,7 +21,7 @@ pub(super) fn document_to_proto(doc: &Document, collection: &str) -> content::Do
     }
 
     content::Document {
-        id: doc.id.clone(),
+        id: doc.id.to_string(),
         collection: collection.to_string(),
         fields: Some(fields),
         created_at: doc.created_at.clone(),
@@ -138,7 +138,10 @@ pub(super) fn field_def_to_proto(field: &FieldDefinition) -> content::FieldInfo 
         r#type: field.field_type.as_str().to_string(),
         required: field.required,
         unique: field.unique,
-        relationship_collection: field.relationship.as_ref().map(|r| r.collection.clone()),
+        relationship_collection: field
+            .relationship
+            .as_ref()
+            .map(|r| r.collection.to_string()),
         relationship_has_many: field.relationship.as_ref().map(|r| r.has_many),
         options: field
             .options

@@ -18,7 +18,7 @@ use tokio_util::sync::WaitForCancellationFutureOwned;
 use crate::{
     admin::AdminState,
     core::{
-        AuthUser,
+        AuthUser, Slug,
         event::{EventOperation, EventTarget},
     },
     db::AccessResult,
@@ -62,8 +62,8 @@ pub async fn sse_handler(
     let shutdown = state.shutdown.clone();
 
     // Build allowed collections/globals snapshot at subscribe time
-    let mut allowed_collections: HashSet<String> = HashSet::new();
-    let mut allowed_globals: HashSet<String> = HashSet::new();
+    let mut allowed_collections: HashSet<Slug> = HashSet::new();
+    let mut allowed_globals: HashSet<Slug> = HashSet::new();
 
     if let Some(ref bus) = event_bus {
         let _ = bus; // just to verify it exists

@@ -6,16 +6,16 @@ use std::{
 };
 
 use crate::core::{
-    CollectionDefinition, collection::GlobalDefinition, job::JobDefinition,
+    CollectionDefinition, Slug, collection::GlobalDefinition, job::JobDefinition,
     richtext::RichtextNodeDef,
 };
 
 /// Holds all collection, global, and job definitions loaded at startup.
 #[derive(Clone)]
 pub struct Registry {
-    pub collections: HashMap<String, CollectionDefinition>,
-    pub globals: HashMap<String, GlobalDefinition>,
-    pub jobs: HashMap<String, JobDefinition>,
+    pub collections: HashMap<Slug, CollectionDefinition>,
+    pub globals: HashMap<Slug, GlobalDefinition>,
+    pub jobs: HashMap<Slug, JobDefinition>,
     pub richtext_nodes: HashMap<String, RichtextNodeDef>,
 }
 

@@ -1,10 +1,13 @@
-use crate::core::job::{JobDefinitionBuilder, JobLabels};
+use crate::core::{
+    Slug,
+    job::{JobDefinitionBuilder, JobLabels},
+};
 
 /// A job definition registered via `crap.jobs.define()` in Lua.
 #[derive(Debug, Clone)]
 pub struct JobDefinition {
     /// Unique identifier for this job type.
-    pub slug: String,
+    pub slug: Slug,
     /// Lua function reference for the job handler (e.g., "jobs.cleanup.run").
     pub handler: String,
     /// Optional cron schedule expression (e.g., "0 3 * * *").
@@ -26,7 +29,7 @@ pub struct JobDefinition {
 }
 
 impl JobDefinition {
-    pub fn builder(slug: impl Into<String>, handler: impl Into<String>) -> JobDefinitionBuilder {
+    pub fn builder(slug: impl Into<Slug>, handler: impl Into<String>) -> JobDefinitionBuilder {
         JobDefinitionBuilder::new(slug, handler)
     }
 }
@@ -34,7 +37,7 @@ impl JobDefinition {
 impl Default for JobDefinition {
     fn default() -> Self {
         Self {
-            slug: String::new(),
+            slug: Slug::new(""),
             handler: String::new(),
             schedule: None,
             queue: "default".to_string(),
