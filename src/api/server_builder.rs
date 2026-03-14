@@ -3,7 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    api::GrpcStartParams,
+    api::server::GrpcStartParams,
     config::CrapConfig,
     core::{JwtSecret, Registry, event::EventBus},
     db::DbPool,

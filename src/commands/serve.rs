@@ -9,6 +9,13 @@ use std::{
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
+/// Which server to start when using `--only`.
+#[derive(Clone, Copy, clap::ValueEnum)]
+pub enum ServeMode {
+    Admin,
+    Api,
+}
+
 use crate::{
     admin, api,
     config::{AuthConfig, CrapConfig},
@@ -63,7 +70,7 @@ fn check_existing_pid(config_dir: &Path) {
 
 /// Re-exec the current binary as a detached background process.
 #[cfg(not(tarpaulin_include))]
-pub fn detach(config_dir: &Path) -> Result<()> {
+pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
     let exe = env::current_exe().context("Failed to determine executable path")?;
 
     let config_dir = config_dir
@@ -71,9 +78,21 @@ pub fn detach(config_dir: &Path) -> Result<()> {
         .unwrap_or_else(|_| config_dir.to_path_buf());
     check_existing_pid(&config_dir);
 
-    let child = process::Command::new(&exe)
-        .arg("serve")
-        .arg(&config_dir)
+    let mut cmd = process::Command::new(&exe);
+    cmd.arg("serve").arg(&config_dir);
+
+    if let Some(mode) = only {
+        cmd.arg("--only");
+        cmd.arg(match mode {
+            ServeMode::Admin => "admin",
+            ServeMode::Api => "api",
+        });
+    }
+    if no_scheduler {
+        cmd.arg("--no-scheduler");
+    }
+
+    let child = cmd
         .stdin(process::Stdio::null())
         .stdout(process::Stdio::null())
         .stderr(process::Stdio::null())
@@ -219,7 +238,7 @@ fn log_startup_info(registry: &SharedRegistry, cfg: &CrapConfig) -> Result<()> {
 
 /// Start the admin UI and gRPC servers.
 #[cfg(not(tarpaulin_include))]
-pub async fn run(config_dir: &Path) -> Result<()> {
+pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -322,56 +341,80 @@ pub async fn run(config_dir: &Path) -> Result<()> {
     let shutdown = CancellationToken::new();
     spawn_shutdown_signal(shutdown.clone());
 
+    // Determine which components to start
+    let run_admin = only.is_none() || matches!(only, Some(ServeMode::Admin));
+    let run_api = only.is_none() || matches!(only, Some(ServeMode::Api));
+    let run_scheduler = !no_scheduler;
+
     // Start servers
     let admin_addr = format!("{}:{}", cfg.server.host, cfg.server.admin_port);
     let grpc_addr = format!("{}:{}", cfg.server.host, cfg.server.grpc_port);
 
-    info!("Starting Admin UI on http://{}", admin_addr);
-    info!("Starting gRPC API on {}", grpc_addr);
+    if run_admin {
+        info!("Starting Admin UI on http://{}", admin_addr);
+    }
+    if run_api {
+        info!("Starting gRPC API on {}", grpc_addr);
+    }
+    if !run_scheduler {
+        info!("Background job scheduler disabled");
+    }
 
-    let admin_handle = admin::server::start(
-        &admin_addr,
-        admin::server::AdminStartParams::builder()
-            .config(cfg.clone())
-            .config_dir(config_dir.clone())
-            .pool(pool.clone())
-            .registry(registry_snapshot.clone())
-            .hook_runner(hook_runner.clone())
-            .jwt_secret(jwt_secret.clone())
-            .event_bus(event_bus.clone())
-            .build(),
-        shutdown.clone(),
-    );
+    let admin_handle = async {
+        if run_admin {
+            admin::server::start(
+                &admin_addr,
+                admin::server::AdminStartParams::builder()
+                    .config(cfg.clone())
+                    .config_dir(config_dir.clone())
+                    .pool(pool.clone())
+                    .registry(registry_snapshot.clone())
+                    .hook_runner(hook_runner.clone())
+                    .jwt_secret(jwt_secret.clone())
+                    .event_bus(event_bus.clone())
+                    .build(),
+                shutdown.clone(),
+            )
+            .await
+        } else {
+            Ok(())
+        }
+    };
 
-    let grpc_handle = api::start_server(
-        &grpc_addr,
-        api::GrpcStartParams::builder()
-            .pool(pool.clone())
-            .registry(registry_snapshot)
-            .hook_runner(hook_runner.clone())
-            .jwt_secret(jwt_secret)
-            .config(cfg.clone())
-            .config_dir(config_dir.clone())
-            .event_bus(event_bus)
-            .build(),
-        shutdown.clone(),
-    );
+    let grpc_handle = async {
+        if run_api {
+            api::server::start(
+                &grpc_addr,
+                api::server::GrpcStartParams::builder()
+                    .pool(pool.clone())
+                    .registry(registry_snapshot.clone())
+                    .hook_runner(hook_runner.clone())
+                    .jwt_secret(jwt_secret.clone())
+                    .config(cfg.clone())
+                    .config_dir(config_dir.clone())
+                    .event_bus(event_bus.clone())
+                    .build(),
+                shutdown.clone(),
+            )
+            .await
+        } else {
+            Ok(())
+        }
+    };
 
-    // Start the background job scheduler
-    let scheduler_pool = pool.clone();
-    let scheduler_runner = hook_runner.clone();
-    let scheduler_registry = registry.clone();
-    let scheduler_config = cfg.jobs.clone();
-    let scheduler_shutdown = shutdown.clone();
-    let scheduler_handle = async move {
-        scheduler::start(
-            scheduler_pool,
-            scheduler_runner,
-            scheduler_registry,
-            scheduler_config,
-            scheduler_shutdown,
-        )
-        .await
+    let scheduler_handle = async {
+        if run_scheduler {
+            scheduler::start(
+                pool.clone(),
+                hook_runner.clone(),
+                registry.clone(),
+                cfg.jobs.clone(),
+                shutdown.clone(),
+            )
+            .await
+        } else {
+            Ok(())
+        }
     };
 
     tokio::try_join!(admin_handle, grpc_handle, scheduler_handle).map_err(|e| {

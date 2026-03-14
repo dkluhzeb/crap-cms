@@ -18,7 +18,7 @@ Use `crap-cms --help` to list all commands, or `crap-cms <command> --help` for d
 ### `serve` — Start the server
 
 ```bash
-crap-cms serve <CONFIG> [-d] [--json]
+crap-cms serve <CONFIG> [-d] [--json] [--only <admin|api>] [--no-scheduler]
 ```
 
 | Argument / Flag | Description |
@@ -26,11 +26,18 @@ crap-cms serve <CONFIG> [-d] [--json]
 | `<CONFIG>` | Path to the config directory |
 | `-d`, `--detach` | Run in the background (prints PID and exits) |
 | `--json` | Output logs as structured JSON (for log aggregation) |
+| `--only <admin\|api>` | Start only the specified server. Omit to start both. |
+| `--no-scheduler` | Disable the background job scheduler |
 
 ```bash
 crap-cms serve ./my-project
 crap-cms serve ./my-project -d
 crap-cms serve ./my-project --json
+crap-cms serve ./my-project --only admin       # admin UI only
+crap-cms serve ./my-project --only api         # gRPC API only
+crap-cms serve ./my-project --no-scheduler     # both servers, no scheduler
+crap-cms serve ./my-project --only admin --no-scheduler
+crap-cms serve ./my-project -d --only api      # detached, API only
 ```
 
 ### `status` — Show project status

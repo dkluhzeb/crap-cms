@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use crap_cms::commands::{
     self, BlueprintAction, DbAction, ImagesAction, JobsAction, MakeAction, MigrateAction,
-    TemplatesAction, UserAction,
+    TemplatesAction, UserAction, serve::ServeMode,
 };
 
 #[derive(Parser)]
@@ -38,6 +38,14 @@ enum Command {
         /// Output logs as structured JSON (for log aggregation)
         #[arg(long)]
         json: bool,
+
+        /// Start only the specified server (admin or api). Omit to start both.
+        #[arg(long, value_enum)]
+        only: Option<ServeMode>,
+
+        /// Disable the background job scheduler
+        #[arg(long)]
+        no_scheduler: bool,
     },
 
     /// Show project status (collections, globals, migrations)
@@ -220,11 +228,17 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Command::Serve { config, detach, .. } => {
+        Command::Serve {
+            config,
+            detach,
+            only,
+            no_scheduler,
+            ..
+        } => {
             if detach {
-                return commands::serve::detach(&config);
+                return commands::serve::detach(&config, only, no_scheduler);
             }
-            commands::serve::run(&config).await
+            commands::serve::run(&config, only, no_scheduler).await
         }
         Command::Status { config } => commands::status::run(&config),
         Command::User { action } => commands::user::run(action),
