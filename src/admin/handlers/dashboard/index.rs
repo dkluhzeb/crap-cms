@@ -82,7 +82,7 @@ pub async fn index(
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::Dashboard, "Dashboard")
+        .page(PageType::Dashboard, "dashboard")
         .set("collection_cards", Value::Array(collection_cards))
         .set("global_cards", Value::Array(global_cards))
         .build();

@@ -19,7 +19,7 @@
         {{#if this.sortable}}
         <a class="table__sort-link" href="{{this.sort_url}}"
            hx-get="{{this.sort_url}}" hx-target="body" hx-push-url="true">
-          {{this.label}}
+          {{t this.label}}
           {{#if this.is_sorted_asc}}<span class="material-symbols-outlined table__sort-icon table__sort-icon--active" aria-label="{{t "sorted_ascending"}}">arrow_upward</span>{{/if}}
           {{#if this.is_sorted_desc}}<span class="material-symbols-outlined table__sort-icon table__sort-icon--active" aria-label="{{t "sorted_descending"}}">arrow_downward</span>{{/if}}
           {{#unless this.is_sorted_asc}}{{#unless this.is_sorted_desc}}<span class="material-symbols-outlined table__sort-icon" aria-label="{{t "sort"}}">unfold_more</span>{{/unless}}{{/unless}}

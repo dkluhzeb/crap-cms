@@ -174,10 +174,10 @@ pub async fn edit_form(
         fields.push(json!({
             "name": "password",
             "field_type": "password",
-            "label": "Password",
+            "label": "password",
             "required": false,
             "value": "",
-            "description": "Leave blank to keep current password",
+            "description": "leave_blank_keep_password",
         }));
 
         // Add locked checkbox — read current lock state from DB
@@ -190,9 +190,9 @@ pub async fn edit_form(
         fields.push(json!({
             "name": "_locked",
             "field_type": "checkbox",
-            "label": "Account locked",
+            "label": "account_locked",
             "checked": is_locked,
-            "description": "Prevent this user from logging in",
+            "description": "prevent_login",
         }));
     }
 
@@ -228,11 +228,8 @@ pub async fn edit_form(
     let mut data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(
-            PageType::CollectionEdit,
-            format!("Edit {}", def.singular_name()),
-        )
-        .set("page_title", json!(format!("Edit {}", def.singular_name())))
+        .page(PageType::CollectionEdit, "edit_name")
+        .page_title_name(def.singular_name())
         .collection_def(&def)
         .document_with_status(&document, &doc_status)
         .fields(main_fields)
@@ -251,7 +248,7 @@ pub async fn edit_form(
             json!(format!("/admin/collections/{}/{}/versions", slug, id)),
         )
         .breadcrumbs(vec![
-            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
             Breadcrumb::current(doc_title),
         ])

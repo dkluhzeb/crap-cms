@@ -132,7 +132,7 @@ class CrapListSettings extends HTMLElement {
       checkbox.checked = opt.selected;
 
       const text = document.createElement('span');
-      text.textContent = opt.label;
+      text.textContent = t(opt.label);
 
       label.appendChild(checkbox);
       label.appendChild(text);
@@ -220,7 +220,7 @@ class CrapListSettings extends HTMLElement {
       for (const fm of fieldMetas) {
         const opt = document.createElement('option');
         opt.value = fm.key;
-        opt.textContent = fm.label;
+        opt.textContent = t(fm.label);
         if (preset && fm.key === preset.field) opt.selected = true;
         fieldSelect.appendChild(opt);
       }
@@ -377,7 +377,7 @@ class CrapListSettings extends HTMLElement {
       for (const opt of fieldMeta.options) {
         const option = document.createElement('option');
         option.value = opt.value;
-        option.textContent = opt.label;
+        option.textContent = t(opt.label);
         if (opt.value === currentValue) option.selected = true;
         select.appendChild(option);
       }

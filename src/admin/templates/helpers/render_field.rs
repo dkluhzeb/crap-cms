@@ -10,7 +10,7 @@ impl HelperDef for RenderFieldHelper {
         &self,
         h: &Helper<'rc>,
         r: &'reg Handlebars<'reg>,
-        _ctx: &'rc handlebars::Context,
+        ctx: &'rc handlebars::Context,
         _rc: &mut RenderContext<'reg, 'rc>,
     ) -> Result<ScopedJson<'rc>, RenderError> {
         let param = h.param(0).ok_or_else(|| {
@@ -28,13 +28,24 @@ impl HelperDef for RenderFieldHelper {
 
         let template_name = format!("fields/{}", field_type);
 
-        let rendered = r.render(&template_name, field_data).unwrap_or_else(|e| {
+        // Inject _locale from parent context so {{t}} works inside field partials
+        let render_data = if let Some(locale) = ctx.data().get("_locale") {
+            let mut data = field_data.clone();
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("_locale".to_string(), locale.clone());
+            }
+            data
+        } else {
+            field_data.clone()
+        };
+
+        let rendered = r.render(&template_name, &render_data).unwrap_or_else(|e| {
             tracing::warn!(
                 "Failed to render template '{}': {}, falling back to fields/text",
                 template_name,
                 e
             );
-            r.render("fields/text", field_data).unwrap_or_default()
+            r.render("fields/text", &render_data).unwrap_or_default()
         });
 
         Ok(ScopedJson::Derived(Value::String(rendered)))

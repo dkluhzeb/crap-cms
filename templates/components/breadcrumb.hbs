@@ -4,9 +4,9 @@
     {{#each page.breadcrumbs}}
     <li>
       {{#if this.url}}
-      <a href="{{this.url}}" hx-get="{{this.url}}" hx-target="body" hx-push-url="true">{{this.label}}</a>
+      <a href="{{this.url}}" hx-get="{{this.url}}" hx-target="body" hx-push-url="true">{{t this.label name=this.label_name}}</a>
       {{else}}
-      <span>{{this.label}}</span>
+      <span>{{t this.label name=this.label_name}}</span>
       {{/if}}
     </li>
     {{/each}}
@@ -20,9 +20,9 @@
     {{#each breadcrumbs}}
     <li>
       {{#if this.url}}
-      <a href="{{this.url}}" hx-get="{{this.url}}" hx-target="body" hx-push-url="true">{{this.label}}</a>
+      <a href="{{this.url}}" hx-get="{{this.url}}" hx-target="body" hx-push-url="true">{{t this.label name=this.label_name}}</a>
       {{else}}
-      <span>{{this.label}}</span>
+      <span>{{t this.label name=this.label_name}}</span>
       {{/if}}
     </li>
     {{/each}}

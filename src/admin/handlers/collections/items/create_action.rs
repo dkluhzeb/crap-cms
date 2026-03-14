@@ -266,14 +266,8 @@ pub async fn create_action(
 
                 let mut data = ContextBuilder::new(&state, None)
                     .locale_from_auth(&auth_user)
-                    .page(
-                        PageType::CollectionCreate,
-                        format!("Create {}", def.singular_name()),
-                    )
-                    .set(
-                        "page_title",
-                        json!(format!("Create {}", def.singular_name())),
-                    )
+                    .page(PageType::CollectionCreate, "create_name")
+                    .page_title_name(def.singular_name())
                     .collection_def(&def)
                     .fields(main_fields)
                     .set("sidebar_fields", json!(sidebar_fields))

@@ -20,7 +20,7 @@ pub async fn login_page(
     let show_forgot_password = show_forgot_password(&state);
 
     let data = ContextBuilder::auth(&state)
-        .page(PageType::AuthLogin, "Login")
+        .page(PageType::AuthLogin, "login_page_title")
         .set("collections", json!(auth_collections))
         .set("show_collection_picker", json!(auth_collections.len() > 1))
         .set("disable_local", json!(all_disable_local))

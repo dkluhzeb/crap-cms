@@ -82,14 +82,8 @@ pub(super) fn render_upload_error(
 
     let data = ContextBuilder::new(state, None)
         .locale_from_auth(auth_user)
-        .page(
-            PageType::CollectionCreate,
-            format!("Create {}", def.singular_name()),
-        )
-        .set(
-            "page_title",
-            json!(format!("Create {}", def.singular_name())),
-        )
+        .page(PageType::CollectionCreate, "create_name")
+        .page_title_name(def.singular_name())
         .collection_def(def)
         .fields(main_fields)
         .set("sidebar_fields", json!(sidebar_fields))
@@ -159,11 +153,8 @@ pub(super) fn render_edit_upload_error(
 
     let data = ContextBuilder::new(state, None)
         .locale_from_auth(auth_user)
-        .page(
-            PageType::CollectionEdit,
-            format!("Edit {}", def.singular_name()),
-        )
-        .set("page_title", json!(format!("Edit {}", def.singular_name())))
+        .page(PageType::CollectionEdit, "edit_name")
+        .page_title_name(def.singular_name())
         .collection_def(def)
         .document_stub(id)
         .fields(main_fields)
@@ -439,11 +430,8 @@ pub(super) async fn do_update(
 
                 let mut data = ContextBuilder::new(state, None)
                     .locale_from_auth(auth_user)
-                    .page(
-                        PageType::CollectionEdit,
-                        format!("Edit {}", def.singular_name()),
-                    )
-                    .set("page_title", json!(format!("Edit {}", def.singular_name())))
+                    .page(PageType::CollectionEdit, "edit_name")
+                    .page_title_name(def.singular_name())
                     .collection_def(&def)
                     .document_stub(id)
                     .fields(main_fields)

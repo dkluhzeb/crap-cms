@@ -279,7 +279,6 @@ pub async fn list_items(
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionItems, def.display_name())
-        .set("page_title", json!(def.display_name()))
         .collection_def(&def)
         .items(items)
         .pagination(page, per_page, total, prev_url, next_url)

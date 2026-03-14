@@ -396,7 +396,7 @@ fn value_to_form_string(v: &Value) -> String {
 /// Render a 403 Forbidden page with the given message.
 pub(crate) fn forbidden(state: &AdminState, message: &str) -> Response {
     let data = ContextBuilder::new(state, None)
-        .page(PageType::Error403, "Forbidden")
+        .page(PageType::Error403, "forbidden_page_title")
         .set("message", Value::String(message.to_string()))
         .build();
 
@@ -468,7 +468,7 @@ pub(crate) fn render_or_error(state: &AdminState, template: &str, data: &Value) 
 /// Render a 404 Not Found page with the given message.
 pub(crate) fn not_found(state: &AdminState, message: &str) -> Response {
     let data = ContextBuilder::new(state, None)
-        .page(PageType::Error404, "Not Found")
+        .page(PageType::Error404, "not_found_page_title")
         .set("message", Value::String(message.to_string()))
         .build();
 
@@ -485,7 +485,7 @@ pub(crate) fn not_found(state: &AdminState, message: &str) -> Response {
 /// Render a 500 Internal Server Error page with the given message.
 pub(crate) fn server_error(state: &AdminState, message: &str) -> Response {
     let data = ContextBuilder::new(state, None)
-        .page(PageType::Error500, "Server Error")
+        .page(PageType::Error500, "server_error_page_title")
         .set("message", Value::String(message.to_string()))
         .build();
 

@@ -136,6 +136,9 @@ impl ContextBuilder {
                 if let Some(url) = c.url {
                     m.insert("url".into(), Value::String(url));
                 }
+                if let Some(name) = c.label_name {
+                    m.insert("label_name".into(), Value::String(name));
+                }
                 Value::Object(m)
             })
             .collect();
@@ -229,6 +232,15 @@ impl ContextBuilder {
             .insert("has_next".into(), json!(page < total_pages));
         self.data.insert("prev_url".into(), Value::String(prev_url));
         self.data.insert("next_url".into(), Value::String(next_url));
+        self
+    }
+
+    /// Set interpolation param for page title translation.
+    pub fn page_title_name(mut self, name: impl Into<String>) -> Self {
+        let page = self.data.entry("page").or_insert_with(|| json!({}));
+        if let Some(obj) = page.as_object_mut() {
+            obj.insert("title_name".into(), Value::String(name.into()));
+        }
         self
     }
 

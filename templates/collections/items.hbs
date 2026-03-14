@@ -62,7 +62,7 @@
 <div class="filter-pills">
   {{#each active_filters}}
   <span class="filter-pill">
-    <span class="filter-pill__label">{{this.field_label}}</span>
+    <span class="filter-pill__label">{{t this.field_label}}</span>
     <span class="filter-pill__op">{{this.op}}</span>
     {{#if this.value}}<span class="filter-pill__value">{{this.value}}</span>{{/if}}
     <a class="filter-pill__remove" href="{{this.remove_url}}"

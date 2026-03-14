@@ -72,19 +72,16 @@ pub async fn restore_confirm(
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(
-            PageType::GlobalVersions,
-            format!("Restore Version — {}", def.display_name()),
-        )
+        .page(PageType::GlobalVersions, "restore_version")
         .global_def(&def)
         .set("version_number", json!(version.version))
         .set("missing_relations", json!(missing))
         .set("restore_url", json!(restore_url))
         .set("back_url", json!(back_url))
         .breadcrumbs(vec![
-            Breadcrumb::link("Dashboard", "/admin"),
+            Breadcrumb::link("dashboard", "/admin"),
             Breadcrumb::link(def.display_name(), format!("/admin/globals/{}", slug)),
-            Breadcrumb::current("Restore Version"),
+            Breadcrumb::current("restore_version"),
         ])
         .build();
 

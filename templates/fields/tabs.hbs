@@ -9,7 +9,7 @@
             aria-controls="tabpanel-{{../name}}-{{@index}}"
             data-action="switch-tab"
             data-tab-index="{{@index}}">
-      {{label}}
+      {{t label}}
       {{#if error_count}}<span class="form__tabs-tab-error">{{error_count}}</span>{{/if}}
     </button>
     {{/each}}
@@ -20,7 +20,7 @@
        role="tabpanel"
        aria-labelledby="tab-{{../name}}-{{@index}}"
        data-tab-panel="{{@index}}">
-    {{#if description}}<p class="form__description form__tabs-description">{{description}}</p>{{/if}}
+    {{#if description}}<p class="form__description form__tabs-description">{{t description}}</p>{{/if}}
     {{#each sub_fields}}
     <div class="form__field{{#if (eq condition_visible false)}} form__field--hidden{{/if}}"
       {{#if condition_json}}data-condition='{{{json condition_json}}}'{{/if}}

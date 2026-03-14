@@ -85,22 +85,16 @@ pub async fn delete_confirm(
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(
-            PageType::CollectionDelete,
-            format!("Delete {}", def.singular_name()),
-        )
-        .set(
-            "page_title",
-            json!(format!("Delete {}", def.singular_name())),
-        )
+        .page(PageType::CollectionDelete, "delete_name")
+        .page_title_name(def.singular_name())
         .collection_def(&def)
         .set("document_id", json!(id))
         .set("title_value", json!(title_value))
         .set("back_references", json!(back_refs))
         .breadcrumbs(vec![
-            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::current(format!("Delete {}", def.singular_name())),
+            Breadcrumb::current("delete_name").with_name(def.singular_name()),
         ])
         .build();
 

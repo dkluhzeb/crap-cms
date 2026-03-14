@@ -21,7 +21,7 @@
   <script src="/static/codemirror.js?v={{crap.build_hash}}" defer></script>
   <script type="module" src="/static/components/index.js?v={{crap.build_hash}}"></script>
 
-  <title>{{#if page.title}}{{page.title}}{{else}}{{title}}{{/if}} - Crap CMS</title>
+  <title>{{t page.title name=page.title_name}} - Crap CMS</title>
   <script type="application/json" id="crap-i18n">{
     "filters": "{{t "filters"}}",
     "columns": "{{t "columns"}}",
@@ -69,7 +69,12 @@
     "op_on_or_after": "{{t "op_on_or_after"}}",
     "op_on_or_before": "{{t "op_on_or_before"}}",
     "op_exists": "{{t "op_exists"}}",
-    "op_not_exists": "{{t "op_not_exists"}}"
+    "op_not_exists": "{{t "op_not_exists"}}",
+    "status": "{{t "status"}}",
+    "created": "{{t "created"}}",
+    "updated": "{{t "updated"}}",
+    "published": "{{t "published"}}",
+    "draft": "{{t "draft"}}"
   }</script>
 </head>
 

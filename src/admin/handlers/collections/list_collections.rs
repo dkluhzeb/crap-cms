@@ -33,7 +33,7 @@ pub async fn list_collections(
 
     let data = ContextBuilder::new(&state, claims_ref)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionList, "Collections")
+        .page(PageType::CollectionList, "collections")
         .set("collections", json!(collections))
         .build();
 

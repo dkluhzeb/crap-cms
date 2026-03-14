@@ -12,7 +12,7 @@ pub async fn forgot_password_page(State(state): State<AdminState>) -> Html<Strin
     let auth_collections = get_auth_collections(&state);
 
     let data = ContextBuilder::auth(&state)
-        .page(PageType::AuthForgot, "Forgot Password")
+        .page(PageType::AuthForgot, "forgot_password_page_title")
         .set("collections", json!(auth_collections))
         .set("show_collection_picker", json!(auth_collections.len() > 1))
         .build();

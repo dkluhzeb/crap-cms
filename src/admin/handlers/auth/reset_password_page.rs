@@ -48,7 +48,8 @@ pub async fn reset_password_page(
     .await
     .unwrap_or(false);
 
-    let mut builder = ContextBuilder::auth(&state).page(PageType::AuthReset, "Reset Password");
+    let mut builder =
+        ContextBuilder::auth(&state).page(PageType::AuthReset, "reset_password_page_title");
 
     if valid {
         builder = builder.set("token", json!(query.token));

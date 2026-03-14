@@ -72,6 +72,8 @@ pub struct Breadcrumb {
     pub label: String,
     /// The optional URL to link to. If None, the breadcrumb is the current page.
     pub url: Option<String>,
+    /// Optional interpolation param for `{{t label name=label_name}}`.
+    pub label_name: Option<String>,
 }
 
 impl Breadcrumb {
@@ -80,6 +82,7 @@ impl Breadcrumb {
         Self {
             label: label.into(),
             url: Some(url.into()),
+            label_name: None,
         }
     }
     /// Create a breadcrumb representing the current page (non-clickable).
@@ -87,7 +90,14 @@ impl Breadcrumb {
         Self {
             label: label.into(),
             url: None,
+            label_name: None,
         }
+    }
+
+    /// Fluent setter for the label interpolation name param.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.label_name = Some(name.into());
+        self
     }
 }
 

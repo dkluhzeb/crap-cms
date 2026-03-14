@@ -1,5 +1,5 @@
 <label for="field-{{name}}">
-  {{label}}
+  {{t label}}
   {{#if required}}<span class="required">*</span>{{/if}}
   {{#if locale_locked}}<span class="form__locale-badge">{{t "shared_field"}}</span>{{/if}}
 </label>
@@ -46,4 +46,4 @@
   {{/unless}}
 </div>
 {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-{{#if description}}<p class="form__help">{{description}}</p>{{/if}}
+{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}

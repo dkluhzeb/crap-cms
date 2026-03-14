@@ -104,14 +104,8 @@ pub async fn list_versions_page(
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(
-            PageType::CollectionVersions,
-            format!("Version History — {}", doc_title),
-        )
-        .set(
-            "page_title",
-            json!(format!("Version History — {}", doc_title)),
-        )
+        .page(PageType::CollectionVersions, "version_history_for")
+        .page_title_name(doc_title.clone())
         .collection_def(&def)
         .document_stub(&id)
         .set("doc_title", json!(doc_title))
@@ -138,13 +132,13 @@ pub async fn list_versions_page(
             ),
         )
         .breadcrumbs(vec![
-            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
             Breadcrumb::link(
                 doc_title.clone(),
                 format!("/admin/collections/{}/{}", slug, id),
             ),
-            Breadcrumb::current("Version History"),
+            Breadcrumb::current("version_history"),
         ])
         .build();
 

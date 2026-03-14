@@ -1,7 +1,7 @@
 <crap-array-field>
 <fieldset class="form__array" data-field-type="array" data-field-name="{{name}}"{{#if label_field}} data-label-field="{{label_field}}"{{/if}}>
   <legend>
-    {{label}}
+    {{t label}}
     {{#if required}}<span class="required">*</span>{{/if}}
     <span class="form__array-count" id="array-count-{{template_id}}">{{row_count}}</span>
     <span class="form__array-legend-actions">
@@ -95,6 +95,6 @@
   </button>
 
   {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-  {{#if description}}<p class="form__help">{{description}}</p>{{/if}}
+  {{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
 </fieldset>
 </crap-array-field>

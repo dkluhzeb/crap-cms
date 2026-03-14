@@ -66,9 +66,9 @@ pub(super) fn resolve_columns(
     keys.iter()
         .map(|key| {
             let (label, sortable) = match key.as_str() {
-                "created_at" => ("Created".to_string(), true),
-                "updated_at" => ("Updated".to_string(), true),
-                "_status" => ("Status".to_string(), true),
+                "created_at" => ("created".to_string(), true),
+                "updated_at" => ("updated".to_string(), true),
+                "_status" => ("status".to_string(), true),
                 _ => {
                     if let Some(f) = def.fields.iter().find(|f| f.name == *key) {
                         (field_label(f), true)
@@ -202,18 +202,18 @@ pub(super) fn build_column_options(
     if def.has_drafts() {
         options.push(json!({
             "key": "_status",
-            "label": "Status",
+            "label": "status",
             "selected": selected_keys.contains(&"_status".to_string()),
         }));
     }
     options.push(json!({
         "key": "created_at",
-        "label": "Created",
+        "label": "created",
         "selected": selected_keys.contains(&"created_at".to_string()),
     }));
     options.push(json!({
         "key": "updated_at",
-        "label": "Updated",
+        "label": "updated",
         "selected": selected_keys.contains(&"updated_at".to_string()),
     }));
 
@@ -242,24 +242,24 @@ pub(super) fn build_filter_fields(def: &CollectionDefinition) -> Vec<Value> {
     if def.has_drafts() {
         fields.push(json!({
             "key": "_status",
-            "label": "Status",
+            "label": "status",
             "field_type": "select",
             "options": [
-                { "label": "Published", "value": "published" },
-                { "label": "Draft", "value": "draft" },
+                { "label": "published", "value": "published" },
+                { "label": "draft", "value": "draft" },
             ],
         }));
     }
 
     fields.push(json!({
         "key": "created_at",
-        "label": "Created",
+        "label": "created",
         "field_type": "date",
     }));
 
     fields.push(json!({
         "key": "updated_at",
-        "label": "Updated",
+        "label": "updated",
         "field_type": "date",
     }));
 
@@ -309,9 +309,9 @@ pub(super) fn build_filter_pills(
             };
 
             let field_label_str = match filter.field.as_str() {
-                "created_at" => "Created".to_string(),
-                "updated_at" => "Updated".to_string(),
-                "_status" => "Status".to_string(),
+                "created_at" => "created".to_string(),
+                "updated_at" => "updated".to_string(),
+                "_status" => "status".to_string(),
                 name => def
                     .fields
                     .iter()

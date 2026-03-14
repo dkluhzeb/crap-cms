@@ -4,7 +4,7 @@
     <button type="button" class="form__group-toggle" data-action="toggle-group"
             aria-expanded="{{#if collapsed}}false{{else}}true{{/if}}">
       <span class="form__group-chevron material-symbols-outlined" aria-hidden="true">expand_more</span>
-      {{label}}
+      {{t label}}
       {{#if required}}<span class="required">*</span>{{/if}}
     </button>
   </legend>
@@ -19,6 +19,6 @@
     {{/each}}
   </div>
   {{#if error}}<p class="form__error">{{error}}</p>{{/if}}
-  {{#if description}}<p class="form__help">{{description}}</p>{{/if}}
+  {{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
 </fieldset>
 </crap-collapsible>

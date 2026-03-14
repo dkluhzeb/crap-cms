@@ -79,7 +79,7 @@ pub async fn restore_confirm(
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(PageType::CollectionVersions, "Restore Version".to_string())
+        .page(PageType::CollectionVersions, "restore_version")
         .collection_def(&def)
         .document_stub(&id)
         .set("version_number", json!(version.version))
@@ -87,10 +87,10 @@ pub async fn restore_confirm(
         .set("restore_url", json!(restore_url))
         .set("back_url", json!(back_url))
         .breadcrumbs(vec![
-            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
             Breadcrumb::link(&id, format!("/admin/collections/{}/{}", slug, id)),
-            Breadcrumb::current("Restore Version"),
+            Breadcrumb::current("restore_version"),
         ])
         .build();
 

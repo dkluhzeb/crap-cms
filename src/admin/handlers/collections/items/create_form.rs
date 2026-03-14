@@ -85,10 +85,10 @@ pub async fn create_form(
         fields.push(json!({
             "name": "password",
             "field_type": "password",
-            "label": "Password",
+            "label": "password",
             "required": true,
             "value": "",
-            "description": "Set the user's password",
+            "description": "set_password_description",
         }));
     }
 
@@ -102,23 +102,17 @@ pub async fn create_form(
     let mut data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(
-            PageType::CollectionCreate,
-            format!("Create {}", def.singular_name()),
-        )
-        .set(
-            "page_title",
-            json!(format!("Create {}", def.singular_name())),
-        )
+        .page(PageType::CollectionCreate, "create_name")
+        .page_title_name(def.singular_name())
         .collection_def(&def)
         .fields(main_fields)
         .set("sidebar_fields", json!(sidebar_fields))
         .set("editing", json!(false))
         .set("has_drafts", json!(def.has_drafts()))
         .breadcrumbs(vec![
-            Breadcrumb::link("Collections", "/admin/collections"),
+            Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::current(format!("Create {}", def.singular_name())),
+            Breadcrumb::current("create_name").with_name(def.singular_name()),
         ])
         .merge(locale_data)
         .build();

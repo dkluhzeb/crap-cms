@@ -77,14 +77,8 @@ pub async fn list_versions_page(
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
-        .page(
-            PageType::GlobalVersions,
-            format!("Version History — {}", def.display_name()),
-        )
-        .set(
-            "page_title",
-            json!(format!("Version History — {}", def.display_name())),
-        )
+        .page(PageType::GlobalVersions, "version_history_for")
+        .page_title_name(def.display_name())
         .global_def(&def)
         .set("versions", json!(versions))
         .set(
@@ -99,9 +93,9 @@ pub async fn list_versions_page(
             format!("/admin/globals/{}/versions?page={}", slug, page + 1),
         )
         .breadcrumbs(vec![
-            Breadcrumb::link("Dashboard", "/admin"),
+            Breadcrumb::link("dashboard", "/admin"),
             Breadcrumb::link(def.display_name(), format!("/admin/globals/{}", slug)),
-            Breadcrumb::current("Version History"),
+            Breadcrumb::current("version_history"),
         ])
         .build();
 

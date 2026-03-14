@@ -155,7 +155,7 @@ pub async fn edit_form(
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::GlobalEdit, def.display_name())
         .breadcrumbs(vec![
-            Breadcrumb::link("Dashboard", "/admin"),
+            Breadcrumb::link("dashboard", "/admin"),
             Breadcrumb::current(def.display_name()),
         ])
         .global_def(&def)

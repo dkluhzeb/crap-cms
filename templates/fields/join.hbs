@@ -1,5 +1,5 @@
 <label>
-  {{label}}
+  {{t label}}
 </label>
 <div class="form__join">
   {{#if join_items}}
@@ -19,4 +19,4 @@
   <p class="form__join-count">{{join_count}} {{#if (eq join_count 1)}}{{t "item"}}{{else}}{{t "items"}}{{/if}}</p>
   {{/if}}
 </div>
-{{#if description}}<p class="form__help">{{description}}</p>{{/if}}
+{{#if description}}<p class="form__help">{{t description}}</p>{{/if}}
