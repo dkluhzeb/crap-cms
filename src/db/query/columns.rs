@@ -2,9 +2,11 @@
 
 use std::collections::HashSet;
 
-use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
-
-use crate::db::LocaleContext;
+use crate::{
+    config::LocaleConfig,
+    core::{CollectionDefinition, FieldDefinition, FieldType},
+    db::LocaleContext,
+};
 
 /// Get column names for a collection (id + field columns + timestamps).
 pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
@@ -53,6 +55,104 @@ fn collect_column_names_inner(fields: &[FieldDefinition], names: &mut Vec<String
                         format!("{}__{}", prefix, field.name)
                     };
                     names.push(col);
+                }
+            }
+        }
+    }
+}
+
+/// Get expected column names including locale suffixes for localized fields.
+/// Used by orphan column detection where actual DB columns have locale suffixes.
+pub fn get_expected_column_names(
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> HashSet<String> {
+    if !locale_config.is_enabled() {
+        return get_column_names(def).into_iter().collect();
+    }
+
+    let mut expected = HashSet::new();
+    expected.insert("id".to_string());
+    collect_expected_with_locale(&def.fields, &mut expected, "", locale_config);
+
+    if def.has_drafts() {
+        expected.insert("_status".to_string());
+    }
+    if def.timestamps {
+        expected.insert("created_at".to_string());
+        expected.insert("updated_at".to_string());
+    }
+    expected
+}
+
+fn collect_expected_with_locale(
+    fields: &[FieldDefinition],
+    names: &mut HashSet<String>,
+    prefix: &str,
+    locale_config: &LocaleConfig,
+) {
+    collect_expected_locale_inner(fields, names, prefix, locale_config, false);
+}
+
+fn collect_expected_locale_inner(
+    fields: &[FieldDefinition],
+    names: &mut HashSet<String>,
+    prefix: &str,
+    locale_config: &LocaleConfig,
+    parent_localized: bool,
+) {
+    for field in fields {
+        match field.field_type {
+            FieldType::Group => {
+                let new_prefix = if prefix.is_empty() {
+                    field.name.clone()
+                } else {
+                    format!("{}__{}", prefix, field.name)
+                };
+                // Group propagates its localized flag to children
+                collect_expected_locale_inner(
+                    &field.fields,
+                    names,
+                    &new_prefix,
+                    locale_config,
+                    parent_localized || field.localized,
+                );
+            }
+            FieldType::Row | FieldType::Collapsible => {
+                collect_expected_locale_inner(
+                    &field.fields,
+                    names,
+                    prefix,
+                    locale_config,
+                    parent_localized,
+                );
+            }
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    collect_expected_locale_inner(
+                        &tab.fields,
+                        names,
+                        prefix,
+                        locale_config,
+                        parent_localized,
+                    );
+                }
+            }
+            _ => {
+                if field.has_parent_column() {
+                    let base = if prefix.is_empty() {
+                        field.name.clone()
+                    } else {
+                        format!("{}__{}", prefix, field.name)
+                    };
+
+                    if field.localized || parent_localized {
+                        for locale in &locale_config.locales {
+                            names.insert(format!("{}__{}", base, locale));
+                        }
+                    } else {
+                        names.insert(base);
+                    }
                 }
             }
         }
@@ -119,6 +219,7 @@ fn collect_valid_filter_names(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LocaleConfig;
     use crate::core::field::{FieldTab, FieldType};
     use crate::db::query::test_helpers::*;
 
@@ -511,5 +612,95 @@ mod tests {
             valid.contains("outer__inner__value"),
             "Group→Tabs→Group filter: outer__inner__value"
         );
+    }
+
+    fn no_locale() -> LocaleConfig {
+        LocaleConfig::default()
+    }
+
+    fn locale_en_de() -> LocaleConfig {
+        LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        }
+    }
+
+    #[test]
+    fn expected_columns_no_locale_matches_get_column_names() {
+        let def = make_collection_def(
+            "posts",
+            vec![
+                make_field("title", FieldType::Text),
+                make_group_field("seo", vec![make_field("desc", FieldType::Text)]),
+            ],
+            true,
+        );
+        let expected = get_expected_column_names(&def, &no_locale());
+        let names: HashSet<String> = get_column_names(&def).into_iter().collect();
+        assert_eq!(expected, names);
+    }
+
+    #[test]
+    fn expected_columns_with_locale_expands_localized() {
+        let mut title = make_field("title", FieldType::Text);
+        title.localized = true;
+        let def = make_collection_def(
+            "posts",
+            vec![title, make_field("slug", FieldType::Text)],
+            true,
+        );
+        let expected = get_expected_column_names(&def, &locale_en_de());
+
+        assert!(expected.contains("title__en"));
+        assert!(expected.contains("title__de"));
+        assert!(!expected.contains("title"), "base name should not appear");
+        assert!(expected.contains("slug"), "non-localized field stays");
+        assert!(expected.contains("id"));
+        assert!(expected.contains("created_at"));
+    }
+
+    #[test]
+    fn expected_columns_localized_group_field() {
+        let mut sub = make_field("desc", FieldType::Text);
+        sub.localized = true;
+        let def = make_collection_def(
+            "posts",
+            vec![make_group_field(
+                "seo",
+                vec![sub, make_field("robots", FieldType::Text)],
+            )],
+            false,
+        );
+        let expected = get_expected_column_names(&def, &locale_en_de());
+
+        assert!(expected.contains("seo__desc__en"));
+        assert!(expected.contains("seo__desc__de"));
+        assert!(expected.contains("seo__robots"));
+        assert!(!expected.contains("seo__desc"));
+    }
+
+    #[test]
+    fn expected_columns_nested_tabs_row_group() {
+        let def = make_collection_def(
+            "posts",
+            vec![make_tabs_field(
+                "layout",
+                vec![FieldTab::new(
+                    "Tab",
+                    vec![make_row_field(
+                        "r",
+                        vec![
+                            make_group_field("meta", vec![make_field("title", FieldType::Text)]),
+                            make_field("body", FieldType::Textarea),
+                        ],
+                    )],
+                )],
+            )],
+            false,
+        );
+        let expected = get_expected_column_names(&def, &no_locale());
+        assert!(expected.contains("meta__title"));
+        assert!(expected.contains("body"));
     }
 }

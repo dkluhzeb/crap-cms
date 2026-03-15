@@ -19,7 +19,7 @@ mod locale;
 mod types;
 mod validation;
 
-pub use columns::get_column_names;
+pub use columns::{get_column_names, get_expected_column_names};
 pub use helpers::{apply_pagination_limits, normalize_date_value};
 pub use locale::{LocaleContext, LocaleMode, get_locale_select_columns};
 pub use types::*;

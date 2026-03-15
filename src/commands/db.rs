@@ -2,15 +2,12 @@
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
-use std::{
-    collections::HashSet,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use crate::{
     config::{CrapConfig, LocaleConfig},
-    core::{FieldType, Registry},
-    db::{DbConnection, migrate, pool},
+    core::Registry,
+    db::{DbConnection, migrate, pool, query},
     hooks,
     hooks::HookRunner,
     scaffold,
@@ -164,8 +161,8 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
     Ok(())
 }
 
-/// Open an interactive SQLite console.
-/// Untestable: spawns interactive sqlite3 process.
+/// Open an interactive database console.
+/// Untestable: spawns interactive process.
 #[cfg(not(tarpaulin_include))]
 pub fn console(config_dir: &Path) -> Result<()> {
     let config_dir = config_dir
@@ -173,22 +170,29 @@ pub fn console(config_dir: &Path) -> Result<()> {
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+    let p = pool::create_pool(&config_dir, &cfg).context("Failed to create pool")?;
+    let conn = p.get().context("Failed to get connection")?;
 
-    let db_path = cfg.db_path(&config_dir);
+    match conn.kind() {
+        "sqlite" => {
+            let db_path = cfg.db_path(&config_dir);
 
-    if !db_path.exists() {
-        bail!("Database file not found: {}", db_path.display());
-    }
+            if !db_path.exists() {
+                bail!("Database file not found: {}", db_path.display());
+            }
 
-    println!("Opening SQLite console: {}", db_path.display());
+            println!("Opening SQLite console: {}", db_path.display());
 
-    let status = std::process::Command::new("sqlite3")
-        .arg(&db_path)
-        .status()
-        .context("Failed to launch sqlite3 — is it installed?")?;
+            let status = std::process::Command::new("sqlite3")
+                .arg(&db_path)
+                .status()
+                .context("Failed to launch sqlite3 — is it installed?")?;
 
-    if !status.success() {
-        bail!("sqlite3 exited with status {}", status);
+            if !status.success() {
+                bail!("sqlite3 exited with status {}", status);
+            }
+        }
+        other => bail!("No interactive console available for '{}' backend", other),
     }
 
     Ok(())
@@ -538,72 +542,7 @@ pub fn find_orphan_columns(
         }
 
         // Build expected column names from Lua definition
-        let mut expected: HashSet<String> = HashSet::new();
-        expected.insert("id".to_string());
-
-        for field in &def.fields {
-            if field.field_type == FieldType::Group {
-                for sub in &field.fields {
-                    let base = format!("{}__{}", field.name, sub.name);
-                    let is_localized =
-                        (field.localized || sub.localized) && locale_config.is_enabled();
-
-                    if is_localized {
-                        for locale in &locale_config.locales {
-                            expected.insert(format!("{}__{}", base, locale));
-                        }
-                    } else {
-                        expected.insert(base);
-                    }
-                }
-                continue;
-            }
-            if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
-                for sub in &field.fields {
-                    let is_localized = sub.localized && locale_config.is_enabled();
-
-                    if is_localized {
-                        for locale in &locale_config.locales {
-                            expected.insert(format!("{}__{}", sub.name, locale));
-                        }
-                    } else {
-                        expected.insert(sub.name.clone());
-                    }
-                }
-                continue;
-            }
-            if field.field_type == FieldType::Tabs {
-                for tab in &field.tabs {
-                    for sub in &tab.fields {
-                        let is_localized = sub.localized && locale_config.is_enabled();
-
-                        if is_localized {
-                            for locale in &locale_config.locales {
-                                expected.insert(format!("{}__{}", sub.name, locale));
-                            }
-                        } else {
-                            expected.insert(sub.name.clone());
-                        }
-                    }
-                }
-                continue;
-            }
-            if !field.has_parent_column() {
-                continue;
-            }
-            if field.localized && locale_config.is_enabled() {
-                for locale in &locale_config.locales {
-                    expected.insert(format!("{}__{}", field.name, locale));
-                }
-            } else {
-                expected.insert(field.name.clone());
-            }
-        }
-
-        if def.timestamps {
-            expected.insert("created_at".to_string());
-            expected.insert("updated_at".to_string());
-        }
+        let expected = query::get_expected_column_names(def, locale_config);
 
         // Find orphans: columns in DB but not in expected, excluding system columns
         let mut orphan_cols: Vec<String> = existing
@@ -792,5 +731,45 @@ mod tests {
         let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
         assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].1, vec!["removed_field"]);
+    }
+
+    #[test]
+    fn nested_group_in_row_in_tabs_not_orphans() {
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
+            "CREATE TABLE posts (id TEXT, seo__title TEXT, body TEXT, created_at TEXT, updated_at TEXT)",
+        ).unwrap();
+
+        let mut reg = Registry::default();
+        reg.collections.insert(
+            "posts".into(),
+            simple_collection(
+                "posts",
+                vec![
+                    FieldDefinition::builder("layout", FieldType::Tabs)
+                        .tabs(vec![crate::core::field::FieldTab::new(
+                            "Content",
+                            vec![
+                                FieldDefinition::builder("row", FieldType::Row)
+                                    .fields(vec![
+                                        FieldDefinition::builder("seo", FieldType::Group)
+                                            .fields(vec![text_field("title")])
+                                            .build(),
+                                        text_field("body"),
+                                    ])
+                                    .build(),
+                            ],
+                        )])
+                        .build(),
+                ],
+            ),
+        );
+
+        let orphans = find_orphan_columns(&conn, &reg, &no_locale()).unwrap();
+        assert!(
+            orphans.is_empty(),
+            "nested Group→Row→Tabs columns should not be orphans: {:?}",
+            orphans
+        );
     }
 }

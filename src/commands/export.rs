@@ -90,8 +90,39 @@ pub fn export(
 /// Collected columns for a single document import row.
 struct ImportRow {
     parent_cols: Vec<String>,
-    parent_vals: Vec<String>,
+    parent_vals: Vec<DbValue>,
     join_data: HashMap<String, Value>,
+}
+
+/// Convert a JSON value to a typed DbValue based on the field type.
+fn json_to_db_value(val: &Value, field_type: &FieldType) -> Option<DbValue> {
+    match val {
+        Value::Null => None,
+        Value::String(s) => Some(DbValue::Text(s.clone())),
+        Value::Number(n) => match field_type {
+            FieldType::Number => n.as_f64().map(DbValue::Real),
+            _ => n
+                .as_i64()
+                .map(DbValue::Integer)
+                .or_else(|| n.as_f64().map(DbValue::Real)),
+        },
+        Value::Bool(b) => Some(DbValue::Integer(if *b { 1 } else { 0 })),
+        other => Some(DbValue::Text(other.to_string())),
+    }
+}
+
+/// Push a column/value pair into the import row if the JSON value is non-null.
+fn push_field_value(
+    cols: &mut Vec<String>,
+    vals: &mut Vec<DbValue>,
+    col_name: String,
+    val: &Value,
+    field_type: &FieldType,
+) {
+    if let Some(db_val) = json_to_db_value(val, field_type) {
+        cols.push(col_name);
+        vals.push(db_val);
+    }
 }
 
 /// Collect parent columns and join data for a single document from its JSON representation.
@@ -101,31 +132,31 @@ fn collect_import_columns(
     id: &str,
 ) -> ImportRow {
     let mut parent_cols: Vec<String> = vec!["id".to_string()];
-    let mut parent_vals: Vec<String> = vec![id.to_string()];
+    let mut parent_vals: Vec<DbValue> = vec![DbValue::Text(id.to_string())];
     let mut join_data: HashMap<String, Value> = HashMap::new();
 
-    // Handle timestamps
+    // Handle timestamps (always text)
     if def.timestamps {
         if let Some(v) = doc_obj.get("created_at").and_then(|v| v.as_str()) {
             parent_cols.push("created_at".to_string());
-            parent_vals.push(v.to_string());
+            parent_vals.push(DbValue::Text(v.to_string()));
         }
         if let Some(v) = doc_obj.get("updated_at").and_then(|v| v.as_str()) {
             parent_cols.push("updated_at".to_string());
-            parent_vals.push(v.to_string());
+            parent_vals.push(DbValue::Text(v.to_string()));
         }
     }
 
     for field in &def.fields {
         if field.has_parent_column() && field.field_type != FieldType::Group {
             if let Some(val) = doc_obj.get(&field.name) {
-                let str_val = match val {
-                    Value::String(s) => s.clone(),
-                    Value::Null => continue,
-                    other => other.to_string(),
-                };
-                parent_cols.push(field.name.clone());
-                parent_vals.push(str_val);
+                push_field_value(
+                    &mut parent_cols,
+                    &mut parent_vals,
+                    field.name.clone(),
+                    val,
+                    &field.field_type,
+                );
             }
         } else if !field.has_parent_column() {
             // Join table fields (array, blocks, has-many relationship)
@@ -148,13 +179,13 @@ fn collect_import_columns(
                     .or_else(|| doc_obj.get(&col_name));
 
                 if let Some(val) = val {
-                    let str_val = match val {
-                        Value::String(s) => s.clone(),
-                        Value::Null => continue,
-                        other => other.to_string(),
-                    };
-                    parent_cols.push(col_name);
-                    parent_vals.push(str_val);
+                    push_field_value(
+                        &mut parent_cols,
+                        &mut parent_vals,
+                        col_name,
+                        val,
+                        &sub.field_type,
+                    );
                 }
             }
         }
@@ -163,13 +194,13 @@ fn collect_import_columns(
         if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
             for sub in &field.fields {
                 if let Some(val) = doc_obj.get(&sub.name) {
-                    let str_val = match val {
-                        Value::String(s) => s.clone(),
-                        Value::Null => continue,
-                        other => other.to_string(),
-                    };
-                    parent_cols.push(sub.name.clone());
-                    parent_vals.push(str_val);
+                    push_field_value(
+                        &mut parent_cols,
+                        &mut parent_vals,
+                        sub.name.clone(),
+                        val,
+                        &sub.field_type,
+                    );
                 }
             }
         }
@@ -179,13 +210,13 @@ fn collect_import_columns(
             for tab in &field.tabs {
                 for sub in &tab.fields {
                     if let Some(val) = doc_obj.get(&sub.name) {
-                        let str_val = match val {
-                            Value::String(s) => s.clone(),
-                            Value::Null => continue,
-                            other => other.to_string(),
-                        };
-                        parent_cols.push(sub.name.clone());
-                        parent_vals.push(str_val);
+                        push_field_value(
+                            &mut parent_cols,
+                            &mut parent_vals,
+                            sub.name.clone(),
+                            val,
+                            &sub.field_type,
+                        );
                     }
                 }
             }
@@ -285,12 +316,7 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
                 "id",
             );
 
-            let params: Vec<DbValue> = parent_vals
-                .iter()
-                .map(|v| DbValue::Text(v.clone()))
-                .collect();
-
-            tx.execute(&sql, &params)
+            tx.execute(&sql, &parent_vals)
                 .with_context(|| format!("Failed to insert document {} into '{}'", id, slug))?;
 
             // Save join table data
@@ -310,4 +336,57 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
     println!("\nTotal: {} document(s) imported", total_imported);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn json_to_db_value_null() {
+        assert!(json_to_db_value(&Value::Null, &FieldType::Text).is_none());
+    }
+
+    #[test]
+    fn json_to_db_value_string() {
+        let val = json_to_db_value(&json!("hello"), &FieldType::Text);
+        assert!(matches!(val, Some(DbValue::Text(s)) if s == "hello"));
+    }
+
+    #[test]
+    fn json_to_db_value_integer() {
+        let val = json_to_db_value(&json!(42), &FieldType::Text);
+        assert!(matches!(val, Some(DbValue::Integer(42))));
+    }
+
+    #[test]
+    fn json_to_db_value_number_field_gives_real() {
+        let val = json_to_db_value(&json!(42), &FieldType::Number);
+        assert!(matches!(val, Some(DbValue::Real(v)) if (v - 42.0).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn json_to_db_value_float() {
+        let val = json_to_db_value(&json!(3.14), &FieldType::Text);
+        assert!(matches!(val, Some(DbValue::Real(v)) if (v - 3.14).abs() < f64::EPSILON));
+    }
+
+    #[test]
+    fn json_to_db_value_bool_true() {
+        let val = json_to_db_value(&json!(true), &FieldType::Checkbox);
+        assert!(matches!(val, Some(DbValue::Integer(1))));
+    }
+
+    #[test]
+    fn json_to_db_value_bool_false() {
+        let val = json_to_db_value(&json!(false), &FieldType::Checkbox);
+        assert!(matches!(val, Some(DbValue::Integer(0))));
+    }
+
+    #[test]
+    fn json_to_db_value_object_becomes_text() {
+        let val = json_to_db_value(&json!({"key": "val"}), &FieldType::Json);
+        assert!(matches!(val, Some(DbValue::Text(_))));
+    }
 }

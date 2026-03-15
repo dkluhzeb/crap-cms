@@ -68,14 +68,25 @@ pub fn run(config_dir: &Path) -> Result<()> {
     // Config dir
     println!("Config:  {}", config_dir.display());
 
-    // DB file + size
-    let db_path = cfg.db_path(&config_dir);
-    let db_size = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
-    println!(
-        "Database: {} ({})",
-        db_path.display(),
-        format_bytes(db_size)
-    );
+    // DB info — file size only for file-based backends
+    {
+        let conn = pool.get().context("Failed to get connection for DB info")?;
+
+        match conn.kind() {
+            "sqlite" => {
+                let db_path = cfg.db_path(&config_dir);
+                let db_size = fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0);
+                println!(
+                    "Database: {} ({})",
+                    db_path.display(),
+                    format_bytes(db_size)
+                );
+            }
+            other => {
+                println!("Database: {} backend", other);
+            }
+        }
+    }
 
     // Uploads size
     let uploads_dir = config_dir.join("uploads");

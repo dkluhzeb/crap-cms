@@ -1,11 +1,11 @@
 //! `make` command — scaffold collections, globals, hooks, and jobs.
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use std::{fs, path::Path};
+use std::path::Path;
 
 use crate::{
     config::CrapConfig,
-    core::FieldType,
+    core::{FieldType, SharedRegistry},
     hooks,
     scaffold::{
         self, CollectionOptions, ConditionFieldInfo, HookType, MakeHookOptions, VALID_FIELD_TYPES,
@@ -303,18 +303,33 @@ fn make_hook_command(
         }
     };
 
-    // 2. Resolve collection/global — try loading registry for choices, fall back to text input
+    // Load registry once for all interactive helpers
+    let registry = try_load_registry(config_dir);
+
+    // 2. Resolve collection/global — use registry for choices, fall back to text input
     let (collection, is_global) = match collection {
         Some(c) => {
             // Auto-detect: check if it's a global slug
-            let is_global = try_load_global_slugs(config_dir)
-                .map(|slugs| slugs.contains(&c))
+            let is_global = registry
+                .as_ref()
+                .and_then(|r| r.read().ok())
+                .map(|reg| reg.globals.contains_key(c.as_str()))
                 .unwrap_or(false);
             (c, is_global)
         }
         None => {
-            let collection_slugs = try_load_collection_slugs(config_dir).unwrap_or_default();
-            let global_slugs = try_load_global_slugs(config_dir).unwrap_or_default();
+            let (collection_slugs, global_slugs) = registry
+                .as_ref()
+                .and_then(|r| r.read().ok())
+                .map(|reg| {
+                    let mut cs: Vec<String> =
+                        reg.collections.keys().map(|s| s.to_string()).collect();
+                    cs.sort();
+                    let mut gs: Vec<String> = reg.globals.keys().map(|s| s.to_string()).collect();
+                    gs.sort();
+                    (cs, gs)
+                })
+                .unwrap_or_default();
 
             if !collection_slugs.is_empty() || !global_slugs.is_empty() {
                 // Build merged list: collections first, then globals tagged
@@ -387,7 +402,13 @@ fn make_hook_command(
         match field {
             Some(f) => Some(f),
             None => {
-                let field_names = try_load_field_names(config_dir, &collection);
+                let field_names: Option<Vec<String>> = registry
+                    .as_ref()
+                    .and_then(|r| r.read().ok())
+                    .and_then(|reg| {
+                        reg.get_collection(&collection)
+                            .map(|def| def.fields.iter().map(|f| f.name.clone()).collect())
+                    });
 
                 if let Some(names) = field_names.filter(|n| !n.is_empty()) {
                     let selection = Select::new()
@@ -426,7 +447,33 @@ fn make_hook_command(
 
     // 6. For condition hooks: resolve watched field with type info
     let condition_field = if hook_type == HookType::Condition {
-        let field_infos = try_load_field_infos(config_dir, &collection);
+        let field_infos: Option<Vec<ConditionFieldInfo>> = registry
+            .as_ref()
+            .and_then(|r| r.read().ok())
+            .and_then(|reg| {
+                let def = reg.get_collection(&collection)?;
+                Some(
+                    def.fields
+                        .iter()
+                        .filter(|f| {
+                            !matches!(
+                                f.field_type,
+                                FieldType::Array
+                                    | FieldType::Blocks
+                                    | FieldType::Group
+                                    | FieldType::Row
+                                    | FieldType::Collapsible
+                                    | FieldType::Tabs
+                            )
+                        })
+                        .map(|f| ConditionFieldInfo {
+                            name: f.name.clone(),
+                            field_type: format!("{:?}", f.field_type).to_lowercase(),
+                            select_options: f.options.iter().map(|o| o.value.clone()).collect(),
+                        })
+                        .collect(),
+                )
+            });
 
         if let Some(ref f) = field {
             // CLI --field flag provided — look up type info from registry if available
@@ -483,44 +530,30 @@ fn make_hook_command(
 
 /// Check if localization is enabled in the config dir's crap.toml.
 pub fn has_locales_enabled(config_dir: &Path) -> bool {
-    let toml_path = config_dir.join("crap.toml");
-    let content = fs::read_to_string(&toml_path).unwrap_or_default();
-    let table: toml::Table = content.parse().unwrap_or_default();
-    table
-        .get("locale")
-        .and_then(|v| v.get("locales"))
-        .and_then(|v| v.as_array())
-        .map(|a| !a.is_empty())
+    CrapConfig::load(config_dir)
+        .map(|cfg| cfg.locale.is_enabled())
         .unwrap_or(false)
+}
+
+/// Try to load the Lua registry once for reuse across make helpers.
+pub fn try_load_registry(config_dir: &Path) -> Option<SharedRegistry> {
+    let config_dir = config_dir.canonicalize().ok()?;
+    let cfg = CrapConfig::load(&config_dir).ok()?;
+    hooks::init_lua(&config_dir, &cfg).ok()
 }
 
 /// Try to load collection slugs from the config dir for interactive selection.
 pub fn try_load_collection_slugs(config_dir: &Path) -> Option<Vec<String>> {
-    let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = CrapConfig::load(&config_dir).ok()?;
-    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
+    let registry = try_load_registry(config_dir)?;
     let reg = registry.read().ok()?;
     let mut slugs: Vec<String> = reg.collections.keys().map(|s| s.to_string()).collect();
     slugs.sort();
     Some(slugs)
 }
 
-/// Try to load global slugs from the config dir for interactive selection.
-pub fn try_load_global_slugs(config_dir: &Path) -> Option<Vec<String>> {
-    let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = CrapConfig::load(&config_dir).ok()?;
-    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
-    let reg = registry.read().ok()?;
-    let mut slugs: Vec<String> = reg.globals.keys().map(|s| s.to_string()).collect();
-    slugs.sort();
-    Some(slugs)
-}
-
 /// Try to load field names for a collection from the config dir.
 pub fn try_load_field_names(config_dir: &Path, collection: &str) -> Option<Vec<String>> {
-    let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = CrapConfig::load(&config_dir).ok()?;
-    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
+    let registry = try_load_registry(config_dir)?;
     let reg = registry.read().ok()?;
     let def = reg.get_collection(collection)?;
     Some(def.fields.iter().map(|f| f.name.clone()).collect())
@@ -531,9 +564,7 @@ pub fn try_load_field_infos(
     config_dir: &Path,
     collection: &str,
 ) -> Option<Vec<ConditionFieldInfo>> {
-    let config_dir = config_dir.canonicalize().ok()?;
-    let cfg = CrapConfig::load(&config_dir).ok()?;
-    let registry = hooks::init_lua(&config_dir, &cfg).ok()?;
+    let registry = try_load_registry(config_dir)?;
     let reg = registry.read().ok()?;
     let def = reg.get_collection(collection)?;
     Some(
