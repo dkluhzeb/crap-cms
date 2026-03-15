@@ -1,5 +1,7 @@
 //! Value helpers: pagination limits, date normalization, type coercion.
 
+use serde_json::Value;
+
 use crate::{core::FieldType, db::DbValue};
 
 /// Clamp a requested limit to the configured default/max.
@@ -101,6 +103,28 @@ pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
                 DbValue::Text(value.to_string())
             }
         }
+    }
+}
+
+/// Coerce a `serde_json::Value` to the appropriate database type, preserving
+/// numeric precision. Unlike [`coerce_value`] (which takes `&str`), this
+/// operates on typed JSON values directly — important for backends like
+/// Postgres that require typed parameters.
+#[allow(dead_code)]
+pub(crate) fn coerce_json_value(field_type: &FieldType, val: &Value) -> DbValue {
+    match val {
+        Value::Null => DbValue::Null,
+        Value::Bool(b) => DbValue::Integer(if *b { 1 } else { 0 }),
+        Value::Number(n) => match field_type {
+            FieldType::Number => DbValue::Real(n.as_f64().unwrap_or(0.0)),
+            _ => n
+                .as_i64()
+                .map(DbValue::Integer)
+                .unwrap_or_else(|| DbValue::Real(n.as_f64().unwrap_or(0.0))),
+        },
+        Value::String(s) => coerce_value(field_type, s),
+        Value::Array(arr) => DbValue::Text(Value::Array(arr.clone()).to_string()),
+        Value::Object(obj) => DbValue::Text(Value::Object(obj.clone()).to_string()),
     }
 }
 
@@ -238,6 +262,106 @@ mod tests {
         assert_eq!(
             coerce_value(&FieldType::Date, "2026-03-15"),
             DbValue::Text("2026-03-15T12:00:00.000Z".into())
+        );
+    }
+
+    // ── apply_pagination_limits tests ──────────────────────────────────
+
+    // ── coerce_json_value tests ──────────────────────────────────────
+
+    #[test]
+    fn coerce_json_null() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &Value::Null),
+            DbValue::Null
+        );
+    }
+
+    #[test]
+    fn coerce_json_bool_true() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Checkbox, &Value::Bool(true)),
+            DbValue::Integer(1)
+        );
+    }
+
+    #[test]
+    fn coerce_json_bool_false() {
+        assert_eq!(
+            coerce_json_value(&FieldType::Checkbox, &Value::Bool(false)),
+            DbValue::Integer(0)
+        );
+    }
+
+    #[test]
+    fn coerce_json_number_as_real_for_number_field() {
+        let val = serde_json::json!(42.5);
+        assert_eq!(
+            coerce_json_value(&FieldType::Number, &val),
+            DbValue::Real(42.5)
+        );
+    }
+
+    #[test]
+    fn coerce_json_integer_for_number_field() {
+        let val = serde_json::json!(42);
+        // Number field always yields Real
+        assert_eq!(
+            coerce_json_value(&FieldType::Number, &val),
+            DbValue::Real(42.0)
+        );
+    }
+
+    #[test]
+    fn coerce_json_integer_for_non_number_field() {
+        let val = serde_json::json!(42);
+        // Non-number field: integer stays as Integer
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &val),
+            DbValue::Integer(42)
+        );
+    }
+
+    #[test]
+    fn coerce_json_float_for_non_number_field() {
+        let val = serde_json::json!(3.14);
+        // Non-number field, but value has no i64 representation: falls back to Real
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &val),
+            DbValue::Real(3.14)
+        );
+    }
+
+    #[test]
+    fn coerce_json_string_delegates_to_coerce_value() {
+        let val = serde_json::json!("hello");
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &val),
+            DbValue::Text("hello".into())
+        );
+    }
+
+    #[test]
+    fn coerce_json_string_empty_is_null() {
+        let val = serde_json::json!("");
+        assert_eq!(coerce_json_value(&FieldType::Text, &val), DbValue::Null);
+    }
+
+    #[test]
+    fn coerce_json_array_to_text() {
+        let val = serde_json::json!([1, 2, 3]);
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &val),
+            DbValue::Text("[1,2,3]".into())
+        );
+    }
+
+    #[test]
+    fn coerce_json_object_to_text() {
+        let val = serde_json::json!({"key": "value"});
+        assert_eq!(
+            coerce_json_value(&FieldType::Text, &val),
+            DbValue::Text(r#"{"key":"value"}"#.into())
         );
     }
 

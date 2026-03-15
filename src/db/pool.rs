@@ -15,6 +15,7 @@ use super::{connection::BoxedConnection, sqlite::SqliteConnection};
 /// `DbPool` holds an `Arc<dyn PoolBackend>` and delegates `get()` to it.
 trait PoolBackend: Send + Sync {
     fn get(&self) -> Result<BoxedConnection>;
+    fn kind(&self) -> &'static str;
 }
 
 /// SQLite pool backend.
@@ -26,6 +27,10 @@ impl PoolBackend for SqlitePoolBackend {
     fn get(&self) -> Result<BoxedConnection> {
         let conn = self.pool.get().context("Failed to get DB connection")?;
         Ok(BoxedConnection::new(Box::new(SqliteConnection::new(conn))))
+    }
+
+    fn kind(&self) -> &'static str {
+        "sqlite"
     }
 }
 
@@ -42,6 +47,11 @@ impl DbPool {
     /// Get a connection from the pool.
     pub fn get(&self) -> Result<BoxedConnection> {
         self.inner.get()
+    }
+
+    /// Return the backend identifier (e.g. `"sqlite"`, `"postgres"`).
+    pub fn kind(&self) -> &str {
+        self.inner.kind()
     }
 
     /// Wrap an existing r2d2 SQLite pool. Used in tests.
@@ -179,6 +189,12 @@ mod tests {
             .expect("PRAGMA busy_timeout failed");
         let timeout = row.unwrap().get_i64("timeout").unwrap();
         assert_eq!(timeout, 12345, "busy_timeout should match configured value");
+    }
+
+    #[test]
+    fn pool_kind_returns_sqlite() {
+        let (_dir, pool) = temp_pool();
+        assert_eq!(pool.kind(), "sqlite");
     }
 
     #[test]

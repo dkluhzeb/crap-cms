@@ -10,7 +10,7 @@ use crate::{
     api::content::{self, content_api_server::ContentApi},
     config::{EmailConfig, LocaleConfig, PasswordPolicy, ServerConfig},
     core::{
-        AuthUser, CollectionDefinition, FieldDefinition, JwtSecret, Registry,
+        AuthUser, CollectionDefinition, JwtSecret, Registry,
         auth::validate_token,
         collection::GlobalDefinition,
         email::EmailRenderer,
@@ -18,7 +18,7 @@ use crate::{
         rate_limit::LoginRateLimiter,
     },
     db::{
-        AccessResult, DbPool,
+        AccessResult, BoxedConnection, DbPool,
         query::{self},
     },
     hooks::HookRunner,
@@ -50,6 +50,8 @@ pub struct ContentService {
     pub(in crate::api::service) default_limit: i64,
     pub(in crate::api::service) max_limit: i64,
     pub(in crate::api::service) cursor_enabled: bool,
+    /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
+    pub(in crate::api::service) db_kind: String,
 }
 
 /// Untestable as unit: helper methods require full pool + registry + hook_runner.
@@ -69,6 +71,7 @@ impl ContentService {
         let max_limit = deps.config.pagination.max_limit;
         let cursor_enabled = deps.config.pagination.is_cursor();
         let reset_token_expiry = deps.config.auth.reset_token_expiry;
+        let db_kind = deps.pool.kind().to_string();
 
         Self {
             pool: deps.pool,
@@ -91,6 +94,7 @@ impl ContentService {
             default_limit,
             max_limit,
             cursor_enabled,
+            db_kind,
         }
     }
 
@@ -119,41 +123,48 @@ impl ContentService {
             .ok_or_else(|| Status::not_found(format!("Global '{}' not found", slug)))
     }
 
-    /// Extract auth user from gRPC metadata (Bearer token in `authorization` header).
-    pub(in crate::api::service) fn extract_auth_user(
-        &self,
-        metadata: &MetadataMap,
-    ) -> Option<AuthUser> {
-        let token = metadata
+    /// Extract Bearer token string from gRPC metadata (pure, no I/O).
+    pub(in crate::api::service) fn extract_token(metadata: &MetadataMap) -> Option<String> {
+        metadata
             .get("authorization")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))?;
-        let claims = validate_token(token, self.jwt_secret.as_ref()).ok()?;
-        let def = self.registry.get_collection(&claims.collection)?.clone();
-        let conn = self.pool.get().ok()?;
-        let doc = query::find_by_id(&conn, &claims.collection, &def, &claims.sub, None).ok()??;
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|s| s.to_string())
+    }
+
+    /// Resolve an auth user from a token using an existing connection.
+    ///
+    /// Pure data lookup — safe to call inside `spawn_blocking`.
+    pub(in crate::api::service) fn resolve_auth_user(
+        token: Option<String>,
+        jwt_secret: &JwtSecret,
+        registry: &Registry,
+        conn: &dyn crate::db::DbConnection,
+    ) -> Option<AuthUser> {
+        let token = token?;
+        let claims = validate_token(&token, jwt_secret.as_ref()).ok()?;
+        let def = registry.get_collection(&claims.collection)?.clone();
+        let doc = query::find_by_id(conn, &claims.collection, &def, &claims.sub, None).ok()??;
         Some(AuthUser::new(claims, doc))
     }
 
-    /// Check collection-level access, returning the AccessResult or a Status error.
-    pub(in crate::api::service) fn require_access(
-        &self,
+    /// Check collection-level access using an existing connection.
+    ///
+    /// Free-standing helper — safe to call inside `spawn_blocking`.
+    pub(in crate::api::service) fn check_access_blocking(
         access_ref: Option<&str>,
         auth_user: &Option<AuthUser>,
         id: Option<&str>,
         data: Option<&HashMap<String, Value>>,
+        hook_runner: &HookRunner,
+        conn: &mut BoxedConnection,
     ) -> Result<AccessResult, Status> {
         let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let mut conn = self
-            .pool
-            .get()
-            .map_err(|_| Status::unavailable("Database connection pool exhausted (retryable)"))?;
         let tx = conn.transaction().map_err(|e| {
             tracing::error!("Access check tx error: {}", e);
             Status::internal("Internal error")
         })?;
-        let result = self
-            .hook_runner
+        let result = hook_runner
             .check_access(access_ref, user_doc, id, data, &tx)
             .map_err(|e| {
                 tracing::error!("Access check error: {}", e);
@@ -173,51 +184,6 @@ impl ContentService {
         auth_user
             .as_ref()
             .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
-    }
-
-    /// Strip field-level read-denied fields from a proto document.
-    /// Fail closed: on pool/tx error, strip ALL fields that have access controls.
-    pub(in crate::api::service) fn strip_denied_read_fields(
-        &self,
-        doc: &mut content::Document,
-        fields: &[FieldDefinition],
-        auth_user: &Option<AuthUser>,
-    ) {
-        let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-        let denied = match self.pool.get() {
-            Ok(mut conn) => match conn.transaction() {
-                Ok(tx) => {
-                    let d = self
-                        .hook_runner
-                        .check_field_read_access(fields, user_doc, &tx);
-                    // Read-only access check — commit result is irrelevant, rollback on drop is safe
-                    let _ = tx.commit();
-                    d
-                }
-                Err(e) => {
-                    tracing::error!("Field access check tx error (fail closed): {}", e);
-                    fields
-                        .iter()
-                        .filter(|f| f.access.read.is_some())
-                        .map(|f| f.name.clone())
-                        .collect()
-                }
-            },
-            Err(e) => {
-                tracing::error!("Field access check pool error (fail closed): {}", e);
-                fields
-                    .iter()
-                    .filter(|f| f.access.read.is_some())
-                    .map(|f| f.name.clone())
-                    .collect()
-            }
-        };
-
-        if let Some(ref mut s) = doc.fields {
-            for name in &denied {
-                s.fields.remove(name);
-            }
-        }
     }
 }
 

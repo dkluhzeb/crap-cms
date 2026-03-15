@@ -909,7 +909,7 @@ async fn describe_auth_collection() {
 async fn find_by_id_not_found() {
     let ts = setup_service(vec![make_posts_def()], vec![]);
 
-    let resp = ts
+    let err = ts
         .service
         .find_by_id(Request::new(content::FindByIdRequest {
             collection: "posts".to_string(),
@@ -920,10 +920,9 @@ async fn find_by_id_not_found() {
             draft: None,
         }))
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap_err();
 
-    assert!(resp.document.is_none());
+    assert_eq!(err.code(), tonic::Code::NotFound);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

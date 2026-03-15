@@ -28,7 +28,8 @@ pub use validation::{
     validate_query_fields, validate_slug,
 };
 
-pub(crate) use helpers::coerce_value;
+#[allow(unused_imports)]
+pub(crate) use helpers::{coerce_json_value, coerce_value};
 pub(crate) use locale::{group_locale_fields, locale_write_column};
 pub(crate) use validation::validate_filter_field;
 

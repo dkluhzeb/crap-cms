@@ -1,6 +1,5 @@
 //! Read-oriented collection RPC handlers: Find, FindByID, Count.
 
-use anyhow::Context as _;
 use std::collections::HashMap;
 use tonic::{Request, Response, Status};
 
@@ -31,22 +30,9 @@ impl ContentService {
         request: Request<content::FindRequest>,
     ) -> Result<Response<content::FindResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
-
-        // Check read access
-        let access_result =
-            self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Read access denied"));
-        }
-
-        let filters = FilterBuilder::new(&def.fields, &access_result)
-            .where_json(req.r#where.as_deref())
-            .draft_filter(def.has_drafts(), !req.draft.unwrap_or(false))
-            .build()?;
 
         let select = if req.select.is_empty() {
             None
@@ -102,50 +88,81 @@ impl ContentService {
 
         let has_cursor = after_cursor.is_some() || before_cursor.is_some();
 
-        let mut find_query = FindQuery::new();
-        find_query.filters = filters.clone();
-        find_query.order_by = req.order_by.clone();
-        find_query.limit = Some(clamped_limit);
-        find_query.offset = if has_cursor {
-            None
-        } else {
-            Some(internal_offset)
-        };
-        find_query.select = select.clone();
-        find_query.after_cursor = after_cursor.clone();
-        find_query.before_cursor = before_cursor.clone();
-        find_query.search = req.search.clone();
-
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
-
-        // Validate filter/order_by fields early for a clear INVALID_ARGUMENT status
-        query::validate_query_fields(&def, &find_query, locale_ctx.as_ref())
-            .map_err(|e| Status::invalid_argument(e.to_string()))?;
-
         let depth = req.depth.unwrap_or(0).max(0).min(self.max_depth);
+        let cursor_enabled = self.cursor_enabled;
+        let has_timestamps = def.timestamps;
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let db_kind = self.db_kind.clone();
         let hooks = def.hooks.clone();
         let def_fields = def.fields.clone();
         let fields = def_fields.clone();
-        let has_timestamps = def.timestamps;
         let collection = req.collection.clone();
-        let registry = self.registry.clone();
         let pop_cache = self.populate_cache.clone();
+        let req_where = req.r#where.clone();
+        let has_drafts = def.has_drafts();
+        let draft = req.draft;
+        let order_by = req.order_by.clone();
+        let search = req.search.clone();
         let def_owned = def;
-        let (documents, total) = tokio::task::spawn_blocking(move || {
-            runner.fire_before_read(&hooks, &collection, "find", HashMap::new())?;
-            // Single connection for find + count + hydration + population
-            let conn = pool.get().context("DB connection")?;
+        let (proto_docs, pagination) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+
+            // Auth + access (all on blocking thread)
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def_owned.access.read.as_deref(),
+                &auth_user,
+                None,
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Read access denied"));
+            }
+
+            let filters = FilterBuilder::new(&def_owned.fields, &access_result)
+                .where_json(req_where.as_deref())
+                .draft_filter(has_drafts, !draft.unwrap_or(false))
+                .build()?;
+
+            let mut find_query = FindQuery::new();
+            find_query.filters = filters.clone();
+            find_query.order_by = order_by.clone();
+            find_query.limit = Some(clamped_limit);
+            find_query.offset = if has_cursor {
+                None
+            } else {
+                Some(internal_offset)
+            };
+            find_query.select = select.clone();
+            find_query.after_cursor = after_cursor.clone();
+            find_query.before_cursor = before_cursor.clone();
+            find_query.search = search;
+
+            query::validate_query_fields(&def_owned, &find_query, locale_ctx.as_ref())
+                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+
+            runner
+                .fire_before_read(&hooks, &collection, "find", HashMap::new())
+                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+
             let mut docs = query::find(
                 &conn,
                 &collection,
                 &def_owned,
                 &find_query,
                 locale_ctx.as_ref(),
-            )?;
+            )
+            .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+
             let total = query::count_with_search(
                 &conn,
                 &collection,
@@ -153,7 +170,9 @@ impl ContentService {
                 &filters,
                 locale_ctx.as_ref(),
                 find_query.search.as_deref(),
-            )?;
+            )
+            .map_err(|e| map_db_error(e, "Count error", &db_kind))?;
+
             // Hydrate join table data (has-many relationships and arrays)
             let select_slice = select.as_deref();
             for doc in &mut docs {
@@ -164,8 +183,10 @@ impl ContentService {
                     doc,
                     select_slice,
                     locale_ctx.as_ref(),
-                )?;
+                )
+                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
             }
+
             // Assemble sizes for upload collections
             if let Some(ref upload_config) = def_owned.upload
                 && upload_config.enabled
@@ -174,6 +195,7 @@ impl ContentService {
                     upload::assemble_sizes_object(doc, upload_config);
                 }
             }
+
             let ar_ctx = AfterReadCtx {
                 hooks: &hooks,
                 fields: &fields,
@@ -182,10 +204,10 @@ impl ContentService {
                 user: None,
                 ui_locale: None,
             };
-            let docs = runner.apply_after_read_many(&ar_ctx, docs);
+            let mut docs = runner.apply_after_read_many(&ar_ctx, docs);
+
             // Populate relationships if depth > 0 (batch for efficiency)
             if depth > 0 {
-                let mut docs = docs;
                 let local_cache;
                 let cache_ref = match &pop_cache {
                     Some(shared) => &**shared,
@@ -205,40 +227,51 @@ impl ContentService {
                 }
                 query::populate_relationships_batch_cached(
                     &pop_ctx, &mut docs, &pop_opts, cache_ref,
-                )?;
-
-                return Ok((docs, total));
+                )
+                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
             }
-            Ok::<_, anyhow::Error>((docs, total))
+
+            // Proto conversion
+            let mut proto_docs: Vec<_> = docs
+                .iter()
+                .map(|doc| document_to_proto(doc, &collection))
+                .collect();
+
+            // Strip field-level read-denied fields (using existing conn)
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("Field access check tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
+            let _ = tx.commit();
+            for doc in &mut proto_docs {
+                if let Some(ref mut s) = doc.fields {
+                    for name in &denied {
+                        s.fields.remove(name);
+                    }
+                }
+            }
+
+            // Build pagination
+            let pagination = if cursor_enabled {
+                PaginationBuilder::new(&docs, total, clamped_limit)
+                    .cursor_mode(order_by.as_deref(), has_timestamps)
+                    .cursor_state(before_cursor.is_some(), has_cursor)
+                    .build()
+            } else {
+                PaginationBuilder::new(&docs, total, clamped_limit)
+                    .page(page, internal_offset)
+                    .build()
+            };
+
+            Ok((proto_docs, pagination))
         })
         .await
         .map_err(|e| {
             tracing::error!("Task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| map_db_error(e, "Query error"))?;
-
-        let mut proto_docs: Vec<_> = documents
-            .iter()
-            .map(|doc| document_to_proto(doc, &req.collection))
-            .collect();
-
-        // Strip field-level read-denied fields
-        for doc in &mut proto_docs {
-            self.strip_denied_read_fields(doc, &def_fields, &auth_user);
-        }
-
-        // Build PaginationInfo
-        let pagination = if self.cursor_enabled {
-            PaginationBuilder::new(&documents, total, clamped_limit)
-                .cursor_mode(req.order_by.as_deref(), has_timestamps)
-                .cursor_state(before_cursor.is_some(), has_cursor)
-                .build()
-        } else {
-            PaginationBuilder::new(&documents, total, clamped_limit)
-                .page(page, internal_offset)
-                .build()
-        };
+        })??;
 
         Ok(Response::new(content::FindResponse {
             documents: proto_docs,
@@ -252,17 +285,9 @@ impl ContentService {
         request: Request<content::FindByIdRequest>,
     ) -> Result<Response<content::FindByIdResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
-
-        // Check read access
-        let access_result =
-            self.require_access(def.access.read.as_deref(), &auth_user, Some(&req.id), None)?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Read access denied"));
-        }
 
         let depth = req
             .depth
@@ -284,23 +309,44 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let db_kind = self.db_kind.clone();
         let hooks = def.hooks.clone();
         let fields = def.fields.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
-        let access_constraints = if let AccessResult::Constrained(ref filters) = access_result {
-            Some(filters.clone())
-        } else {
-            None
-        };
         let def_fields = def.fields.clone();
-        let registry = self.registry.clone();
         let pop_cache = self.populate_cache.clone();
         let def_owned = def;
-        let doc = tokio::task::spawn_blocking(move || {
-            runner.fire_before_read(&hooks, &collection, "find_by_id", HashMap::new())?;
+        let result = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
-            let conn = pool.get().context("DB connection")?;
+            // Auth + access (all on blocking thread)
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def_owned.access.read.as_deref(),
+                &auth_user,
+                Some(&id),
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Read access denied"));
+            }
+
+            let access_constraints = if let AccessResult::Constrained(ref filters) = access_result {
+                Some(filters.clone())
+            } else {
+                None
+            };
+
+            runner
+                .fire_before_read(&hooks, &collection, "find_by_id", HashMap::new())
+                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+
             let mut doc = ops::find_by_id_full(
                 &conn,
                 &collection,
@@ -309,7 +355,8 @@ impl ContentService {
                 locale_ctx.as_ref(),
                 access_constraints,
                 use_draft_version,
-            )?;
+            )
+            .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
 
             // Assemble sizes for upload collections
             if let Some(ref mut d) = doc
@@ -318,6 +365,7 @@ impl ContentService {
             {
                 upload::assemble_sizes_object(d, upload_config);
             }
+
             let ar_ctx = AfterReadCtx {
                 hooks: &hooks,
                 fields: &fields,
@@ -328,6 +376,7 @@ impl ContentService {
             };
             let mut doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));
             let select_slice = select.as_deref();
+
             // Populate relationships if depth > 0
             if depth > 0
                 && let Some(ref mut d) = doc
@@ -356,32 +405,51 @@ impl ContentService {
                     &mut visited,
                     &pop_opts,
                     cache_ref,
-                )?;
+                )
+                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
             }
+
             // Apply select field stripping for find_by_id
             if let Some(ref sel) = select
                 && let Some(ref mut d) = doc
             {
                 query::apply_select_to_document(d, sel);
             }
-            Ok::<_, anyhow::Error>(doc)
+
+            match doc {
+                Some(d) => {
+                    let mut proto_doc = document_to_proto(&d, &collection);
+
+                    // Strip field-level read-denied fields (using existing conn)
+                    let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                    let tx = conn.transaction().map_err(|e| {
+                        tracing::error!("Field access check tx error: {}", e);
+                        Status::internal("Internal error")
+                    })?;
+                    let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
+                    let _ = tx.commit();
+                    if let Some(ref mut s) = proto_doc.fields {
+                        for name in &denied {
+                            s.fields.remove(name);
+                        }
+                    }
+
+                    Ok(Some(proto_doc))
+                }
+                None => Err(Status::not_found(format!(
+                    "Document '{}' not found in '{}'",
+                    id, collection
+                ))),
+            }
         })
         .await
         .map_err(|e| {
             tracing::error!("Task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| map_db_error(e, "Query error"))?;
-
-        let mut proto_doc = doc.map(|d| document_to_proto(&d, &req.collection));
-
-        // Strip field-level read-denied fields
-        if let Some(ref mut d) = proto_doc {
-            self.strip_denied_read_fields(d, &def_fields, &auth_user);
-        }
+        })??;
 
         Ok(Response::new(content::FindByIdResponse {
-            document: proto_doc,
+            document: result,
         }))
     }
 
@@ -391,32 +459,47 @@ impl ContentService {
         request: Request<content::CountRequest>,
     ) -> Result<Response<content::CountResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
-
-        // Check read access
-        let access_result =
-            self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Read access denied"));
-        }
-
-        let filters = FilterBuilder::new(&def.fields, &access_result)
-            .where_json(req.r#where.as_deref())
-            .draft_filter(def.has_drafts(), !req.draft.unwrap_or(false))
-            .build()?;
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
 
         let pool = self.pool.clone();
+        let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
-        let def_owned = def;
+        let req_where = req.r#where.clone();
+        let has_drafts = def.has_drafts();
+        let draft = req.draft;
         let search = req.search.clone();
-        let count = tokio::task::spawn_blocking(move || {
-            let conn = pool.get().context("DB connection")?;
+        let def_owned = def;
+        let count = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+
+            // Auth + access (all on blocking thread)
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def_owned.access.read.as_deref(),
+                &auth_user,
+                None,
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Read access denied"));
+            }
+
+            let filters = FilterBuilder::new(&def_owned.fields, &access_result)
+                .where_json(req_where.as_deref())
+                .draft_filter(has_drafts, !draft.unwrap_or(false))
+                .build()?;
+
             query::count_with_search(
                 &conn,
                 &collection,
@@ -425,13 +508,13 @@ impl ContentService {
                 locale_ctx.as_ref(),
                 search.as_deref(),
             )
+            .map_err(|e| map_db_error(e, "Count error", &db_kind))
         })
         .await
         .map_err(|e| {
             tracing::error!("Task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| map_db_error(e, "Count error"))?;
+        })??;
 
         Ok(Response::new(content::CountResponse { count }))
     }

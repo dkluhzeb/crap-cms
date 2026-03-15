@@ -2,7 +2,6 @@
 //! DescribeCollection, Subscribe, ListVersions, RestoreVersion, ListJobs,
 //! TriggerJob, GetJobRun, ListJobRuns.
 
-use anyhow::{Context as _, anyhow};
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
@@ -12,10 +11,8 @@ use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
 use tonic::{Request, Response, Status};
 
 use crate::{
-    admin::server::load_auth_user,
     api::content,
     core::{
-        auth::validate_token,
         event::{EventOperation, EventTarget},
         job::JobRun,
     },
@@ -45,30 +42,51 @@ impl ContentService {
         request: Request<content::GetGlobalRequest>,
     ) -> Result<Response<content::GetGlobalResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_global_def(&req.slug)?;
-
-        // Check read access
-        let access_result =
-            self.require_access(def.access.read.as_deref(), &auth_user, None, None)?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Read access denied"));
-        }
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
         let hooks = def.hooks.clone();
         let def_fields = def.fields.clone();
         let fields = def_fields.clone();
         let slug = req.slug.clone();
-        let doc = tokio::task::spawn_blocking(move || {
-            runner.fire_before_read(&hooks, &slug, "get_global", HashMap::new())?;
-            let doc = ops::get_global(&pool, &slug, &def, locale_ctx.as_ref())?;
+        let proto_doc = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| {
+                tracing::error!("GetGlobal pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def.access.read.as_deref(),
+                &auth_user,
+                None,
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Read access denied"));
+            }
+
+            runner
+                .fire_before_read(&hooks, &slug, "get_global", HashMap::new())
+                .map_err(|e| {
+                    tracing::error!("GetGlobal hook error: {}", e);
+                    Status::internal("Internal error")
+                })?;
+            let doc = ops::get_global(&pool, &slug, &def, locale_ctx.as_ref()).map_err(|e| {
+                tracing::error!("GetGlobal query error: {}", e);
+                Status::internal("Internal error")
+            })?;
             let ar_ctx = AfterReadCtx {
                 hooks: &hooks,
                 fields: &fields,
@@ -78,20 +96,28 @@ impl ContentService {
                 ui_locale: None,
             };
             let doc = runner.apply_after_read(&ar_ctx, doc);
-            Ok::<_, anyhow::Error>(doc)
+
+            let mut proto_doc = document_to_proto(&doc, &slug);
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("Field access check tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
+            let _ = tx.commit();
+            if let Some(ref mut s) = proto_doc.fields {
+                for name in &denied {
+                    s.fields.remove(name);
+                }
+            }
+
+            Ok(proto_doc)
         })
         .await
         .map_err(|e| {
             tracing::error!("GetGlobal task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| {
-            tracing::error!("GetGlobal query error: {}", e);
-            Status::internal("Internal error")
-        })?;
-
-        let mut proto_doc = document_to_proto(&doc, &req.slug);
-        self.strip_denied_read_fields(&mut proto_doc, &def_fields, &auth_user);
+        })??;
 
         Ok(Response::new(content::GetGlobalResponse {
             document: Some(proto_doc),
@@ -104,17 +130,9 @@ impl ContentService {
         request: Request<content::UpdateGlobalRequest>,
     ) -> Result<Response<content::UpdateGlobalResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_global_def(&req.slug)?;
-
-        // Check update access
-        let access_result =
-            self.require_access(def.access.update.as_deref(), &auth_user, None, None)?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Update access denied"));
-        }
 
         // Extract join table data (preserves structured arrays/objects)
         let join_data = req
@@ -123,43 +141,59 @@ impl ContentService {
             .map(prost_struct_to_json_map)
             .unwrap_or_default();
 
-        // Strip field-level update-denied fields
         let mut data = req
             .data
             .map(|s| prost_struct_to_hashmap(&s))
             .unwrap_or_default();
-        {
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let mut conn = self
-                .pool
-                .get()
-                .map_err(|_| Status::internal("Database connection error"))?;
-            let tx = conn.transaction().map_err(|e| {
-                tracing::error!("UpdateGlobal field access tx error: {}", e);
-                Status::internal("Internal error")
-            })?;
-            let denied =
-                self.hook_runner
-                    .check_field_write_access(&def.fields, user_doc, "update", &tx);
-            // Read-only access check — commit result is irrelevant, rollback on drop is safe
-            let _ = tx.commit();
-            for name in &denied {
-                data.remove(name);
-            }
-        }
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
         let slug = req.slug.clone();
         let def_fields = def.fields.clone();
         let def_owned = def;
-        let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-        let (doc, _req_context) = tokio::task::spawn_blocking(move || {
-            service::update_global_document(
+        let (proto_doc, auth_user) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| {
+                tracing::error!("UpdateGlobal pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def_owned.access.update.as_deref(),
+                &auth_user,
+                None,
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Update access denied"));
+            }
+
+            // Strip field-level update-denied fields
+            {
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                let tx = conn.transaction().map_err(|e| {
+                    tracing::error!("UpdateGlobal field access tx error: {}", e);
+                    Status::internal("Internal error")
+                })?;
+                let denied =
+                    runner.check_field_write_access(&def_owned.fields, user_doc, "update", &tx);
+                let _ = tx.commit();
+                for name in &denied {
+                    data.remove(name);
+                }
+            }
+
+            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+            let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
+            let (doc, _req_context) = service::update_global_document(
                 &pool,
                 &runner,
                 &slug,
@@ -170,16 +204,33 @@ impl ContentService {
                     .build(),
                 user_doc.as_ref(),
             )
+            .map_err(|e| {
+                tracing::error!("UpdateGlobal error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            // Proto conversion + field stripping
+            let mut proto_doc = document_to_proto(&doc, &slug);
+            let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("Field read access tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
+            let _ = tx.commit();
+            if let Some(ref mut s) = proto_doc.fields {
+                for name in &denied {
+                    s.fields.remove(name);
+                }
+            }
+
+            Ok((proto_doc, auth_user))
         })
         .await
         .map_err(|e| {
             tracing::error!("UpdateGlobal task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| {
-            tracing::error!("UpdateGlobal error: {}", e);
-            Status::internal("Internal error")
-        })?;
+        })??;
 
         if let Some(c) = &self.populate_cache {
             c.clear();
@@ -197,15 +248,11 @@ impl ContentService {
                 live.as_ref(),
                 PublishEventInput::builder(EventTarget::Global, EventOperation::Update)
                     .collection(req.slug.clone())
-                    .document_id(doc.id.clone())
-                    .data(doc.fields.clone())
+                    .document_id(proto_doc.id.clone())
                     .edited_by(Self::event_user_from(&auth_user))
                     .build(),
             );
         }
-
-        let mut proto_doc = document_to_proto(&doc, &req.slug);
-        self.strip_denied_read_fields(&mut proto_doc, &def_fields, &auth_user);
 
         Ok(Response::new(content::UpdateGlobalResponse {
             document: Some(proto_doc),
@@ -324,6 +371,7 @@ impl ContentService {
         Response<Pin<Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>>>,
         Status,
     > {
+        let metadata = request.metadata().clone();
         let req = request.into_inner();
 
         let event_bus = self
@@ -331,28 +379,8 @@ impl ContentService {
             .as_ref()
             .ok_or_else(|| Status::unavailable("Live updates disabled"))?;
 
-        // Authenticate subscriber
-        let auth_user = if !req.token.is_empty() {
-            let claims = validate_token(&req.token, self.jwt_secret.as_ref())
-                .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
-            let pool = self.pool.clone();
-            let registry = self.registry.clone();
-            let locale_config = self.locale_config.clone();
-            tokio::task::spawn_blocking(move || {
-                load_auth_user(&pool, &registry, &claims, &locale_config)
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!("Subscribe auth task error: {}", e);
-                Status::internal("Internal error")
-            })?
-        } else {
-            None
-        };
+        let token = Self::extract_token(&metadata);
 
-        // Build allowed set: snapshot access at subscribe time
-        let mut allowed_collections: HashSet<String> = HashSet::new();
-        let mut allowed_globals: HashSet<String> = HashSet::new();
         let requested_ops: HashSet<String> = if req.operations.is_empty() {
             ["create", "update", "delete"]
                 .iter()
@@ -362,32 +390,37 @@ impl ContentService {
             req.operations.into_iter().collect()
         };
 
-        {
-            let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
-
-            // Check collection read access
-            let target_collections: Vec<String> = if req.collections.is_empty() {
-                self.registry
-                    .collections
-                    .keys()
-                    .map(|s| s.to_string())
-                    .collect()
-            } else {
-                req.collections
-            };
-
-            let mut conn = self.pool.get().map_err(|e| {
-                tracing::error!("Subscribe DB connection: {}", e);
+        let pool = self.pool.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let hook_runner = self.hook_runner.clone();
+        let collections_req = req.collections;
+        let globals_req = req.globals;
+        let (allowed_collections, allowed_globals) = tokio::task::spawn_blocking(move || {
+            let mut conn = pool.get().map_err(|e| {
+                tracing::error!("Subscribe pool error: {}", e);
                 Status::internal("Internal error")
             })?;
+
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
+
             let tx = conn.transaction().map_err(|e| {
                 tracing::error!("Subscribe tx error: {}", e);
                 Status::internal("Internal error")
             })?;
 
+            // Check collection read access
+            let target_collections: Vec<String> = if collections_req.is_empty() {
+                registry.collections.keys().map(|s| s.to_string()).collect()
+            } else {
+                collections_req
+            };
+
+            let mut allowed_collections: HashSet<String> = HashSet::new();
             for slug in &target_collections {
-                if let Some(def) = self.registry.get_collection(slug) {
-                    match self.hook_runner.check_access(
+                if let Some(def) = registry.get_collection(slug) {
+                    match hook_runner.check_access(
                         def.access.read.as_deref(),
                         user_doc,
                         None,
@@ -402,19 +435,16 @@ impl ContentService {
                 }
             }
 
-            let target_globals: Vec<String> = if req.globals.is_empty() {
-                self.registry
-                    .globals
-                    .keys()
-                    .map(|s| s.to_string())
-                    .collect()
+            let target_globals: Vec<String> = if globals_req.is_empty() {
+                registry.globals.keys().map(|s| s.to_string()).collect()
             } else {
-                req.globals
+                globals_req
             };
 
+            let mut allowed_globals: HashSet<String> = HashSet::new();
             for slug in &target_globals {
-                if let Some(def) = self.registry.get_global(slug) {
-                    match self.hook_runner.check_access(
+                if let Some(def) = registry.get_global(slug) {
+                    match hook_runner.check_access(
                         def.access.read.as_deref(),
                         user_doc,
                         None,
@@ -428,9 +458,15 @@ impl ContentService {
                     }
                 }
             }
-            // Read-only access check — commit result is irrelevant, rollback on drop is safe
             let _ = tx.commit();
-        }
+
+            Ok::<_, Status>((allowed_collections, allowed_globals))
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("Subscribe task error: {}", e);
+            Status::internal("Internal error")
+        })??;
 
         if allowed_collections.is_empty() && allowed_globals.is_empty() {
             return Err(Status::permission_denied(
@@ -505,7 +541,7 @@ impl ContentService {
         request: Request<content::ListVersionsRequest>,
     ) -> Result<Response<content::ListVersionsResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -516,31 +552,44 @@ impl ContentService {
             )));
         }
 
-        // Check read access
-        let access_result =
-            self.require_access(def.access.read.as_deref(), &auth_user, Some(&req.id), None)?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Read access denied"));
-        }
-
         let pool = self.pool.clone();
+        let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
         let limit = req.limit;
-        let versions = tokio::task::spawn_blocking(move || {
-            let conn = pool.get().context("DB connection")?;
-            query::list_versions(&conn, &collection, &id, limit, None)
+        let access_read = def.access.read.clone();
+        let versions = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| {
+                tracing::error!("ListVersions pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                access_read.as_deref(),
+                &auth_user,
+                Some(&id),
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Read access denied"));
+            }
+
+            query::list_versions(&conn, &collection, &id, limit, None).map_err(|e| {
+                tracing::error!("ListVersions error: {}", e);
+                Status::internal("Internal error")
+            })
         })
         .await
         .map_err(|e| {
             tracing::error!("ListVersions task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| {
-            tracing::error!("ListVersions error: {}", e);
-            Status::internal("Internal error")
-        })?;
+        })??;
 
         let proto_versions: Vec<content::VersionInfo> = versions
             .iter()
@@ -564,7 +613,7 @@ impl ContentService {
         request: Request<content::RestoreVersionRequest>,
     ) -> Result<Response<content::RestoreVersionResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
@@ -575,28 +624,42 @@ impl ContentService {
             )));
         }
 
-        // Check update access
-        let access_result = self.require_access(
-            def.access.update.as_deref(),
-            &auth_user,
-            Some(&req.document_id),
-            None,
-        )?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Update access denied"));
-        }
-
         let pool = self.pool.clone();
+        let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
         let collection = req.collection.clone();
         let document_id = req.document_id.clone();
         let version_id = req.version_id.clone();
+        let access_update = def.access.update.clone();
         let def_owned = def.clone();
         let locale_config = self.locale_config.clone();
-        let doc = tokio::task::spawn_blocking(move || {
-            let conn = pool.get().context("DB connection")?;
-            let version = query::find_version_by_id(&conn, &collection, &version_id)?
-                .ok_or_else(|| anyhow!("Version '{}' not found", version_id))?;
+        let doc = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| {
+                tracing::error!("RestoreVersion pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                access_update.as_deref(),
+                &auth_user,
+                Some(&document_id),
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Update access denied"));
+            }
+
+            let version = query::find_version_by_id(&conn, &collection, &version_id)
+                .map_err(|e| {
+                    tracing::error!("RestoreVersion error: {}", e);
+                    Status::internal("Internal error")
+                })?
+                .ok_or_else(|| Status::not_found(format!("Version '{}' not found", version_id)))?;
             query::restore_version(
                 &conn,
                 &collection,
@@ -606,16 +669,16 @@ impl ContentService {
                 &version.status,
                 &locale_config,
             )
+            .map_err(|e| {
+                tracing::error!("RestoreVersion error: {}", e);
+                Status::internal("Internal error")
+            })
         })
         .await
         .map_err(|e| {
             tracing::error!("RestoreVersion task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| {
-            tracing::error!("RestoreVersion error: {}", e);
-            Status::internal("Internal error")
-        })?;
+        })??;
 
         if let Some(c) = &self.populate_cache {
             c.clear();
@@ -634,11 +697,27 @@ impl ContentService {
         request: Request<content::ListJobsRequest>,
     ) -> Result<Response<content::ListJobsResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
 
-        if auth_user.is_none() {
-            return Err(Status::unauthenticated("Authentication required"));
-        }
+        let pool = self.pool.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = pool.get().map_err(|e| {
+                tracing::error!("ListJobs pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            if auth_user.is_none() {
+                return Err(Status::unauthenticated("Authentication required"));
+            }
+            Ok::<_, Status>(())
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("ListJobs task error: {}", e);
+            Status::internal("Internal error")
+        })??;
 
         let jobs: Vec<content::JobDefinitionInfo> = self
             .registry
@@ -666,11 +745,7 @@ impl ContentService {
         request: Request<content::TriggerJobRequest>,
     ) -> Result<Response<content::TriggerJobResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
-
-        if auth_user.is_none() {
-            return Err(Status::unauthenticated("Authentication required"));
-        }
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
 
         // Look up job definition
@@ -680,37 +755,57 @@ impl ContentService {
             .cloned()
             .ok_or_else(|| Status::not_found(format!("Job '{}' not found", req.slug)))?;
 
-        // Check access if defined
-        if let Some(ref access_ref) = job_def.access {
-            let result = self.require_access(Some(access_ref), &auth_user, None, None)?;
-
-            if matches!(result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Trigger access denied"));
-            }
-        }
-
+        let pool = self.pool.clone();
+        let hook_runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
         let data_json = req.data_json.unwrap_or_else(|| "{}".to_string());
-        let conn = self
-            .pool
-            .get()
-            .map_err(|_| Status::internal("Database connection error"))?;
+        let slug = req.slug.clone();
+        let access_ref = job_def.access.clone();
+        let retries = job_def.retries;
+        let queue = job_def.queue.clone();
+        let job_id = tokio::task::spawn_blocking(move || -> Result<String, Status> {
+            let mut conn = pool.get().map_err(|e| {
+                tracing::error!("TriggerJob pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
-        let job_run = jobs::insert_job(
-            &conn,
-            &req.slug,
-            &data_json,
-            "grpc",
-            job_def.retries + 1,
-            &job_def.queue,
-        )
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            if auth_user.is_none() {
+                return Err(Status::unauthenticated("Authentication required"));
+            }
+
+            // Check access if defined
+            if access_ref.is_some() {
+                let result = ContentService::check_access_blocking(
+                    access_ref.as_deref(),
+                    &auth_user,
+                    None,
+                    None,
+                    &hook_runner,
+                    &mut conn,
+                )?;
+
+                if matches!(result, AccessResult::Denied) {
+                    return Err(Status::permission_denied("Trigger access denied"));
+                }
+            }
+
+            let job_run = jobs::insert_job(&conn, &slug, &data_json, "grpc", retries + 1, &queue)
+                .map_err(|e| {
+                tracing::error!("Failed to queue job: {}", e);
+                Status::internal("Internal error")
+            })?;
+
+            Ok(job_run.id)
+        })
+        .await
         .map_err(|e| {
-            tracing::error!("Failed to queue job: {}", e);
+            tracing::error!("TriggerJob task error: {}", e);
             Status::internal("Internal error")
-        })?;
+        })??;
 
-        Ok(Response::new(content::TriggerJobResponse {
-            job_id: job_run.id,
-        }))
+        Ok(Response::new(content::TriggerJobResponse { job_id }))
     }
 
     /// Get details of a specific job run.
@@ -719,21 +814,36 @@ impl ContentService {
         request: Request<content::GetJobRunRequest>,
     ) -> Result<Response<content::GetJobRunResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
-
-        if auth_user.is_none() {
-            return Err(Status::unauthenticated("Authentication required"));
-        }
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
 
-        let conn = self
-            .pool
-            .get()
-            .map_err(|_| Status::internal("Database connection error"))?;
+        let pool = self.pool.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let id = req.id.clone();
+        let run = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let conn = pool.get().map_err(|e| {
+                tracing::error!("GetJobRun pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
-        let run = jobs::get_job_run(&conn, &req.id)
-            .map_err(|e| Status::internal(format!("Query error: {}", e)))?
-            .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", req.id)))?;
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            if auth_user.is_none() {
+                return Err(Status::unauthenticated("Authentication required"));
+            }
+
+            jobs::get_job_run(&conn, &id)
+                .map_err(|e| {
+                    tracing::error!("GetJobRun query error: {}", e);
+                    Status::internal("Internal error")
+                })?
+                .ok_or_else(|| Status::not_found(format!("Job run '{}' not found", id)))
+        })
+        .await
+        .map_err(|e| {
+            tracing::error!("GetJobRun task error: {}", e);
+            Status::internal("Internal error")
+        })??;
 
         Ok(Response::new(job_run_to_proto(&run)))
     }
@@ -744,32 +854,39 @@ impl ContentService {
         request: Request<content::ListJobRunsRequest>,
     ) -> Result<Response<content::ListJobRunsResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
-
-        if auth_user.is_none() {
-            return Err(Status::unauthenticated("Authentication required"));
-        }
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
 
-        let conn = self
-            .pool
-            .get()
-            .map_err(|_| Status::internal("Database connection error"))?;
-
+        let pool = self.pool.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let slug = req.slug.clone();
+        let status = req.status.clone();
         let limit = req.limit.unwrap_or(50);
         let offset = req.offset.unwrap_or(0);
+        let runs = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let conn = pool.get().map_err(|e| {
+                tracing::error!("ListJobRuns pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
 
-        let runs = jobs::list_job_runs(
-            &conn,
-            req.slug.as_deref(),
-            req.status.as_deref(),
-            limit,
-            offset,
-        )
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            if auth_user.is_none() {
+                return Err(Status::unauthenticated("Authentication required"));
+            }
+
+            jobs::list_job_runs(&conn, slug.as_deref(), status.as_deref(), limit, offset).map_err(
+                |e| {
+                    tracing::error!("ListJobRuns query error: {}", e);
+                    Status::internal("Internal error")
+                },
+            )
+        })
+        .await
         .map_err(|e| {
-            tracing::error!("Job query error: {}", e);
+            tracing::error!("ListJobRuns task error: {}", e);
             Status::internal("Internal error")
-        })?;
+        })??;
 
         let runs: Vec<content::GetJobRunResponse> = runs.iter().map(job_run_to_proto).collect();
 

@@ -29,17 +29,9 @@ impl ContentService {
         request: Request<content::CreateRequest>,
     ) -> Result<Response<content::CreateResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
-
-        // Check create access
-        let access_result =
-            self.require_access(def.access.create.as_deref(), &auth_user, None, None)?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Create access denied"));
-        }
 
         // Extract join table data (preserves structured arrays/objects)
         let join_data = req
@@ -72,30 +64,57 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let def_fields = def.fields.clone();
         let def_owned = def;
-        let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-        let (doc, _req_context) = tokio::task::spawn_blocking(move || {
-            // Strip field-level create-denied fields inside spawn_blocking
-            // to avoid pool.get() on the async thread
+        let (proto_doc, auth_user) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+
+            // Auth + access (all on blocking thread)
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def_owned.access.create.as_deref(),
+                &auth_user,
+                None,
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Create access denied"));
+            }
+
+            // Strip field-level create-denied fields
             {
-                let mut conn = pool.get().context("DB connection for field access")?;
-                let tx = conn.transaction().context("Transaction for field access")?;
-                let denied = runner.check_field_write_access(
-                    &def_owned.fields,
-                    user_doc.as_ref(),
-                    "create",
-                    &tx,
-                );
-                tx.commit().context("Commit field access transaction")?;
+                let tx = conn
+                    .transaction()
+                    .context("Transaction for field access")
+                    .map_err(|e| {
+                        tracing::error!("Field access tx error: {}", e);
+                        Status::internal("Internal error")
+                    })?;
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                let denied =
+                    runner.check_field_write_access(&def_owned.fields, user_doc, "create", &tx);
+                tx.commit()
+                    .context("Commit field access transaction")
+                    .map_err(|e| {
+                        tracing::error!("Field access commit error: {}", e);
+                        Status::internal("Internal error")
+                    })?;
                 for name in &denied {
                     data.remove(name);
                 }
             }
+
+            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+            let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-            service::create_document(
+            let (doc, _req_context) = service::create_document(
                 &pool,
                 &runner,
                 &collection,
@@ -108,13 +127,30 @@ impl ContentService {
                     .build(),
                 user_doc.as_ref(),
             )
+            .map_err(|e| map_db_error(e, "Create error", &db_kind))?;
+
+            // Proto conversion + field stripping
+            let mut proto_doc = document_to_proto(&doc, &collection);
+            let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("Field read access tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
+            let _ = tx.commit();
+            if let Some(ref mut s) = proto_doc.fields {
+                for name in &denied {
+                    s.fields.remove(name);
+                }
+            }
+
+            Ok((proto_doc, auth_user))
         })
         .await
         .map_err(|e| {
             tracing::error!("Task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| map_db_error(e, "Create error"))?;
+        })??;
 
         if let Some(c) = &self.populate_cache {
             c.clear();
@@ -130,36 +166,61 @@ impl ContentService {
                 ),
                 Err(_) => (Default::default(), false, None),
             };
+            // Extract doc ID from the proto_doc before publishing
+            let doc_id = proto_doc.id.clone();
+            let doc_fields = proto_doc
+                .fields
+                .as_ref()
+                .map(|s| {
+                    s.fields
+                        .iter()
+                        .map(|(k, v)| {
+                            (
+                                k.clone(),
+                                crate::api::service::convert::prost_value_to_json(v),
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             self.hook_runner.publish_event(
                 &self.event_bus,
                 &hooks,
                 live.as_ref(),
                 PublishEventInput::builder(EventTarget::Collection, EventOperation::Create)
                     .collection(req.collection.clone())
-                    .document_id(doc.id.clone())
-                    .data(doc.fields.clone())
+                    .document_id(doc_id.clone())
+                    .data(doc_fields)
                     .edited_by(Self::event_user_from(&auth_user))
                     .build(),
             );
 
             // Auto-send verification email for auth collections with verify_email
-            if should_verify
-                && let Some(user_email) = doc.fields.get("email").and_then(|v| v.as_str())
-            {
-                service::send_verification_email(
-                    self.pool.clone(),
-                    self.email_config.clone(),
-                    self.email_renderer.clone(),
-                    self.server_config.clone(),
-                    req.collection.clone(),
-                    doc.id.to_string(),
-                    user_email.to_string(),
-                );
+            if should_verify {
+                let email_val = proto_doc
+                    .fields
+                    .as_ref()
+                    .and_then(|s| s.fields.get("email"))
+                    .and_then(|v| {
+                        if let Some(prost_types::value::Kind::StringValue(s)) = &v.kind {
+                            Some(s.clone())
+                        } else {
+                            None
+                        }
+                    });
+                if let Some(user_email) = email_val {
+                    service::send_verification_email(
+                        self.pool.clone(),
+                        self.email_config.clone(),
+                        self.email_renderer.clone(),
+                        self.server_config.clone(),
+                        req.collection.clone(),
+                        doc_id.to_string(),
+                        user_email,
+                    );
+                }
             }
         }
-
-        let mut proto_doc = document_to_proto(&doc, &req.collection);
-        self.strip_denied_read_fields(&mut proto_doc, &def_fields, &auth_user);
 
         Ok(Response::new(content::CreateResponse {
             document: Some(proto_doc),
@@ -172,21 +233,9 @@ impl ContentService {
         request: Request<content::UpdateRequest>,
     ) -> Result<Response<content::UpdateResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
-
-        // Check update access
-        let access_result = self.require_access(
-            def.access.update.as_deref(),
-            &auth_user,
-            Some(&req.id),
-            None,
-        )?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Update access denied"));
-        }
 
         // Extract join table data (preserves structured arrays/objects)
         let join_data = req
@@ -221,27 +270,64 @@ impl ContentService {
         if req.unpublish.unwrap_or(false) && def.has_versions() {
             let pool = self.pool.clone();
             let runner = self.hook_runner.clone();
+            let jwt_secret = self.jwt_secret.clone();
+            let registry = self.registry.clone();
+            let db_kind = self.db_kind.clone();
             let collection = req.collection.clone();
             let id = req.id.clone();
             let def_fields = def.fields.clone();
             let def_owned = def;
-            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-            let doc = tokio::task::spawn_blocking(move || {
-                service::unpublish_document(
-                    &pool,
-                    &runner,
-                    &collection,
-                    &id,
-                    &def_owned,
-                    user_doc.as_ref(),
-                )
-            })
-            .await
-            .map_err(|e| {
-                tracing::error!("Task error: {}", e);
-                Status::internal("Internal error")
-            })?
-            .map_err(|e| map_db_error(e, "Unpublish error"))?;
+            let (proto_doc, auth_user) =
+                tokio::task::spawn_blocking(move || -> Result<_, Status> {
+                    let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+
+                    let auth_user =
+                        ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+                    let access_result = ContentService::check_access_blocking(
+                        def_owned.access.update.as_deref(),
+                        &auth_user,
+                        Some(&id),
+                        None,
+                        &runner,
+                        &mut conn,
+                    )?;
+
+                    if matches!(access_result, AccessResult::Denied) {
+                        return Err(Status::permission_denied("Update access denied"));
+                    }
+
+                    let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+                    let doc = service::unpublish_document(
+                        &pool,
+                        &runner,
+                        &collection,
+                        &id,
+                        &def_owned,
+                        user_doc.as_ref(),
+                    )
+                    .map_err(|e| map_db_error(e, "Unpublish error", &db_kind))?;
+
+                    let mut proto_doc = document_to_proto(&doc, &collection);
+                    let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
+                    let tx = conn.transaction().map_err(|e| {
+                        tracing::error!("Field read access tx error: {}", e);
+                        Status::internal("Internal error")
+                    })?;
+                    let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
+                    let _ = tx.commit();
+                    if let Some(ref mut s) = proto_doc.fields {
+                        for name in &denied {
+                            s.fields.remove(name);
+                        }
+                    }
+
+                    Ok((proto_doc, auth_user))
+                })
+                .await
+                .map_err(|e| {
+                    tracing::error!("Task error: {}", e);
+                    Status::internal("Internal error")
+                })??;
 
             if let Some(c) = &self.populate_cache {
                 c.clear();
@@ -260,13 +346,9 @@ impl ContentService {
                 PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
                     .collection(req.collection.clone())
                     .document_id(req.id.clone())
-                    .data(doc.fields.clone())
                     .edited_by(Self::event_user_from(&auth_user))
                     .build(),
             );
-
-            let mut proto_doc = document_to_proto(&doc, &req.collection);
-            self.strip_denied_read_fields(&mut proto_doc, &def_fields, &auth_user);
 
             return Ok(Response::new(content::UpdateResponse {
                 document: Some(proto_doc),
@@ -275,31 +357,58 @@ impl ContentService {
 
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
         let def_fields = def.fields.clone();
         let def_owned = def;
-        let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
-        let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
-        let (doc, _req_context) = tokio::task::spawn_blocking(move || {
-            // Strip field-level update-denied fields inside spawn_blocking
-            // to avoid pool.get() on the async thread
+        let (proto_doc, auth_user) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+
+            // Auth + access (all on blocking thread)
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def_owned.access.update.as_deref(),
+                &auth_user,
+                Some(&id),
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Update access denied"));
+            }
+
+            // Strip field-level update-denied fields
             {
-                let mut conn = pool.get().context("DB connection for field access")?;
-                let tx = conn.transaction().context("Transaction for field access")?;
-                let denied = runner.check_field_write_access(
-                    &def_owned.fields,
-                    user_doc.as_ref(),
-                    "update",
-                    &tx,
-                );
-                tx.commit().context("Commit field access transaction")?;
+                let tx = conn
+                    .transaction()
+                    .context("Transaction for field access")
+                    .map_err(|e| {
+                        tracing::error!("Field access tx error: {}", e);
+                        Status::internal("Internal error")
+                    })?;
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                let denied =
+                    runner.check_field_write_access(&def_owned.fields, user_doc, "update", &tx);
+                tx.commit()
+                    .context("Commit field access transaction")
+                    .map_err(|e| {
+                        tracing::error!("Field access commit error: {}", e);
+                        Status::internal("Internal error")
+                    })?;
                 for name in &denied {
                     data.remove(name);
                 }
             }
+
+            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+            let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
-            service::update_document(
+            let (doc, _req_context) = service::update_document(
                 &pool,
                 &runner,
                 &collection,
@@ -313,13 +422,30 @@ impl ContentService {
                     .build(),
                 user_doc.as_ref(),
             )
+            .map_err(|e| map_db_error(e, "Update error", &db_kind))?;
+
+            // Proto conversion + field stripping
+            let mut proto_doc = document_to_proto(&doc, &collection);
+            let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
+            let tx = conn.transaction().map_err(|e| {
+                tracing::error!("Field read access tx error: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
+            let _ = tx.commit();
+            if let Some(ref mut s) = proto_doc.fields {
+                for name in &denied {
+                    s.fields.remove(name);
+                }
+            }
+
+            Ok((proto_doc, auth_user))
         })
         .await
         .map_err(|e| {
             tracing::error!("Task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| map_db_error(e, "Update error"))?;
+        })??;
 
         if let Some(c) = &self.populate_cache {
             c.clear();
@@ -338,14 +464,10 @@ impl ContentService {
                 PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
                     .collection(req.collection.clone())
                     .document_id(req.id.clone())
-                    .data(doc.fields.clone())
                     .edited_by(Self::event_user_from(&auth_user))
                     .build(),
             );
         }
-
-        let mut proto_doc = document_to_proto(&doc, &req.collection);
-        self.strip_denied_read_fields(&mut proto_doc, &def_fields, &auth_user);
 
         Ok(Response::new(content::UpdateResponse {
             document: Some(proto_doc),
@@ -358,30 +480,38 @@ impl ContentService {
         request: Request<content::DeleteRequest>,
     ) -> Result<Response<content::DeleteResponse>, Status> {
         let metadata = request.metadata().clone();
-        let auth_user = self.extract_auth_user(&metadata);
+        let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        // Check delete access
-        let access_result = self.require_access(
-            def.access.delete.as_deref(),
-            &auth_user,
-            Some(&req.id),
-            None,
-        )?;
-
-        if matches!(access_result, AccessResult::Denied) {
-            return Err(Status::permission_denied("Delete access denied"));
-        }
-
         let pool = self.pool.clone();
         let runner = self.hook_runner.clone();
+        let jwt_secret = self.jwt_secret.clone();
+        let registry = self.registry.clone();
+        let db_kind = self.db_kind.clone();
         let def_clone = def.clone();
         let collection = req.collection.clone();
         let id = req.id.clone();
-        let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
         let config_dir = self.config_dir.clone();
-        let _req_context = tokio::task::spawn_blocking(move || {
+        let auth_user = tokio::task::spawn_blocking(move || -> Result<_, Status> {
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+
+            // Auth + access (all on blocking thread)
+            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let access_result = ContentService::check_access_blocking(
+                def_clone.access.delete.as_deref(),
+                &auth_user,
+                Some(&id),
+                None,
+                &runner,
+                &mut conn,
+            )?;
+
+            if matches!(access_result, AccessResult::Denied) {
+                return Err(Status::permission_denied("Delete access denied"));
+            }
+
+            let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             service::delete_document(
                 &pool,
                 &runner,
@@ -391,13 +521,15 @@ impl ContentService {
                 user_doc.as_ref(),
                 Some(&config_dir),
             )
+            .map_err(|e| map_db_error(e, "Delete error", &db_kind))?;
+
+            Ok(auth_user)
         })
         .await
         .map_err(|e| {
             tracing::error!("Task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| map_db_error(e, "Delete error"))?;
+        })??;
 
         if let Some(c) = &self.populate_cache {
             c.clear();

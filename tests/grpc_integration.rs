@@ -346,11 +346,9 @@ async fn delete_document() {
             draft: None,
         }))
         .await
-        .unwrap()
-        .into_inner()
-        .document;
+        .unwrap_err();
 
-    assert!(found.is_none());
+    assert_eq!(found.code(), tonic::Code::NotFound);
 }
 
 #[tokio::test]

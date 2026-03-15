@@ -173,13 +173,16 @@ impl ContentService {
     }
 
     /// Return the currently authenticated user from a JWT token.
+    /// Checks metadata `authorization` header first, falls back to body `token` field.
     pub(super) async fn me_impl(
         &self,
         request: Request<content::MeRequest>,
     ) -> Result<Response<content::MeResponse>, Status> {
-        let req = request.into_inner();
+        let metadata = request.metadata().clone();
+        let token = Self::extract_token(&metadata)
+            .ok_or_else(|| Status::unauthenticated("Missing token"))?;
 
-        let claims = auth::validate_token(&req.token, self.jwt_secret.as_ref())
+        let claims = auth::validate_token(&token, self.jwt_secret.as_ref())
             .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
 
         let def = self.get_collection_def(&claims.collection)?;
