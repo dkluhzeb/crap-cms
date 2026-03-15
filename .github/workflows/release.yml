@@ -130,7 +130,8 @@ jobs:
 
       - name: Install mdbook
         run: |
-          curl -sSL https://github.com/rust-lang/mdBook/releases/latest/download/mdbook-v0.4.44-x86_64-unknown-linux-gnu.tar.gz \
+          tag=$(curl -sSL -o /dev/null -w '%{url_effective}' https://github.com/rust-lang/mdBook/releases/latest | grep -oP '[^/]+$')
+          curl -sSL "https://github.com/rust-lang/mdBook/releases/download/${tag}/mdbook-${tag}-x86_64-unknown-linux-gnu.tar.gz" \
             | tar xz -C /usr/local/bin
 
       - name: Build book
