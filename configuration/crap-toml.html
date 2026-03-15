@@ -1,0 +1,674 @@
+<!DOCTYPE HTML>
+<html lang="en" class="navy sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>crap.toml - Crap CMS</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="Documentation for Crap CMS — a headless CMS in Rust with Lua hooks">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "navy";
+            const default_dark_theme = "navy";
+            window.path_to_searchindex_js = "../searchindex-bb4fd1e2.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-8f88eb31.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('navy')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Crap CMS</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://github.com/dkluhzeb/crap-cms" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="craptoml"><a class="header" href="#craptoml">crap.toml</a></h1>
+<p>The <code>crap.toml</code> file configures the server, database, authentication, and other global settings. All sections and fields are optional — sensible defaults are used when omitted.</p>
+<p>If <code>crap.toml</code> does not exist in the config directory, all defaults apply.</p>
+<h2 id="top-level-fields"><a class="header" href="#top-level-fields">Top-Level Fields</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crap_version</code></td><td>string</td><td>—</td><td>Expected CMS version. If set, a warning is logged on startup when the running binary doesn’t match. Supports exact (<code>"0.1.0"</code>) or prefix (<code>"0.1"</code>) matching.</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="environment-variable-substitution"><a class="header" href="#environment-variable-substitution">Environment Variable Substitution</a></h2>
+<p>String values in <code>crap.toml</code> can reference environment variables using <code>${VAR}</code> syntax:</p>
+<pre><code class="language-toml">[auth]
+secret = "${JWT_SECRET}"
+
+[database]
+path = "${DB_PATH:-data/crap.db}"
+
+[email]
+smtp_pass = "${SMTP_PASSWORD}"
+</code></pre>
+<ul>
+<li><code>${VAR}</code> — replaced with the value of <code>VAR</code>. Startup fails if <code>VAR</code> is not set.</li>
+<li><code>${VAR:-default}</code> — replaced with <code>VAR</code> if set and non-empty, otherwise uses <code>default</code>.</li>
+</ul>
+<p>Substitution only applies to string values — <code>${VAR}</code> patterns in comments are safely ignored.</p>
+<p>This allows keeping secrets out of config files and varying configuration across environments.</p>
+<h2 id="duration-values"><a class="header" href="#duration-values">Duration Values</a></h2>
+<p>Most time-related fields accept <strong>both</strong> an integer (seconds) and a human-readable string:</p>
+<pre><code class="language-toml"># These are equivalent:
+token_expiry = 7200
+token_expiry = "2h"
+
+# Supported suffixes: s (seconds), m (minutes), h (hours), d (days)
+poll_interval = "5s"
+login_lockout_seconds = "5m"
+auto_purge = "7d"
+</code></pre>
+<p>Fields that support this: <code>token_expiry</code>, <code>login_lockout_seconds</code>, <code>reset_token_expiry</code>, <code>forgot_password_window_seconds</code>, <code>max_age_seconds</code>, <code>poll_interval</code>, <code>cron_interval</code>, <code>heartbeat_interval</code>, <code>auto_purge</code>, <code>grpc_rate_limit_window</code>.</p>
+<h2 id="file-size-values"><a class="header" href="#file-size-values">File Size Values</a></h2>
+<p>File size fields accept <strong>both</strong> an integer (bytes) and a human-readable string:</p>
+<pre><code class="language-toml"># These are equivalent:
+max_file_size = 52428800
+max_file_size = "50MB"
+
+# Supported suffixes (case-insensitive, 1024-based):
+# B (bytes), KB (kilobytes), MB (megabytes), GB (gigabytes)
+max_file_size = "500B"
+max_file_size = "100KB"
+max_file_size = "1GB"
+</code></pre>
+<p>Fields that support this: <code>max_file_size</code> (global and per-collection).</p>
+<h2 id="full-reference"><a class="header" href="#full-reference">Full Reference</a></h2>
+<pre><code class="language-toml"># Optional: warn if the running binary doesn't match this version
+# crap_version = "0.1.0"
+
+[server]
+admin_port = 3000       # Admin UI port
+grpc_port = 50051       # gRPC API port
+host = "0.0.0.0"        # Bind address
+# compression = "off"   # "off" (default), "gzip", "br", "all"
+# grpc_reflection = true         # Enable gRPC server reflection (default: true)
+# grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled)
+# grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
+
+[database]
+path = "data/crap.db"   # Relative to config dir, or absolute
+pool_max_size = 32       # Max connections in the pool
+busy_timeout = "30s"     # SQLite busy timeout (integer ms or "30s", "1m")
+connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
+
+[admin]
+dev_mode = false         # Reload templates per-request (enable in development)
+require_auth = true      # Block admin when no auth collection exists (default: true)
+# access = "access.admin_panel"  # Lua function: which users can access the admin UI
+
+[auth]
+secret = ""              # JWT signing key. Empty = auto-generated and persisted to data/.jwt_secret
+token_expiry = "2h"      # Default token expiry (accepts integer seconds or "2h", "30m", etc.)
+max_login_attempts = 5   # Failed attempts before temporary lockout
+login_lockout_seconds = "5m"  # Lockout duration after max attempts
+reset_token_expiry = "1h"    # Password reset token expiry
+max_forgot_password_attempts = 3   # Forgot-password requests per email before rate limiting
+forgot_password_window_seconds = "15m"  # Rate limit window for forgot-password
+
+[auth.password_policy]
+min_length = 8              # Minimum password length
+max_length = 128            # Maximum password length (DoS protection)
+# require_uppercase = false # Require at least one uppercase letter
+# require_lowercase = false # Require at least one lowercase letter
+# require_digit = false     # Require at least one digit
+# require_special = false   # Require at least one special character
+
+[depth]
+default_depth = 1        # Default population depth for FindByID (Find always defaults to 0)
+max_depth = 10           # Hard cap on population depth (prevents abuse)
+# populate_cache = false           # Cross-request populate cache (opt-in)
+# populate_cache_max_age_secs = 0  # Periodic cache clear for external DB mutations
+
+[pagination]
+default_limit = 20      # Default limit for Find queries (when none is specified)
+max_limit = 1000         # Hard cap on limit — requests above this are clamped
+# mode = "page"          # "page" (offset) or "cursor" (keyset)
+
+[upload]
+max_file_size = "50MB"   # Global max file size (accepts bytes or "50MB", "1GB", etc.)
+
+[email]
+smtp_host = ""           # SMTP server hostname. Empty = email disabled (no-op)
+smtp_port = 587          # SMTP port (587 for STARTTLS, 465 for TLS, 25/1025 for plain)
+smtp_user = ""           # SMTP username
+smtp_pass = ""           # SMTP password
+smtp_tls = "starttls"    # "starttls" (default), "tls" (implicit TLS), "none" (plain/test)
+from_address = "noreply@example.com"  # Sender email address
+from_name = "Crap CMS"  # Sender display name
+# smtp_timeout = 30     # SMTP connection/send timeout in seconds (or "30s")
+
+[hooks]
+on_init = []             # Lua function refs to run at startup (with CRUD access)
+vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
+                         # Default: max(available_parallelism, 4), capped at 32
+
+[live]
+enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
+channel_capacity = 1024  # Broadcast channel buffer size
+
+[locale]
+default_locale = "en"    # Default locale code
+locales = ["en", "de"]   # Supported locales (empty = disabled)
+fallback = true          # Fall back to default locale if field is NULL
+
+[jobs]
+max_concurrent = 10          # Max concurrent job executions across all queues
+poll_interval = "1s"         # How often to poll for pending jobs
+cron_interval = "1m"         # How often to check cron schedules
+heartbeat_interval = "10s"   # How often running jobs update their heartbeat
+auto_purge = "7d"            # Auto-purge completed/failed runs older than this
+image_queue_batch_size = 10  # Pending image conversions to process per poll
+
+[access]
+default_deny = false     # When true, deny all operations without explicit access functions
+
+[cors]
+allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (default)
+                         # Use ["*"] to allow any origin
+allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
+allowed_headers = ["Content-Type", "Authorization"]
+exposed_headers = []     # Response headers exposed to the browser
+max_age_seconds = "1h"   # How long browsers cache preflight results
+allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] origins
+</code></pre>
+<h2 id="section-details"><a class="header" href="#section-details">Section Details</a></h2>
+<h3 id="server"><a class="header" href="#server"><code>[server]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>admin_port</code></td><td>integer</td><td><code>3000</code></td><td>Port for the Axum admin UI</td></tr>
+<tr><td><code>grpc_port</code></td><td>integer</td><td><code>50051</code></td><td>Port for the Tonic gRPC API</td></tr>
+<tr><td><code>host</code></td><td>string</td><td><code>"0.0.0.0"</code></td><td>Bind address for both servers</td></tr>
+<tr><td><code>compression</code></td><td>string</td><td><code>"off"</code></td><td>Response compression. <code>"off"</code> = disabled (default), <code>"gzip"</code> = gzip only, <code>"br"</code> = brotli only, <code>"all"</code> = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in.</td></tr>
+<tr><td><code>grpc_reflection</code></td><td>boolean</td><td><code>true</code></td><td>Enable gRPC server reflection. Allows clients (e.g., <code>grpcurl</code>, Postman) to discover services and methods without a <code>.proto</code> file. Disable in production to hide the API surface from unauthenticated probing.</td></tr>
+<tr><td><code>grpc_rate_limit_requests</code></td><td>integer</td><td><code>0</code></td><td>Maximum number of gRPC requests per IP within the sliding window. <code>0</code> = disabled (default). When enabled, requests exceeding the limit receive <code>ResourceExhausted</code> status.</td></tr>
+<tr><td><code>grpc_rate_limit_window</code></td><td>integer/string</td><td><code>60</code> (<code>"1m"</code>)</td><td>Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (<code>"1m"</code>, <code>"30s"</code>).</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="database"><a class="header" href="#database"><code>[database]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>path</code></td><td>string</td><td><code>"data/crap.db"</code></td><td>SQLite database path. Relative paths are resolved from the config directory. Absolute paths are used as-is.</td></tr>
+<tr><td><code>pool_max_size</code></td><td>integer</td><td><code>32</code></td><td>Maximum number of connections in the SQLite connection pool.</td></tr>
+<tr><td><code>busy_timeout</code></td><td>duration</td><td><code>30000</code> (<code>"30s"</code>)</td><td>SQLite busy timeout in milliseconds. Controls how long a connection waits for locks before returning SQLITE_BUSY. Accepts integer ms or human-readable string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
+<tr><td><code>connection_timeout</code></td><td>duration</td><td><code>5</code></td><td>Pool checkout timeout in seconds. How long <code>pool.get()</code> waits for a free connection before returning an error.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="admin"><a class="header" href="#admin"><code>[admin]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>dev_mode</code></td><td>boolean</td><td><code>false</code></td><td>When true, templates are reloaded from disk on every request. The scaffold sets this to <code>true</code> for new projects. Set to <code>false</code> in production for cached templates.</td></tr>
+<tr><td><code>require_auth</code></td><td>boolean</td><td><code>true</code></td><td>When true and no auth collection exists, the admin panel shows a “Setup Required” page (HTTP 503) instead of being open. Set to <code>false</code> for fully open dev mode without authentication.</td></tr>
+<tr><td><code>access</code></td><td>string</td><td>—</td><td>Lua function ref (e.g., <code>"access.admin_panel"</code>) that gates admin panel access. Called after successful authentication with <code>{ user }</code> context. Return <code>true</code> to allow, <code>false</code>/<code>nil</code> to deny (HTTP 403).</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="auth"><a class="header" href="#auth"><code>[auth]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>secret</code></td><td>string</td><td><code>""</code> (empty)</td><td>JWT signing secret. If empty, a random secret is auto-generated and <strong>persisted to <code>data/.jwt_secret</code></strong> so tokens survive restarts. Set explicitly if you prefer to manage the secret yourself.</td></tr>
+<tr><td><code>token_expiry</code></td><td>integer/string</td><td><code>7200</code> (<code>"2h"</code>)</td><td>Default JWT token lifetime. Accepts seconds (integer) or human-readable (<code>"2h"</code>, <code>"30m"</code>). Can be overridden per auth collection.</td></tr>
+<tr><td><code>max_login_attempts</code></td><td>integer</td><td><code>5</code></td><td>Maximum failed login attempts before temporary lockout. Tracked per email address.</td></tr>
+<tr><td><code>login_lockout_seconds</code></td><td>integer/string</td><td><code>300</code> (<code>"5m"</code>)</td><td>Duration of lockout after <code>max_login_attempts</code> is reached. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>reset_token_expiry</code></td><td>integer/string</td><td><code>3600</code> (<code>"1h"</code>)</td><td>Password reset token expiry. The “Forgot password” email link expires after this duration. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>max_forgot_password_attempts</code></td><td>integer</td><td><code>3</code></td><td>Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email.</td></tr>
+<tr><td><code>forgot_password_window_seconds</code></td><td>integer/string</td><td><code>900</code> (<code>"15m"</code>)</td><td>Rate limit window for forgot-password requests. Accepts seconds or human-readable.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="authpassword_policy"><a class="header" href="#authpassword_policy"><code>[auth.password_policy]</code></a></h3>
+<p>Password strength requirements applied to all password-setting paths (create, update, reset, CLI).</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>min_length</code></td><td>integer</td><td><code>8</code></td><td>Minimum password length.</td></tr>
+<tr><td><code>max_length</code></td><td>integer</td><td><code>128</code></td><td>Maximum password length. Prevents DoS via Argon2 on huge inputs.</td></tr>
+<tr><td><code>require_uppercase</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one uppercase letter (A-Z).</td></tr>
+<tr><td><code>require_lowercase</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one lowercase letter (a-z).</td></tr>
+<tr><td><code>require_digit</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one digit (0-9).</td></tr>
+<tr><td><code>require_special</code></td><td>boolean</td><td><code>false</code></td><td>Require at least one special (non-alphanumeric) character.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="depth"><a class="header" href="#depth"><code>[depth]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>default_depth</code></td><td>integer</td><td><code>1</code></td><td>Default population depth for <code>FindByID</code>. <code>Find</code> always defaults to <code>0</code>.</td></tr>
+<tr><td><code>max_depth</code></td><td>integer</td><td><code>10</code></td><td>Maximum allowed depth for any request. Hard cap to prevent excessive queries.</td></tr>
+<tr><td><code>populate_cache</code></td><td>boolean</td><td><code>false</code></td><td>Enable cross-request populate cache. Caches populated documents in memory, cleared on any write through the API. Improves read performance for repeated deep population. <strong>Opt-in</strong> because external DB modifications can cause stale reads.</td></tr>
+<tr><td><code>populate_cache_max_age_secs</code></td><td>integer</td><td><code>0</code></td><td>Periodic full cache clear interval in seconds. <code>0</code> = disabled (only write-through invalidation). Set <code>&gt; 0</code> to limit staleness when the database may be modified outside the API. Only used when <code>populate_cache = true</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="pagination"><a class="header" href="#pagination"><code>[pagination]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>default_limit</code></td><td>integer</td><td><code>20</code></td><td>Default page size applied to <code>Find</code> queries when no <code>limit</code> is specified.</td></tr>
+<tr><td><code>max_limit</code></td><td>integer</td><td><code>1000</code></td><td>Hard cap on <code>limit</code>. Requests above this value are clamped to <code>max_limit</code>.</td></tr>
+<tr><td><code>mode</code></td><td>string</td><td><code>"page"</code></td><td>Pagination mode: <code>"page"</code> (offset-based with <code>page</code>/<code>totalPages</code>) or <code>"cursor"</code> (keyset-based with <code>startCursor</code>/<code>endCursor</code>). In cursor mode, pass <code>after_cursor</code> (forward) or <code>before_cursor</code> (backward) instead of <code>page</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="upload"><a class="header" href="#upload"><code>[upload]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>max_file_size</code></td><td>integer/string</td><td><code>52428800</code> (<code>"50MB"</code>)</td><td>Global maximum file size. Accepts bytes (integer) or human-readable (<code>"50MB"</code>, <code>"1GB"</code>). Per-collection <code>max_file_size</code> overrides this. Also sets the HTTP body limit (with 1MB overhead for multipart encoding).</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="email"><a class="header" href="#email"><code>[email]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>smtp_host</code></td><td>string</td><td><code>""</code> (empty)</td><td>SMTP server hostname. <strong>Empty = email disabled</strong> — all send attempts log a warning and return Ok.</td></tr>
+<tr><td><code>smtp_port</code></td><td>integer</td><td><code>587</code></td><td>SMTP port. 587 is the standard STARTTLS port.</td></tr>
+<tr><td><code>smtp_user</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication username.</td></tr>
+<tr><td><code>smtp_pass</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication password.</td></tr>
+<tr><td><code>from_address</code></td><td>string</td><td><code>"noreply@example.com"</code></td><td>Sender email address for outgoing mail.</td></tr>
+<tr><td><code>from_name</code></td><td>string</td><td><code>"Crap CMS"</code></td><td>Sender display name.</td></tr>
+<tr><td><code>smtp_timeout</code></td><td>integer/string</td><td><code>30</code></td><td>SMTP connection and send timeout in seconds. Accepts integer or duration string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
+</tbody>
+</table>
+</div>
+<p>When configured, email enables password reset (“Forgot password?” link on login), email verification (optional per-collection), and the <code>crap.email.send()</code> Lua API.</p>
+<h3 id="hooks"><a class="header" href="#hooks"><code>[hooks]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>on_init</code></td><td>string[]</td><td><code>[]</code></td><td>Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup.</td></tr>
+<tr><td><code>max_depth</code></td><td>integer</td><td><code>3</code></td><td>Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. <code>0</code> = never run hooks from Lua CRUD.</td></tr>
+<tr><td><code>vm_pool_size</code></td><td>integer</td><td><code>max(cpus, 4)</code> capped at 32</td><td>Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores with a floor of 4 and ceiling of 32.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="live"><a class="header" href="#live"><code>[live]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>enabled</code></td><td>boolean</td><td><code>true</code></td><td>Enable live event streaming (SSE + gRPC Subscribe).</td></tr>
+<tr><td><code>channel_capacity</code></td><td>integer</td><td><code>1024</code></td><td>Internal broadcast channel buffer size. Increase if subscribers lag.</td></tr>
+</tbody>
+</table>
+</div>
+<p>See <a href="../live-updates/overview.html">Live Updates</a> for full documentation.</p>
+<h3 id="locale"><a class="header" href="#locale"><code>[locale]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>default_locale</code></td><td>string</td><td><code>"en"</code></td><td>Default locale code. Content without an explicit locale uses this.</td></tr>
+<tr><td><code>locales</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Supported locale codes. <strong>Empty = localization disabled.</strong> When empty, all fields behave as before (single value, no locale columns).</td></tr>
+<tr><td><code>fallback</code></td><td>boolean</td><td><code>true</code></td><td>When reading a non-default locale, fall back to the default locale value if the requested locale field is NULL. Uses <code>COALESCE</code> in SQL.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="jobs"><a class="header" href="#jobs"><code>[jobs]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>max_concurrent</code></td><td>integer</td><td><code>10</code></td><td>Maximum concurrent job executions across all queues.</td></tr>
+<tr><td><code>poll_interval</code></td><td>integer/string</td><td><code>1</code> (<code>"1s"</code>)</td><td>How often to poll for pending jobs. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>cron_interval</code></td><td>integer/string</td><td><code>60</code> (<code>"1m"</code>)</td><td>How often to evaluate cron schedules. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>heartbeat_interval</code></td><td>integer/string</td><td><code>10</code> (<code>"10s"</code>)</td><td>How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>auto_purge</code></td><td>integer/string</td><td><code>"7d"</code></td><td>Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (<code>"7d"</code>, <code>"24h"</code>, <code>"30m"</code>, <code>"3600"</code>). Absent = 7 days default.</td></tr>
+<tr><td><code>image_queue_batch_size</code></td><td>integer</td><td><code>10</code></td><td>Number of pending image format conversions to claim per scheduler poll cycle. Increase for higher throughput on capable hardware.</td></tr>
+</tbody>
+</table>
+</div>
+<h3 id="access"><a class="header" href="#access"><code>[access]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>default_deny</code></td><td>boolean</td><td><code>false</code></td><td>When <code>true</code>, collections and globals without an explicit access function deny all operations. When <code>false</code> (default), missing access functions allow all operations.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Enable this to enforce a “secure by default” posture — every collection must explicitly declare its access rules. Without it, collections without access functions are open to any authenticated (or anonymous) user.</p>
+<h3 id="cors"><a class="header" href="#cors"><code>[cors]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>allowed_origins</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Origins allowed to make cross-origin requests. <strong>Empty = CORS disabled</strong> (no layer added, default). Use <code>["*"]</code> to allow any origin.</td></tr>
+<tr><td><code>allowed_methods</code></td><td>string[]</td><td><code>["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]</code></td><td>HTTP methods allowed in CORS preflight.</td></tr>
+<tr><td><code>allowed_headers</code></td><td>string[]</td><td><code>["Content-Type", "Authorization"]</code></td><td>Request headers allowed in CORS requests.</td></tr>
+<tr><td><code>exposed_headers</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Response headers the browser is allowed to access.</td></tr>
+<tr><td><code>max_age_seconds</code></td><td>integer/string</td><td><code>3600</code> (<code>"1h"</code>)</td><td>How long browsers may cache preflight results. Accepts seconds or human-readable.</td></tr>
+<tr><td><code>allow_credentials</code></td><td>boolean</td><td><code>false</code></td><td>Allow credentials (cookies, <code>Authorization</code> header). <strong>Cannot be used with <code>allowed_origins = ["*"]</code></strong> — if both are set, credentials are ignored with a warning.</td></tr>
+</tbody>
+</table>
+</div>
+<p>When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC API (Tonic) servers. CORS runs before CSRF middleware, so preflight <code>OPTIONS</code> requests get CORS headers without triggering CSRF validation.</p>
+<h3 id="mcp"><a class="header" href="#mcp"><code>[mcp]</code></a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>enabled</code></td><td>boolean</td><td><code>false</code></td><td>Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports.</td></tr>
+<tr><td><code>http</code></td><td>boolean</td><td><code>false</code></td><td>Mount <code>POST /mcp</code> on the admin server for HTTP-based MCP access.</td></tr>
+<tr><td><code>config_tools</code></td><td>boolean</td><td><code>false</code></td><td>Enable config generation tools (<code>read_config_file</code>, <code>write_config_file</code>, <code>list_config_files</code>). Opt-in because they allow filesystem writes.</td></tr>
+<tr><td><code>api_key</code></td><td>string</td><td><code>""</code> (empty)</td><td>API key for HTTP transport. When set, requests must include <code>Authorization: Bearer &lt;key&gt;</code>. Empty = no auth.</td></tr>
+<tr><td><code>include_collections</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Only expose these collections via MCP. Empty = all collections.</td></tr>
+<tr><td><code>exclude_collections</code></td><td>string[]</td><td><code>[]</code> (empty)</td><td>Hide these collections from MCP. Takes precedence over <code>include_collections</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<p>See <a href="../mcp/overview.html">MCP Overview</a> for usage details.</p>
+<p>When locales are configured, any field with <code>localized = true</code> in its Lua definition gets one column per locale (<code>title__en</code>, <code>title__de</code>) instead of a single <code>title</code> column. The API accepts a <code>locale</code> parameter on Find, FindByID, Create, Update, GetGlobal, and UpdateGlobal to control which locale to read/write. The admin UI shows a locale selector in the edit sidebar.</p>
+<p><strong>Special locale values:</strong></p>
+<ul>
+<li><code>"all"</code> — returns all locales as nested objects: <code>{ title: { en: "Hello", de: "Hallo" } }</code></li>
+<li>Any locale code (e.g., <code>"en"</code>, <code>"de"</code>) — returns flat field names with that locale’s values</li>
+<li>Omitted — uses the default locale</li>
+</ul>
+<h2 id="example"><a class="header" href="#example">Example</a></h2>
+<pre><code class="language-toml">[server]
+admin_port = 8080
+grpc_port = 9090
+host = "127.0.0.1"
+
+[database]
+path = "/var/lib/crap/production.db"
+
+[admin]
+dev_mode = false
+# require_auth = true
+# access = "access.admin_panel"
+
+[auth]
+secret = "a-very-long-random-string-for-jwt-signing"
+token_expiry = "24h"
+max_login_attempts = 10
+login_lockout_seconds = "10m"
+
+[depth]
+default_depth = 1
+max_depth = 5
+
+[upload]
+max_file_size = "100MB"
+
+[email]
+smtp_host = "smtp.example.com"
+smtp_port = 587
+smtp_user = "noreply@example.com"
+smtp_pass = "your-smtp-password"
+from_address = "noreply@example.com"
+from_name = "My App"
+
+[hooks]
+on_init = ["hooks.seed.run"]
+vm_pool_size = 8
+</code></pre>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../getting-started/config-directory.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../locale/overview.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../getting-started/config-directory.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../locale/overview.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>
