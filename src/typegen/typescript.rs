@@ -7,7 +7,8 @@ use crate::core::{
 };
 
 use crate::typegen::{
-    is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
+    collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
+    sorted_global_slugs, to_pascal_case,
 };
 
 pub(super) fn render(registry: &Registry) -> String {
@@ -31,23 +32,21 @@ pub(super) fn render(registry: &Registry) -> String {
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
-    // Array sub-types
-    for f in &col.fields {
-        if f.field_type == FieldType::Array && !f.fields.is_empty() {
-            let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
-            writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
-            for sf in &f.fields {
-                write_field(out, sf);
-            }
-            writeln!(out, "}}\n").expect("write to String");
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&col.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
+        for sf in &stf.field.fields {
+            write_field(out, sf, &pascal);
         }
+        writeln!(out, "}}\n").expect("write to String");
     }
 
     // Input data interface
     writeln!(out, "/** Input data for creating/updating a {} */", pascal).expect("write to String");
     writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
     for f in &col.fields {
-        write_field_with_context(out, f, &pascal);
+        write_field(out, f, &pascal);
     }
     writeln!(out, "}}\n").expect("write to String");
 
@@ -71,10 +70,20 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&global.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        writeln!(out, "export interface {} {{", sub_pascal).expect("write to String");
+        for sf in &stf.field.fields {
+            write_field(out, sf, &pascal);
+        }
+        writeln!(out, "}}\n").expect("write to String");
+    }
+
     writeln!(out, "/** Input data for {} global */", pascal).expect("write to String");
     writeln!(out, "export interface {}Data {{", pascal).expect("write to String");
     for f in &global.fields {
-        write_field(out, f);
+        write_field(out, f, &pascal);
     }
     writeln!(out, "}}\n").expect("write to String");
 
@@ -121,18 +130,18 @@ fn write_polymorphic_comment(out: &mut String, field: &FieldDefinition, indent: 
     }
 }
 
-fn write_field(out: &mut String, field: &FieldDefinition) {
+fn write_field(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
     // Row is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Row {
         for sub in &field.fields {
-            write_field(out, sub);
+            write_field(out, sub, parent_pascal);
         }
         return;
     }
     // Collapsible is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Collapsible {
         for sub in &field.fields {
-            write_field(out, sub);
+            write_field(out, sub, parent_pascal);
         }
         return;
     }
@@ -140,37 +149,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
     if field.field_type == FieldType::Tabs {
         for tab in &field.tabs {
             for sub in &tab.fields {
-                write_field(out, sub);
-            }
-        }
-        return;
-    }
-    write_polymorphic_comment(out, field, "  ");
-    let ts_type = field_to_ts(field, "");
-    let opt = if is_optional(field) { "?" } else { "" };
-    writeln!(out, "  {}{}: {};", field.name, opt, ts_type).expect("write to String");
-}
-
-fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
-    // Row is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Row {
-        for sub in &field.fields {
-            write_field_with_context(out, sub, parent_pascal);
-        }
-        return;
-    }
-    // Collapsible is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Collapsible {
-        for sub in &field.fields {
-            write_field_with_context(out, sub, parent_pascal);
-        }
-        return;
-    }
-    // Tabs is layout-only — promote sub-fields to parent level (no prefix)
-    if field.field_type == FieldType::Tabs {
-        for tab in &field.tabs {
-            for sub in &tab.fields {
-                write_field_with_context(out, sub, parent_pascal);
+                write_field(out, sub, parent_pascal);
             }
         }
         return;
@@ -239,7 +218,13 @@ fn field_to_ts(field: &FieldDefinition, parent_pascal: &str) -> String {
                 format!("{}{}[]", parent_pascal, to_pascal_case(&field.name))
             }
         }
-        FieldType::Group => "Record<string, unknown>".to_string(),
+        FieldType::Group => {
+            if field.fields.is_empty() {
+                "Record<string, unknown>".to_string()
+            } else {
+                format!("{}{}", parent_pascal, to_pascal_case(&field.name))
+            }
+        }
         FieldType::Row => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
         FieldType::Collapsible => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "Record<string, unknown>".to_string(), // layout-only; sub-fields are promoted
@@ -477,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn typescript_group_field() {
+    fn typescript_group_field_empty() {
         let col = make_col(
             "items",
             vec![FieldDefinition::builder("seo", FieldType::Group).build()],
@@ -485,6 +470,39 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Record<string, unknown>"));
+    }
+
+    #[test]
+    fn typescript_group_field_with_subfields() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![
+                        text_field("title", true),
+                        text_field("description", false),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("export interface PostsSeo {"),
+            "group sub-type interface should be emitted: {}",
+            out
+        );
+        assert!(out.contains("  title: string;"), "group sub-field: {}", out);
+        assert!(
+            out.contains("  description?: string;"),
+            "group optional sub-field: {}",
+            out
+        );
+        assert!(
+            out.contains("PostsSeo"),
+            "parent should reference group sub-type: {}",
+            out
+        );
     }
 
     #[test]
@@ -815,6 +833,59 @@ mod tests {
         assert!(
             out.contains("  tab_field: string;"),
             "tabs sub-field should be promoted: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn typescript_array_nested_in_row() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("layout", FieldType::Row)
+                    .fields(vec![
+                        FieldDefinition::builder("items", FieldType::Array)
+                            .fields(vec![text_field("label", true)])
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("export interface PostsItems {"),
+            "array nested in Row should emit sub-type: {}",
+            out
+        );
+        assert!(
+            out.contains("PostsItems[]"),
+            "field should reference sub-type: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn typescript_global_with_subtypes() {
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = vec![
+            FieldDefinition::builder("nav", FieldType::Array)
+                .fields(vec![text_field("label", true), text_field("url", true)])
+                .build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title", true)])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(
+            out.contains("export interface SettingsNav {"),
+            "global array sub-type should be emitted: {}",
+            out
+        );
+        assert!(
+            out.contains("export interface SettingsSeo {"),
+            "global group sub-type should be emitted: {}",
             out
         );
     }

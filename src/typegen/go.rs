@@ -7,7 +7,8 @@ use crate::core::{
 };
 
 use crate::typegen::{
-    is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
+    collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
+    sorted_global_slugs, to_pascal_case,
 };
 
 pub(super) fn render(registry: &Registry) -> String {
@@ -29,22 +30,23 @@ pub(super) fn render(registry: &Registry) -> String {
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
-    // Array sub-types
-    for f in &col.fields {
-        if f.field_type == FieldType::Array && !f.fields.is_empty() {
-            let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
-            writeln!(
-                out,
-                "// {} represents a row in the {} array field.",
-                sub_pascal, f.name
-            )
-            .expect("write to String");
-            writeln!(out, "type {} struct {{", sub_pascal).expect("write to String");
-            for sf in &f.fields {
-                write_field(out, sf);
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&col.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        let kind_desc = match stf.kind {
+            crate::typegen::SubTypeKind::Array => {
+                format!("a row in the {} array field", stf.field.name)
             }
-            writeln!(out, "}}\n").expect("write to String");
+            crate::typegen::SubTypeKind::Group => {
+                format!("the {} group field", stf.field.name)
+            }
+        };
+        writeln!(out, "// {} represents {}.", sub_pascal, kind_desc).expect("write to String");
+        writeln!(out, "type {} struct {{", sub_pascal).expect("write to String");
+        for sf in &stf.field.fields {
+            write_field_with_context(out, sf, &pascal);
         }
+        writeln!(out, "}}\n").expect("write to String");
     }
 
     // Document struct (includes id, fields, and timestamps)
@@ -66,19 +68,34 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&global.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        let kind_desc = match stf.kind {
+            crate::typegen::SubTypeKind::Array => {
+                format!("a row in the {} array field", stf.field.name)
+            }
+            crate::typegen::SubTypeKind::Group => {
+                format!("the {} group field", stf.field.name)
+            }
+        };
+        writeln!(out, "// {} represents {}.", sub_pascal, kind_desc).expect("write to String");
+        writeln!(out, "type {} struct {{", sub_pascal).expect("write to String");
+        for sf in &stf.field.fields {
+            write_field_with_context(out, sf, &pascal);
+        }
+        writeln!(out, "}}\n").expect("write to String");
+    }
+
     writeln!(out, "// {} represents the {} global.", pascal, global.slug).expect("write to String");
     writeln!(out, "type {} struct {{", pascal).expect("write to String");
     writeln!(out, "\tID        string  `json:\"id\"`").expect("write to String");
     for f in &global.fields {
-        write_field(out, f);
+        write_field_with_context(out, f, &pascal);
     }
     writeln!(out, "\tCreatedAt *string `json:\"created_at,omitempty\"`").expect("write to String");
     writeln!(out, "\tUpdatedAt *string `json:\"updated_at,omitempty\"`").expect("write to String");
     writeln!(out, "}}\n").expect("write to String");
-}
-
-fn write_field(out: &mut String, field: &FieldDefinition) {
-    write_field_with_context(out, field, "");
 }
 
 fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
@@ -188,7 +205,14 @@ fn field_to_go(field: &FieldDefinition, parent_pascal: &str) -> (String, bool) {
                 (sub, true)
             }
         }
-        FieldType::Group => ("map[string]interface{}".to_string(), true),
+        FieldType::Group => {
+            if field.fields.is_empty() {
+                ("map[string]interface{}".to_string(), true)
+            } else {
+                let sub = format!("{}{}", parent_pascal, to_pascal_case(&field.name));
+                (sub, true)
+            }
+        }
         FieldType::Row => ("map[string]interface{}".to_string(), true), // layout-only; sub-fields are promoted
         FieldType::Collapsible => ("map[string]interface{}".to_string(), true), // layout-only; sub-fields are promoted
         FieldType::Tabs => ("map[string]interface{}".to_string(), true), // layout-only; sub-fields are promoted
@@ -417,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn go_group_field() {
+    fn go_group_field_empty() {
         let col = make_col(
             "posts",
             vec![FieldDefinition::builder("seo", FieldType::Group).build()],
@@ -425,6 +449,82 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("map[string]interface{}"));
+    }
+
+    #[test]
+    fn go_group_field_with_subfields() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![
+                        text_field("title", true),
+                        text_field("description", false),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("type PostsSeo struct {"),
+            "group sub-type struct should be emitted: {}",
+            out
+        );
+        assert!(out.contains("Title"), "group sub-field: {}", out);
+        assert!(
+            out.contains("PostsSeo"),
+            "parent should reference group sub-type: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn go_array_nested_in_row() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("layout", FieldType::Row)
+                    .fields(vec![
+                        FieldDefinition::builder("items", FieldType::Array)
+                            .fields(vec![text_field("label", true)])
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("type PostsItems struct {"),
+            "array nested in Row should emit sub-type: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn go_global_with_subtypes() {
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = vec![
+            FieldDefinition::builder("nav", FieldType::Array)
+                .fields(vec![text_field("label", true)])
+                .build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title", true)])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(
+            out.contains("type SettingsNav struct {"),
+            "global array sub-type: {}",
+            out
+        );
+        assert!(
+            out.contains("type SettingsSeo struct {"),
+            "global group sub-type: {}",
+            out
+        );
     }
 
     #[test]

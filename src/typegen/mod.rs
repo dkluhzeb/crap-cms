@@ -160,6 +160,49 @@ pub(crate) fn sorted_global_slugs(registry: &Registry) -> Vec<&Slug> {
     slugs
 }
 
+/// Distinguishes Array from Group for sub-type rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SubTypeKind {
+    Array,
+    Group,
+}
+
+/// A field that needs a named sub-type definition.
+pub(crate) struct SubTypeField<'a> {
+    pub field: &'a FieldDefinition,
+    pub kind: SubTypeKind,
+}
+
+/// Recursively collect Array and Group fields that need sub-type definitions.
+/// Walks through Row, Collapsible, Tabs, and Group containers to find nested
+/// fields at any depth. Returns `(kind, field)` pairs where kind distinguishes
+/// Array from Group for naming/rendering.
+pub(crate) fn collect_sub_type_fields(fields: &[FieldDefinition]) -> Vec<SubTypeField<'_>> {
+    let mut result = Vec::new();
+    for f in fields {
+        if f.field_type == FieldType::Array && !f.fields.is_empty() {
+            result.push(SubTypeField {
+                field: f,
+                kind: SubTypeKind::Array,
+            });
+            result.extend(collect_sub_type_fields(&f.fields));
+        } else if f.field_type == FieldType::Group && !f.fields.is_empty() {
+            result.push(SubTypeField {
+                field: f,
+                kind: SubTypeKind::Group,
+            });
+            result.extend(collect_sub_type_fields(&f.fields));
+        } else if matches!(f.field_type, FieldType::Row | FieldType::Collapsible) {
+            result.extend(collect_sub_type_fields(&f.fields));
+        } else if f.field_type == FieldType::Tabs {
+            for tab in &f.tabs {
+                result.extend(collect_sub_type_fields(&tab.fields));
+            }
+        }
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +372,114 @@ mod tests {
         let slugs = sorted_global_slugs(&registry);
         let expected: Vec<Slug> = vec!["about".into(), "settings".into()];
         assert_eq!(slugs, expected.iter().collect::<Vec<&Slug>>());
+    }
+
+    fn text_field(name: &str, required: bool) -> FieldDefinition {
+        FieldDefinition::builder(name, FieldType::Text)
+            .required(required)
+            .build()
+    }
+
+    #[test]
+    fn collect_sub_type_fields_top_level() {
+        let fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("label", true)])
+                .build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title", true)])
+                .build(),
+            text_field("name", true),
+        ];
+        let result = collect_sub_type_fields(&fields);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].field.name, "items");
+        assert_eq!(result[0].kind, SubTypeKind::Array);
+        assert_eq!(result[1].field.name, "seo");
+        assert_eq!(result[1].kind, SubTypeKind::Group);
+    }
+
+    #[test]
+    fn collect_sub_type_fields_nested_in_layout() {
+        use crate::core::field::FieldTab;
+        let fields = vec![
+            FieldDefinition::builder("row_container", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("row_items", FieldType::Array)
+                        .fields(vec![text_field("val", true)])
+                        .build(),
+                ])
+                .build(),
+            FieldDefinition::builder("collapse", FieldType::Collapsible)
+                .fields(vec![
+                    FieldDefinition::builder("meta", FieldType::Group)
+                        .fields(vec![text_field("key", true)])
+                        .build(),
+                ])
+                .build(),
+            FieldDefinition::builder("tabs", FieldType::Tabs)
+                .tabs(vec![FieldTab::new(
+                    "T",
+                    vec![
+                        FieldDefinition::builder("tab_items", FieldType::Array)
+                            .fields(vec![text_field("x", true)])
+                            .build(),
+                    ],
+                )])
+                .build(),
+        ];
+        let result = collect_sub_type_fields(&fields);
+        let names: Vec<&str> = result.iter().map(|s| s.field.name.as_str()).collect();
+        assert!(
+            names.contains(&"row_items"),
+            "array inside Row: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"meta"),
+            "group inside Collapsible: {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"tab_items"),
+            "array inside Tabs: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn collect_sub_type_fields_recursive() {
+        let fields = vec![
+            FieldDefinition::builder("outer", FieldType::Array)
+                .fields(vec![
+                    FieldDefinition::builder("inner", FieldType::Array)
+                        .fields(vec![text_field("x", true)])
+                        .build(),
+                ])
+                .build(),
+            FieldDefinition::builder("group", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("nested_arr", FieldType::Array)
+                        .fields(vec![text_field("y", true)])
+                        .build(),
+                ])
+                .build(),
+        ];
+        let result = collect_sub_type_fields(&fields);
+        let names: Vec<&str> = result.iter().map(|s| s.field.name.as_str()).collect();
+        assert_eq!(names, vec!["outer", "inner", "group", "nested_arr"]);
+    }
+
+    #[test]
+    fn collect_sub_type_fields_skips_empty() {
+        let fields = vec![
+            FieldDefinition::builder("empty_arr", FieldType::Array).build(),
+            FieldDefinition::builder("empty_group", FieldType::Group).build(),
+        ];
+        let result = collect_sub_type_fields(&fields);
+        assert!(
+            result.is_empty(),
+            "empty Array/Group should not produce sub-types"
+        );
     }
 }

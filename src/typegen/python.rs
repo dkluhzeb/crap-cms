@@ -7,7 +7,8 @@ use crate::core::{
 };
 
 use crate::typegen::{
-    is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
+    collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
+    sorted_global_slugs, to_pascal_case,
 };
 
 pub(super) fn render(registry: &Registry) -> String {
@@ -34,25 +35,20 @@ pub(super) fn render(registry: &Registry) -> String {
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
-    // Array sub-types
-    for f in &col.fields {
-        if f.field_type == FieldType::Array && !f.fields.is_empty() {
-            let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
-            writeln!(out, "@dataclass").expect("write to String");
-            writeln!(out, "class {}:", sub_pascal).expect("write to String");
-            let (required, optional): (Vec<_>, Vec<_>) =
-                f.fields.iter().partition(|sf| !is_optional(sf));
-            for sf in &required {
-                write_field(out, sf);
-            }
-            for sf in &optional {
-                write_field(out, sf);
-            }
-            if f.fields.is_empty() {
-                writeln!(out, "    pass").expect("write to String");
-            }
-            writeln!(out).expect("write to String");
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&col.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        writeln!(out, "@dataclass").expect("write to String");
+        writeln!(out, "class {}:", sub_pascal).expect("write to String");
+        let (required, optional): (Vec<_>, Vec<_>) =
+            stf.field.fields.iter().partition(|sf| !is_optional(sf));
+        for sf in &required {
+            write_field_with_context(out, sf, &pascal);
         }
+        for sf in &optional {
+            write_field_with_context(out, sf, &pascal);
+        }
+        writeln!(out).expect("write to String");
     }
 
     // Document class (required fields first, then optional with defaults)
@@ -69,13 +65,13 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
     // Required fields first
     for f in &col.fields {
         if !is_optional(f) {
-            write_field(out, f);
+            write_field_with_context(out, f, &pascal);
         }
     }
     // Optional fields
     for f in &col.fields {
         if is_optional(f) {
-            write_field(out, f);
+            write_field_with_context(out, f, &pascal);
         }
     }
     if col.timestamps {
@@ -88,18 +84,34 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&global.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        writeln!(out, "@dataclass").expect("write to String");
+        writeln!(out, "class {}:", sub_pascal).expect("write to String");
+        let (required, optional): (Vec<_>, Vec<_>) =
+            stf.field.fields.iter().partition(|sf| !is_optional(sf));
+        for sf in &required {
+            write_field_with_context(out, sf, &pascal);
+        }
+        for sf in &optional {
+            write_field_with_context(out, sf, &pascal);
+        }
+        writeln!(out).expect("write to String");
+    }
+
     writeln!(out, "@dataclass").expect("write to String");
     writeln!(out, "class {}:", pascal).expect("write to String");
     writeln!(out, "    id: str = \"\"").expect("write to String");
 
     for f in &global.fields {
         if !is_optional(f) {
-            write_field(out, f);
+            write_field_with_context(out, f, &pascal);
         }
     }
     for f in &global.fields {
         if is_optional(f) {
-            write_field(out, f);
+            write_field_with_context(out, f, &pascal);
         }
     }
     writeln!(out, "    created_at: Optional[str] = None").expect("write to String");
@@ -107,18 +119,18 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     writeln!(out).expect("write to String");
 }
 
-fn write_field(out: &mut String, field: &FieldDefinition) {
+fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
     // Row is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Row {
         for sub in &field.fields {
-            write_field(out, sub);
+            write_field_with_context(out, sub, parent_pascal);
         }
         return;
     }
     // Collapsible is layout-only — promote sub-fields to parent level (no prefix)
     if field.field_type == FieldType::Collapsible {
         for sub in &field.fields {
-            write_field(out, sub);
+            write_field_with_context(out, sub, parent_pascal);
         }
         return;
     }
@@ -126,7 +138,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
     if field.field_type == FieldType::Tabs {
         for tab in &field.tabs {
             for sub in &tab.fields {
-                write_field(out, sub);
+                write_field_with_context(out, sub, parent_pascal);
             }
         }
         return;
@@ -140,7 +152,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
         writeln!(out, "    # Polymorphic relationship — targets: {}", targets)
             .expect("write to String");
     }
-    let py_type = field_to_py(field);
+    let py_type = field_to_py(field, parent_pascal);
 
     if is_optional(field) {
         writeln!(out, "    {}: Optional[{}] = None", field.name, py_type).expect("write to String");
@@ -150,7 +162,7 @@ fn write_field(out: &mut String, field: &FieldDefinition) {
     }
 }
 
-fn field_to_py(field: &FieldDefinition) -> String {
+fn field_to_py(field: &FieldDefinition, parent_pascal: &str) -> String {
     match &field.field_type {
         FieldType::Text => {
             if field.has_many {
@@ -193,8 +205,20 @@ fn field_to_py(field: &FieldDefinition) -> String {
             Some(rc) if rc.has_many => "list[str]".to_string(),
             _ => "str".to_string(),
         },
-        FieldType::Array => "list[dict]".to_string(),
-        FieldType::Group => "dict".to_string(),
+        FieldType::Array => {
+            if field.fields.is_empty() {
+                "list[dict]".to_string()
+            } else {
+                format!("list[{}{}]", parent_pascal, to_pascal_case(&field.name))
+            }
+        }
+        FieldType::Group => {
+            if field.fields.is_empty() {
+                "dict".to_string()
+            } else {
+                format!("{}{}", parent_pascal, to_pascal_case(&field.name))
+            }
+        }
         FieldType::Row => "dict".to_string(), // layout-only; sub-fields are promoted
         FieldType::Collapsible => "dict".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "dict".to_string(), // layout-only; sub-fields are promoted
@@ -431,13 +455,19 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         // Sub-type should be generated
-        assert!(out.contains("class PostsItems:"));
+        assert!(out.contains("class PostsItems:"), "sub-type class: {}", out);
         assert!(out.contains("label: str = \"\""));
         assert!(out.contains("value: Optional[str] = None"));
+        // Parent should reference sub-type
+        assert!(
+            out.contains("list[PostsItems]"),
+            "parent should reference sub-type: {}",
+            out
+        );
     }
 
     #[test]
-    fn python_group_field() {
+    fn python_group_field_empty() {
         let col = make_col(
             "items",
             vec![FieldDefinition::builder("seo", FieldType::Group).build()],
@@ -445,6 +475,82 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(out.contains("Optional[dict]"));
+    }
+
+    #[test]
+    fn python_group_field_with_subfields() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![
+                        text_field("title", true),
+                        text_field("description", false),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("class PostsSeo:"),
+            "group sub-type class should be emitted: {}",
+            out
+        );
+        assert!(out.contains("title: str"), "group sub-field: {}", out);
+        assert!(
+            out.contains("description: Optional[str]"),
+            "group optional sub-field: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn python_array_nested_in_row() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("layout", FieldType::Row)
+                    .fields(vec![
+                        FieldDefinition::builder("items", FieldType::Array)
+                            .fields(vec![text_field("label", true)])
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("class PostsItems:"),
+            "array nested in Row should emit sub-type: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn python_global_with_subtypes() {
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = vec![
+            FieldDefinition::builder("nav", FieldType::Array)
+                .fields(vec![text_field("label", true)])
+                .build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title", true)])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(
+            out.contains("class SettingsNav:"),
+            "global array sub-type: {}",
+            out
+        );
+        assert!(
+            out.contains("class SettingsSeo:"),
+            "global group sub-type: {}",
+            out
+        );
     }
 
     #[test]

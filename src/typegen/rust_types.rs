@@ -7,7 +7,8 @@ use crate::core::{
 };
 
 use crate::typegen::{
-    is_optional, rel_has_many, sorted_collection_slugs, sorted_global_slugs, to_pascal_case,
+    collect_sub_type_fields, is_optional, rel_has_many, sorted_collection_slugs,
+    sorted_global_slugs, to_pascal_case,
 };
 
 pub(super) fn render(registry: &Registry) -> String {
@@ -32,18 +33,15 @@ pub(super) fn render(registry: &Registry) -> String {
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
-    // Array sub-types
-    for f in &col.fields {
-        if f.field_type == FieldType::Array && !f.fields.is_empty() {
-            let sub_pascal = format!("{}{}", pascal, to_pascal_case(&f.name));
-            writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]")
-                .expect("write to String");
-            writeln!(out, "pub struct {} {{", sub_pascal).expect("write to String");
-            for sf in &f.fields {
-                write_field(out, sf);
-            }
-            writeln!(out, "}}\n").expect("write to String");
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&col.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]").expect("write to String");
+        writeln!(out, "pub struct {} {{", sub_pascal).expect("write to String");
+        for sf in &stf.field.fields {
+            write_field_with_context(out, sf, &pascal);
         }
+        writeln!(out, "}}\n").expect("write to String");
     }
 
     // Document struct
@@ -73,11 +71,22 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
+    // Sub-types (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&global.fields) {
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
+        writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]").expect("write to String");
+        writeln!(out, "pub struct {} {{", sub_pascal).expect("write to String");
+        for sf in &stf.field.fields {
+            write_field_with_context(out, sf, &pascal);
+        }
+        writeln!(out, "}}\n").expect("write to String");
+    }
+
     writeln!(out, "#[derive(Debug, Clone, Serialize, Deserialize)]").expect("write to String");
     writeln!(out, "pub struct {} {{", pascal).expect("write to String");
     writeln!(out, "    pub id: String,").expect("write to String");
     for f in &global.fields {
-        write_field(out, f);
+        write_field_with_context(out, f, &pascal);
     }
     writeln!(
         out,
@@ -92,10 +101,6 @@ fn render_global(out: &mut String, global: &GlobalDefinition) {
     .expect("write to String");
     writeln!(out, "    pub updated_at: Option<String>,").expect("write to String");
     writeln!(out, "}}\n").expect("write to String");
-}
-
-fn write_field(out: &mut String, field: &FieldDefinition) {
-    write_field_with_context(out, field, "");
 }
 
 fn write_field_with_context(out: &mut String, field: &FieldDefinition, parent_pascal: &str) {
@@ -199,7 +204,13 @@ fn field_to_rust(field: &FieldDefinition, parent_pascal: &str) -> String {
                 format!("Vec<{}{}>", parent_pascal, to_pascal_case(&field.name))
             }
         }
-        FieldType::Group => "serde_json::Value".to_string(),
+        FieldType::Group => {
+            if field.fields.is_empty() {
+                "serde_json::Value".to_string()
+            } else {
+                format!("{}{}", parent_pascal, to_pascal_case(&field.name))
+            }
+        }
         FieldType::Row => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
         FieldType::Collapsible => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "serde_json::Value".to_string(), // layout-only; sub-fields are promoted
@@ -414,11 +425,91 @@ mod tests {
         render_collection(&mut out, &col);
         assert!(
             out.contains("Option<serde_json::Value>"),
-            "group should be serde_json::Value"
+            "empty group should be serde_json::Value"
         );
         assert!(
             out.contains("Option<Vec<serde_json::Value>>"),
             "blocks should be Vec<serde_json::Value>"
+        );
+    }
+
+    #[test]
+    fn rust_group_field_with_subfields() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("seo", FieldType::Group)
+                    .fields(vec![
+                        text_field("title", true),
+                        text_field("description", false),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("pub struct PostsSeo {"),
+            "group sub-type struct should be emitted: {}",
+            out
+        );
+        assert!(
+            out.contains("pub title: String,"),
+            "group sub-field: {}",
+            out
+        );
+        assert!(
+            out.contains("pub description: Option<String>,"),
+            "group optional sub-field: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn rust_array_nested_in_row() {
+        let col = make_col(
+            "posts",
+            vec![
+                FieldDefinition::builder("layout", FieldType::Row)
+                    .fields(vec![
+                        FieldDefinition::builder("items", FieldType::Array)
+                            .fields(vec![text_field("label", true)])
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("pub struct PostsItems {"),
+            "array nested in Row should emit sub-type: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn rust_global_with_subtypes() {
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = vec![
+            FieldDefinition::builder("nav", FieldType::Array)
+                .fields(vec![text_field("label", true)])
+                .build(),
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title", true)])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(
+            out.contains("pub struct SettingsNav {"),
+            "global array sub-type: {}",
+            out
+        );
+        assert!(
+            out.contains("pub struct SettingsSeo {"),
+            "global group sub-type: {}",
+            out
         );
     }
 

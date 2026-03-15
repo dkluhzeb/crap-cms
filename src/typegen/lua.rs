@@ -9,7 +9,9 @@ use crate::{
     db::query::get_column_names,
 };
 
-use crate::typegen::{is_optional, rel_has_many, to_pascal_case};
+use crate::typegen::{
+    SubTypeKind, collect_sub_type_fields, is_optional, rel_has_many, to_pascal_case,
+};
 
 /// Render all Lua type definitions.
 pub(super) fn render(registry: &Registry) -> String {
@@ -34,36 +36,18 @@ pub(super) fn render(registry: &Registry) -> String {
     out
 }
 
-/// Recursively collect all array fields (including those inside layout wrappers).
-fn collect_array_fields(fields: &[FieldDefinition]) -> Vec<&FieldDefinition> {
-    let mut result = Vec::new();
-    for f in fields {
-        if f.field_type == FieldType::Array && !f.fields.is_empty() {
-            result.push(f);
-            // Also recurse into the array's own sub-fields (nested arrays)
-            result.extend(collect_array_fields(&f.fields));
-        } else if matches!(
-            f.field_type,
-            FieldType::Row | FieldType::Collapsible | FieldType::Group
-        ) {
-            result.extend(collect_array_fields(&f.fields));
-        } else if f.field_type == FieldType::Tabs {
-            for tab in &f.tabs {
-                result.extend(collect_array_fields(&tab.fields));
-            }
-        }
-    }
-    result
-}
-
 fn render_collection(out: &mut String, col: &CollectionDefinition) {
     let pascal = to_pascal_case(&col.slug);
 
-    // Array sub-type classes (emitted before the collection class that references them)
-    for f in collect_array_fields(&col.fields) {
-        let sub_pascal = to_pascal_case(&f.name);
-        writeln!(out, "---@class crap.array_row.{sub_pascal}").expect("write to String");
-        for sf in &f.fields {
+    // Sub-type classes (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&col.fields) {
+        let sub_pascal = to_pascal_case(&stf.field.name);
+        let namespace = match stf.kind {
+            SubTypeKind::Array => "array_row",
+            SubTypeKind::Group => "group",
+        };
+        writeln!(out, "---@class crap.{namespace}.{sub_pascal}").expect("write to String");
+        for sf in &stf.field.fields {
             write_field(out, sf);
         }
         out.push('\n');
@@ -150,11 +134,15 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 fn render_global(out: &mut String, global: &GlobalDefinition) {
     let pascal = to_pascal_case(&global.slug);
 
-    // Array sub-type classes (same as collections — recurse into layout wrappers)
-    for f in collect_array_fields(&global.fields) {
-        let sub_pascal = to_pascal_case(&f.name);
-        writeln!(out, "---@class crap.array_row.{sub_pascal}").expect("write to String");
-        for sf in &f.fields {
+    // Sub-type classes (Array rows and Group shapes)
+    for stf in collect_sub_type_fields(&global.fields) {
+        let sub_pascal = to_pascal_case(&stf.field.name);
+        let namespace = match stf.kind {
+            SubTypeKind::Array => "array_row",
+            SubTypeKind::Group => "group",
+        };
+        writeln!(out, "---@class crap.{namespace}.{sub_pascal}").expect("write to String");
+        for sf in &stf.field.fields {
             write_field(out, sf);
         }
         out.push('\n');
@@ -335,7 +323,13 @@ fn field_to_lua_type(field: &FieldDefinition) -> String {
             let pascal = to_pascal_case(&field.name);
             format!("crap.array_row.{}[]", pascal)
         }
-        FieldType::Group => "table".to_string(),
+        FieldType::Group => {
+            if field.fields.is_empty() {
+                "table".to_string()
+            } else {
+                format!("crap.group.{}", to_pascal_case(&field.name))
+            }
+        }
         FieldType::Row => "table".to_string(), // layout-only; sub-fields are promoted
         FieldType::Collapsible => "table".to_string(), // layout-only; sub-fields are promoted
         FieldType::Tabs => "table".to_string(), // layout-only; sub-fields are promoted
@@ -665,9 +659,20 @@ mod tests {
     }
 
     #[test]
-    fn lua_group_type() {
+    fn lua_group_type_empty() {
         let f = FieldDefinition::builder("seo", FieldType::Group).build();
         assert_eq!(field_to_lua_type(&f), "table");
+    }
+
+    #[test]
+    fn lua_group_type_with_subfields() {
+        let f = FieldDefinition::builder("seo", FieldType::Group)
+            .fields(vec![
+                text_field("title", true),
+                text_field("description", false),
+            ])
+            .build();
+        assert_eq!(field_to_lua_type(&f), "crap.group.Seo");
     }
 
     #[test]
@@ -855,18 +860,65 @@ mod tests {
     }
 
     #[test]
-    fn collect_array_fields_inside_row_and_tabs() {
-        use crate::core::field::FieldTab;
-        // Arrays nested inside Row, Group, and Tabs containers should be discovered
-        let fields = vec![
-            FieldDefinition::builder("row_container", FieldType::Row)
+    fn lua_group_subtype_emitted_in_collection() {
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
                 .fields(vec![
-                    FieldDefinition::builder("row_items", FieldType::Array)
+                    text_field("title", true),
+                    text_field("description", false),
+                ])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_collection(&mut out, &col);
+        assert!(
+            out.contains("---@class crap.group.Seo"),
+            "group sub-type class should be emitted: {}",
+            out
+        );
+        assert!(
+            out.contains("---@field title string"),
+            "group sub-field: {}",
+            out
+        );
+        assert!(
+            out.contains("---@field description? string"),
+            "group sub-field optional: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn lua_group_subtype_emitted_in_global() {
+        let mut global = GlobalDefinition::new("settings");
+        global.fields = vec![
+            FieldDefinition::builder("seo", FieldType::Group)
+                .fields(vec![text_field("title", true)])
+                .build(),
+        ];
+        let mut out = String::new();
+        render_global(&mut out, &global);
+        assert!(
+            out.contains("---@class crap.group.Seo"),
+            "global group sub-type should be emitted: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn lua_array_nested_in_row_emits_subtype() {
+        use crate::core::field::FieldTab;
+        let mut col = CollectionDefinition::new("posts");
+        col.fields = vec![
+            FieldDefinition::builder("layout", FieldType::Row)
+                .fields(vec![
+                    FieldDefinition::builder("items", FieldType::Array)
                         .fields(vec![text_field("val", true)])
                         .build(),
                 ])
                 .build(),
-            FieldDefinition::builder("tab_container", FieldType::Tabs)
+            FieldDefinition::builder("tabs", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
                     "T",
                     vec![
@@ -876,36 +928,18 @@ mod tests {
                     ],
                 )])
                 .build(),
-            // Nested array inside an array (recursion)
-            FieldDefinition::builder("outer", FieldType::Array)
-                .fields(vec![
-                    FieldDefinition::builder("inner", FieldType::Array)
-                        .fields(vec![text_field("x", true)])
-                        .build(),
-                ])
-                .build(),
         ];
-        let result = collect_array_fields(&fields);
-        let names: Vec<&str> = result.iter().map(|f| f.name.as_str()).collect();
+        let mut out = String::new();
+        render_collection(&mut out, &col);
         assert!(
-            names.contains(&"row_items"),
-            "array inside Row should be found: {:?}",
-            names
+            out.contains("---@class crap.array_row.Items"),
+            "array inside Row should emit sub-type: {}",
+            out
         );
         assert!(
-            names.contains(&"tab_items"),
-            "array inside Tabs should be found: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"outer"),
-            "top-level array should be found: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"inner"),
-            "nested array inside array should be found: {:?}",
-            names
+            out.contains("---@class crap.array_row.TabItems"),
+            "array inside Tabs should emit sub-type: {}",
+            out
         );
     }
 }
