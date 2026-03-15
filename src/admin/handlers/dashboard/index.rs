@@ -10,7 +10,7 @@ use crate::{
         handlers::shared::extract_editor_locale,
     },
     core::auth::{AuthUser, Claims},
-    db::ops::count_documents,
+    db::{DbConnection, ops::count_documents},
 };
 
 /// Render the admin dashboard with collection and global summary cards.
@@ -28,13 +28,13 @@ pub async fn index(
         for (slug, def) in &state.registry.collections {
             let count = count_documents(&state.pool, slug, def, &[], None).unwrap_or(0);
             let last_updated = conn.as_ref().and_then(|c| {
-                c.query_row(
-                    &format!("SELECT MAX(updated_at) FROM \"{}\"", slug),
-                    [],
-                    |row| row.get::<_, Option<String>>(0),
+                c.query_one(
+                    &format!("SELECT MAX(updated_at) AS last_updated FROM \"{}\"", slug),
+                    &[],
                 )
                 .ok()
                 .flatten()
+                .and_then(|r| r.get_opt_string("last_updated").ok().flatten())
             });
 
             collection_cards.push(json!({
@@ -52,16 +52,16 @@ pub async fn index(
         for (slug, def) in &state.registry.globals {
             let table_name = format!("_global_{}", slug);
             let last_updated = conn.as_ref().and_then(|c| {
-                c.query_row(
+                c.query_one(
                     &format!(
-                        "SELECT updated_at FROM \"{}\" WHERE id = 'default'",
+                        "SELECT updated_at AS last_updated FROM \"{}\" WHERE id = 'default'",
                         table_name
                     ),
-                    [],
-                    |row| row.get::<_, Option<String>>(0),
+                    &[],
                 )
                 .ok()
                 .flatten()
+                .and_then(|r| r.get_opt_string("last_updated").ok().flatten())
             });
 
             global_cards.push(json!({

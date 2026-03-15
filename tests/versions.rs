@@ -18,7 +18,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::service;
 
@@ -155,16 +155,20 @@ fn migration_creates_versions_table_and_status_column() {
 
     // _versions_articles table should exist
     let count: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_versions_articles'",
-            [],
-            |row| row.get(0),
+        .query_one(
+            "SELECT count(*) AS cnt FROM sqlite_master WHERE type='table' AND name='_versions_articles'",
+            &[],
         )
+        .unwrap()
+        .unwrap()
+        .get_i64("cnt")
         .unwrap();
     assert_eq!(count, 1, "versions table should exist");
 
     // _status column should exist on articles
-    let status_exists: bool = conn.prepare("SELECT _status FROM articles LIMIT 0").is_ok();
+    let status_exists: bool = conn
+        .query_one("SELECT _status FROM articles LIMIT 0", &[])
+        .is_ok();
     assert!(status_exists, "_status column should exist");
 }
 
@@ -174,11 +178,13 @@ fn migration_no_versions_table_for_nonversioned() {
     let conn = pool.get().unwrap();
 
     let count: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_versions_notes'",
-            [],
-            |row| row.get(0),
+        .query_one(
+            "SELECT count(*) AS cnt FROM sqlite_master WHERE type='table' AND name='_versions_notes'",
+            &[],
         )
+        .unwrap()
+        .unwrap()
+        .get_i64("cnt")
         .unwrap();
     assert_eq!(count, 0, "no versions table for non-versioned collection");
 }
@@ -549,12 +555,15 @@ fn restore_version_clears_locale_columns() {
     // German should be cleared (NULL → fallback to English if fallback enabled, or NULL)
     // Read the raw column to verify it's NULL
     let de_raw: Option<String> = conn
-        .query_row(
+        .query_one(
             "SELECT title__de FROM articles WHERE id = ?1",
-            [doc.id.as_ref()],
-            |row| row.get(0),
+            &[DbValue::Text(doc.id.to_string())],
         )
-        .unwrap();
+        .unwrap()
+        .unwrap()
+        .get_opt_string("title__de")
+        .ok()
+        .flatten();
     assert!(
         de_raw.is_none(),
         "German locale column should be NULL after restoring pre-translation version"

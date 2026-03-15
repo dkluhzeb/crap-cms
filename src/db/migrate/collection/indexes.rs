@@ -7,6 +7,7 @@ use crate::{
     config::LocaleConfig,
     core::CollectionDefinition,
     db::{
+        DbConnection,
         migrate::helpers::{collect_column_specs, sanitize_locale},
         query::is_valid_identifier,
     },
@@ -16,7 +17,7 @@ use crate::{
 /// collection-level compound `indexes`. Idempotent — creates missing indexes,
 /// drops stale ones. Only manages indexes with the `idx_{slug}_` naming prefix.
 pub(super) fn sync_indexes(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
@@ -96,27 +97,18 @@ pub(super) fn sync_indexes(
 
     // 3. Get existing managed indexes (our prefix only)
     let prefix = format!("idx_{}_", slug);
-    let mut existing: HashSet<String> = HashSet::new();
-    let mut stmt = conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1 AND name LIKE ?2",
-    )?;
-    let rows = stmt.query_map(rusqlite::params![slug, format!("{}%", prefix)], |row| {
-        row.get::<_, String>(0)
-    })?;
-    for row in rows {
-        existing.insert(row?);
-    }
+    let existing: HashSet<String> = conn.index_names(slug, &prefix)?.into_iter().collect();
 
     // 4. Drop stale indexes (in existing but not in desired)
     for name in existing.difference(&desired) {
         tracing::info!("Dropping stale index: {}", name);
-        conn.execute(&format!("DROP INDEX IF EXISTS {}", name), [])
+        conn.execute(&format!("DROP INDEX IF EXISTS {}", name), &[])
             .with_context(|| format!("Failed to drop index {}", name))?;
     }
 
     // 5. Create missing indexes
     for stmt_sql in &create_stmts {
-        conn.execute(stmt_sql, [])
+        conn.execute(stmt_sql, &[])
             .with_context(|| format!("Failed to create index: {}", stmt_sql))?;
     }
 
@@ -130,20 +122,22 @@ mod tests {
     use super::*;
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldType};
+    use crate::db::{DbConnection, DbValue};
 
-    fn get_indexes(conn: &rusqlite::Connection, table: &str) -> HashSet<String> {
-        let mut stmt = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1")
-            .unwrap();
-        stmt.query_map([table], |row| row.get::<_, String>(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
-            .collect()
+    fn get_indexes(conn: &dyn DbConnection, table: &str) -> HashSet<String> {
+        conn.query_all(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1",
+            &[DbValue::Text(table.to_string())],
+        )
+        .unwrap()
+        .into_iter()
+        .filter_map(|r| r.get_string("name").ok())
+        .collect()
     }
 
     #[test]
     fn sync_indexes_creates_index_for_indexed_field() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -165,7 +159,7 @@ mod tests {
 
     #[test]
     fn sync_indexes_skips_unique_field() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -188,7 +182,7 @@ mod tests {
 
     #[test]
     fn sync_indexes_creates_compound_index() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def =
             simple_collection("posts", vec![text_field("status"), text_field("category")]);
@@ -208,7 +202,7 @@ mod tests {
 
     #[test]
     fn sync_indexes_creates_compound_unique_index() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("category"), text_field("slug")]);
         def.indexes = vec![IndexDefinition {
@@ -227,7 +221,7 @@ mod tests {
 
     #[test]
     fn sync_indexes_drops_stale_indexes() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def =
             simple_collection("posts", vec![text_field("status"), text_field("category")]);
@@ -259,7 +253,7 @@ mod tests {
 
     #[test]
     fn sync_indexes_localized_field() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -286,7 +280,7 @@ mod tests {
 
     #[test]
     fn sync_indexes_idempotent() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -308,7 +302,7 @@ mod tests {
 
     #[test]
     fn sync_indexes_validates_compound_field_names() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("title")]);
         def.indexes = vec![IndexDefinition {

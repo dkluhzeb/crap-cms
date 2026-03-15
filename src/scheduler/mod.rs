@@ -16,7 +16,7 @@ use crate::{
     config::JobsConfig,
     core::{SharedRegistry, upload},
     db::{
-        DbPool,
+        DbConnection, DbPool,
         query::{images as image_query, jobs as job_query},
     },
     hooks::HookRunner,
@@ -169,10 +169,16 @@ async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
                 .context("Image queue: failed to get DB connection")?;
             conn.execute(
                 &format!(
-                    "UPDATE \"{}\" SET \"{}\" = ?1 WHERE id = ?2",
-                    entry.collection, entry.url_column
+                    "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
+                    entry.collection,
+                    entry.url_column,
+                    conn.placeholder(1),
+                    conn.placeholder(2)
                 ),
-                rusqlite::params![entry.url_value, entry.document_id],
+                &[
+                    crate::db::DbValue::Text(entry.url_value.clone()),
+                    crate::db::DbValue::Text(entry.document_id.clone()),
+                ],
             )
             .context("Image queue: failed to update document")?;
 

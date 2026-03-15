@@ -1,15 +1,14 @@
 //! `find_by_id`, `find_by_ids`, `find_by_id_raw` — single and batch document lookup.
 
 use anyhow::{Context as _, Result};
-use rusqlite::params_from_iter;
 
-use crate::db::{
-    LocaleContext, LocaleMode,
-    query::{get_column_names, get_locale_select_columns, group_locale_fields},
-};
 use crate::{
     core::{CollectionDefinition, Document},
-    db::document::row_to_document,
+    db::{
+        DbConnection, DbValue, LocaleContext, LocaleMode,
+        document::row_to_document,
+        query::{get_column_names, get_locale_select_columns, group_locale_fields},
+    },
 };
 
 /// Find a single document by ID with full hydration (join tables, group reconstruction).
@@ -18,7 +17,7 @@ use crate::{
 /// nested group objects and populated join table data (arrays, blocks, relationships).
 /// Use `find_by_id_raw` when you only need flat column data without hydration.
 pub fn find_by_id(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     id: &str,
@@ -40,7 +39,7 @@ pub fn find_by_id(
 /// lookups. Returns documents in arbitrary order (caller should reorder if needed).
 /// Missing IDs are silently skipped (not included in the result).
 pub fn find_by_ids(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     ids: &[String],
@@ -50,7 +49,7 @@ pub fn find_by_ids(
         return Ok(Vec::new());
     }
 
-    let (select_exprs, result_names) = match locale_ctx {
+    let (select_exprs, _result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
             get_locale_select_columns(&def.fields, def.timestamps, ctx)
         }
@@ -60,7 +59,7 @@ pub fn find_by_ids(
         }
     };
 
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
     let sql = format!(
         "SELECT {} FROM {} WHERE id IN ({})",
         select_exprs.join(", "),
@@ -68,23 +67,14 @@ pub fn find_by_ids(
         placeholders.join(", ")
     );
 
-    let params: Vec<&dyn rusqlite::types::ToSql> = ids
-        .iter()
-        .map(|id| id as &dyn rusqlite::types::ToSql)
-        .collect();
-    let mut stmt = conn
-        .prepare(&sql)
-        .with_context(|| format!("Failed to prepare find_by_ids query on '{}'", slug))?;
-
-    let rows = stmt
-        .query_map(params_from_iter(params.iter()), |row| {
-            row_to_document(row, &result_names)
-        })
-        .with_context(|| format!("Failed to execute find_by_ids on '{}'", slug))?;
+    let params: Vec<DbValue> = ids.iter().map(|id| DbValue::Text(id.clone())).collect();
+    let rows = conn
+        .query_all(&sql, &params)
+        .with_context(|| format!("Failed to execute find_by_ids on '{slug}'"))?;
 
     let mut documents = Vec::new();
-    for row in rows {
-        let mut doc = row?;
+    for row in &rows {
+        let mut doc = row_to_document(conn, row)?;
 
         if let Some(ctx) = locale_ctx
             && ctx.config.is_enabled()
@@ -105,13 +95,13 @@ pub fn find_by_ids(
 /// as `field__subfield` flat keys. Join table data (arrays, blocks, relationships)
 /// is NOT populated. Used internally by write operations that don't need hydration.
 pub(crate) fn find_by_id_raw(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     id: &str,
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<Option<Document>> {
-    let (select_exprs, result_names) = match locale_ctx {
+    let (select_exprs, _result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
             get_locale_select_columns(&def.fields, def.timestamps, ctx)
         }
@@ -122,15 +112,20 @@ pub(crate) fn find_by_id_raw(
     };
 
     let sql = format!(
-        "SELECT {} FROM {} WHERE id = ?1",
+        "SELECT {} FROM {} WHERE id = {}",
         select_exprs.join(", "),
-        slug
+        slug,
+        conn.placeholder(1)
     );
 
-    let result = conn.query_row(&sql, [id], |row| row_to_document(row, &result_names));
+    let row = conn
+        .query_one(&sql, &[DbValue::Text(id.to_string())])
+        .with_context(|| format!("Failed to find document {id} in {slug}"))?;
 
-    match result {
-        Ok(mut doc) => {
+    match row {
+        None => Ok(None),
+        Some(r) => {
+            let mut doc = row_to_document(conn, &r)?;
             if let Some(ctx) = locale_ctx
                 && ctx.config.is_enabled()
                 && let LocaleMode::All = ctx.mode
@@ -139,8 +134,6 @@ pub(crate) fn find_by_id_raw(
             }
             Ok(Some(doc))
         }
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context(format!("Failed to find document {} in {}", id, slug)),
     }
 }
 
@@ -148,11 +141,12 @@ pub(crate) fn find_by_id_raw(
 mod tests {
     use super::super::super::write::create;
     use super::*;
+    use crate::config::{CrapConfig, DatabaseConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
-    use rusqlite::Connection;
-    use std::collections::HashMap;
-    use std::collections::HashSet;
+    use crate::db::{DbPool, pool};
+    use std::collections::{HashMap, HashSet};
+    use tempfile::TempDir;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -163,24 +157,36 @@ mod tests {
         def
     }
 
-    fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE posts (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                status TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            )",
-        )
-        .unwrap();
-        conn
+    fn setup_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE posts (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    status TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
     }
 
     #[test]
     fn find_by_id_exists() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut data = HashMap::new();
@@ -198,7 +204,8 @@ mod tests {
 
     #[test]
     fn find_by_id_not_found() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let found = find_by_id(&conn, "posts", &def, "nonexistent-id", None).unwrap();
@@ -207,7 +214,8 @@ mod tests {
 
     #[test]
     fn find_by_ids_empty_returns_empty() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
         let result = find_by_ids(&conn, "posts", &def, &[], None).unwrap();
         assert!(result.is_empty());
@@ -215,7 +223,8 @@ mod tests {
 
     #[test]
     fn find_by_ids_returns_matching() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut d1 = HashMap::new();
@@ -246,7 +255,8 @@ mod tests {
 
     #[test]
     fn find_by_ids_missing_ids_skipped() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut d1 = HashMap::new();

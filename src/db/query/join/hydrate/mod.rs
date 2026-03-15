@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     core::{Document, FieldDefinition, FieldType},
-    db::LocaleContext,
+    db::{DbConnection, LocaleContext},
 };
 use group::reconstruct_group_fields;
 
@@ -25,7 +25,7 @@ use group::reconstruct_group_fields;
 /// If `select` is provided, skip hydrating fields not in the select list.
 /// When `locale_ctx` is provided, localized join fields are filtered by locale.
 pub fn hydrate_document(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     fields: &[FieldDefinition],
     doc: &mut Document,
@@ -132,11 +132,16 @@ pub fn hydrate_document(
 
 #[cfg(test)]
 pub(super) mod test_helpers {
+    use crate::config::CrapConfig;
     use crate::core::{collection::*, field::*};
-    use rusqlite::Connection;
+    use crate::db::{BoxedConnection, DbConnection, pool};
+    use tempfile::TempDir;
 
-    pub fn setup_join_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    pub fn setup_join_db() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -168,7 +173,7 @@ pub(super) mod test_helpers {
             );
             INSERT INTO posts (id, title, created_at, updated_at) VALUES ('p1', 'Post 1', '2024-01-01', '2024-01-01');",
         ).unwrap();
-        conn
+        (dir, conn)
     }
 
     pub fn array_sub_fields() -> Vec<FieldDefinition> {
@@ -209,14 +214,25 @@ mod tests {
         test_helpers::{array_sub_fields, posts_def_with_joins, setup_join_db},
         *,
     };
+    use crate::config::CrapConfig;
     use crate::core::{Document, field::*};
-    use rusqlite::Connection;
+    use crate::db::{BoxedConnection, pool};
+    use tempfile::TempDir;
+
+    fn setup_conn(sql: &str) -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
+        conn.execute_batch(sql).unwrap();
+        (dir, conn)
+    }
 
     // ── hydrate_document ─────────────────────────────────────────────────────
 
     #[test]
     fn hydrate_has_many_and_array() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         let tag_ids = vec!["t1".to_string(), "t2".to_string()];
@@ -265,7 +281,7 @@ mod tests {
 
     #[test]
     fn hydrate_with_select_filters_fields() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         let tag_ids = vec!["t1".to_string()];
@@ -298,8 +314,7 @@ mod tests {
 
     #[test]
     fn hydrate_polymorphic_has_many() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_conn(
             "CREATE TABLE posts (id TEXT PRIMARY KEY);
              CREATE TABLE posts_refs (
                  parent_id TEXT,
@@ -309,8 +324,7 @@ mod tests {
                  PRIMARY KEY (parent_id, related_id, related_collection)
              );
              INSERT INTO posts (id) VALUES ('p1');",
-        )
-        .unwrap();
+        );
 
         let items = vec![
             ("articles".to_string(), "a1".to_string()),
@@ -343,7 +357,7 @@ mod tests {
         // Regression: blocks nested inside a Tabs field were lost on save and invisible on read
         use super::save::save_join_table_data;
         use crate::core::field::FieldTab;
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();
         let tabs_field = FieldDefinition::builder("page_settings", FieldType::Tabs)
@@ -387,7 +401,7 @@ mod tests {
     fn save_and_hydrate_array_inside_row() {
         // Regression: arrays nested inside a Row field were lost on save and invisible on read
         use super::save::save_join_table_data;
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
 
         let array_field = FieldDefinition::builder("items", FieldType::Array)
             .fields(array_sub_fields())
@@ -433,7 +447,7 @@ mod tests {
     fn save_and_hydrate_blocks_inside_collapsible() {
         // Regression: blocks nested inside a Collapsible field were lost
         use super::save::save_join_table_data;
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();
         let collapsible_field = FieldDefinition::builder("advanced", FieldType::Collapsible)

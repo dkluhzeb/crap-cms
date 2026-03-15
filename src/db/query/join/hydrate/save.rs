@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     core::{FieldDefinition, FieldType},
-    db::LocaleContext,
+    db::{DbConnection, LocaleContext},
 };
 
 /// Parse polymorphic relationship values from form data.
@@ -58,7 +58,7 @@ fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
 /// Extracts relevant data from the data map and writes to join tables.
 /// When `locale_ctx` is provided, localized join fields are scoped by locale.
 pub fn save_join_table_data(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     fields: &[FieldDefinition],
     parent_id: &str,
@@ -178,12 +178,23 @@ mod tests {
     };
     use super::super::test_helpers::{posts_def_with_joins, setup_join_db};
     use super::*;
+    use crate::config::CrapConfig;
     use crate::core::field::*;
-    use rusqlite::Connection;
+    use crate::db::{BoxedConnection, pool};
+    use tempfile::TempDir;
+
+    fn setup_conn(sql: &str) -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
+        conn.execute_batch(sql).unwrap();
+        (dir, conn)
+    }
 
     #[test]
     fn save_join_table_data_has_many_from_string() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
@@ -197,7 +208,7 @@ mod tests {
 
     #[test]
     fn save_join_table_data_has_many_from_array() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
@@ -211,7 +222,7 @@ mod tests {
 
     #[test]
     fn save_join_table_data_has_many_empty_string() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string()], None).unwrap();
@@ -227,7 +238,7 @@ mod tests {
 
     #[test]
     fn save_join_table_data_blocks() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
@@ -249,7 +260,7 @@ mod tests {
 
     #[test]
     fn save_join_table_data_skips_absent_fields() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         set_related_ids(&conn, "posts", "tags", "p1", &["t1".to_string()], None).unwrap();
@@ -268,7 +279,7 @@ mod tests {
 
     #[test]
     fn save_join_table_data_blocks_non_array_is_noop() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
@@ -281,7 +292,7 @@ mod tests {
 
     #[test]
     fn save_join_table_data_has_many_non_string_non_array_is_empty() {
-        let conn = setup_join_db();
+        let (_dir, conn) = setup_join_db();
         let def = posts_def_with_joins();
 
         let mut data = HashMap::new();
@@ -294,8 +305,7 @@ mod tests {
 
     #[test]
     fn save_join_table_data_polymorphic_has_many() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_conn(
             "CREATE TABLE posts (id TEXT PRIMARY KEY);
              CREATE TABLE posts_refs (
                  parent_id TEXT,
@@ -305,8 +315,7 @@ mod tests {
                  PRIMARY KEY (parent_id, related_id, related_collection)
              );
              INSERT INTO posts (id) VALUES ('p1');",
-        )
-        .unwrap();
+        );
 
         let mut refs_rel = RelationshipConfig::new("articles", true);
         refs_rel.polymorphic = vec!["articles".into(), "pages".into()];

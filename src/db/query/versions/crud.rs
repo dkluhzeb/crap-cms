@@ -3,11 +3,14 @@
 use anyhow::{Context as _, Result};
 use serde_json::Value;
 
-use crate::core::document::VersionSnapshot;
+use crate::{
+    core::document::VersionSnapshot,
+    db::{DbConnection, DbValue},
+};
 
 /// Create a new version entry. Clears previous `_latest` flag, inserts new version.
 pub fn create_version(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     parent_id: &str,
     status: &str,
@@ -17,36 +20,53 @@ pub fn create_version(
     let id = nanoid::nanoid!();
 
     // Get the next version number
+    let p1 = conn.placeholder(1);
     let next_version: i64 = conn
-        .query_row(
+        .query_one(
             &format!(
-                "SELECT COALESCE(MAX(_version), 0) + 1 FROM {} WHERE _parent = ?1",
+                "SELECT COALESCE(MAX(_version), 0) + 1 AS next_ver FROM {} WHERE _parent = {p1}",
                 table
             ),
-            [parent_id],
-            |row| row.get(0),
-        )
-        .context("Failed to get next version number")?;
+            &[DbValue::Text(parent_id.to_string())],
+        )?
+        .map(|row| row.get_i64("next_ver"))
+        .transpose()?
+        .unwrap_or(1);
 
     // Clear previous _latest flag
+    let p1 = conn.placeholder(1);
     conn.execute(
         &format!(
-            "UPDATE {} SET _latest = 0 WHERE _parent = ?1 AND _latest = 1",
+            "UPDATE {} SET _latest = 0 WHERE _parent = {p1} AND _latest = 1",
             table
         ),
-        [parent_id],
+        &[DbValue::Text(parent_id.to_string())],
     )
     .context("Failed to clear previous latest flag")?;
 
     // Insert new version
     let snapshot_str = serde_json::to_string(snapshot).context("Failed to serialize snapshot")?;
+    let (p1, p2, p3, p4, p5) = (
+        conn.placeholder(1),
+        conn.placeholder(2),
+        conn.placeholder(3),
+        conn.placeholder(4),
+        conn.placeholder(5),
+    );
     conn.execute(
         &format!(
-            "INSERT INTO {} (id, _parent, _version, _status, _latest, snapshot) VALUES (?1, ?2, ?3, ?4, 1, ?5)",
+            "INSERT INTO {} (id, _parent, _version, _status, _latest, snapshot) VALUES ({p1}, {p2}, {p3}, {p4}, 1, {p5})",
             table
         ),
-        rusqlite::params![id, parent_id, next_version, status, snapshot_str],
-    ).context("Failed to insert version")?;
+        &[
+            DbValue::Text(id.clone()),
+            DbValue::Text(parent_id.to_string()),
+            DbValue::Integer(next_version),
+            DbValue::Text(status.to_string()),
+            DbValue::Text(snapshot_str),
+        ],
+    )
+    .context("Failed to insert version")?;
 
     Ok(VersionSnapshot::builder(id, parent_id)
         .version(next_version)
@@ -58,51 +78,55 @@ pub fn create_version(
 
 /// Find the latest version for a parent document.
 pub fn find_latest_version(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     parent_id: &str,
 ) -> Result<Option<VersionSnapshot>> {
     let table = format!("_versions_{}", slug);
-    let mut stmt = conn.prepare(&format!(
+    let p1 = conn.placeholder(1);
+    let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
-             FROM {} WHERE _parent = ?1 AND _latest = 1 LIMIT 1",
+             FROM {} WHERE _parent = {p1} AND _latest = 1 LIMIT 1",
         table
-    ))?;
-    let result = stmt.query_row([parent_id], |row| {
-        let snapshot_str: String = row.get(5)?;
-        let id: String = row.get(0)?;
-        let parent: String = row.get(1)?;
-        Ok(VersionSnapshot::builder(id, parent)
-            .version(row.get(2)?)
-            .status(row.get::<_, String>(3)?)
-            .latest(row.get::<_, i32>(4)? != 0)
-            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
-            .build())
-    });
+    );
 
-    match result {
-        Ok(v) => Ok(Some(v)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
+    match conn.query_one(&sql, &[DbValue::Text(parent_id.to_string())])? {
+        Some(row) => {
+            let snapshot_str = row.get_string("snapshot")?;
+            let id = row.get_string("id")?;
+            let parent = row.get_string("_parent")?;
+            let version = row.get_i64("_version")?;
+            let status = row.get_string("_status")?;
+            let latest = row.get_bool("_latest")?;
+            Ok(Some(
+                VersionSnapshot::builder(id, parent)
+                    .version(version)
+                    .status(status)
+                    .latest(latest)
+                    .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                    .build(),
+            ))
+        }
+        None => Ok(None),
     }
 }
 
 /// Count total versions for a parent document.
-pub fn count_versions(conn: &rusqlite::Connection, slug: &str, parent_id: &str) -> Result<i64> {
+pub fn count_versions(conn: &dyn DbConnection, slug: &str, parent_id: &str) -> Result<i64> {
     let table = format!("_versions_{}", slug);
-    let count: i64 = conn
-        .query_row(
-            &format!("SELECT COUNT(*) FROM {} WHERE _parent = ?1", table),
-            [parent_id],
-            |row| row.get(0),
-        )
+    let p1 = conn.placeholder(1);
+    let row = conn
+        .query_one(
+            &format!("SELECT COUNT(*) AS cnt FROM {} WHERE _parent = {p1}", table),
+            &[DbValue::Text(parent_id.to_string())],
+        )?
         .context("Failed to count versions")?;
-    Ok(count)
+    row.get_i64("cnt")
 }
 
 /// List versions for a parent document, newest first.
 pub fn list_versions(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     parent_id: &str,
     limit: Option<i64>,
@@ -111,63 +135,72 @@ pub fn list_versions(
     let table = format!("_versions_{}", slug);
     let limit_clause = limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
     let offset_clause = offset.map(|o| format!(" OFFSET {}", o)).unwrap_or_default();
-    let mut stmt = conn.prepare(&format!(
+    let p1 = conn.placeholder(1);
+    let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
-             FROM {} WHERE _parent = ?1 ORDER BY _version DESC{}{}",
+             FROM {} WHERE _parent = {p1} ORDER BY _version DESC{}{}",
         table, limit_clause, offset_clause
-    ))?;
-    let rows = stmt.query_map([parent_id], |row| {
-        let snapshot_str: String = row.get(5)?;
-        let id: String = row.get(0)?;
-        let parent: String = row.get(1)?;
-        Ok(VersionSnapshot::builder(id, parent)
-            .version(row.get(2)?)
-            .status(row.get::<_, String>(3)?)
-            .latest(row.get::<_, i32>(4)? != 0)
-            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
-            .build())
-    })?;
+    );
+
+    let rows = conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())])?;
     let mut versions = Vec::new();
     for row in rows {
-        versions.push(row?);
+        let snapshot_str = row.get_string("snapshot")?;
+        let id = row.get_string("id")?;
+        let parent = row.get_string("_parent")?;
+        let version = row.get_i64("_version")?;
+        let status = row.get_string("_status")?;
+        let latest = row.get_bool("_latest")?;
+        versions.push(
+            VersionSnapshot::builder(id, parent)
+                .version(version)
+                .status(status)
+                .latest(latest)
+                .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                .build(),
+        );
     }
     Ok(versions)
 }
 
 /// Find a specific version by its ID.
 pub fn find_version_by_id(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     version_id: &str,
 ) -> Result<Option<VersionSnapshot>> {
     let table = format!("_versions_{}", slug);
-    let mut stmt = conn.prepare(&format!(
+    let p1 = conn.placeholder(1);
+    let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
-             FROM {} WHERE id = ?1 LIMIT 1",
+             FROM {} WHERE id = {p1} LIMIT 1",
         table
-    ))?;
-    let result = stmt.query_row([version_id], |row| {
-        let snapshot_str: String = row.get(5)?;
-        let id: String = row.get(0)?;
-        let parent: String = row.get(1)?;
-        Ok(VersionSnapshot::builder(id, parent)
-            .version(row.get(2)?)
-            .status(row.get::<_, String>(3)?)
-            .latest(row.get::<_, i32>(4)? != 0)
-            .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
-            .build())
-    });
+    );
 
-    match result {
-        Ok(v) => Ok(Some(v)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
+    match conn.query_one(&sql, &[DbValue::Text(version_id.to_string())])? {
+        Some(row) => {
+            let snapshot_str = row.get_string("snapshot")?;
+            let id = row.get_string("id")?;
+            let parent = row.get_string("_parent")?;
+            let version = row.get_i64("_version")?;
+            let status = row.get_string("_status")?;
+            let latest = row.get_bool("_latest")?;
+            Ok(Some(
+                VersionSnapshot::builder(id, parent)
+                    .version(version)
+                    .status(status)
+                    .latest(latest)
+                    .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                    .build(),
+            ))
+        }
+        None => Ok(None),
     }
 }
 
 /// Delete oldest versions beyond the max_versions cap for a document.
 pub fn prune_versions(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     parent_id: &str,
     max_versions: u32,
@@ -177,14 +210,18 @@ pub fn prune_versions(
     }
     let table = format!("_versions_{}", slug);
     // Delete all versions beyond the cap, keeping the newest ones
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
         &format!(
-            "DELETE FROM {} WHERE _parent = ?1 AND id NOT IN (\
-                SELECT id FROM {} WHERE _parent = ?1 ORDER BY _version DESC LIMIT ?2\
+            "DELETE FROM {} WHERE _parent = {p1} AND id NOT IN (\
+                SELECT id FROM {} WHERE _parent = {p1} ORDER BY _version DESC LIMIT {p2}\
             )",
             table, table
         ),
-        rusqlite::params![parent_id, max_versions],
+        &[
+            DbValue::Text(parent_id.to_string()),
+            DbValue::Integer(max_versions as i64),
+        ],
     )
     .context("Failed to prune versions")?;
     Ok(())
@@ -192,17 +229,22 @@ pub fn prune_versions(
 
 /// Set the `_status` column on a document in the main table.
 pub fn set_document_status(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     id: &str,
     status: &str,
 ) -> Result<()> {
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
         &format!(
-            "UPDATE {} SET _status = ?1, updated_at = datetime('now') WHERE id = ?2",
-            slug
+            "UPDATE {} SET _status = {p1}, updated_at = {} WHERE id = {p2}",
+            slug,
+            conn.now_expr()
         ),
-        rusqlite::params![status, id],
+        &[
+            DbValue::Text(status.to_string()),
+            DbValue::Text(id.to_string()),
+        ],
     )
     .with_context(|| format!("Failed to set _status on {}.{}", slug, id))?;
     Ok(())
@@ -210,19 +252,17 @@ pub fn set_document_status(
 
 /// Get the `_status` column from a document in the main table.
 pub fn get_document_status(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     id: &str,
 ) -> Result<Option<String>> {
-    let result = conn.query_row(
-        &format!("SELECT _status FROM {} WHERE id = ?1", slug),
-        [id],
-        |row| row.get(0),
-    );
-    match result {
-        Ok(status) => Ok(Some(status)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e.into()),
+    let p1 = conn.placeholder(1);
+    match conn.query_one(
+        &format!("SELECT _status FROM {} WHERE id = {p1}", slug),
+        &[DbValue::Text(id.to_string())],
+    )? {
+        Some(row) => Ok(row.get_opt_string("_status")?),
+        None => Ok(None),
     }
 }
 
@@ -231,9 +271,15 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::config::CrapConfig;
+    use crate::db::{BoxedConnection, pool};
+    use tempfile::TempDir;
 
-    fn setup_versions_db() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+    fn setup_versions_db() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let db_pool = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = db_pool.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -255,12 +301,12 @@ mod tests {
             INSERT INTO posts (id, title, _status) VALUES ('p1', 'Hello', 'published');",
         )
         .unwrap();
-        conn
+        (dir, conn)
     }
 
     #[test]
     fn create_and_find_latest_version() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         let snapshot = json!({"title": "Hello"});
 
         let v = create_version(&conn, "posts", "p1", "published", &snapshot).unwrap();
@@ -279,7 +325,7 @@ mod tests {
 
     #[test]
     fn create_multiple_versions_latest_flag() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
 
         let v1 =
             create_version(&conn, "posts", "p1", "published", &json!({"title": "V1"})).unwrap();
@@ -299,14 +345,14 @@ mod tests {
 
     #[test]
     fn find_latest_version_none() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         let result = find_latest_version(&conn, "posts", "nonexistent").unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn count_versions_empty_and_populated() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         assert_eq!(count_versions(&conn, "posts", "p1").unwrap(), 0);
 
         create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
@@ -318,7 +364,7 @@ mod tests {
 
     #[test]
     fn list_versions_order_and_pagination() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         for i in 0..5 {
             create_version(&conn, "posts", "p1", "published", &json!({"v": i})).unwrap();
         }
@@ -344,7 +390,7 @@ mod tests {
 
     #[test]
     fn find_version_by_id_found_and_not_found() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         let v =
             create_version(&conn, "posts", "p1", "published", &json!({"title": "Test"})).unwrap();
 
@@ -358,7 +404,7 @@ mod tests {
 
     #[test]
     fn set_and_get_document_status() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
 
         let status = get_document_status(&conn, "posts", "p1").unwrap();
         assert_eq!(status, Some("published".to_string()));
@@ -370,14 +416,14 @@ mod tests {
 
     #[test]
     fn get_document_status_not_found() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         let status = get_document_status(&conn, "posts", "nonexistent").unwrap();
         assert!(status.is_none());
     }
 
     #[test]
     fn prune_versions_unlimited() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         for _ in 0..5 {
             create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
         }
@@ -388,7 +434,7 @@ mod tests {
 
     #[test]
     fn prune_versions_caps() {
-        let conn = setup_versions_db();
+        let (_dir, conn) = setup_versions_db();
         for _ in 0..5 {
             create_version(&conn, "posts", "p1", "published", &json!({})).unwrap();
         }

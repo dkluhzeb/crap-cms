@@ -10,11 +10,13 @@ mod write;
 use anyhow::Result;
 use mlua::Lua;
 
-use crate::{config::LocaleConfig, core::SharedRegistry, hooks::lifecycle::TxContext};
+use crate::{
+    config::LocaleConfig, core::SharedRegistry, db::DbConnection, hooks::lifecycle::TxContext,
+};
 
 /// Get the active transaction connection from Lua app_data.
 /// Returns an error if called outside of `run_hooks_with_conn`.
-pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const rusqlite::Connection> {
+pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const dyn DbConnection> {
     let ctx = lua.app_data_ref::<TxContext>().ok_or_else(|| {
         mlua::Error::RuntimeError(
             "crap.collections CRUD functions are only available inside hooks \
@@ -22,7 +24,7 @@ pub(crate) fn get_tx_conn(lua: &Lua) -> mlua::Result<*const rusqlite::Connection
                 .into(),
         )
     })?;
-    Ok(ctx.0)
+    Ok(ctx.as_ptr())
 }
 
 /// Register the CRUD functions on `crap.collections` and `crap.globals`.

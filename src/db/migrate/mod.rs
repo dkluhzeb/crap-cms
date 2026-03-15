@@ -12,8 +12,11 @@ pub use tracking::{
 
 use anyhow::{Context as _, Result, anyhow};
 
-use crate::db::DbPool;
-use crate::{config::LocaleConfig, core::SharedRegistry};
+use crate::{
+    config::LocaleConfig,
+    core::SharedRegistry,
+    db::{DbConnection, DbPool},
+};
 
 /// Sync all collection tables with their Lua definitions.
 pub fn sync_all(
@@ -26,47 +29,50 @@ pub fn sync_all(
         .transaction()
         .context("Failed to start migration transaction")?;
 
+    let ts_default = tx.timestamp_column_default();
+    let ts_type = tx.timestamp_column_type();
+
     // Create metadata table
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_meta (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL,
-            updated_at TEXT DEFAULT (datetime('now'))
-        );",
-    )
+            updated_at {ts_default}
+        );"
+    ))
     .context("Failed to create _crap_meta table")?;
 
     // Create migrations tracking table
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_migrations (
             filename TEXT PRIMARY KEY,
-            applied_at TEXT DEFAULT (datetime('now'))
-        );",
-    )
+            applied_at {ts_default}
+        );"
+    ))
     .context("Failed to create _crap_migrations table")?;
 
     // Create jobs table
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_jobs (
             id TEXT PRIMARY KEY,
             slug TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
             queue TEXT NOT NULL DEFAULT 'default',
-            data TEXT DEFAULT '{}',
+            data TEXT DEFAULT '{{}}',
             result TEXT,
             error TEXT,
             attempt INTEGER NOT NULL DEFAULT 0,
             max_attempts INTEGER NOT NULL DEFAULT 1,
             scheduled_by TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            started_at TEXT,
-            completed_at TEXT,
-            heartbeat_at TEXT
+            created_at {ts_default},
+            started_at {ts_type},
+            completed_at {ts_type},
+            heartbeat_at {ts_type}
         );
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);
-        CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);",
-    )
+        CREATE INDEX IF NOT EXISTS idx_crap_jobs_slug ON _crap_jobs(slug, status);"
+    ))
     .context("Failed to create _crap_jobs table")?;
 
     // Create user settings table (decoupled from auth collections)
@@ -79,7 +85,7 @@ pub fn sync_all(
     .context("Failed to create _crap_user_settings table")?;
 
     // Create image processing queue table
-    tx.execute_batch(
+    tx.execute_batch(&format!(
         "CREATE TABLE IF NOT EXISTS _crap_image_queue (
             id TEXT PRIMARY KEY,
             collection TEXT NOT NULL,
@@ -92,11 +98,11 @@ pub fn sync_all(
             url_value TEXT NOT NULL,
             status TEXT NOT NULL DEFAULT 'pending',
             error TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
-            completed_at TEXT
+            created_at {ts_default},
+            completed_at {ts_type}
         );
-        CREATE INDEX IF NOT EXISTS idx_crap_image_queue_status ON _crap_image_queue(status);",
-    )
+        CREATE INDEX IF NOT EXISTS idx_crap_image_queue_status ON _crap_image_queue(status);"
+    ))
     .context("Failed to create _crap_image_queue table")?;
 
     let reg = registry

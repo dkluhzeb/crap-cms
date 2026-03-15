@@ -3,8 +3,8 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashSet;
 
-use crate::db::DbPool;
 use crate::db::migrate::helpers::table_exists;
+use crate::db::{DbConnection, DbPool, DbValue};
 
 /// List all `*.lua` files in the migrations directory, sorted by filename (chronological).
 pub fn list_migration_files(migrations_dir: &std::path::Path) -> Result<Vec<String>> {
@@ -37,11 +37,10 @@ pub fn get_applied_migrations(pool: &DbPool) -> Result<HashSet<String>> {
     if !exists {
         return Ok(HashSet::new());
     }
-    let mut stmt = conn.prepare("SELECT filename FROM _crap_migrations")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let rows = conn.query_all("SELECT filename FROM _crap_migrations", &[])?;
     let mut set = HashSet::new();
     for r in rows {
-        set.insert(r?);
+        set.insert(r.get_string("filename")?);
     }
     Ok(set)
 }
@@ -54,12 +53,13 @@ pub fn get_applied_migrations_desc(pool: &DbPool) -> Result<Vec<String>> {
     if !exists {
         return Ok(Vec::new());
     }
-    let mut stmt = conn
-        .prepare("SELECT filename FROM _crap_migrations ORDER BY applied_at DESC, filename DESC")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+    let rows = conn.query_all(
+        "SELECT filename FROM _crap_migrations ORDER BY applied_at DESC, filename DESC",
+        &[],
+    )?;
     let mut list = Vec::new();
     for r in rows {
-        list.push(r?);
+        list.push(r.get_string("filename")?);
     }
     Ok(list)
 }
@@ -75,20 +75,26 @@ pub fn get_pending_migrations(
 }
 
 /// Record a migration as applied.
-pub fn record_migration(conn: &rusqlite::Connection, filename: &str) -> Result<()> {
+pub fn record_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
     conn.execute(
-        "INSERT INTO _crap_migrations (filename) VALUES (?1)",
-        [filename],
+        &format!(
+            "INSERT INTO _crap_migrations (filename) VALUES ({})",
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(filename.to_string())],
     )
     .with_context(|| format!("Failed to record migration {}", filename))?;
     Ok(())
 }
 
 /// Remove a migration record (for rollback).
-pub fn remove_migration(conn: &rusqlite::Connection, filename: &str) -> Result<()> {
+pub fn remove_migration(conn: &dyn DbConnection, filename: &str) -> Result<()> {
     conn.execute(
-        "DELETE FROM _crap_migrations WHERE filename = ?1",
-        [filename],
+        &format!(
+            "DELETE FROM _crap_migrations WHERE filename = {}",
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(filename.to_string())],
     )
     .with_context(|| format!("Failed to remove migration record {}", filename))?;
     Ok(())
@@ -97,17 +103,10 @@ pub fn remove_migration(conn: &rusqlite::Connection, filename: &str) -> Result<(
 /// Drop all user tables (for `migrate fresh`). Drops everything except sqlite internals.
 pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
     let conn = pool.get().context("Failed to get DB connection")?;
-    let mut stmt = conn.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-    )?;
-    let tables: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(0))?
-        .filter_map(|r| r.ok())
-        .collect();
-    drop(stmt);
+    let tables = conn.list_user_tables()?;
 
     for table in &tables {
-        conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", table), [])
+        conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", table), &[])
             .with_context(|| format!("Failed to drop table {}", table))?;
         tracing::info!("Dropped table: {}", table);
     }
@@ -117,26 +116,22 @@ pub fn drop_all_tables(pool: &DbPool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::DbPool;
+    use crate::config::CrapConfig;
+    use crate::db::{DbConnection, DbPool, pool};
+    use tempfile::TempDir;
 
-    fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-                | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
-        );
-        r2d2::Pool::builder()
-            .max_size(2)
-            .build(manager)
-            .expect("in-memory pool")
+    fn in_memory_pool() -> (TempDir, DbPool) {
+        let dir = TempDir::new().expect("temp dir");
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).expect("in-memory pool");
+        (dir, p)
     }
 
     // ── migration tracking ────────────────────────────────────────────────
 
     #[test]
     fn migration_tracking_roundtrip() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
@@ -153,7 +148,7 @@ mod tests {
 
     #[test]
     fn remove_migration_works() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
@@ -168,14 +163,14 @@ mod tests {
 
     #[test]
     fn get_applied_migrations_no_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let applied = get_applied_migrations(&pool).unwrap();
         assert!(applied.is_empty());
     }
 
     #[test]
     fn get_pending_migrations_filters_applied() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"
@@ -212,12 +207,12 @@ mod tests {
 
     #[test]
     fn drop_all_tables_cleans_everything() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         {
             let conn = pool.get().unwrap();
-            conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+            conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
                 .unwrap();
-            conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY)", [])
+            conn.execute("CREATE TABLE users (id TEXT PRIMARY KEY)", &[])
                 .unwrap();
         }
         drop_all_tables(&pool).unwrap();
@@ -230,14 +225,14 @@ mod tests {
 
     #[test]
     fn get_applied_migrations_desc_no_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let result = get_applied_migrations_desc(&pool).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
     fn get_applied_migrations_desc_ordering() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE _crap_migrations (filename TEXT PRIMARY KEY, applied_at TEXT DEFAULT (datetime('now')))"

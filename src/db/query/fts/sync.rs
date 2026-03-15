@@ -5,6 +5,7 @@ use anyhow::{Context as _, Result, bail};
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, Document, Registry},
+    db::{DbConnection, DbValue},
 };
 
 use super::{
@@ -16,21 +17,27 @@ use super::{
 /// Get column names from the FTS table (excludes `id`).
 ///
 /// Returns `None` if the FTS table doesn't exist or has no columns.
-fn get_fts_table_columns(conn: &rusqlite::Connection, fts_table: &str) -> Option<Vec<String>> {
+fn get_fts_table_columns(conn: &dyn DbConnection, fts_table: &str) -> Option<Vec<String>> {
     if !table_exists(conn, fts_table) {
         return None;
     }
 
     // Use PRAGMA table_info (not table_xinfo) — table_xinfo includes hidden
     // virtual columns like the table name and rank which aren't real data columns.
-    let mut stmt = conn
-        .prepare(&format!("PRAGMA table_info({})", fts_table))
+    let rows = conn
+        .query_all(&format!("PRAGMA table_info({})", fts_table), &[])
         .ok()?;
-    let cols: Vec<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
-        .ok()?
-        .filter_map(|r| r.ok())
-        .filter(|name| name != "id")
+
+    let cols: Vec<String> = rows
+        .into_iter()
+        .filter_map(|row| {
+            if let Some(DbValue::Text(name)) = row.get_value(1)
+                && name != "id"
+            {
+                return Some(name.clone());
+            }
+            None
+        })
         .collect();
 
     if cols.is_empty() { None } else { Some(cols) }
@@ -41,7 +48,7 @@ fn get_fts_table_columns(conn: &rusqlite::Connection, fts_table: &str) -> Option
 /// Called during migration (startup). Always rebuilds fresh — avoids drift detection.
 /// If there are no indexable columns, drops the FTS table if it exists.
 pub fn sync_fts_table(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
@@ -95,7 +102,7 @@ pub fn sync_fts_table(
 
 /// Fast path: no JSON richtext fields, pure SQL bulk insert.
 fn bulk_populate_fast(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     fts_table: &str,
     fts_fields: &[String],
@@ -119,7 +126,7 @@ fn bulk_populate_fast(
 
 /// Slow path: read rows and extract plain text from JSON richtext fields.
 fn bulk_populate_slow(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     fts_table: &str,
     fts_fields: &[String],
@@ -131,11 +138,9 @@ fn bulk_populate_slow(
         .map(|f| format!("COALESCE({}, '')", f))
         .collect();
     let select_sql = format!("SELECT id, {} FROM {}", select_fields.join(", "), slug);
-    let mut stmt = conn
-        .prepare(&select_sql)
-        .with_context(|| format!("Failed to prepare FTS population query for {}", slug))?;
-    let mut rows = stmt
-        .query([])
+
+    let db_rows = conn
+        .query_all(&select_sql, &[])
         .with_context(|| format!("Failed to query {} for FTS population", slug))?;
 
     let placeholders: Vec<String> = (1..=fts_fields.len() + 1)
@@ -148,13 +153,19 @@ fn bulk_populate_slow(
         placeholders.join(", ")
     );
 
-    while let Some(row) = rows.next()? {
-        let id: String = row.get(0)?;
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        params.push(Box::new(id));
+    for row in db_rows {
+        let id = match row.get_value(0) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => continue,
+        };
+
+        let mut params: Vec<DbValue> = vec![DbValue::Text(id)];
 
         for (i, col_name) in fts_fields.iter().enumerate() {
-            let raw: String = row.get(i + 1)?;
+            let raw = match row.get_value(i + 1) {
+                Some(DbValue::Text(s)) => s.clone(),
+                _ => String::new(),
+            };
             let is_json_rt = json_rt_cols.contains(col_name)
                 || col_name
                     .split("__")
@@ -166,12 +177,10 @@ fn bulk_populate_slow(
             } else {
                 raw
             };
-            params.push(Box::new(text));
+            params.push(DbValue::Text(text));
         }
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        conn.execute(&insert_sql, rusqlite::params_from_iter(param_refs.iter()))
+        conn.execute(&insert_sql, &params)
             .with_context(|| format!("FTS bulk insert in {}", fts_table))?;
     }
     Ok(())
@@ -185,7 +194,7 @@ fn bulk_populate_slow(
 ///
 /// If `def` is provided, JSON-format richtext fields are extracted to plain text.
 pub fn fts_upsert(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     doc: &Document,
     def: Option<&CollectionDefinition>,
@@ -196,7 +205,7 @@ pub fn fts_upsert(
 /// Like `fts_upsert`, but accepts an optional registry for resolving custom
 /// richtext node searchable attrs.
 pub fn fts_upsert_with_registry(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     doc: &Document,
     def: Option<&CollectionDefinition>,
@@ -217,13 +226,12 @@ pub fn fts_upsert_with_registry(
     // Delete existing row
     conn.execute(
         &format!("DELETE FROM {} WHERE id = ?1", fts_table),
-        [doc.id.as_ref()],
+        &[DbValue::Text(doc.id.to_string())],
     )
     .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
 
     // Insert new row
-    let mut values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-    values.push(Box::new(doc.id.to_string()));
+    let mut values: Vec<DbValue> = vec![DbValue::Text(doc.id.to_string())];
 
     for col_name in &fts_cols {
         let raw = doc
@@ -250,7 +258,7 @@ pub fn fts_upsert_with_registry(
         } else {
             raw.to_string()
         };
-        values.push(Box::new(text));
+        values.push(DbValue::Text(text));
     }
 
     let placeholders: Vec<String> = (1..=values.len()).map(|i| format!("?{}", i)).collect();
@@ -262,8 +270,7 @@ pub fn fts_upsert_with_registry(
         placeholders.join(", ")
     );
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = values.iter().map(|p| p.as_ref()).collect();
-    conn.execute(&sql, rusqlite::params_from_iter(param_refs.iter()))
+    conn.execute(&sql, &values)
         .with_context(|| format!("FTS upsert in {}", fts_table))?;
 
     Ok(())
@@ -272,15 +279,18 @@ pub fn fts_upsert_with_registry(
 /// Delete a document from the FTS index.
 ///
 /// No-op if the FTS table doesn't exist.
-pub fn fts_delete(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<()> {
+pub fn fts_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     let fts_table = fts_table_name(slug);
 
     if !table_exists(conn, &fts_table) {
         return Ok(());
     }
 
-    conn.execute(&format!("DELETE FROM {} WHERE id = ?1", fts_table), [id])
-        .with_context(|| format!("FTS delete in {}", fts_table))?;
+    conn.execute(
+        &format!("DELETE FROM {} WHERE id = ?1", fts_table),
+        &[DbValue::Text(id.to_string())],
+    )
+    .with_context(|| format!("FTS delete in {}", fts_table))?;
 
     Ok(())
 }
@@ -290,10 +300,12 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::query::fts::search::fts_search;
+    use crate::db::{BoxedConnection, DbValue, pool};
+    use tempfile::TempDir;
 
     fn text_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text).build()
@@ -305,8 +317,11 @@ mod tests {
         def
     }
 
-    fn setup_db() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+    fn setup_db() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -318,13 +333,17 @@ mod tests {
             )",
         )
         .unwrap();
-        conn
+        (dir, conn)
     }
 
-    fn insert_post(conn: &rusqlite::Connection, id: &str, title: &str, body: &str) {
+    fn insert_post(conn: &dyn DbConnection, id: &str, title: &str, body: &str) {
         conn.execute(
             "INSERT INTO posts (id, title, body, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
-            rusqlite::params![id, title, body],
+            &[
+                DbValue::Text(id.to_string()),
+                DbValue::Text(title.to_string()),
+                DbValue::Text(body.to_string()),
+            ],
         ).unwrap();
     }
 
@@ -346,31 +365,46 @@ mod tests {
 
     #[test]
     fn sync_creates_and_populates() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Hello World", "Body text");
         insert_post(&conn, "2", "Rust FTS", "Full text search");
 
         let def = simple_def(vec![text_field("title"), text_field("body")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
-        let exists: bool = conn
-            .query_row(
+        let exists = conn
+            .query_one(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='_fts_posts'",
-                [],
-                |row| row.get(0),
+                &[],
             )
-            .unwrap();
+            .unwrap()
+            .and_then(|row| {
+                if let Some(DbValue::Integer(n)) = row.get_value(0) {
+                    Some(*n != 0)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(false);
         assert!(exists);
 
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM _fts_posts", [], |row| row.get(0))
-            .unwrap();
+        let count = conn
+            .query_one("SELECT COUNT(*) FROM _fts_posts", &[])
+            .unwrap()
+            .and_then(|row| {
+                if let Some(DbValue::Integer(n)) = row.get_value(0) {
+                    Some(*n)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
         assert_eq!(count, 2);
     }
 
     #[test]
     fn sync_drops_when_no_fields() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         conn.execute_batch("CREATE VIRTUAL TABLE _fts_posts USING fts5(id UNINDEXED, title)")
             .unwrap();
 
@@ -379,19 +413,26 @@ mod tests {
         ]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
-        let exists: bool = conn
-            .query_row(
+        let exists = conn
+            .query_one(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name='_fts_posts'",
-                [],
-                |row| row.get(0),
+                &[],
             )
-            .unwrap();
+            .unwrap()
+            .and_then(|row| {
+                if let Some(DbValue::Integer(n)) = row.get_value(0) {
+                    Some(*n != 0)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(false);
         assert!(!exists);
     }
 
     #[test]
     fn sync_rebuilds_on_field_change() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Hello", "World");
 
         let mut def1 = simple_def(vec![text_field("title"), text_field("body")]);
@@ -411,7 +452,7 @@ mod tests {
 
     #[test]
     fn sync_fts_table_rejects_invalid_field_names() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let mut def = simple_def(vec![text_field("title")]);
         def.admin.list_searchable_fields = vec!["valid".into(), "has space".into()];
         let result = sync_fts_table(&conn, "posts", &def, &LocaleConfig::default());
@@ -426,7 +467,7 @@ mod tests {
 
     #[test]
     fn sync_fts_table_rejects_sql_injection_field_names() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let mut def = simple_def(vec![text_field("title")]);
         def.admin.list_searchable_fields = vec!["title; DROP TABLE posts".into()];
         let result = sync_fts_table(&conn, "posts", &def, &LocaleConfig::default());
@@ -435,7 +476,10 @@ mod tests {
 
     #[test]
     fn sync_fts_table_creates_locale_columns() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -448,8 +492,13 @@ mod tests {
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO posts (id, title__en, title__de, body) VALUES ('1', 'Hello', 'Hallo', 'Content')",
-            [],
+            "INSERT INTO posts (id, title__en, title__de, body) VALUES (?1, ?2, ?3, ?4)",
+            &[
+                DbValue::Text("1".into()),
+                DbValue::Text("Hello".into()),
+                DbValue::Text("Hallo".into()),
+                DbValue::Text("Content".into()),
+            ],
         )
         .unwrap();
 
@@ -472,14 +521,18 @@ mod tests {
 
     #[test]
     fn sync_fts_table_slow_path_json_richtext_bulk_populate() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT")
             .unwrap();
 
         let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Extracted content"}]}]}"#;
         conn.execute(
-            "INSERT INTO posts (id, title, content, created_at, updated_at) VALUES ('1', 'Test', ?1, datetime('now'), datetime('now'))",
-            [pm_json],
+            "INSERT INTO posts (id, title, content, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
+            &[
+                DbValue::Text("1".into()),
+                DbValue::Text("Test".into()),
+                DbValue::Text(pm_json.into()),
+            ],
         )
         .unwrap();
 
@@ -506,7 +559,10 @@ mod tests {
 
     #[test]
     fn sync_fts_table_slow_path_locale_richtext() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
         let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Hello locale"}]}]}"#;
         conn.execute_batch(&format!(
             "CREATE TABLE posts (id TEXT PRIMARY KEY, content__en TEXT, content__de TEXT, created_at TEXT, updated_at TEXT);
@@ -539,7 +595,7 @@ mod tests {
 
     #[test]
     fn upsert_and_search() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title"), text_field("body")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
@@ -555,7 +611,7 @@ mod tests {
 
     #[test]
     fn upsert_updates_existing() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Old Title", "");
         let def = simple_def(vec![text_field("title"), text_field("body")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
@@ -574,7 +630,7 @@ mod tests {
 
     #[test]
     fn delete_removes_from_index() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Searchable", "");
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
@@ -594,20 +650,23 @@ mod tests {
 
     #[test]
     fn upsert_noop_no_fts_table() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let doc = Document::new("1".to_string());
         fts_upsert(&conn, "posts", &doc, None).unwrap();
     }
 
     #[test]
     fn delete_noop_no_fts_table() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         fts_delete(&conn, "posts", "1").unwrap();
     }
 
     #[test]
     fn upsert_with_locale_columns() {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -639,7 +698,7 @@ mod tests {
 
     #[test]
     fn fts_upsert_json_richtext() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT")
             .unwrap();
 
@@ -654,8 +713,12 @@ mod tests {
 
         let pm_json = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Searchable text inside JSON"}]}]}"#;
         conn.execute(
-            "INSERT INTO posts (id, title, content, created_at, updated_at) VALUES ('1', 'Test', ?1, datetime('now'), datetime('now'))",
-            [pm_json],
+            "INSERT INTO posts (id, title, content, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
+            &[
+                DbValue::Text("1".into()),
+                DbValue::Text("Test".into()),
+                DbValue::Text(pm_json.into()),
+            ],
         )
         .unwrap();
 
@@ -675,7 +738,7 @@ mod tests {
     fn fts_upsert_with_registry_extracts_node_attrs() {
         use crate::core::{Registry, richtext::RichtextNodeDef};
 
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         conn.execute_batch("ALTER TABLE posts ADD COLUMN content TEXT")
             .unwrap();
 
@@ -726,7 +789,7 @@ mod tests {
     fn fts_upsert_with_registry_noop_no_fts_table() {
         use crate::core::Registry;
 
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let doc = Document::new("1".to_string());
         let registry = Registry::new();
         let result = fts_upsert_with_registry(&conn, "posts", &doc, None, Some(&registry));
@@ -735,7 +798,7 @@ mod tests {
 
     #[test]
     fn fts_upsert_with_registry_nil_inputs_use_plain_extraction() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
@@ -750,14 +813,14 @@ mod tests {
 
     #[test]
     fn get_fts_table_columns_nonexistent_returns_none() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let doc = Document::new("x".to_string());
         fts_upsert(&conn, "posts", &doc, None).unwrap();
     }
 
     #[test]
     fn fts_upsert_field_with_non_string_value_uses_empty() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 

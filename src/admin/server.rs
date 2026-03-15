@@ -38,7 +38,7 @@ use crate::{
         event::EventBus,
         rate_limit::LoginRateLimiter,
     },
-    db::{DbPool, query},
+    db::{DbConnection, DbPool, query},
     hooks::HookRunner,
     mcp::{
         McpServer,
@@ -343,8 +343,8 @@ async fn health_liveness() -> StatusCode {
 /// Readiness probe — returns 200 if DB pool is healthy, 503 otherwise.
 async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
     match state.pool.get() {
-        Ok(conn) => match conn.query_row("SELECT 1", [], |_| Ok(())) {
-            Ok(()) => StatusCode::OK,
+        Ok(conn) => match conn.query_one("SELECT 1", &[]) {
+            Ok(_) => StatusCode::OK,
             Err(_) => StatusCode::SERVICE_UNAVAILABLE,
         },
         Err(_) => StatusCode::SERVICE_UNAVAILABLE,

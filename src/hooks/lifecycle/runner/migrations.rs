@@ -16,7 +16,7 @@ impl HookRunner {
         &self,
         path: &Path,
         direction: &str,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
     ) -> Result<()> {
         let code = fs::read_to_string(path)
             .with_context(|| format!("Failed to read migration {}", path.display()))?;
@@ -24,7 +24,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
 
         // Inject connection for CRUD access
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(None));
 
         let result = (|| -> Result<()> {

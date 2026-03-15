@@ -1,11 +1,12 @@
 //! CRUD query functions for the `_crap_jobs` table.
 
 use crate::core::job::{JobRun, JobStatus};
+use crate::db::{DbConnection, DbRow, DbValue};
 use anyhow::{Context as _, Result};
 
 /// Insert a new pending job run.
 pub fn insert_job(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     data: &str,
     scheduled_by: &str,
@@ -13,10 +14,27 @@ pub fn insert_job(
     queue: &str,
 ) -> Result<JobRun> {
     let id = nanoid::nanoid!();
+    let (p1, p2, p3, p4, p5, p6) = (
+        conn.placeholder(1),
+        conn.placeholder(2),
+        conn.placeholder(3),
+        conn.placeholder(4),
+        conn.placeholder(5),
+        conn.placeholder(6),
+    );
     conn.execute(
-        "INSERT INTO _crap_jobs (id, slug, status, queue, data, max_attempts, scheduled_by)
-         VALUES (?1, ?2, 'pending', ?3, ?4, ?5, ?6)",
-        rusqlite::params![id, slug, queue, data, max_attempts, scheduled_by],
+        &format!(
+            "INSERT INTO _crap_jobs (id, slug, status, queue, data, max_attempts, scheduled_by)
+         VALUES ({p1}, {p2}, 'pending', {p3}, {p4}, {p5}, {p6})"
+        ),
+        &[
+            DbValue::Text(id.clone()),
+            DbValue::Text(slug.to_string()),
+            DbValue::Text(queue.to_string()),
+            DbValue::Text(data.to_string()),
+            DbValue::Integer(max_attempts as i64),
+            DbValue::Text(scheduled_by.to_string()),
+        ],
     )
     .context("Failed to insert job run")?;
 
@@ -31,54 +49,64 @@ pub fn insert_job(
 /// Atomically claim up to `limit` pending jobs by setting them to running.
 /// Returns the claimed jobs. Respects per-job concurrency limits.
 pub fn claim_pending_jobs(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     limit: usize,
     running_counts: &std::collections::HashMap<String, i64>,
     job_concurrency: &std::collections::HashMap<String, u32>,
 ) -> Result<Vec<JobRun>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, slug, queue, data, attempt, max_attempts, scheduled_by, created_at
+    let rows = conn.query_all(
+        &format!(
+            "SELECT id, slug, queue, data, attempt, max_attempts, scheduled_by, created_at
          FROM _crap_jobs
          WHERE status = 'pending'
          ORDER BY created_at ASC
-         LIMIT ?1",
+         LIMIT {}",
+            conn.placeholder(1)
+        ),
+        &[DbValue::Integer((limit * 2) as i64)],
     )?;
-
-    type PendingJobRow = (
-        String,
-        String,
-        String,
-        String,
-        u32,
-        u32,
-        Option<String>,
-        Option<String>,
-    );
-
-    let rows: Vec<PendingJobRow> = stmt
-        .query_map([limit as i64 * 2], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get::<_, i64>(4)? as u32,
-                row.get::<_, i64>(5)? as u32,
-                row.get(6)?,
-                row.get(7)?,
-            ))
-        })?
-        .filter_map(|r| r.ok())
-        .collect();
 
     let mut claimed = Vec::new();
     let mut extra_running: std::collections::HashMap<String, i64> =
         std::collections::HashMap::new();
 
-    for (id, slug, queue, data, attempt, max_attempts, scheduled_by, created_at) in rows {
+    for row in rows {
         if claimed.len() >= limit {
             break;
         }
+
+        let id = match row.get_value(0) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => continue,
+        };
+        let slug = match row.get_value(1) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => continue,
+        };
+        let queue = match row.get_value(2) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => "default".to_string(),
+        };
+        let data = match row.get_value(3) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => "{}".to_string(),
+        };
+        let attempt = match row.get_value(4) {
+            Some(DbValue::Integer(n)) => *n as u32,
+            _ => 0,
+        };
+        let max_attempts = match row.get_value(5) {
+            Some(DbValue::Integer(n)) => *n as u32,
+            _ => 1,
+        };
+        let scheduled_by: Option<String> = match row.get_value(6) {
+            Some(DbValue::Text(s)) => Some(s.clone()),
+            _ => None,
+        };
+        let created_at: Option<String> = match row.get_value(7) {
+            Some(DbValue::Text(s)) => Some(s.clone()),
+            _ => None,
+        };
 
         // Check per-job concurrency
         let max_conc = job_concurrency.get(&slug).copied().unwrap_or(1) as i64;
@@ -90,10 +118,12 @@ pub fn claim_pending_jobs(
         }
 
         // Claim the job
+        let now = conn.now_expr();
+        let p1 = conn.placeholder(1);
         let affected = conn.execute(
-            "UPDATE _crap_jobs SET status = 'running', started_at = datetime('now'), heartbeat_at = datetime('now'), attempt = attempt + 1
-             WHERE id = ?1 AND status = 'pending'",
-            [&id],
+            &format!("UPDATE _crap_jobs SET status = 'running', started_at = {now}, heartbeat_at = {now}, attempt = attempt + 1
+             WHERE id = {p1} AND status = 'pending'"),
+            &[DbValue::Text(id.clone())],
         )?;
 
         if affected > 0 {
@@ -119,38 +149,45 @@ pub fn claim_pending_jobs(
 }
 
 /// Mark a job as completed with an optional result.
-pub fn complete_job(
-    conn: &rusqlite::Connection,
-    id: &str,
-    result_json: Option<&str>,
-) -> Result<()> {
+pub fn complete_job(conn: &dyn DbConnection, id: &str, result_json: Option<&str>) -> Result<()> {
+    let result_val = match result_json {
+        Some(r) => DbValue::Text(r.to_string()),
+        None => DbValue::Null,
+    };
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
-        "UPDATE _crap_jobs SET status = 'completed', result = ?2, completed_at = datetime('now')
-         WHERE id = ?1",
-        rusqlite::params![id, result_json],
+        &format!(
+            "UPDATE _crap_jobs SET status = 'completed', result = {p2}, completed_at = {}
+         WHERE id = {p1}",
+            conn.now_expr()
+        ),
+        &[DbValue::Text(id.to_string()), result_val],
     )
     .context("Failed to complete job")?;
     Ok(())
 }
 
 /// Mark a job as failed. If should_retry is true and attempt < max_attempts, resets to pending.
-pub fn fail_job(
-    conn: &rusqlite::Connection,
-    id: &str,
-    error: &str,
-    should_retry: bool,
-) -> Result<()> {
+pub fn fail_job(conn: &dyn DbConnection, id: &str, error: &str, should_retry: bool) -> Result<()> {
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     if should_retry {
         conn.execute(
-            "UPDATE _crap_jobs SET status = 'pending', error = ?2, started_at = NULL, completed_at = NULL
-             WHERE id = ?1",
-            rusqlite::params![id, error],
-        ).context("Failed to retry job")?;
+            &format!("UPDATE _crap_jobs SET status = 'pending', error = {p2}, started_at = NULL, completed_at = NULL
+             WHERE id = {p1}"),
+            &[DbValue::Text(id.to_string()), DbValue::Text(error.to_string())],
+        )
+        .context("Failed to retry job")?;
     } else {
         conn.execute(
-            "UPDATE _crap_jobs SET status = 'failed', error = ?2, completed_at = datetime('now')
-             WHERE id = ?1",
-            rusqlite::params![id, error],
+            &format!(
+                "UPDATE _crap_jobs SET status = 'failed', error = {p2}, completed_at = {}
+             WHERE id = {p1}",
+                conn.now_expr()
+            ),
+            &[
+                DbValue::Text(id.to_string()),
+                DbValue::Text(error.to_string()),
+            ],
         )
         .context("Failed to fail job")?;
     }
@@ -158,71 +195,76 @@ pub fn fail_job(
 }
 
 /// Update the heartbeat timestamp for a running job.
-pub fn update_heartbeat(conn: &rusqlite::Connection, id: &str) -> Result<()> {
+pub fn update_heartbeat(conn: &dyn DbConnection, id: &str) -> Result<()> {
     conn.execute(
-        "UPDATE _crap_jobs SET heartbeat_at = datetime('now') WHERE id = ?1",
-        [id],
+        &format!(
+            "UPDATE _crap_jobs SET heartbeat_at = {} WHERE id = {}",
+            conn.now_expr(),
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(id.to_string())],
     )
     .context("Failed to update heartbeat")?;
     Ok(())
 }
 
 /// Find jobs that are marked as running but have a stale heartbeat.
-pub fn find_stale_jobs(
-    conn: &rusqlite::Connection,
-    stale_threshold_secs: u64,
-) -> Result<Vec<JobRun>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
-                scheduled_by, created_at, started_at, completed_at, heartbeat_at
-         FROM _crap_jobs
-         WHERE status = 'running'
-           AND (heartbeat_at IS NULL OR heartbeat_at < datetime('now', ?1))",
+pub fn find_stale_jobs(conn: &dyn DbConnection, stale_threshold_secs: u64) -> Result<Vec<JobRun>> {
+    let (offset_sql, offset_param) = conn.date_offset_expr(stale_threshold_secs as i64, 1);
+    let rows = conn.query_all(
+        &format!(
+            "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
+                    scheduled_by, created_at, started_at, completed_at, heartbeat_at
+             FROM _crap_jobs
+             WHERE status = 'running'
+               AND (heartbeat_at IS NULL OR heartbeat_at < {})",
+            offset_sql
+        ),
+        &[offset_param],
     )?;
 
-    let threshold = format!("-{} seconds", stale_threshold_secs);
-    let jobs = stmt
-        .query_map([&threshold], row_to_job_run)?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(jobs)
+    rows.iter().map(row_to_job_run).collect()
 }
 
 /// Count running jobs, optionally filtered by slug.
-pub fn count_running(conn: &rusqlite::Connection, slug: Option<&str>) -> Result<i64> {
-    match slug {
-        Some(s) => {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM _crap_jobs WHERE status = 'running' AND slug = ?1",
-                [s],
-                |row| row.get(0),
-            )?;
-            Ok(count)
-        }
-        None => {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM _crap_jobs WHERE status = 'running'",
-                [],
-                |row| row.get(0),
-            )?;
-            Ok(count)
-        }
+pub fn count_running(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64> {
+    let row = match slug {
+        Some(s) => conn.query_one(
+            &format!(
+                "SELECT COUNT(*) FROM _crap_jobs WHERE status = 'running' AND slug = {}",
+                conn.placeholder(1)
+            ),
+            &[DbValue::Text(s.to_string())],
+        )?,
+        None => conn.query_one(
+            "SELECT COUNT(*) FROM _crap_jobs WHERE status = 'running'",
+            &[],
+        )?,
+    };
+    match row.as_ref().and_then(|r| r.get_value(0)) {
+        Some(DbValue::Integer(n)) => Ok(*n),
+        _ => Ok(0),
     }
 }
 
 /// Count running jobs per slug, returned as a HashMap.
 pub fn count_running_per_slug(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
 ) -> Result<std::collections::HashMap<String, i64>> {
-    let mut stmt = conn
-        .prepare("SELECT slug, COUNT(*) FROM _crap_jobs WHERE status = 'running' GROUP BY slug")?;
+    let rows = conn.query_all(
+        "SELECT slug, COUNT(*) FROM _crap_jobs WHERE status = 'running' GROUP BY slug",
+        &[],
+    )?;
     let mut map = std::collections::HashMap::new();
-    let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-    })?;
     for row in rows {
-        let (slug, count) = row?;
+        let slug = match row.get_value(0) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => continue,
+        };
+        let count = match row.get_value(1) {
+            Some(DbValue::Integer(n)) => *n,
+            _ => 0,
+        };
         map.insert(slug, count);
     }
     Ok(map)
@@ -230,7 +272,7 @@ pub fn count_running_per_slug(
 
 /// List job runs with optional filters.
 pub fn list_job_runs(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: Option<&str>,
     status: Option<&str>,
     limit: i64,
@@ -241,155 +283,190 @@ pub fn list_job_runs(
                 scheduled_by, created_at, started_at, completed_at, heartbeat_at
          FROM _crap_jobs WHERE 1=1",
     );
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut params: Vec<DbValue> = Vec::new();
 
     if let Some(s) = slug {
-        params.push(Box::new(s.to_string()));
-        sql.push_str(&format!(" AND slug = ?{}", params.len()));
+        params.push(DbValue::Text(s.to_string()));
+        sql.push_str(&format!(" AND slug = {}", conn.placeholder(params.len())));
     }
     if let Some(st) = status {
-        params.push(Box::new(st.to_string()));
-        sql.push_str(&format!(" AND status = ?{}", params.len()));
+        params.push(DbValue::Text(st.to_string()));
+        sql.push_str(&format!(" AND status = {}", conn.placeholder(params.len())));
     }
 
-    params.push(Box::new(limit));
+    params.push(DbValue::Integer(limit));
     sql.push_str(&format!(
-        " ORDER BY created_at DESC LIMIT ?{}",
-        params.len()
+        " ORDER BY created_at DESC LIMIT {}",
+        conn.placeholder(params.len())
     ));
-    params.push(Box::new(offset));
-    sql.push_str(&format!(" OFFSET ?{}", params.len()));
+    params.push(DbValue::Integer(offset));
+    sql.push_str(&format!(" OFFSET {}", conn.placeholder(params.len())));
 
-    let mut stmt = conn.prepare(&sql)?;
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    let jobs = stmt
-        .query_map(param_refs.as_slice(), row_to_job_run)?
-        .filter_map(|r| r.ok())
-        .collect();
-
-    Ok(jobs)
+    let rows = conn.query_all(&sql, &params)?;
+    rows.iter().map(row_to_job_run).collect()
 }
 
 /// Get a single job run by ID.
-pub fn get_job_run(conn: &rusqlite::Connection, id: &str) -> Result<Option<JobRun>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
+pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> {
+    let row = conn.query_one(
+        &format!(
+            "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
                 scheduled_by, created_at, started_at, completed_at, heartbeat_at
-         FROM _crap_jobs WHERE id = ?1",
+         FROM _crap_jobs WHERE id = {}",
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(id.to_string())],
     )?;
 
-    let mut rows = stmt.query_map([id], row_to_job_run)?;
-
-    match rows.next() {
-        Some(Ok(job)) => Ok(Some(job)),
-        Some(Err(e)) => Err(e.into()),
+    match row {
+        Some(r) => Ok(Some(row_to_job_run(&r)?)),
         None => Ok(None),
     }
 }
 
 /// Delete completed/failed job runs older than the given threshold.
 /// Returns the number of rows deleted.
-pub fn purge_old_jobs(conn: &rusqlite::Connection, older_than_secs: u64) -> Result<i64> {
-    let threshold = format!("-{} seconds", older_than_secs);
+pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i64> {
+    let (offset_sql, offset_param) = conn.date_offset_expr(older_than_secs as i64, 1);
     let deleted = conn.execute(
-        "DELETE FROM _crap_jobs
-         WHERE status IN ('completed', 'failed', 'stale')
-           AND created_at < datetime('now', ?1)",
-        [&threshold],
+        &format!(
+            "DELETE FROM _crap_jobs
+             WHERE status IN ('completed', 'failed', 'stale')
+               AND created_at < {}",
+            offset_sql
+        ),
+        &[offset_param],
     )? as i64;
 
     Ok(deleted)
 }
 
 /// Count failed jobs within a recent time window (in seconds).
-pub fn count_failed_since(conn: &rusqlite::Connection, since_secs: u64) -> Result<i64> {
-    let threshold = format!("-{} seconds", since_secs);
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM _crap_jobs
-         WHERE status = 'failed'
-           AND completed_at >= datetime('now', ?1)",
-        [&threshold],
-        |row| row.get(0),
+pub fn count_failed_since(conn: &dyn DbConnection, since_secs: u64) -> Result<i64> {
+    let (offset_sql, offset_param) = conn.date_offset_expr(since_secs as i64, 1);
+    let row = conn.query_one(
+        &format!(
+            "SELECT COUNT(*) FROM _crap_jobs
+             WHERE status = 'failed'
+               AND completed_at >= {}",
+            offset_sql
+        ),
+        &[offset_param],
     )?;
-
-    Ok(count)
+    match row.as_ref().and_then(|r| r.get_value(0)) {
+        Some(DbValue::Integer(n)) => Ok(*n),
+        _ => Ok(0),
+    }
 }
 
 /// Count pending jobs that have been waiting longer than the given threshold (in seconds).
-pub fn count_pending_older_than(conn: &rusqlite::Connection, older_than_secs: u64) -> Result<i64> {
-    let threshold = format!("-{} seconds", older_than_secs);
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM _crap_jobs
-         WHERE status = 'pending'
-           AND created_at < datetime('now', ?1)",
-        [&threshold],
-        |row| row.get(0),
+pub fn count_pending_older_than(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i64> {
+    let (offset_sql, offset_param) = conn.date_offset_expr(older_than_secs as i64, 1);
+    let row = conn.query_one(
+        &format!(
+            "SELECT COUNT(*) FROM _crap_jobs
+             WHERE status = 'pending'
+               AND created_at < {}",
+            offset_sql
+        ),
+        &[offset_param],
     )?;
-
-    Ok(count)
+    match row.as_ref().and_then(|r| r.get_value(0)) {
+        Some(DbValue::Integer(n)) => Ok(*n),
+        _ => Ok(0),
+    }
 }
 
 /// Get the most recent completed run for a given job slug.
-pub fn last_completed_run(conn: &rusqlite::Connection, slug: &str) -> Result<Option<JobRun>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
+pub fn last_completed_run(conn: &dyn DbConnection, slug: &str) -> Result<Option<JobRun>> {
+    let row = conn.query_one(
+        &format!(
+            "SELECT id, slug, status, queue, data, result, error, attempt, max_attempts,
                 scheduled_by, created_at, started_at, completed_at, heartbeat_at
          FROM _crap_jobs
-         WHERE slug = ?1 AND status = 'completed'
+         WHERE slug = {} AND status = 'completed'
          ORDER BY completed_at DESC
          LIMIT 1",
+            conn.placeholder(1)
+        ),
+        &[DbValue::Text(slug.to_string())],
     )?;
-    let mut rows = stmt.query_map([slug], row_to_job_run)?;
 
-    match rows.next() {
-        Some(Ok(job)) => Ok(Some(job)),
-        Some(Err(e)) => Err(e.into()),
+    match row {
+        Some(r) => Ok(Some(row_to_job_run(&r)?)),
         None => Ok(None),
     }
 }
 
 /// Mark a running job as stale.
-pub fn mark_stale(conn: &rusqlite::Connection, id: &str, error: &str) -> Result<()> {
+pub fn mark_stale(conn: &dyn DbConnection, id: &str, error: &str) -> Result<()> {
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     conn.execute(
-        "UPDATE _crap_jobs SET status = 'stale', error = ?2, completed_at = datetime('now')
-         WHERE id = ?1",
-        rusqlite::params![id, error],
+        &format!(
+            "UPDATE _crap_jobs SET status = 'stale', error = {p2}, completed_at = {}
+         WHERE id = {p1}",
+            conn.now_expr()
+        ),
+        &[
+            DbValue::Text(id.to_string()),
+            DbValue::Text(error.to_string()),
+        ],
     )?;
 
     Ok(())
 }
 
-fn row_to_job_run(row: &rusqlite::Row) -> rusqlite::Result<JobRun> {
-    let id: String = row.get(0)?;
-    let slug: String = row.get(1)?;
-    let status_str: String = row.get(2)?;
+fn row_to_job_run(row: &DbRow) -> Result<JobRun> {
+    let get_text = |idx: usize, default: &str| -> String {
+        match row.get_value(idx) {
+            Some(DbValue::Text(s)) => s.clone(),
+            _ => default.to_string(),
+        }
+    };
+    let get_opt_text = |idx: usize| -> Option<String> {
+        match row.get_value(idx) {
+            Some(DbValue::Text(s)) => Some(s.clone()),
+            _ => None,
+        }
+    };
+    let get_i64 = |idx: usize| -> i64 {
+        match row.get_value(idx) {
+            Some(DbValue::Integer(n)) => *n,
+            _ => 0,
+        }
+    };
+
+    let id = get_text(0, "");
+    let slug = get_text(1, "");
+    let status_str = get_text(2, "pending");
     let status = JobStatus::from_name(&status_str).unwrap_or(JobStatus::Pending);
+
     let mut b = JobRun::builder(id, slug)
         .status(status)
-        .queue(row.get::<_, String>(3)?)
-        .data(row.get::<_, String>(4).unwrap_or_else(|_| "{}".to_string()))
-        .attempt(row.get::<_, i64>(7).unwrap_or(0) as u32)
-        .max_attempts(row.get::<_, i64>(8).unwrap_or(1) as u32);
+        .queue(get_text(3, "default"))
+        .data(get_text(4, "{}"))
+        .attempt(get_i64(7) as u32)
+        .max_attempts(get_i64(8) as u32);
 
-    if let Some(r) = row.get::<_, Option<String>>(5)? {
+    if let Some(r) = get_opt_text(5) {
         b = b.result(r);
     }
-    if let Some(e) = row.get::<_, Option<String>>(6)? {
+    if let Some(e) = get_opt_text(6) {
         b = b.error(e);
     }
-    if let Some(sb) = row.get::<_, Option<String>>(9)? {
+    if let Some(sb) = get_opt_text(9) {
         b = b.scheduled_by(sb);
     }
-    if let Some(ca) = row.get::<_, Option<String>>(10)? {
+    if let Some(ca) = get_opt_text(10) {
         b = b.created_at(ca);
     }
-    if let Some(sa) = row.get::<_, Option<String>>(11)? {
+    if let Some(sa) = get_opt_text(11) {
         b = b.started_at(sa);
     }
-    if let Some(ca) = row.get::<_, Option<String>>(12)? {
+    if let Some(ca) = get_opt_text(12) {
         b = b.completed_at(ca);
     }
-    if let Some(ha) = row.get::<_, Option<String>>(13)? {
+    if let Some(ha) = get_opt_text(13) {
         b = b.heartbeat_at(ha);
     }
 
@@ -399,9 +476,15 @@ fn row_to_job_run(row: &rusqlite::Row) -> rusqlite::Result<JobRun> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
+    use crate::db::{BoxedConnection, pool};
+    use tempfile::TempDir;
 
-    fn setup_db() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+    fn setup_db() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE _crap_jobs (
                 id TEXT PRIMARY KEY,
@@ -424,12 +507,12 @@ mod tests {
             CREATE INDEX idx_crap_jobs_slug ON _crap_jobs(slug, status);",
         )
         .unwrap();
-        conn
+        (dir, conn)
     }
 
     #[test]
     fn test_insert_and_get_job() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test_job", "{}", "manual", 1, "default").unwrap();
         assert_eq!(job.slug, "test_job");
         assert_eq!(job.status, JobStatus::Pending);
@@ -441,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_claim_pending_jobs() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
 
@@ -458,7 +541,7 @@ mod tests {
 
     #[test]
     fn test_claim_respects_concurrency() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_job(&conn, "limited", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "limited", "{}", "cron", 1, "default").unwrap();
 
@@ -472,12 +555,12 @@ mod tests {
 
     #[test]
     fn test_complete_job() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
         // Claim it first
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
-            [&job.id],
+            &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
@@ -489,11 +572,11 @@ mod tests {
 
     #[test]
     fn test_fail_job_no_retry() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
-            [&job.id],
+            &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
@@ -505,11 +588,11 @@ mod tests {
 
     #[test]
     fn test_fail_job_with_retry() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 3, "default").unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', attempt = 1 WHERE id = ?1",
-            [&job.id],
+            &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
@@ -520,12 +603,12 @@ mod tests {
 
     #[test]
     fn test_count_running() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
-            [],
+            &[],
         )
         .unwrap();
 
@@ -536,7 +619,7 @@ mod tests {
 
     #[test]
     fn test_list_job_runs() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "manual", 1, "default").unwrap();
 
@@ -549,15 +632,15 @@ mod tests {
 
     #[test]
     fn test_purge_old_jobs() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         // Insert a completed job with old timestamp
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('old1', 'test', 'completed', datetime('now', '-30 days'))",
-            [],
+            &[],
         ).unwrap();
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('new1', 'test', 'completed', datetime('now'))",
-            [],
+            &[],
         ).unwrap();
 
         let deleted = purge_old_jobs(&conn, 86400 * 7).unwrap(); // 7 days
@@ -570,11 +653,11 @@ mod tests {
 
     #[test]
     fn test_mark_stale() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
-            [&job.id],
+            &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
@@ -586,11 +669,11 @@ mod tests {
 
     #[test]
     fn test_update_heartbeat() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE id = ?1",
-            [&job.id],
+            &[DbValue::Text(job.id.clone())],
         )
         .unwrap();
 
@@ -606,19 +689,19 @@ mod tests {
 
     #[test]
     fn test_count_running_per_slug() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
 
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
-            [],
+            &[],
         )
         .unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_b'",
-            [],
+            &[],
         )
         .unwrap();
 
@@ -629,19 +712,19 @@ mod tests {
 
     #[test]
     fn test_get_job_run_not_found() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let result = get_job_run(&conn, "nonexistent").unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn test_list_job_runs_with_status_filter() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_job(&conn, "job_a", "{}", "cron", 1, "default").unwrap();
         insert_job(&conn, "job_b", "{}", "cron", 1, "default").unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'job_a'",
-            [],
+            &[],
         )
         .unwrap();
 
@@ -656,12 +739,12 @@ mod tests {
 
     #[test]
     fn test_find_stale_jobs() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let job = insert_job(&conn, "test", "{}", "manual", 1, "default").unwrap();
         // Set job as running with a stale heartbeat
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-3600 seconds') WHERE id = ?1",
-            [&job.id],
+            &[DbValue::Text(job.id.clone())],
         ).unwrap();
 
         let stale = find_stale_jobs(&conn, 60).unwrap();
@@ -675,21 +758,21 @@ mod tests {
 
     #[test]
     fn test_count_failed_since() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         // Insert a recently failed job
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f1', 'test', 'failed', datetime('now'))",
-            [],
+            &[],
         ).unwrap();
         // Insert an old failed job
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('f2', 'test', 'failed', datetime('now', '-48 hours'))",
-            [],
+            &[],
         ).unwrap();
         // Insert a completed job (should not count)
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', datetime('now'))",
-            [],
+            &[],
         ).unwrap();
 
         let count = count_failed_since(&conn, 86400).unwrap(); // 24h
@@ -701,16 +784,16 @@ mod tests {
 
     #[test]
     fn test_count_pending_older_than() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         // Insert a pending job from 10 minutes ago
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p1', 'test', 'pending', datetime('now', '-600 seconds'))",
-            [],
+            &[],
         ).unwrap();
         // Insert a recent pending job
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, created_at) VALUES ('p2', 'test', 'pending', datetime('now'))",
-            [],
+            &[],
         ).unwrap();
 
         let count = count_pending_older_than(&conn, 300).unwrap(); // 5 min
@@ -722,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_last_completed_run() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
 
         // No completed runs
         let last = last_completed_run(&conn, "test").unwrap();
@@ -731,11 +814,11 @@ mod tests {
         // Add a completed run
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c1', 'test', 'completed', datetime('now', '-1 hour'))",
-            [],
+            &[],
         ).unwrap();
         conn.execute(
             "INSERT INTO _crap_jobs (id, slug, status, completed_at) VALUES ('c2', 'test', 'completed', datetime('now'))",
-            [],
+            &[],
         ).unwrap();
 
         let last = last_completed_run(&conn, "test").unwrap().unwrap();

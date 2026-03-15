@@ -7,7 +7,9 @@ use std::collections::HashMap;
 use crate::core::{
     CollectionDefinition, Document, collection::GlobalDefinition, document::DocumentBuilder,
 };
-use crate::db::{DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query};
+use crate::db::{
+    DbConnection, DbPool, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, query,
+};
 
 /// Find documents (read-only, no transaction needed).
 pub fn find_documents(
@@ -66,7 +68,7 @@ pub fn get_global(
 /// - Hydration: join table data (blocks, arrays, has-many) is hydrated unless
 ///   a draft snapshot was used (snapshots already contain everything).
 pub fn find_by_id_full(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     id: &str,

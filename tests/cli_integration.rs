@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::auth;
-use crap_cms::db::{DbPool, migrate, pool, query};
+use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 
@@ -1171,13 +1171,11 @@ fn import_basic() {
                 .join(", "),
             placeholders.join(", ")
         );
-        let params: Vec<Box<dyn rusqlite::types::ToSql>> = parent_vals
+        let db_params: Vec<DbValue> = parent_vals
             .iter()
-            .map(|v| Box::new(v.clone()) as Box<dyn rusqlite::types::ToSql>)
+            .map(|v| DbValue::Text(v.clone()))
             .collect();
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|p| p.as_ref()).collect();
-        tx.execute(&sql, param_refs.as_slice()).unwrap();
+        tx.execute(&sql, &db_params).unwrap();
     }
     tx.commit().unwrap();
 
@@ -1222,7 +1220,10 @@ fn import_collection_filter() {
                 "INSERT OR REPLACE INTO \"{}\" (id, title) VALUES (?1, ?2)",
                 slug
             ),
-            rusqlite::params![id, title],
+            &[
+                DbValue::Text(id.to_string()),
+                DbValue::Text(title.to_string()),
+            ],
         )
         .unwrap();
     }
@@ -1255,7 +1256,10 @@ fn import_preserves_ids() {
     let tx = conn.transaction().unwrap();
     tx.execute(
         "INSERT OR REPLACE INTO posts (id, title) VALUES (?1, ?2)",
-        rusqlite::params!["custom-id-123", "Custom ID Post"],
+        &[
+            DbValue::Text("custom-id-123".into()),
+            DbValue::Text("Custom ID Post".into()),
+        ],
     )
     .unwrap();
     tx.commit().unwrap();
@@ -1278,11 +1282,11 @@ fn import_with_timestamps() {
     let tx = conn.transaction().unwrap();
     tx.execute(
         "INSERT OR REPLACE INTO posts (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![
-            "ts-post",
-            "Timestamped",
-            "2024-01-01 00:00:00",
-            "2024-06-15 12:30:00"
+        &[
+            DbValue::Text("ts-post".into()),
+            DbValue::Text("Timestamped".into()),
+            DbValue::Text("2024-01-01 00:00:00".into()),
+            DbValue::Text("2024-06-15 12:30:00".into()),
         ],
     )
     .unwrap();

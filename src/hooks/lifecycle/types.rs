@@ -59,7 +59,44 @@ pub enum FieldHookEvent {
 /// Raw pointer wrapper for injecting a transaction/connection into Lua CRUD
 /// functions via `lua.set_app_data()`. Only valid between `set_app_data` and
 /// `remove_app_data` calls in `run_hooks_with_conn`.
-pub(crate) struct TxContext(pub(crate) *const rusqlite::Connection);
+///
+/// Stores the fat pointer as two `usize` words (data pointer + vtable pointer)
+/// to keep the struct `'static` — `mlua::set_app_data` requires `T: 'static`,
+/// but the actual connection reference has a shorter lifetime. The caller
+/// guarantees the connection outlives the Lua call.
+pub(crate) struct TxContext {
+    data: usize,
+    vtable: usize,
+}
+
+impl TxContext {
+    /// Construct from a reference to any `DbConnection`.
+    ///
+    /// # Safety
+    /// The caller must call `lua.remove_app_data::<TxContext>()` before the
+    /// connection referenced by `conn` is dropped. The pointer is only
+    /// dereferenced inside `get_tx_conn`, which runs while the Lua VM is
+    /// locked and the connection is still alive.
+    pub(crate) fn new(conn: &dyn crate::db::DbConnection) -> Self {
+        // Decompose the fat pointer into its two raw words.
+        // `*const dyn Trait` is a (data_ptr, vtable_ptr) pair.
+        // We store them as `usize` so the struct is `'static`.
+        let fat_ptr: *const dyn crate::db::DbConnection = conn;
+        // SAFETY: *const dyn Trait is repr(data_ptr, vtable_ptr) on all
+        // supported platforms. We transmute to [usize; 2] to erase lifetimes.
+        let [data, vtable]: [usize; 2] = unsafe { std::mem::transmute(fat_ptr) };
+        Self { data, vtable }
+    }
+
+    /// Reconstruct the fat pointer from the stored words.
+    ///
+    /// # Safety
+    /// Must only be called while the original connection is still alive.
+    pub(crate) fn as_ptr(&self) -> *const dyn crate::db::DbConnection {
+        let words: [usize; 2] = [self.data, self.vtable];
+        unsafe { std::mem::transmute(words) }
+    }
+}
 
 // Safety: TxContext is only stored in Lua app_data while the originating
 // Connection/Transaction is alive and the Lua mutex is held. The pointer

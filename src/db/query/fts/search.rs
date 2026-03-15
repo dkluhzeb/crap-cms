@@ -2,19 +2,16 @@
 
 use anyhow::{Context as _, Result};
 
+use crate::db::{DbConnection, DbValue};
+
 /// FTS5 table name for a collection.
 pub(super) fn fts_table_name(slug: &str) -> String {
     format!("_fts_{}", slug)
 }
 
 /// Check if a table exists in the database.
-pub(super) fn table_exists(conn: &rusqlite::Connection, name: &str) -> bool {
-    conn.query_row(
-        "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",
-        [name],
-        |row| row.get(0),
-    )
-    .unwrap_or(false)
+pub(super) fn table_exists(conn: &dyn DbConnection, name: &str) -> bool {
+    conn.table_exists(name).unwrap_or(false)
 }
 
 /// Sanitize a user search query for FTS5 with prefix matching.
@@ -44,7 +41,7 @@ pub fn sanitize_fts_query(input: &str) -> String {
 /// Returns empty vec if the FTS table doesn't exist (graceful degradation).
 /// Returns empty vec if the query is empty after sanitization.
 pub fn fts_search(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     query: &str,
     limit: i64,
@@ -67,14 +64,19 @@ pub fn fts_search(
         fts_table, fts_table
     );
 
-    let mut stmt = conn
-        .prepare(&sql)
-        .with_context(|| format!("Failed to prepare FTS search on {}", fts_table))?;
+    let rows = conn
+        .query_all(&sql, &[DbValue::Text(sanitized), DbValue::Integer(limit)])
+        .with_context(|| format!("FTS search on {}", fts_table))?;
 
-    let ids: Vec<String> = stmt
-        .query_map(rusqlite::params![sanitized, limit], |row| row.get(0))
-        .with_context(|| format!("FTS search on {}", fts_table))?
-        .filter_map(|r| r.ok())
+    let ids = rows
+        .into_iter()
+        .filter_map(|row| {
+            if let Some(DbValue::Text(s)) = row.get_value(0) {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
         .collect();
 
     Ok(ids)
@@ -85,7 +87,7 @@ pub fn fts_search(
 /// Returns `None` if the FTS table doesn't exist or search is empty.
 /// Returns `Some((clause_fragment, sanitized_query))` to be appended to a WHERE.
 pub fn fts_where_clause(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     search: &str,
 ) -> Option<(String, String)> {
@@ -112,10 +114,12 @@ pub fn fts_where_clause(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::db::query::fts::sync::sync_fts_table;
+    use crate::db::{BoxedConnection, DbValue, pool};
+    use tempfile::TempDir;
 
     fn text_field(name: &str) -> FieldDefinition {
         FieldDefinition::builder(name, FieldType::Text).build()
@@ -127,8 +131,11 @@ mod tests {
         def
     }
 
-    fn setup_db() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+    fn setup_db() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -140,13 +147,17 @@ mod tests {
             )",
         )
         .unwrap();
-        conn
+        (dir, conn)
     }
 
-    fn insert_post(conn: &rusqlite::Connection, id: &str, title: &str, body: &str) {
+    fn insert_post(conn: &dyn DbConnection, id: &str, title: &str, body: &str) {
         conn.execute(
             "INSERT INTO posts (id, title, body, created_at, updated_at) VALUES (?1, ?2, ?3, datetime('now'), datetime('now'))",
-            rusqlite::params![id, title, body],
+            &[
+                DbValue::Text(id.to_string()),
+                DbValue::Text(title.to_string()),
+                DbValue::Text(body.to_string()),
+            ],
         ).unwrap();
     }
 
@@ -185,14 +196,14 @@ mod tests {
 
     #[test]
     fn search_no_fts_table_returns_empty() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let results = fts_search(&conn, "posts", "hello", 10).unwrap();
         assert!(results.is_empty());
     }
 
     #[test]
     fn search_empty_query_returns_empty() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
@@ -202,7 +213,7 @@ mod tests {
 
     #[test]
     fn search_respects_limit() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         for i in 1..=5 {
             insert_post(&conn, &format!("id{}", i), &format!("Rust post {}", i), "");
         }
@@ -215,7 +226,7 @@ mod tests {
 
     #[test]
     fn search_relevance_ranking() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_post(
             &conn,
             "1",
@@ -236,7 +247,7 @@ mod tests {
 
     #[test]
     fn where_clause_with_fts_table() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Hello", "");
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
@@ -250,13 +261,13 @@ mod tests {
 
     #[test]
     fn where_clause_no_fts_table() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         assert!(fts_where_clause(&conn, "posts", "Hello").is_none());
     }
 
     #[test]
     fn where_clause_empty_query() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         let def = simple_def(vec![text_field("title")]);
         sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
         assert!(fts_where_clause(&conn, "posts", "").is_none());
@@ -264,7 +275,7 @@ mod tests {
 
     #[test]
     fn fts_where_clause_integrates_with_query() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db();
         insert_post(&conn, "1", "Rust Programming", "Learn Rust");
         insert_post(&conn, "2", "Python Programming", "Learn Python");
         insert_post(&conn, "3", "Rust Web", "Web development with Rust");
@@ -278,11 +289,16 @@ mod tests {
             "SELECT id FROM posts WHERE status IS NULL AND {} ORDER BY id",
             clause
         );
-        let mut stmt = conn.prepare(&sql).unwrap();
-        let ids: Vec<String> = stmt
-            .query_map([&query], |row| row.get(0))
-            .unwrap()
-            .filter_map(|r| r.ok())
+        let rows = conn.query_all(&sql, &[DbValue::Text(query)]).unwrap();
+        let ids: Vec<String> = rows
+            .into_iter()
+            .filter_map(|row| {
+                if let Some(DbValue::Text(s)) = row.get_value(0) {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
             .collect();
 
         assert_eq!(ids, vec!["1", "3"]);

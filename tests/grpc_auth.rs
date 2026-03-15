@@ -17,7 +17,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
-use crap_cms::db::{migrate, pool};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -999,7 +999,7 @@ async fn login_locked_account() {
         let conn = ts.pool.get().unwrap();
         conn.execute(
             "UPDATE users SET _locked = 1 WHERE id = ?1",
-            rusqlite::params![doc.id],
+            &[DbValue::Text(doc.id.clone())],
         )
         .unwrap();
     }

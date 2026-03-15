@@ -5,7 +5,7 @@ use std::{fs, path::Path};
 
 use crate::{
     config::CrapConfig,
-    db::{migrate, pool, query},
+    db::{DbConnection, migrate, pool, query},
     hooks,
 };
 
@@ -170,11 +170,13 @@ pub fn run(config_dir: &Path) -> Result<()> {
     if jobs_dir.is_dir() {
         let defined = reg.jobs.len();
         let running: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM _crap_jobs WHERE status = 'running'",
-                [],
-                |row| row.get(0),
+            .query_one(
+                "SELECT COUNT(*) AS cnt FROM _crap_jobs WHERE status = 'running'",
+                &[],
             )
+            .ok()
+            .flatten()
+            .and_then(|r| r.get_i64("cnt").ok())
             .unwrap_or(0);
         let failed_24h = query::jobs::count_failed_since(
             &conn, 86400, // 24 hours in seconds

@@ -3,12 +3,54 @@
 use anyhow::{Context as _, Result};
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
-use std::{path::Path, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use crate::config::CrapConfig;
 
-/// r2d2 connection pool for SQLite.
-pub type DbPool = Pool<SqliteConnectionManager>;
+use super::{connection::BoxedConnection, sqlite::SqliteConnection};
+
+/// Private trait for pool backends.
+///
+/// Each backend (SQLite, PostgreSQL, ...) implements this once.
+/// `DbPool` holds an `Arc<dyn PoolBackend>` and delegates `get()` to it.
+trait PoolBackend: Send + Sync {
+    fn get(&self) -> Result<BoxedConnection>;
+}
+
+/// SQLite pool backend.
+struct SqlitePoolBackend {
+    pool: Pool<SqliteConnectionManager>,
+}
+
+impl PoolBackend for SqlitePoolBackend {
+    fn get(&self) -> Result<BoxedConnection> {
+        let conn = self.pool.get().context("Failed to get DB connection")?;
+        Ok(BoxedConnection::new(Box::new(SqliteConnection::new(conn))))
+    }
+}
+
+/// Connection pool — backend-agnostic wrapper.
+///
+/// Callers get a `BoxedConnection` from `pool.get()` and never see the
+/// underlying backend. The pool type is chosen at startup via `create_pool`.
+#[derive(Clone)]
+pub struct DbPool {
+    inner: Arc<dyn PoolBackend>,
+}
+
+impl DbPool {
+    /// Get a connection from the pool.
+    pub fn get(&self) -> Result<BoxedConnection> {
+        self.inner.get()
+    }
+
+    /// Wrap an existing r2d2 SQLite pool. Used in tests.
+    pub fn from_pool(pool: Pool<SqliteConnectionManager>) -> Self {
+        Self {
+            inner: Arc::new(SqlitePoolBackend { pool }),
+        }
+    }
+}
 
 /// Create a connection pool, ensuring the database directory exists.
 pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
@@ -36,7 +78,7 @@ pub fn create_pool(config_dir: &Path, config: &CrapConfig) -> Result<DbPool> {
         .build(manager)
         .context("Failed to create connection pool")?;
 
-    Ok(pool)
+    Ok(DbPool::from_pool(pool))
 }
 
 #[derive(Debug)]
@@ -62,6 +104,7 @@ impl r2d2::CustomizeConnection<rusqlite::Connection, rusqlite::Error> for Sqlite
 mod tests {
     use super::*;
     use crate::config::CrapConfig;
+    use crate::db::DbConnection;
     use tempfile::TempDir;
 
     fn temp_pool() -> (TempDir, DbPool) {
@@ -95,9 +138,10 @@ mod tests {
     fn wal_mode_is_set() {
         let (_dir, pool) = temp_pool();
         let conn = pool.get().expect("failed to get connection");
-        let mode: String = conn
-            .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        let row = conn
+            .query_one("PRAGMA journal_mode", &[])
             .expect("PRAGMA journal_mode failed");
+        let mode = row.unwrap().get_string("journal_mode").unwrap();
         assert_eq!(mode, "wal", "journal_mode should be WAL");
     }
 
@@ -105,9 +149,10 @@ mod tests {
     fn foreign_keys_are_enabled() {
         let (_dir, pool) = temp_pool();
         let conn = pool.get().expect("failed to get connection");
-        let fk: i64 = conn
-            .query_row("PRAGMA foreign_keys", [], |row| row.get(0))
+        let row = conn
+            .query_one("PRAGMA foreign_keys", &[])
             .expect("PRAGMA foreign_keys failed");
+        let fk = row.unwrap().get_i64("foreign_keys").unwrap();
         assert_eq!(fk, 1, "foreign_keys should be ON (1)");
     }
 
@@ -115,10 +160,10 @@ mod tests {
     fn synchronous_is_normal() {
         let (_dir, pool) = temp_pool();
         let conn = pool.get().expect("failed to get connection");
-        // SQLite returns synchronous as an integer: 0=OFF, 1=NORMAL, 2=FULL, 3=EXTRA.
-        let sync: i64 = conn
-            .query_row("PRAGMA synchronous", [], |row| row.get(0))
+        let row = conn
+            .query_one("PRAGMA synchronous", &[])
             .expect("PRAGMA synchronous failed");
+        let sync = row.unwrap().get_i64("synchronous").unwrap();
         assert_eq!(sync, 1, "synchronous should be NORMAL (1)");
     }
 
@@ -129,9 +174,10 @@ mod tests {
         config.database.busy_timeout = 12345;
         let pool = create_pool(dir.path(), &config).expect("create_pool failed");
         let conn = pool.get().expect("failed to get connection");
-        let timeout: i64 = conn
-            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+        let row = conn
+            .query_one("PRAGMA busy_timeout", &[])
             .expect("PRAGMA busy_timeout failed");
+        let timeout = row.unwrap().get_i64("timeout").unwrap();
         assert_eq!(timeout, 12345, "busy_timeout should match configured value");
     }
 
@@ -139,9 +185,10 @@ mod tests {
     fn wal_autocheckpoint_is_set() {
         let (_dir, pool) = temp_pool();
         let conn = pool.get().expect("failed to get connection");
-        let checkpoint: i64 = conn
-            .query_row("PRAGMA wal_autocheckpoint", [], |row| row.get(0))
+        let row = conn
+            .query_one("PRAGMA wal_autocheckpoint", &[])
             .expect("PRAGMA wal_autocheckpoint failed");
+        let checkpoint = row.unwrap().get_i64("wal_autocheckpoint").unwrap();
         assert_eq!(checkpoint, 1000, "wal_autocheckpoint should be 1000");
     }
 }

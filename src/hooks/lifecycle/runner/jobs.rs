@@ -25,11 +25,11 @@ impl HookRunner {
         data_json: &str,
         attempt: u32,
         max_attempts: u32,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
 
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(None));
 
         let result = (|| -> Result<Option<String>> {
@@ -77,12 +77,12 @@ impl HookRunner {
     pub fn eval_lua_with_conn(
         &self,
         code: &str,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
         user: Option<&Document>,
     ) -> Result<String> {
         let lua = self.pool.acquire()?;
 
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(user.cloned()));
 
         let result = lua.load(code).eval::<String>();

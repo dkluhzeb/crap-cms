@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, Document, SharedRegistry},
-    db::{AccessResult, LocaleContext, query},
+    db::{AccessResult, DbConnection, LocaleContext, query},
     hooks::{
         HookContext, HookEvent, ValidationCtx,
         lifecycle::{
@@ -51,7 +51,7 @@ impl<'a> UnpublishCtx<'a> {
 /// Handle the unpublish code path: revert to draft, fire hooks, return document.
 fn handle_unpublish(
     lua: &Lua,
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     ctx: &UnpublishCtx,
 ) -> mlua::Result<mlua::Table> {
     let existing_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None)

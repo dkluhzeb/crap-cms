@@ -185,9 +185,12 @@ mod tests {
 
     use crate::core::field::*;
     use crate::core::{Document, Registry};
-    use crate::db::query::{
-        PopulateCache, PopulateContext, PopulateOpts, join,
-        populate::{populate_relationships_batch_cached, test_helpers::*},
+    use crate::db::{
+        DbConnection,
+        query::{
+            PopulateCache, PopulateContext, PopulateOpts, join,
+            populate::{populate_relationships_batch_cached, test_helpers::*},
+        },
     };
 
     // ── Polymorphic has-one (batch) ────────────────────────────────────────────

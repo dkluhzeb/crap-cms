@@ -6,7 +6,7 @@ use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition, Labels}
 use crap_cms::core::field::{
     BlockDefinition, FieldDefinition, FieldType, LocalizedString, RelationshipConfig,
 };
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -100,11 +100,13 @@ fn global_migration_creates_join_tables() {
     // Check that join tables exist
     let check = |table: &str| -> bool {
         let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-                [table],
-                |row| row.get(0),
+            .query_one(
+                "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table' AND name=?1",
+                &[DbValue::Text(table.to_string())],
             )
+            .unwrap()
+            .unwrap()
+            .get_i64("cnt")
             .unwrap();
         count > 0
     };
@@ -131,11 +133,11 @@ fn global_migration_parent_table_columns() {
     let (_tmp, pool, _def) = setup_global_with_joins();
     let conn = pool.get().expect("DB connection");
 
-    let mut stmt = conn.prepare("PRAGMA table_info(_global_homepage)").unwrap();
-    let columns: HashSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
+    let columns: HashSet<String> = conn
+        .query_all("PRAGMA table_info(_global_homepage)", &[])
         .unwrap()
-        .filter_map(|r| r.ok())
+        .into_iter()
+        .filter_map(|row| row.get_string("name").ok())
         .collect();
 
     // Should have these columns
@@ -608,11 +610,15 @@ fn global_alter_table_adds_join_tables() {
 
     // Join table should exist
     let conn = pool.get().expect("DB connection");
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_global_growing_items'",
-        [],
-        |row| row.get(0),
-    ).unwrap();
+    let count: i64 = conn
+        .query_one(
+            "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table' AND name='_global_growing_items'",
+            &[],
+        )
+        .unwrap()
+        .unwrap()
+        .get_i64("cnt")
+        .unwrap();
     assert_eq!(count, 1, "Array join table should be created on ALTER");
 
     // Save and read back array data
@@ -647,7 +653,9 @@ fn global_alter_table_adds_join_tables() {
 /// hydrate_document must NOT attempt to reconstruct from __-prefixed sub-columns.
 #[test]
 fn hydrate_document_skips_group_reconstruction_for_globals() {
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let manager = r2d2_sqlite::SqliteConnectionManager::memory();
+    let inner = r2d2::Pool::builder().max_size(2).build(manager).unwrap();
+    let conn = crap_cms::db::DbPool::from_pool(inner).get().unwrap();
     conn.execute_batch(
         "CREATE TABLE _global_test (
             id TEXT PRIMARY KEY,
@@ -669,24 +677,14 @@ fn hydrate_document_skips_group_reconstruction_for_globals() {
     ];
 
     // Simulate what get_global does: read the row, then hydrate
-    let mut doc = conn
-        .query_row(
-            "SELECT id, title, seo, created_at, updated_at FROM _global_test WHERE id = 'default'",
-            [],
-            |row| {
-                crap_cms::db::document::row_to_document(
-                    row,
-                    &[
-                        "id".to_string(),
-                        "title".to_string(),
-                        "seo".to_string(),
-                        "created_at".to_string(),
-                        "updated_at".to_string(),
-                    ],
-                )
-            },
-        )
-        .unwrap();
+    let db_row = DbConnection::query_one(
+        &conn,
+        "SELECT id, title, seo, created_at, updated_at FROM _global_test WHERE id = 'default'",
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    let mut doc = crap_cms::db::document::row_to_document(&conn, &db_row).unwrap();
 
     // Hydrate should NOT touch the group field (no seo__meta_title sub-column exists)
     query::hydrate_document(&conn, "_global_test", &fields, &mut doc, None, None).unwrap();
@@ -700,7 +698,9 @@ fn hydrate_document_skips_group_reconstruction_for_globals() {
 /// (where __-prefixed sub-columns DO exist).
 #[test]
 fn hydrate_document_reconstructs_group_for_collections() {
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    let manager = r2d2_sqlite::SqliteConnectionManager::memory();
+    let inner = r2d2::Pool::builder().max_size(2).build(manager).unwrap();
+    let conn = crap_cms::db::DbPool::from_pool(inner).get().unwrap();
     conn.execute_batch(
         "CREATE TABLE pages (
             id TEXT PRIMARY KEY,
@@ -724,17 +724,14 @@ fn hydrate_document_reconstructs_group_for_collections() {
             .build(),
     ];
 
-    let mut doc = conn.query_row(
+    let db_row = DbConnection::query_one(
+        &conn,
         "SELECT id, title, seo__meta_title, seo__meta_description, created_at, updated_at FROM pages WHERE id = 'p1'",
-        [],
-        |row| {
-            crap_cms::db::document::row_to_document(row, &[
-                "id".to_string(), "title".to_string(),
-                "seo__meta_title".to_string(), "seo__meta_description".to_string(),
-                "created_at".to_string(), "updated_at".to_string(),
-            ])
-        },
-    ).unwrap();
+        &[],
+    )
+    .unwrap()
+    .unwrap();
+    let mut doc = crap_cms::db::document::row_to_document(&conn, &db_row).unwrap();
 
     // Before hydration: sub-columns are separate keys
     assert!(doc.fields.contains_key("seo__meta_title"));
@@ -819,11 +816,11 @@ fn collection_alter_adds_group_sub_columns() {
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2");
 
     // Verify sub-columns exist
-    let mut stmt = conn.prepare("PRAGMA table_info(articles)").unwrap();
-    let columns: HashSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
+    let columns: HashSet<String> = conn
+        .query_all("PRAGMA table_info(articles)", &[])
         .unwrap()
-        .filter_map(|r| r.ok())
+        .into_iter()
+        .filter_map(|row| row.get_string("name").ok())
         .collect();
 
     assert!(
@@ -912,11 +909,11 @@ fn global_alter_adds_group_sub_columns() {
     migrate::sync_all(&pool, &registry, &CrapConfig::default().locale).expect("Sync v2");
 
     // Verify sub-columns exist
-    let mut stmt = conn.prepare("PRAGMA table_info(_global_settings)").unwrap();
-    let columns: HashSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
+    let columns: HashSet<String> = conn
+        .query_all("PRAGMA table_info(_global_settings)", &[])
         .unwrap()
-        .filter_map(|r| r.ok())
+        .into_iter()
+        .filter_map(|row| row.get_string("name").ok())
         .collect();
 
     assert!(
@@ -988,11 +985,11 @@ fn collection_alter_adds_localized_group_columns() {
 
     // Verify non-localized sub-column
     let conn = pool.get().unwrap();
-    let mut stmt = conn.prepare("PRAGMA table_info(pages_alter)").unwrap();
-    let columns_v1: HashSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
+    let columns_v1: HashSet<String> = conn
+        .query_all("PRAGMA table_info(pages_alter)", &[])
         .unwrap()
-        .filter_map(|r| r.ok())
+        .into_iter()
+        .filter_map(|row| row.get_string("name").ok())
         .collect();
     assert!(
         columns_v1.contains("seo__meta_title"),
@@ -1016,11 +1013,11 @@ fn collection_alter_adds_localized_group_columns() {
     migrate::sync_all(&pool, &registry, &lc).expect("Sync v2");
 
     // Verify new locale columns were added
-    let mut stmt2 = conn.prepare("PRAGMA table_info(pages_alter)").unwrap();
-    let columns_v2: HashSet<String> = stmt2
-        .query_map([], |row| row.get::<_, String>(1))
+    let columns_v2: HashSet<String> = conn
+        .query_all("PRAGMA table_info(pages_alter)", &[])
         .unwrap()
-        .filter_map(|r| r.ok())
+        .into_iter()
+        .filter_map(|row| row.get_string("name").ok())
         .collect();
 
     assert!(

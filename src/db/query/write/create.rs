@@ -1,12 +1,11 @@
 //! Create operation and its helper.
 
 use anyhow::{Context as _, Result, anyhow};
-use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
 use crate::core::{CollectionDefinition, Document, FieldDefinition, FieldType};
 use crate::db::{
-    LocaleContext,
+    DbConnection, DbValue, LocaleContext,
     query::{coerce_value, locale_write_column, read::find_by_id_raw},
 };
 
@@ -14,13 +13,13 @@ use crate::db::{
 pub(super) struct InsertCollector {
     pub columns: Vec<String>,
     pub placeholders: Vec<String>,
-    pub params: Vec<Box<dyn rusqlite::types::ToSql>>,
+    pub params: Vec<DbValue>,
     pub idx: usize,
 }
 
 /// Create a new document. Returns the created document.
 pub fn create(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     data: &HashMap<String, String>,
@@ -33,22 +32,22 @@ pub fn create(
 
     let mut collector = InsertCollector {
         columns: vec!["id".to_string()],
-        placeholders: vec!["?1".to_string()],
-        params: vec![Box::new(id.clone())],
+        placeholders: vec![conn.placeholder(1)],
+        params: vec![DbValue::Text(id.clone())],
         idx: 2,
     };
 
-    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, "");
+    collect_insert_params(&def.fields, data, &locale_ctx, &mut collector, conn, "");
 
     if def.timestamps {
         collector.columns.push("created_at".to_string());
-        collector.placeholders.push(format!("?{}", collector.idx));
-        collector.params.push(Box::new(now.clone()));
+        collector.placeholders.push(conn.placeholder(collector.idx));
+        collector.params.push(DbValue::Text(now.clone()));
         collector.idx += 1;
 
         collector.columns.push("updated_at".to_string());
-        collector.placeholders.push(format!("?{}", collector.idx));
-        collector.params.push(Box::new(now));
+        collector.placeholders.push(conn.placeholder(collector.idx));
+        collector.params.push(DbValue::Text(now));
     }
 
     let sql = format!(
@@ -58,13 +57,10 @@ pub fn create(
         collector.placeholders.join(", ")
     );
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-        collector.params.iter().map(|p| p.as_ref()).collect();
-
-    conn.execute(&sql, params_from_iter(param_refs.iter()))
+    conn.execute(&sql, &collector.params)
         .with_context(|| format!("Failed to insert into '{}'", slug))?;
 
-    // Return the created document with the same locale context
+    // Return the created document with the same locale context.
     find_by_id_raw(conn, slug, def, &id, locale_ctx)?
         .ok_or_else(|| anyhow!("Failed to find newly created document"))
 }
@@ -76,6 +72,7 @@ pub(super) fn collect_insert_params(
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
     collector: &mut InsertCollector,
+    conn: &dyn DbConnection,
     prefix: &str,
 ) {
     for field in fields {
@@ -86,14 +83,21 @@ pub(super) fn collect_insert_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                collect_insert_params(&field.fields, data, locale_ctx, collector, &new_prefix);
+                collect_insert_params(
+                    &field.fields,
+                    data,
+                    locale_ctx,
+                    collector,
+                    conn,
+                    &new_prefix,
+                );
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_insert_params(&field.fields, data, locale_ctx, collector, prefix);
+                collect_insert_params(&field.fields, data, locale_ctx, collector, conn, prefix);
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_insert_params(&tab.fields, data, locale_ctx, collector, prefix);
+                    collect_insert_params(&tab.fields, data, locale_ctx, collector, conn, prefix);
                 }
             }
             _ => {
@@ -109,15 +113,15 @@ pub(super) fn collect_insert_params(
 
                 if let Some(value) = data.get(&data_key) {
                     collector.columns.push(col_name);
-                    collector.placeholders.push(format!("?{}", collector.idx));
+                    collector.placeholders.push(conn.placeholder(collector.idx));
                     collector
                         .params
                         .push(coerce_value(&field.field_type, value));
                     collector.idx += 1;
                 } else if field.field_type == FieldType::Checkbox {
                     collector.columns.push(col_name);
-                    collector.placeholders.push(format!("?{}", collector.idx));
-                    collector.params.push(Box::new(0i32));
+                    collector.placeholders.push(conn.placeholder(collector.idx));
+                    collector.params.push(DbValue::Integer(0));
                     collector.idx += 1;
                 }
             }
@@ -128,11 +132,32 @@ pub(super) fn collect_insert_params(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tempfile::TempDir;
 
     use super::*;
+    use crate::config::CrapConfig;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use rusqlite::Connection;
+    use crate::db::{BoxedConnection, pool};
+
+    fn setup_db(ddl: &str) -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
+        conn.execute_batch(ddl).unwrap();
+        (dir, conn)
+    }
+
+    fn posts_ddl() -> &'static str {
+        "CREATE TABLE posts (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            status TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )"
+    }
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -143,24 +168,9 @@ mod tests {
         def
     }
 
-    fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE posts (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                status TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            )",
-        )
-        .unwrap();
-        conn
-    }
-
     #[test]
     fn create_basic() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
         let mut data = HashMap::new();
         data.insert("title".to_string(), "Hello World".to_string());
@@ -172,7 +182,7 @@ mod tests {
 
     #[test]
     fn create_with_timestamps() {
-        let conn = setup_db();
+        let (_dir, conn) = setup_db(posts_ddl());
         let def = test_def();
         let data = HashMap::new();
 
@@ -185,8 +195,7 @@ mod tests {
 
     #[test]
     fn create_checkbox_defaults_to_zero() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 title TEXT,
@@ -195,8 +204,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = test_def();
         def.fields
@@ -213,8 +221,7 @@ mod tests {
 
     #[test]
     fn create_with_group_fields() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 title TEXT,
@@ -223,8 +230,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -252,14 +258,12 @@ mod tests {
 
     #[test]
     fn create_without_timestamps() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE events (
                 id TEXT PRIMARY KEY,
                 name TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("events");
         def.timestamps = false;
@@ -283,16 +287,14 @@ mod tests {
 
     #[test]
     fn create_group_with_checkbox_sub_field_default() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 settings__featured INTEGER DEFAULT 0,
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -313,8 +315,7 @@ mod tests {
 
     #[test]
     fn create_with_collapsible_fields() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 notes TEXT,
@@ -322,8 +323,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -347,8 +347,7 @@ mod tests {
 
     #[test]
     fn create_with_tabs_fields() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 body TEXT,
@@ -356,8 +355,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -387,8 +385,7 @@ mod tests {
 
     #[test]
     fn create_with_tabs_containing_group() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 social__github TEXT,
@@ -397,8 +394,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -440,8 +436,7 @@ mod tests {
 
     #[test]
     fn create_deeply_nested_tabs_collapsible_group() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 og__image TEXT,
@@ -449,8 +444,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -485,8 +479,7 @@ mod tests {
 
     #[test]
     fn create_group_containing_row() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 meta__title TEXT,
@@ -494,8 +487,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -523,8 +515,7 @@ mod tests {
 
     #[test]
     fn create_group_containing_tabs() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 settings__theme TEXT,
@@ -532,8 +523,7 @@ mod tests {
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![
@@ -569,16 +559,14 @@ mod tests {
 
     #[test]
     fn create_group_tabs_group_three_levels() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_db(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
                 outer__inner__deep TEXT,
                 created_at TEXT,
                 updated_at TEXT
             )",
-        )
-        .unwrap();
+        );
 
         let mut def = CollectionDefinition::new("posts");
         def.fields = vec![

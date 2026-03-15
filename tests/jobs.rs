@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::job::JobStatus;
 use crap_cms::db::query::jobs as job_query;
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -244,7 +244,7 @@ fn purge_old_jobs() {
     // Backdate created_at so the purge threshold catches it
     conn.execute(
         "UPDATE _crap_jobs SET created_at = datetime('now', '-3600 seconds') WHERE id = ?1",
-        [&run.id],
+        &[DbValue::Text(run.id.clone())],
     )
     .unwrap();
 
@@ -347,7 +347,7 @@ fn find_stale_jobs_detects_running() {
     // Manually backdate the heartbeat so it appears stale
     conn.execute(
         "UPDATE _crap_jobs SET heartbeat_at = datetime('now', '-600 seconds') WHERE id = ?1",
-        [&run.id],
+        &[DbValue::Text(run.id.clone())],
     )
     .unwrap();
 

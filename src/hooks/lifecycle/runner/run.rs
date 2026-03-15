@@ -7,6 +7,7 @@ use serde_json::Value;
 
 use crate::{
     core::{Document, FieldDefinition, collection::Hooks},
+    db::DbConnection,
     hooks::{
         HookContext, HookEvent, HookRunner,
         lifecycle::{
@@ -23,14 +24,14 @@ use super::field_write_ctx_builder::FieldWriteCtxBuilder;
 
 /// Bundled transaction context for field-level write hooks.
 pub struct FieldWriteCtx<'a> {
-    pub conn: &'a rusqlite::Connection,
+    pub conn: &'a dyn DbConnection,
     pub user: Option<&'a Document>,
     pub ui_locale: Option<&'a str>,
 }
 
 impl<'a> FieldWriteCtx<'a> {
     /// Create a builder with the required connection reference.
-    pub fn builder(conn: &'a rusqlite::Connection) -> FieldWriteCtxBuilder<'a> {
+    pub fn builder(conn: &'a dyn DbConnection) -> FieldWriteCtxBuilder<'a> {
         FieldWriteCtxBuilder::new(conn)
     }
 }
@@ -75,7 +76,7 @@ impl HookRunner {
         hooks: &Hooks,
         event: HookEvent,
         mut context: HookContext,
-        conn: &rusqlite::Connection,
+        conn: &dyn DbConnection,
     ) -> Result<HookContext> {
         let hook_refs = get_hook_refs(hooks, &event);
 
@@ -89,7 +90,7 @@ impl HookRunner {
         // Inject the connection pointer so CRUD functions can use it.
         // Safety: conn is valid for the duration of this method, and we hold
         // the Lua mutex so no concurrent access is possible.
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(context.user.clone()));
         lua.set_app_data(UiLocaleContext(context.ui_locale.clone()));
 
@@ -118,7 +119,7 @@ impl HookRunner {
     pub fn run_system_hooks_with_conn(
         &self,
         refs: &[String],
-        conn: &rusqlite::Connection,
+        conn: &dyn DbConnection,
     ) -> Result<()> {
         if refs.is_empty() {
             return Ok(());
@@ -126,7 +127,7 @@ impl HookRunner {
 
         let lua = self.pool.acquire()?;
 
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(None));
         lua.set_app_data(UiLocaleContext(None));
 
@@ -187,7 +188,7 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
 
         // Inject the connection pointer so CRUD functions can use it.
-        lua.set_app_data(TxContext(wctx.conn as *const _));
+        lua.set_app_data(TxContext::new(wctx.conn));
         lua.set_app_data(UserContext(wctx.user.cloned()));
         lua.set_app_data(UiLocaleContext(wctx.ui_locale.map(|s| s.to_string())));
 

@@ -1,5 +1,4 @@
-//! CRUD query functions operating on `&rusqlite::Connection` (works with both plain
-//! connections and transactions via `Deref`).
+//! CRUD query functions operating on `&dyn DbConnection`.
 
 pub mod auth;
 pub mod cursor;

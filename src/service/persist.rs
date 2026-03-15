@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::{
     core::{CollectionDefinition, Document},
-    db::{LocaleContext, query},
+    db::{DbConnection, LocaleContext, query},
 };
 
 use super::{PersistOptions, versions};
@@ -19,7 +19,7 @@ use super::{PersistOptions, versions};
 /// Persist the DB write phase of a create operation.
 /// Performs: insert → join data → password → version snapshot.
 pub fn persist_create(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     final_data: &HashMap<String, String>,
@@ -45,14 +45,16 @@ pub fn persist_create(
         versions::create_version_snapshot(conn, &ctx, status, &doc)?;
     }
 
-    query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+    if conn.supports_fts() {
+        query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+    }
     Ok(doc)
 }
 
 /// Persist the DB write phase of a normal (non-draft) update operation.
 /// Performs: update → join data → password → version snapshot (published).
 pub fn persist_update(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     id: &str,
     def: &CollectionDefinition,
@@ -78,14 +80,16 @@ pub fn persist_update(
         versions::create_version_snapshot(conn, &ctx, "published", &doc)?;
     }
 
-    query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+    if conn.supports_fts() {
+        query::fts::fts_upsert(conn, slug, &doc, Some(def))?;
+    }
     Ok(doc)
 }
 
 /// Persist a draft-only version save: find existing doc, merge incoming data,
 /// create a draft version snapshot. Main table is NOT modified.
 pub fn persist_draft_version(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     id: &str,
     def: &CollectionDefinition,
@@ -111,7 +115,7 @@ pub fn persist_draft_version(
 /// Persist an unpublish operation: find existing doc, set status to draft,
 /// create a draft version snapshot. Returns the existing doc.
 pub fn persist_unpublish(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     id: &str,
     def: &CollectionDefinition,

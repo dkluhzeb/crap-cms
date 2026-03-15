@@ -149,7 +149,7 @@ impl HookRunner {
         fields: &[FieldDefinition],
         event: HookEvent,
         ctx: HookContext,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
     ) -> Result<HookContext> {
         // Run field-level after_change hooks (with CRUD access)
         if matches!(event, HookEvent::AfterChange) {

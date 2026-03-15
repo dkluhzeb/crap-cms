@@ -1,6 +1,6 @@
 //! Value helpers: pagination limits, date normalization, type coercion.
 
-use crate::core::FieldType;
+use crate::{core::FieldType, db::DbValue};
 
 /// Clamp a requested limit to the configured default/max.
 ///
@@ -71,34 +71,34 @@ pub fn normalize_date_value(value: &str) -> String {
     value.to_string()
 }
 
-/// Coerce a form string value to the appropriate SQLite type.
-pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> Box<dyn rusqlite::types::ToSql> {
+/// Coerce a form string value to the appropriate database type.
+pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
     match field_type {
         FieldType::Checkbox => {
             let b = matches!(value, "on" | "true" | "1" | "yes");
-            Box::new(b as i32)
+            DbValue::Integer(b as i64)
         }
         FieldType::Number => {
             if value.is_empty() {
-                Box::new(rusqlite::types::Null)
+                DbValue::Null
             } else if let Ok(f) = value.parse::<f64>() {
-                Box::new(f)
+                DbValue::Real(f)
             } else {
-                Box::new(rusqlite::types::Null)
+                DbValue::Null
             }
         }
         FieldType::Date => {
             if value.is_empty() {
-                Box::new(rusqlite::types::Null)
+                DbValue::Null
             } else {
-                Box::new(normalize_date_value(value))
+                DbValue::Text(normalize_date_value(value))
             }
         }
         _ => {
             if value.is_empty() {
-                Box::new(rusqlite::types::Null)
+                DbValue::Null
             } else {
-                Box::new(value.to_string())
+                DbValue::Text(value.to_string())
             }
         }
     }
@@ -177,120 +177,68 @@ mod tests {
 
     #[test]
     fn coerce_value_checkbox_truthy() {
-        use rusqlite::types::ToSql;
         for input in &["on", "true", "1", "yes"] {
-            let val = coerce_value(&FieldType::Checkbox, input);
-            let output = val.to_sql().unwrap();
-            match output {
-                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(i)) => {
-                    assert_eq!(i, 1, "Expected 1 for checkbox input '{}'", input);
-                }
-                other => panic!("Expected Integer(1) for '{}', got {:?}", input, other),
-            }
+            assert_eq!(
+                coerce_value(&FieldType::Checkbox, input),
+                DbValue::Integer(1),
+                "Expected Integer(1) for checkbox input '{}'",
+                input
+            );
         }
     }
 
     #[test]
     fn coerce_value_checkbox_falsy() {
-        use rusqlite::types::ToSql;
         for input in &["off", "false", "0", "no"] {
-            let val = coerce_value(&FieldType::Checkbox, input);
-            let output = val.to_sql().unwrap();
-            match output {
-                rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Integer(i)) => {
-                    assert_eq!(i, 0, "Expected 0 for checkbox input '{}'", input);
-                }
-                other => panic!("Expected Integer(0) for '{}', got {:?}", input, other),
-            }
+            assert_eq!(
+                coerce_value(&FieldType::Checkbox, input),
+                DbValue::Integer(0),
+                "Expected Integer(0) for checkbox input '{}'",
+                input
+            );
         }
     }
 
     #[test]
     fn coerce_value_number_valid() {
-        use rusqlite::types::ToSql;
         let val = coerce_value(&FieldType::Number, "42.5");
-        let output = val.to_sql().unwrap();
-        match output {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Real(f)) => {
-                assert!((f - 42.5).abs() < f64::EPSILON, "Expected 42.5, got {}", f);
-            }
-            other => panic!("Expected Real(42.5), got {:?}", other),
-        }
+        assert_eq!(val, DbValue::Real(42.5));
     }
 
     #[test]
     fn coerce_value_number_empty_is_null() {
-        use rusqlite::types::ToSql;
-        let val = coerce_value(&FieldType::Number, "");
-        let output = val.to_sql().unwrap();
-        match output {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Null) => {}
-            other => panic!("Expected Null for empty number, got {:?}", other),
-        }
+        assert_eq!(coerce_value(&FieldType::Number, ""), DbValue::Null);
     }
 
     #[test]
     fn coerce_value_number_invalid_is_null() {
-        use rusqlite::types::ToSql;
-        let val = coerce_value(&FieldType::Number, "abc");
-        let output = val.to_sql().unwrap();
-        match output {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Null) => {}
-            other => panic!("Expected Null for invalid number 'abc', got {:?}", other),
-        }
+        assert_eq!(coerce_value(&FieldType::Number, "abc"), DbValue::Null);
     }
 
     #[test]
     fn coerce_value_text_nonempty() {
-        use rusqlite::types::ToSql;
-        let val = coerce_value(&FieldType::Text, "hello");
-        let output = val.to_sql().unwrap();
-        match &output {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Text(s)) => {
-                assert_eq!(s, "hello");
-            }
-            rusqlite::types::ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Text(b)) => {
-                assert_eq!(std::str::from_utf8(b).unwrap(), "hello");
-            }
-            other => panic!("Expected Text('hello'), got {:?}", other),
-        }
+        assert_eq!(
+            coerce_value(&FieldType::Text, "hello"),
+            DbValue::Text("hello".into())
+        );
     }
 
     #[test]
     fn coerce_value_text_empty_is_null() {
-        use rusqlite::types::ToSql;
-        let val = coerce_value(&FieldType::Text, "");
-        let output = val.to_sql().unwrap();
-        match output {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Null) => {}
-            other => panic!("Expected Null for empty text, got {:?}", other),
-        }
+        assert_eq!(coerce_value(&FieldType::Text, ""), DbValue::Null);
     }
 
     #[test]
     fn coerce_value_date_empty_is_null() {
-        use rusqlite::types::ToSql;
-        let val = coerce_value(&FieldType::Date, "");
-        let output = val.to_sql().unwrap();
-        match output {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Null) => {}
-            other => panic!("Expected Null for empty date, got {:?}", other),
-        }
+        assert_eq!(coerce_value(&FieldType::Date, ""), DbValue::Null);
     }
 
     #[test]
     fn coerce_value_date_normalizes() {
-        use rusqlite::types::ToSql;
-        let val = coerce_value(&FieldType::Date, "2026-03-15");
-        let output = val.to_sql().unwrap();
-        let text = match &output {
-            rusqlite::types::ToSqlOutput::Owned(rusqlite::types::Value::Text(s)) => s.clone(),
-            rusqlite::types::ToSqlOutput::Borrowed(rusqlite::types::ValueRef::Text(b)) => {
-                std::str::from_utf8(b).unwrap().to_string()
-            }
-            other => panic!("Expected normalized date string, got {:?}", other),
-        };
-        assert_eq!(text, "2026-03-15T12:00:00.000Z");
+        assert_eq!(
+            coerce_value(&FieldType::Date, "2026-03-15"),
+            DbValue::Text("2026-03-15T12:00:00.000Z".into())
+        );
     }
 
     // ── apply_pagination_limits tests ──────────────────────────────────

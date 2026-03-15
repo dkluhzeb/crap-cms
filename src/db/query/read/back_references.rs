@@ -9,6 +9,7 @@ use crate::{
         BlockDefinition, FieldDefinition, FieldType, Registry,
         field::{flatten_array_sub_fields, to_title_case},
     },
+    db::{DbConnection, DbValue},
 };
 
 /// A group of documents in one collection/global that reference a target via one field.
@@ -47,7 +48,7 @@ impl BackReference {
 
 /// Invariant context for a back-reference scan operation.
 struct BackRefScan<'a> {
-    conn: &'a rusqlite::Connection,
+    conn: &'a dyn DbConnection,
     target_collection: &'a str,
     target_id: &'a str,
     locale_config: &'a LocaleConfig,
@@ -58,7 +59,7 @@ struct BackRefScan<'a> {
 
 /// Scan all collections and globals for back-references to `target_id` in `target_collection`.
 pub fn find_back_references(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     registry: &Registry,
     target_collection: &str,
     target_id: &str,
@@ -221,9 +222,10 @@ fn query_has_one(
             scan.target_id.to_string()
         };
 
+        let p1 = scan.conn.placeholder(1);
         let conditions: Vec<String> = locale_cols
             .iter()
-            .map(|c| format!("\"{}\" = ?1", c))
+            .map(|c| format!("\"{}\" = {p1}", c))
             .collect();
         let sql = format!(
             "SELECT id FROM \"{}\" WHERE {}",
@@ -233,28 +235,30 @@ fn query_has_one(
         query_ids(
             scan.conn,
             &sql,
-            &[&match_value],
+            &[DbValue::Text(match_value)],
             scan.owner_slug,
             scan.target_id,
             scan.is_global,
         )
     } else if is_polymorphic {
         let match_value = format!("{}/{}", scan.target_collection, scan.target_id);
-        let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = ?1", table, col);
+        let p1 = scan.conn.placeholder(1);
+        let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = {p1}", table, col);
         query_ids(
             scan.conn,
             &sql,
-            &[&match_value as &dyn rusqlite::types::ToSql],
+            &[DbValue::Text(match_value)],
             scan.owner_slug,
             scan.target_id,
             scan.is_global,
         )
     } else {
-        let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = ?1", table, col);
+        let p1 = scan.conn.placeholder(1);
+        let sql = format!("SELECT id FROM \"{}\" WHERE \"{}\" = {p1}", table, col);
         query_ids(
             scan.conn,
             &sql,
-            &[&scan.target_id as &dyn rusqlite::types::ToSql],
+            &[DbValue::Text(scan.target_id.to_string())],
             scan.owner_slug,
             scan.target_id,
             scan.is_global,
@@ -264,44 +268,60 @@ fn query_has_one(
 
 /// Query has-many junction table for references.
 fn query_has_many(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     junction_table: &str,
     target_collection: &str,
     target_id: &str,
     is_polymorphic: bool,
 ) -> Vec<String> {
-    let sql = if is_polymorphic {
-        format!(
-            "SELECT DISTINCT parent_id FROM \"{}\" WHERE related_id = ?1 AND related_collection = ?2",
-            junction_table
-        )
-    } else {
-        format!(
-            "SELECT DISTINCT parent_id FROM \"{}\" WHERE related_id = ?1",
-            junction_table
-        )
-    };
-
-    let mut stmt = match conn.prepare(&sql) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::debug!("Back-ref scan skipping {}: {}", junction_table, e);
-
-            return Vec::new();
-        }
-    };
-
     if is_polymorphic {
-        match stmt.query_map(rusqlite::params![target_id, target_collection], |row| {
-            row.get::<_, String>(0)
-        }) {
-            Ok(r) => r.filter_map(|r| r.ok()).collect(),
-            Err(_) => Vec::new(),
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        let sql = format!(
+            "SELECT DISTINCT parent_id FROM \"{}\" WHERE related_id = {p1} AND related_collection = {p2}",
+            junction_table
+        );
+        let params = vec![
+            DbValue::Text(target_id.to_string()),
+            DbValue::Text(target_collection.to_string()),
+        ];
+        match conn.query_all(&sql, &params) {
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|row| {
+                    if let Some(DbValue::Text(s)) = row.get_value(0) {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                tracing::debug!("Back-ref scan skipping {}: {}", junction_table, e);
+                Vec::new()
+            }
         }
     } else {
-        match stmt.query_map(rusqlite::params![target_id], |row| row.get::<_, String>(0)) {
-            Ok(r) => r.filter_map(|r| r.ok()).collect(),
-            Err(_) => Vec::new(),
+        let p1 = conn.placeholder(1);
+        let sql = format!(
+            "SELECT DISTINCT parent_id FROM \"{}\" WHERE related_id = {p1}",
+            junction_table
+        );
+        let params = vec![DbValue::Text(target_id.to_string())];
+        match conn.query_all(&sql, &params) {
+            Ok(rows) => rows
+                .into_iter()
+                .filter_map(|row| {
+                    if let Some(DbValue::Text(s)) = row.get_value(0) {
+                        Some(s.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect(),
+            Err(e) => {
+                tracing::debug!("Back-ref scan skipping {}: {}", junction_table, e);
+                Vec::new()
+            }
         }
     }
 }
@@ -335,8 +355,9 @@ fn scan_array_sub_fields(
                     scan.target_id.to_string()
                 };
 
+                let p1 = scan.conn.placeholder(1);
                 let sql = format!(
-                    "SELECT DISTINCT parent_id FROM \"{}\" WHERE \"{}\" = ?1",
+                    "SELECT DISTINCT parent_id FROM \"{}\" WHERE \"{}\" = {p1}",
                     array_table, sub.name
                 );
                 let ids = query_ids_simple(scan.conn, &sql, &match_value);
@@ -390,18 +411,17 @@ fn scan_blocks(
                         scan.target_id.to_string()
                     };
 
-                    let json_path = format!("$.{}", sub.name);
+                    let extract = scan.conn.json_extract_expr("data", &sub.name);
+                    let (p1, p2) = (scan.conn.placeholder(1), scan.conn.placeholder(2));
                     let sql = format!(
-                        "SELECT DISTINCT parent_id FROM \"{}\" WHERE _block_type = ?1 AND json_extract(data, ?2) = ?3",
-                        blocks_table
+                        "SELECT DISTINCT parent_id FROM \"{}\" WHERE _block_type = {p1} AND {} = {p2}",
+                        blocks_table, extract
                     );
-                    let ids = query_ids_blocks(
-                        scan.conn,
-                        &sql,
-                        &block.block_type,
-                        &json_path,
-                        &match_value,
-                    );
+                    let params = vec![
+                        DbValue::Text(block.block_type.clone()),
+                        DbValue::Text(match_value),
+                    ];
+                    let ids = query_ids_simple_params(scan.conn, &sql, &params);
 
                     if !ids.is_empty() {
                         let label = format!(
@@ -443,74 +463,71 @@ pub(super) fn field_display_label(field: &FieldDefinition) -> String {
 
 /// Execute a query and collect `id` column values, filtering out self-references.
 fn query_ids(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     sql: &str,
-    params: &[&dyn rusqlite::types::ToSql],
+    params: &[DbValue],
     owner_slug: &str,
     target_id: &str,
     is_global: bool,
 ) -> Vec<String> {
-    let mut stmt = match conn.prepare(sql) {
-        Ok(s) => s,
+    match conn.query_all(sql, params) {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|row| {
+                if let Some(DbValue::Text(s)) = row.get_value(0) {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            // Skip self-references (same collection, same ID)
+            .filter(|id| is_global || id != target_id || owner_slug != target_id)
+            .collect(),
         Err(e) => {
             tracing::debug!("Back-ref scan query failed: {}", e);
-
-            return Vec::new();
+            Vec::new()
         }
-    };
-    let rows = match stmt.query_map(params, |row| row.get::<_, String>(0)) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!("Back-ref scan query failed: {}", e);
-
-            return Vec::new();
-        }
-    };
-    rows.filter_map(|r| r.ok())
-        // Skip self-references (same collection, same ID)
-        .filter(|id| is_global || id != target_id || owner_slug != target_id)
-        .collect()
-}
-
-/// Simple query for array/blocks parent_id lookups.
-fn query_ids_simple(conn: &rusqlite::Connection, sql: &str, value: &str) -> Vec<String> {
-    let mut stmt = match conn.prepare(sql) {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::debug!("Back-ref scan query failed: {}", e);
-
-            return Vec::new();
-        }
-    };
-    let result = stmt.query_map([value], |row| row.get::<_, String>(0));
-    match result {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(_) => Vec::new(),
     }
 }
 
-/// Query blocks table with block_type + json_extract.
-fn query_ids_blocks(
-    conn: &rusqlite::Connection,
-    sql: &str,
-    block_type: &str,
-    json_path: &str,
-    value: &str,
-) -> Vec<String> {
-    let mut stmt = match conn.prepare(sql) {
-        Ok(s) => s,
+/// Simple query for array/blocks parent_id lookups.
+fn query_ids_simple(conn: &dyn DbConnection, sql: &str, value: &str) -> Vec<String> {
+    let params = vec![DbValue::Text(value.to_string())];
+    match conn.query_all(sql, &params) {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|row| {
+                if let Some(DbValue::Text(s)) = row.get_value(0) {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect(),
         Err(e) => {
             tracing::debug!("Back-ref scan query failed: {}", e);
-
-            return Vec::new();
+            Vec::new()
         }
-    };
-    let result = stmt.query_map(rusqlite::params![block_type, json_path, value], |row| {
-        row.get::<_, String>(0)
-    });
-    match result {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(_) => Vec::new(),
+    }
+}
+
+/// Query with arbitrary params, returning collected IDs.
+fn query_ids_simple_params(conn: &dyn DbConnection, sql: &str, params: &[DbValue]) -> Vec<String> {
+    match conn.query_all(sql, params) {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|row| {
+                if let Some(DbValue::Text(s)) = row.get_value(0) {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect(),
+        Err(e) => {
+            tracing::debug!("Back-ref scan query failed: {}", e);
+            Vec::new()
+        }
     }
 }
 
@@ -521,7 +538,7 @@ mod tests {
     use crate::core::collection::*;
     use crate::core::field::*;
     use crate::core::{Registry, Slug};
-    use crate::db::{DbPool, migrate, pool};
+    use crate::db::{DbConnection, DbPool, DbValue, migrate, pool};
 
     fn no_locale() -> LocaleConfig {
         LocaleConfig::default()
@@ -566,24 +583,24 @@ mod tests {
         (tmp, db_pool, registry)
     }
 
-    fn insert_doc(conn: &rusqlite::Connection, table: &str, id: &str) {
-        conn.execute(&format!("INSERT INTO \"{}\" (id) VALUES (?1)", table), [id])
-            .unwrap();
+    fn insert_doc(conn: &dyn DbConnection, table: &str, id: &str) {
+        conn.execute(
+            &format!("INSERT INTO \"{}\" (id) VALUES (?1)", table),
+            &[DbValue::Text(id.to_string())],
+        )
+        .unwrap();
     }
 
-    fn insert_doc_with_field(
-        conn: &rusqlite::Connection,
-        table: &str,
-        id: &str,
-        col: &str,
-        val: &str,
-    ) {
+    fn insert_doc_with_field(conn: &dyn DbConnection, table: &str, id: &str, col: &str, val: &str) {
         conn.execute(
             &format!(
                 "INSERT INTO \"{}\" (id, \"{}\") VALUES (?1, ?2)",
                 table, col
             ),
-            rusqlite::params![id, val],
+            &[
+                DbValue::Text(id.to_string()),
+                DbValue::Text(val.to_string()),
+            ],
         )
         .unwrap();
     }
@@ -658,12 +675,12 @@ mod tests {
         insert_doc(&conn, "posts", "p2");
         conn.execute(
             "INSERT INTO posts_tags (parent_id, related_id, _order) VALUES (?1, ?2, 0)",
-            ["p1", "t1"],
+            &[DbValue::Text("p1".into()), DbValue::Text("t1".into())],
         )
         .unwrap();
         conn.execute(
             "INSERT INTO posts_tags (parent_id, related_id, _order) VALUES (?1, ?2, 0)",
-            ["p2", "t1"],
+            &[DbValue::Text("p2".into()), DbValue::Text("t1".into())],
         )
         .unwrap();
 
@@ -728,7 +745,7 @@ mod tests {
         insert_doc(&conn, "posts", "p1");
         conn.execute(
             "INSERT INTO posts_related (parent_id, related_id, related_collection, _order) VALUES (?1, ?2, ?3, 0)",
-            ["p1", "m1", "media"],
+            &[DbValue::Text("p1".into()), DbValue::Text("m1".into()), DbValue::Text("media".into())],
         ).unwrap();
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
@@ -786,7 +803,7 @@ mod tests {
         insert_doc(&conn, "posts", "p1");
         conn.execute(
             "INSERT INTO posts_slides (id, parent_id, _order, image) VALUES ('s1', 'p1', 0, 'm1')",
-            [],
+            &[],
         )
         .unwrap();
 
@@ -822,7 +839,7 @@ mod tests {
         insert_doc(&conn, "posts", "p1");
         conn.execute(
             "INSERT INTO posts_content (id, parent_id, _order, _block_type, data) VALUES ('b1', 'p1', 0, 'hero', '{\"bg_image\":\"m1\"}')",
-            [],
+            &[],
         ).unwrap();
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
@@ -848,8 +865,11 @@ mod tests {
 
         insert_doc(&conn, "media", "m1");
         // Globals auto-create a single row during migration. Update it.
-        conn.execute("UPDATE _global_settings SET logo = ?1", ["m1"])
-            .unwrap();
+        conn.execute(
+            "UPDATE _global_settings SET logo = ?1",
+            &[DbValue::Text("m1".into())],
+        )
+        .unwrap();
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &no_locale());
         assert_eq!(refs.len(), 1);
@@ -875,7 +895,7 @@ mod tests {
         let conn = pool.get().unwrap();
 
         insert_doc(&conn, "media", "m1");
-        conn.execute("INSERT INTO posts (id, hero__en) VALUES ('p1', 'm1')", [])
+        conn.execute("INSERT INTO posts (id, hero__en) VALUES ('p1', 'm1')", &[])
             .unwrap();
 
         let refs = find_back_references(&conn, &registry, "media", "m1", &locale);

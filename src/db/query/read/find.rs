@@ -1,14 +1,14 @@
 //! `find()` — query multiple documents with filters, sorting, and cursor pagination.
 
 use anyhow::{Context as _, Result, bail};
-use rusqlite::params_from_iter;
 use serde_json::Value;
 
 use crate::db::{
-    FindQuery, LocaleContext, LocaleMode,
+    DbConnection, DbValue, FindQuery, LocaleContext, LocaleMode,
     query::{
         filter::{build_where_clause, resolve_filter_column, resolve_filters},
-        get_column_names, get_locale_select_columns, group_locale_fields, validate_query_fields,
+        fts, get_column_names, get_locale_select_columns, group_locale_fields,
+        validate_query_fields,
     },
 };
 use crate::{
@@ -29,7 +29,7 @@ pub(super) fn denormalize_timestamp(s: &str) -> String {
 
 /// Find documents matching a query.
 pub fn find(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     query: &FindQuery,
@@ -47,31 +47,39 @@ pub fn find(
         }
     };
 
-    let (select_exprs, result_names) =
+    let (select_exprs, _result_names) =
         super::select::apply_select_filter(select_exprs, result_names, query.select.as_ref(), def);
 
-    let mut sql = format!("SELECT {} FROM {}", select_exprs.join(", "), slug);
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut sql = format!("SELECT {} FROM {slug}", select_exprs.join(", "));
+    let mut params: Vec<DbValue> = Vec::new();
 
     // Build WHERE with locale-resolved column names
     let resolved_filters = resolve_filters(&query.filters, def, locale_ctx);
-    let where_clause = build_where_clause(&resolved_filters, slug, &def.fields, &mut params)?;
+    let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
 
     if !where_clause.is_empty() {
         sql.push_str(&where_clause);
     }
 
     // FTS5 full-text search filter
-    if let Some(ref search_term) = query.search
-        && let Some((fts_clause, sanitized)) =
-            super::super::fts::fts_where_clause(conn, slug, search_term)
-    {
-        if where_clause.is_empty() {
-            sql.push_str(&format!(" WHERE {}", fts_clause));
-        } else {
-            sql.push_str(&format!(" AND {}", fts_clause));
+    if let Some(ref search_term) = query.search {
+        let sanitized = fts::sanitize_fts_query(search_term);
+        if !sanitized.is_empty() {
+            let fts_table = format!("_fts_{slug}");
+            let fts_exists = conn.table_exists(&fts_table).unwrap_or(false);
+
+            if fts_exists {
+                let ph = conn.placeholder(params.len() + 1);
+                let fts_clause =
+                    format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})");
+                if where_clause.is_empty() {
+                    sql.push_str(&format!(" WHERE {fts_clause}"));
+                } else {
+                    sql.push_str(&format!(" AND {fts_clause}"));
+                }
+                params.push(DbValue::Text(sanitized));
+            }
         }
-        params.push(Box::new(sanitized));
     }
 
     // Cursor + offset mutual exclusion
@@ -119,12 +127,12 @@ pub fn find(
         };
         let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
         // Keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
+        let ph1 = conn.placeholder(params.len() + 1);
+        let ph2 = conn.placeholder(params.len() + 2);
         let keyset = format!(
-            " AND (({col} {op} ?{p1}) OR ({col} = ?{p1} AND id {op} ?{p2}))",
+            " AND (({col} {op} {ph1}) OR ({col} = {ph1} AND id {op} {ph2}))",
             col = resolved_col,
             op = op,
-            p1 = params.len() + 1,
-            p2 = params.len() + 2,
         );
         // Convert sort_val to string for the parameter.
         // Denormalize ISO timestamps back to SQLite format for comparison:
@@ -135,8 +143,8 @@ pub fn find(
             Value::Null => String::new(),
             other => other.to_string(),
         };
-        params.push(Box::new(sort_val_str));
-        params.push(Box::new(cursor.id.clone()));
+        params.push(DbValue::Text(sort_val_str));
+        params.push(DbValue::Text(cursor.id.clone()));
         // Append to existing WHERE or start WHERE
         if where_clause.is_empty() {
             // Replace leading " AND " with " WHERE "
@@ -161,37 +169,30 @@ pub fn find(
     if sort_col != "id" {
         // Stable ordering: primary sort + id tiebreaker
         sql.push_str(&format!(
-            " ORDER BY {} {}, id {}",
-            resolved_col, effective_dir, effective_dir
+            " ORDER BY {resolved_col} {effective_dir}, id {effective_dir}"
         ));
     } else {
-        sql.push_str(&format!(" ORDER BY id {}", effective_dir));
+        sql.push_str(&format!(" ORDER BY id {effective_dir}"));
     }
 
     if let Some(limit) = query.limit {
-        params.push(Box::new(limit));
-        sql.push_str(&format!(" LIMIT ?{}", params.len()));
+        let ph = conn.placeholder(params.len() + 1);
+        params.push(DbValue::Integer(limit));
+        sql.push_str(&format!(" LIMIT {ph}"));
     }
     if let Some(offset) = query.offset {
-        params.push(Box::new(offset));
-        sql.push_str(&format!(" OFFSET ?{}", params.len()));
+        let ph = conn.placeholder(params.len() + 1);
+        params.push(DbValue::Integer(offset));
+        sql.push_str(&format!(" OFFSET {ph}"));
     }
 
-    let mut stmt = conn
-        .prepare(&sql)
-        .with_context(|| format!("Failed to prepare query: {}", sql))?;
-
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-
-    let rows = stmt
-        .query_map(params_from_iter(param_refs.iter()), |row| {
-            row_to_document(row, &result_names)
-        })
-        .with_context(|| format!("Failed to execute query on '{}'", slug))?;
+    let rows = conn
+        .query_all(&sql, &params)
+        .with_context(|| format!("Failed to execute query on '{slug}'"))?;
 
     let mut documents = Vec::new();
     for row in rows {
-        let mut doc = row?;
+        let mut doc = row_to_document(conn, &row)?;
 
         if let Some(ctx) = locale_ctx
             && ctx.config.is_enabled()
@@ -217,10 +218,12 @@ mod tests {
     use super::super::super::write::create;
     use super::super::super::{Filter, FilterClause, FilterOp, FindQuery};
     use super::*;
+    use crate::config::{CrapConfig, DatabaseConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
-    use rusqlite::Connection;
+    use crate::db::{DbPool, pool};
     use std::collections::HashMap;
+    use tempfile::TempDir;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -231,24 +234,36 @@ mod tests {
         def
     }
 
-    fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE posts (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                status TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            )",
-        )
-        .unwrap();
-        conn
+    fn setup_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE posts (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    status TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
     }
 
     #[test]
     fn find_empty_table() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
         let query = FindQuery::default();
 
@@ -258,7 +273,8 @@ mod tests {
 
     #[test]
     fn find_with_filter() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut data1 = HashMap::new();
@@ -284,12 +300,13 @@ mod tests {
 
     #[test]
     fn find_with_limit_offset() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         for i in 1..=3 {
             let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {}", i));
+            data.insert("title".to_string(), format!("Post {i}"));
             create(&conn, "posts", &def, &data, None).unwrap();
         }
 
@@ -309,7 +326,8 @@ mod tests {
 
     #[test]
     fn find_with_order_by() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut data_a = HashMap::new();
@@ -338,7 +356,8 @@ mod tests {
 
     #[test]
     fn cursor_and_offset_mutual_exclusion() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut query = FindQuery::new();
@@ -361,7 +380,8 @@ mod tests {
 
     #[test]
     fn cursor_asc_pagination() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         // Insert 5 rows with deterministic titles
@@ -416,7 +436,8 @@ mod tests {
 
     #[test]
     fn cursor_desc_pagination() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         for i in 1..=4 {
@@ -453,7 +474,8 @@ mod tests {
 
     #[test]
     fn cursor_wrong_sort_col_errors() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut query = FindQuery::new();
@@ -471,7 +493,8 @@ mod tests {
 
     #[test]
     fn before_cursor_asc_backward_pagination() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         for i in 1..=5 {
@@ -522,7 +545,8 @@ mod tests {
 
     #[test]
     fn before_cursor_desc_backward_pagination() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         for i in 1..=4 {
@@ -577,7 +601,8 @@ mod tests {
 
     #[test]
     fn after_and_before_cursor_mutual_exclusion() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let cursor = super::super::super::cursor::CursorData {
@@ -602,7 +627,8 @@ mod tests {
     #[test]
     fn cursor_sort_val_number_in_params() {
         // Inserting docs and using a numeric sort_val cursor
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         for i in 1..=3 {
@@ -637,7 +663,8 @@ mod tests {
 
     #[test]
     fn cursor_sort_val_bool_in_params() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         // Bool variant exercises the `other => other.to_string()` arm
@@ -656,7 +683,8 @@ mod tests {
 
     #[test]
     fn cursor_appended_to_existing_where_clause() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         // Insert some docs
@@ -695,7 +723,16 @@ mod tests {
 
     #[test]
     fn find_default_sort_without_timestamps() {
-        let conn = Connection::open_in_memory().unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let conn = db_pool.get().unwrap();
         conn.execute_batch("CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT)")
             .unwrap();
 
@@ -704,10 +741,16 @@ mod tests {
         def.fields = vec![FieldDefinition::builder("name", FieldType::Text).build()];
         let def = def;
 
-        conn.execute("INSERT INTO items (id, name) VALUES ('b', 'Banana')", [])
-            .unwrap();
-        conn.execute("INSERT INTO items (id, name) VALUES ('a', 'Apple')", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO items (id, name) VALUES (?1, ?2)",
+            &[DbValue::Text("b".into()), DbValue::Text("Banana".into())],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO items (id, name) VALUES (?1, ?2)",
+            &[DbValue::Text("a".into()), DbValue::Text("Apple".into())],
+        )
+        .unwrap();
 
         // Default sort for no-timestamp collection is id ASC
         let q = FindQuery::default();
@@ -720,7 +763,8 @@ mod tests {
 
     #[test]
     fn find_order_by_id_uses_single_order_clause() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut d1 = HashMap::new();

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
 use crap_cms::core::SharedRegistry;
-use crap_cms::db::DbPool;
+use crap_cms::db::{DbConnection, DbPool, DbValue};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 
@@ -517,14 +517,14 @@ crap.collections.define("media", {
     conn.execute(
         "UPDATE media SET thumbnail_url = ?1, thumbnail_width = ?2, thumbnail_height = ?3, \
          card_url = ?4, card_width = ?5, card_height = ?6 WHERE id = ?7",
-        rusqlite::params![
-            "/uploads/thumb.jpg",
-            200,
-            200,
-            "/uploads/card.jpg",
-            640,
-            480,
-            &doc_id,
+        &[
+            DbValue::Text("/uploads/thumb.jpg".to_string()),
+            DbValue::Integer(200),
+            DbValue::Integer(200),
+            DbValue::Text("/uploads/card.jpg".to_string()),
+            DbValue::Integer(640),
+            DbValue::Integer(480),
+            DbValue::Text(doc_id.clone()),
         ],
     )
     .expect("set size columns");

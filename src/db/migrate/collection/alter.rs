@@ -6,19 +6,22 @@ use std::collections::HashSet;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldType},
-    db::migrate::helpers::{collect_column_specs, get_table_columns, sanitize_locale},
+    db::{
+        DbConnection,
+        migrate::helpers::{collect_column_specs, get_table_columns, sanitize_locale},
+    },
 };
 
 /// Shared context for ALTER TABLE operations.
 struct AlterCtx<'a> {
-    conn: &'a rusqlite::Connection,
+    conn: &'a dyn DbConnection,
     slug: &'a str,
     def: &'a CollectionDefinition,
     existing: &'a HashSet<String>,
 }
 
 impl<'a> AlterCtx<'a> {
-    fn builder(conn: &'a rusqlite::Connection, slug: &'a str) -> AlterCtxBuilder<'a> {
+    fn builder(conn: &'a dyn DbConnection, slug: &'a str) -> AlterCtxBuilder<'a> {
         AlterCtxBuilder {
             conn,
             slug,
@@ -30,7 +33,7 @@ impl<'a> AlterCtx<'a> {
 
 /// Builder for [`AlterCtx`].
 struct AlterCtxBuilder<'a> {
-    conn: &'a rusqlite::Connection,
+    conn: &'a dyn DbConnection,
     slug: &'a str,
     def: Option<&'a CollectionDefinition>,
     existing: Option<&'a HashSet<String>>,
@@ -65,7 +68,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
 
                 if !ctx.existing.contains(&col_name) {
-                    let mut col_def = spec.field.field_type.sqlite_type().to_string();
+                    let mut col_def = ctx.conn.column_type_for(&spec.field.field_type).to_string();
                     super::create::append_default_value(
                         &mut col_def,
                         &spec.field.default_value,
@@ -76,13 +79,13 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                         ctx.slug, col_name, col_def
                     );
                     tracing::info!("Adding column to {}: {}", ctx.slug, col_name);
-                    ctx.conn.execute(&sql, []).with_context(|| {
+                    ctx.conn.execute(&sql, &[]).with_context(|| {
                         format!("Failed to add column {} to {}", col_name, ctx.slug)
                     })?;
                 }
             }
         } else if !ctx.existing.contains(&spec.col_name) {
-            let mut col_def = spec.field.field_type.sqlite_type().to_string();
+            let mut col_def = ctx.conn.column_type_for(&spec.field.field_type).to_string();
             super::create::append_default_value(
                 &mut col_def,
                 &spec.field.default_value,
@@ -93,7 +96,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                 ctx.slug, spec.col_name, col_def
             );
             tracing::info!("Adding column to {}: {}", ctx.slug, spec.col_name);
-            ctx.conn.execute(&sql, []).with_context(|| {
+            ctx.conn.execute(&sql, &[]).with_context(|| {
                 format!("Failed to add column {} to {}", spec.col_name, ctx.slug)
             })?;
         }
@@ -112,7 +115,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
         );
         tracing::info!("Adding _status column to {}", ctx.slug);
         ctx.conn
-            .execute(&sql, [])
+            .execute(&sql, &[])
             .with_context(|| format!("Failed to add _status to {}", ctx.slug))?;
     }
 
@@ -134,7 +137,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                 let sql = format!("ALTER TABLE {} ADD COLUMN {}", ctx.slug, col);
                 tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                 ctx.conn
-                    .execute(&sql, [])
+                    .execute(&sql, &[])
                     .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
             }
         }
@@ -153,7 +156,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
                     let sql = format!("ALTER TABLE {} ADD COLUMN {}", ctx.slug, col);
                     tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                     ctx.conn
-                        .execute(&sql, [])
+                        .execute(&sql, &[])
                         .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
                 }
             }
@@ -166,10 +169,14 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
     if ctx.def.timestamps {
         for col_name in ["created_at", "updated_at"] {
             if !ctx.existing.contains(col_name) {
-                let sql = format!("ALTER TABLE {} ADD COLUMN {} TEXT", ctx.slug, col_name);
+                let ts_type = ctx.conn.timestamp_column_type();
+                let sql = format!(
+                    "ALTER TABLE {} ADD COLUMN {} {}",
+                    ctx.slug, col_name, ts_type
+                );
                 tracing::info!("Adding {} column to {}", col_name, ctx.slug);
                 ctx.conn
-                    .execute(&sql, [])
+                    .execute(&sql, &[])
                     .with_context(|| format!("Failed to add {} to {}", col_name, ctx.slug))?;
             }
         }
@@ -256,7 +263,7 @@ const SYSTEM_COLUMNS: &[&str] = &[
 ];
 
 pub(super) fn alter_collection_table(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
@@ -298,7 +305,7 @@ mod tests {
 
     #[test]
     fn alter_adds_new_column() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
@@ -312,7 +319,7 @@ mod tests {
 
     #[test]
     fn alter_adds_auth_system_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("users", vec![text_field("email")]);
         create_collection_table(&conn, "users", &def1, &no_locale()).unwrap();
@@ -338,7 +345,7 @@ mod tests {
 
     #[test]
     fn alter_adds_status_for_drafts() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
@@ -354,10 +361,10 @@ mod tests {
 
     #[test]
     fn alter_adds_timestamps() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         // Create a table without timestamps
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT)", [])
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY, title TEXT)", &[])
             .unwrap();
 
         let def = simple_collection("posts", vec![text_field("title")]);
@@ -370,7 +377,7 @@ mod tests {
 
     #[test]
     fn alter_collection_with_localized_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection("posts", vec![localized_field("title")]);
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
@@ -389,7 +396,7 @@ mod tests {
 
     #[test]
     fn alter_adds_group_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
@@ -412,7 +419,7 @@ mod tests {
 
     #[test]
     fn alter_adds_localized_group_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &locale_en_de()).unwrap();
@@ -436,7 +443,7 @@ mod tests {
 
     #[test]
     fn alter_adds_row_sub_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
@@ -459,7 +466,7 @@ mod tests {
 
     #[test]
     fn alter_adds_collapsible_sub_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
@@ -481,7 +488,7 @@ mod tests {
 
     #[test]
     fn alter_adds_tabs_sub_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
@@ -503,7 +510,7 @@ mod tests {
 
     #[test]
     fn alter_adds_tabs_with_group_sub_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_collection("posts", vec![text_field("title")]);
         create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();

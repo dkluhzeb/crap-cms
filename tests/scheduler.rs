@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crap_cms::config::CrapConfig;
 use crap_cms::core::job::{JobDefinition, JobStatus};
 use crap_cms::db::query::jobs as job_query;
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, DbValue, migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
 use crap_cms::scheduler;
@@ -212,7 +212,7 @@ fn recover_stale_jobs_on_full_setup() {
     // Backdate the heartbeat to make it appear stale
     conn.execute(
         "UPDATE _crap_jobs SET heartbeat_at = datetime('now', '-600 seconds') WHERE id = ?1",
-        [&run.id],
+        &[DbValue::Text(run.id.clone())],
     )
     .unwrap();
 
@@ -262,7 +262,7 @@ fn check_cron_schedules_skip_if_running_integration() {
         job_query::insert_job(&conn, "test_cron_job", "{}", "manual", 1, "default").unwrap();
         conn.execute(
             "UPDATE _crap_jobs SET status = 'running' WHERE slug = 'test_cron_job'",
-            [],
+            &[],
         )
         .unwrap();
     }

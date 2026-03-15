@@ -15,12 +15,12 @@ use serde_json::Value;
 
 use crate::{
     core::{FieldDefinition, validate::ValidationError},
-    db::LocaleContext,
+    db::{DbConnection, LocaleContext},
 };
 
 /// Context for field validation, bundling database and request parameters.
 pub struct ValidationCtx<'a> {
-    pub conn: &'a rusqlite::Connection,
+    pub conn: &'a dyn DbConnection,
     pub table: &'a str,
     pub exclude_id: Option<&'a str>,
     pub is_draft: bool,
@@ -29,14 +29,14 @@ pub struct ValidationCtx<'a> {
 
 impl<'a> ValidationCtx<'a> {
     /// Create a builder with the required connection and table name.
-    pub fn builder(conn: &'a rusqlite::Connection, table: &'a str) -> ValidationCtxBuilder<'a> {
+    pub fn builder(conn: &'a dyn DbConnection, table: &'a str) -> ValidationCtxBuilder<'a> {
         ValidationCtxBuilder::new(conn, table)
     }
 }
 
 /// Builder for [`ValidationCtx`]. Created via [`ValidationCtx::builder`].
 pub struct ValidationCtxBuilder<'a> {
-    conn: &'a rusqlite::Connection,
+    conn: &'a dyn DbConnection,
     table: &'a str,
     exclude_id: Option<&'a str>,
     is_draft: bool,
@@ -44,7 +44,7 @@ pub struct ValidationCtxBuilder<'a> {
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
-    fn new(conn: &'a rusqlite::Connection, table: &'a str) -> Self {
+    fn new(conn: &'a dyn DbConnection, table: &'a str) -> Self {
         Self {
             conn,
             table,

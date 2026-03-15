@@ -4,7 +4,7 @@ use crap_cms::config::{CrapConfig, LocaleConfig};
 use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition};
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
-use crap_cms::db::{migrate, ops, pool, query};
+use crap_cms::db::{DbConnection, migrate, ops, pool, query};
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
@@ -1577,11 +1577,11 @@ fn collection_localized_group_migration_creates_locale_columns() {
     migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
 
     let conn = pool.get().unwrap();
-    let mut stmt = conn.prepare("PRAGMA table_info(pages_l10n)").unwrap();
-    let columns: HashSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
+    let columns: HashSet<String> = conn
+        .query_all("PRAGMA table_info(pages_l10n)", &[])
         .unwrap()
-        .filter_map(|r| r.ok())
+        .into_iter()
+        .filter_map(|row| row.get_string("name").ok())
         .collect();
 
     assert!(
@@ -1706,13 +1706,11 @@ fn global_localized_group_migration_creates_locale_columns() {
     migrate::sync_all(&pool, &registry, &locale_config()).expect("Sync");
 
     let conn = pool.get().unwrap();
-    let mut stmt = conn
-        .prepare("PRAGMA table_info(_global_site_l10n)")
-        .unwrap();
-    let columns: HashSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))
+    let columns: HashSet<String> = conn
+        .query_all("PRAGMA table_info(_global_site_l10n)", &[])
         .unwrap()
-        .filter_map(|r| r.ok())
+        .into_iter()
+        .filter_map(|row| row.get_string("name").ok())
         .collect();
 
     assert!(

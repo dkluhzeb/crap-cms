@@ -17,10 +17,12 @@ use crate::{
         Registry,
         field::{FieldDefinition, FieldType, RelationshipConfig},
     },
-    db::query::{self, LocaleContext},
+    db::{
+        DbConnection,
+        query::{self, LocaleContext},
+    },
 };
 
-use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use std::collections::HashMap;
@@ -47,7 +49,7 @@ pub(super) struct EnrichCtx<'a> {
     pub state: &'a AdminState,
     pub non_default_locale: bool,
     pub errors: &'a HashMap<String, String>,
-    pub conn: &'a Connection,
+    pub conn: &'a dyn DbConnection,
     pub reg: &'a Registry,
     pub rel_locale_ctx: Option<&'a LocaleContext>,
 }
@@ -75,7 +77,7 @@ pub fn enrich_polymorphic_selected(
     field_name: &str,
     doc_fields: &HashMap<String, Value>,
     reg: &Registry,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     locale_ctx: Option<&LocaleContext>,
 ) -> Vec<Value> {
     // Parse "collection/id" refs
@@ -165,7 +167,7 @@ pub fn enrich_field_contexts(
         state,
         non_default_locale,
         errors,
-        conn: &conn,
+        conn: &conn as &dyn DbConnection,
         reg,
         rel_locale_ctx: rel_locale_ctx.as_ref(),
     };
@@ -183,7 +185,7 @@ pub fn enrich_field_contexts(
                     ctx,
                     field_def,
                     doc_fields,
-                    &conn,
+                    &conn as &dyn DbConnection,
                     reg,
                     rel_locale_ctx.as_ref(),
                 );
@@ -196,7 +198,7 @@ pub fn enrich_field_contexts(
                     ctx,
                     field_def,
                     doc_fields,
-                    &conn,
+                    &conn as &dyn DbConnection,
                     reg,
                     rel_locale_ctx.as_ref(),
                 );
@@ -214,7 +216,7 @@ pub fn enrich_field_contexts(
                     enrich_nested_fields(
                         sub_arr,
                         &field_def.fields,
-                        &conn,
+                        &conn as &dyn DbConnection,
                         reg,
                         rel_locale_ctx.as_ref(),
                     );
@@ -241,7 +243,7 @@ pub fn enrich_field_contexts(
                 enrich_types::enrich_join(
                     ctx,
                     field_def,
-                    &conn,
+                    &conn as &dyn DbConnection,
                     reg,
                     rel_locale_ctx.as_ref(),
                     doc_id,

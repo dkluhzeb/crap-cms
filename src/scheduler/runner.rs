@@ -13,7 +13,7 @@ use crate::{
         SharedRegistry,
         job::{JobDefinition, JobRun},
     },
-    db::{DbPool, query::jobs as job_query},
+    db::{DbConnection, DbPool, query::jobs as job_query},
     hooks::HookRunner,
 };
 
@@ -167,7 +167,7 @@ pub fn check_cron_schedules(
 }
 
 /// Recover stale jobs on startup.
-pub fn recover_stale_jobs(conn: &rusqlite::Connection, registry: &SharedRegistry) -> Result<()> {
+pub fn recover_stale_jobs(conn: &dyn DbConnection, registry: &SharedRegistry) -> Result<()> {
     let reg = registry
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
@@ -299,33 +299,6 @@ mod tests {
 
     // ── recover_stale_jobs ──────────────────────────────────────────────
 
-    fn setup_jobs_db() -> rusqlite::Connection {
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE _crap_jobs (
-                id TEXT PRIMARY KEY,
-                slug TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                queue TEXT NOT NULL DEFAULT 'default',
-                data TEXT DEFAULT '{}',
-                result TEXT,
-                error TEXT,
-                attempt INTEGER NOT NULL DEFAULT 0,
-                max_attempts INTEGER NOT NULL DEFAULT 1,
-                scheduled_by TEXT,
-                created_at TEXT DEFAULT (datetime('now')),
-                started_at TEXT,
-                completed_at TEXT,
-                heartbeat_at TEXT
-            );
-            CREATE INDEX idx_crap_jobs_status ON _crap_jobs(status);
-            CREATE INDEX idx_crap_jobs_queue ON _crap_jobs(queue, status);
-            CREATE INDEX idx_crap_jobs_slug ON _crap_jobs(slug, status);",
-        )
-        .unwrap();
-        conn
-    }
-
     fn make_registry_with_jobs(jobs: Vec<JobDefinition>) -> SharedRegistry {
         let registry = Registry::shared();
         {
@@ -339,7 +312,8 @@ mod tests {
 
     #[test]
     fn recover_stale_jobs_marks_running_as_stale() {
-        let conn = setup_jobs_db();
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![
             JobDefinition::builder("my_job", "some.handler")
                 .timeout(120)
@@ -348,9 +322,8 @@ mod tests {
 
         // Insert a running job (simulates server crash with running job)
         job_query::insert_job(&conn, "my_job", "{}", "manual", 1, "default").unwrap();
-        conn.execute(
+        conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
-            [],
         ).unwrap();
 
         recover_stale_jobs(&conn, &registry).unwrap();
@@ -369,7 +342,8 @@ mod tests {
 
     #[test]
     fn recover_stale_jobs_uses_job_timeout() {
-        let conn = setup_jobs_db();
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![
             JobDefinition::builder("long_job", "some.handler")
                 .timeout(3600)
@@ -377,9 +351,8 @@ mod tests {
         ]);
 
         job_query::insert_job(&conn, "long_job", "{}", "manual", 1, "default").unwrap();
-        conn.execute(
+        conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
-            [],
         ).unwrap();
 
         recover_stale_jobs(&conn, &registry).unwrap();
@@ -392,14 +365,14 @@ mod tests {
 
     #[test]
     fn recover_stale_jobs_default_timeout_for_unknown_slug() {
-        let conn = setup_jobs_db();
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
         // Registry has no job definitions — slug not found, uses default timeout=60
         let registry = make_registry_with_jobs(vec![]);
 
         job_query::insert_job(&conn, "unknown_job", "{}", "manual", 1, "default").unwrap();
-        conn.execute(
+        conn.execute_batch(
             "UPDATE _crap_jobs SET status = 'running', heartbeat_at = datetime('now', '-600 seconds')",
-            [],
         ).unwrap();
 
         recover_stale_jobs(&conn, &registry).unwrap();
@@ -412,7 +385,8 @@ mod tests {
 
     #[test]
     fn recover_stale_jobs_no_running_is_noop() {
-        let conn = setup_jobs_db();
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![]);
 
         // Insert a pending job — should not be affected
@@ -429,7 +403,8 @@ mod tests {
 
     #[test]
     fn recover_stale_jobs_multiple_running() {
-        let conn = setup_jobs_db();
+        let pool = make_test_pool();
+        let conn = pool.get().unwrap();
         let registry = make_registry_with_jobs(vec![
             JobDefinition::builder("job_a", "handler_a")
                 .timeout(60)
@@ -441,7 +416,7 @@ mod tests {
 
         job_query::insert_job(&conn, "job_a", "{}", "manual", 1, "default").unwrap();
         job_query::insert_job(&conn, "job_b", "{}", "manual", 1, "default").unwrap();
-        conn.execute("UPDATE _crap_jobs SET status = 'running'", [])
+        conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
             .unwrap();
 
         recover_stale_jobs(&conn, &registry).unwrap();
@@ -462,11 +437,13 @@ mod tests {
                 | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX
                 | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
         );
-        let pool = Pool::builder()
+        let inner = Pool::builder()
             .max_size(2)
             .test_on_check_out(true)
             .build(manager)
             .expect("Failed to create test pool");
+
+        let pool = DbPool::from_pool(inner);
 
         // Create the jobs table
         let conn = pool.get().unwrap();
@@ -576,7 +553,7 @@ mod tests {
         {
             let conn = pool.get().unwrap();
             job_query::insert_job(&conn, "skip_job", "{}", "manual", 1, "default").unwrap();
-            conn.execute("UPDATE _crap_jobs SET status = 'running'", [])
+            conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }
 
@@ -606,7 +583,7 @@ mod tests {
         {
             let conn = pool.get().unwrap();
             job_query::insert_job(&conn, "noskip_job", "{}", "manual", 1, "default").unwrap();
-            conn.execute("UPDATE _crap_jobs SET status = 'running'", [])
+            conn.execute_batch("UPDATE _crap_jobs SET status = 'running'")
                 .unwrap();
         }
 

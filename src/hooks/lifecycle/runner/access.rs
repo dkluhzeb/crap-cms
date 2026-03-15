@@ -31,12 +31,12 @@ impl HookRunner {
         authenticate_ref: &str,
         collection: &str,
         headers: &HashMap<String, String>,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
     ) -> Result<Option<Document>> {
         let lua = self.pool.acquire()?;
 
         // Inject connection for CRUD access
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(None));
 
         let result = (|| -> Result<Option<Document>> {
@@ -100,12 +100,12 @@ impl HookRunner {
         user: Option<&Document>,
         id: Option<&str>,
         data: Option<&HashMap<String, JsonValue>>,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
     ) -> Result<AccessResult> {
         let lua = self.pool.acquire()?;
 
         // Inject connection for CRUD access in access functions
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(None));
 
         let result = check_access_with_lua(&lua, access_ref, user, id, data);
@@ -121,7 +121,7 @@ impl HookRunner {
         &self,
         fields: &[FieldDefinition],
         user: Option<&Document>,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
     ) -> Vec<String> {
         // Skip VM acquisition if no fields have read access functions
         if fields.iter().all(|f| f.access.read.is_none()) {
@@ -131,7 +131,7 @@ impl HookRunner {
             Ok(l) => l,
             Err(_) => return Vec::new(),
         };
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(None));
 
         let result = check_field_read_access_with_lua(&lua, fields, user);
@@ -148,7 +148,7 @@ impl HookRunner {
         fields: &[FieldDefinition],
         user: Option<&Document>,
         operation: &str,
-        conn: &rusqlite::Connection,
+        conn: &dyn crate::db::DbConnection,
     ) -> Vec<String> {
         // Skip VM acquisition if no fields have write access functions for this operation
         let has_write_access = fields.iter().any(|f| match operation {
@@ -164,7 +164,7 @@ impl HookRunner {
             Ok(l) => l,
             Err(_) => return Vec::new(),
         };
-        lua.set_app_data(TxContext(conn as *const _));
+        lua.set_app_data(TxContext::new(conn));
         lua.set_app_data(UserContext(None));
 
         let result = check_field_write_access_with_lua(&lua, fields, user, operation);

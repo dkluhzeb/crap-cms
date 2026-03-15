@@ -8,10 +8,12 @@ use crate::{
         field::{FieldDefinition, FieldType},
         upload,
     },
-    db::query::{self, LocaleContext},
+    db::{
+        DbConnection,
+        query::{self, LocaleContext},
+    },
 };
 
-use rusqlite::Connection;
 use serde_json::{Value, json};
 
 use super::{SubFieldOpts, field_types};
@@ -148,7 +150,7 @@ pub fn build_enriched_sub_field_context(
 pub fn enrich_nested_fields(
     sub_fields: &mut [Value],
     field_defs: &[FieldDefinition],
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
@@ -196,7 +198,7 @@ pub fn enrich_nested_fields(
 fn enrich_nested_relationship(
     ctx: &mut Value,
     field_def: &FieldDefinition,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
@@ -241,7 +243,7 @@ fn enrich_nested_relationship(
 fn enrich_nested_upload(
     ctx: &mut Value,
     field_def: &FieldDefinition,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
@@ -331,7 +333,7 @@ fn enrich_nested_upload(
 fn enrich_nested_array(
     ctx: &mut Value,
     field_def: &FieldDefinition,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
@@ -353,7 +355,7 @@ fn enrich_nested_array(
 fn enrich_nested_blocks(
     ctx: &mut Value,
     field_def: &FieldDefinition,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {

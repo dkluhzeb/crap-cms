@@ -11,7 +11,7 @@ use crate::{
             convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
-    db::{AccessResult, FindQuery, LocaleContext, query},
+    db::{AccessResult, DbConnection, FindQuery, LocaleContext, query},
 };
 
 use super::{filter_builder::FilterBuilder, helpers::map_db_error};
@@ -62,9 +62,7 @@ impl ContentService {
         let auth_user_clone = auth_user.clone();
         let modified = tokio::task::spawn_blocking(move || -> Result<i64, anyhow::Error> {
             let mut conn = pool.get().context("DB connection")?;
-            let tx = conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .context("Start transaction")?;
+            let tx = conn.transaction_immediate().context("Start transaction")?;
 
             let mut find_query = FindQuery::new();
             find_query.filters = filters;
@@ -112,7 +110,9 @@ impl ContentService {
                     &join_data,
                     locale_ctx.as_ref(),
                 )?;
-                query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))?;
+                if tx.supports_fts() {
+                    query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))?;
+                }
                 count += 1;
             }
 
@@ -169,9 +169,7 @@ impl ContentService {
         let auth_user_clone = auth_user.clone();
         let deleted = tokio::task::spawn_blocking(move || -> Result<i64, anyhow::Error> {
             let mut conn = pool.get().context("DB connection")?;
-            let tx = conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .context("Start transaction")?;
+            let tx = conn.transaction_immediate().context("Start transaction")?;
 
             let mut find_query = FindQuery::new();
             find_query.filters = filters;
@@ -198,7 +196,9 @@ impl ContentService {
             let mut count = 0i64;
             for doc in &docs {
                 query::delete(&tx, &collection, &doc.id)?;
-                query::fts::fts_delete(&tx, &collection, &doc.id)?;
+                if tx.supports_fts() {
+                    query::fts::fts_delete(&tx, &collection, &doc.id)?;
+                }
                 count += 1;
             }
 

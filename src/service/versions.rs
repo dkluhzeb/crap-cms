@@ -7,7 +7,7 @@ use serde_json::{Map, Value};
 
 use crate::{
     core::{Document, FieldDefinition, collection::VersionsConfig},
-    db::query,
+    db::{DbConnection, query},
 };
 
 use super::version_snapshot_ctx_builder::VersionSnapshotCtxBuilder;
@@ -59,7 +59,7 @@ fn merge_join_data_into_snapshot(
 /// Save a draft-only version: merge incoming hook-processed data onto existing doc,
 /// create a version snapshot, and prune.
 pub(crate) fn save_draft_version(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     table: &str,
     parent_id: &str,
     fields: &[FieldDefinition],
@@ -89,7 +89,7 @@ pub(crate) fn save_draft_version(
 
 /// Set document status, create a version snapshot, and prune.
 pub(crate) fn create_version_snapshot(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     ctx: &VersionSnapshotCtx<'_>,
     status: &str,
     doc: &Document,
@@ -106,7 +106,7 @@ pub(crate) fn create_version_snapshot(
 /// Set a document's status to "draft", build+save a snapshot, and prune.
 /// Used by both collection `persist_unpublish` and the globals unpublish handler.
 pub fn unpublish_with_snapshot(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     table: &str,
     parent_id: &str,
     fields: &[FieldDefinition],
@@ -122,7 +122,7 @@ pub fn unpublish_with_snapshot(
 
 /// Prune versions if max_versions is configured and > 0.
 pub(crate) fn prune_versions(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     table: &str,
     parent_id: &str,
     versions: Option<&VersionsConfig>,

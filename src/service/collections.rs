@@ -8,12 +8,10 @@ use anyhow::{Context as _, Result, anyhow};
 
 use serde_json::Value;
 
-use rusqlite::TransactionBehavior;
-
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, Document, upload},
-    db::{DbPool, LocaleContext, query},
+    db::{DbConnection, DbPool, LocaleContext, query},
     hooks::{HookContext, HookEvent, HookRunner, ValidationCtx},
     service::{AfterChangeInput, WriteInput, WriteResult, build_hook_data, run_after_change_hooks},
 };
@@ -35,9 +33,7 @@ pub fn create_document(
     let is_draft = input.draft && def.has_drafts();
 
     let mut conn = pool.get().context("DB connection")?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("Start transaction")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
@@ -105,9 +101,7 @@ pub fn update_document(
     let is_draft = input.draft && def.has_drafts();
 
     let mut conn = pool.get().context("DB connection")?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("Start transaction")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let ui_locale = input.ui_locale.as_deref();
     let hook_data = build_hook_data(&input.data, input.join_data);
@@ -182,9 +176,7 @@ pub fn unpublish_document(
     user: Option<&Document>,
 ) -> Result<Document> {
     let mut conn = pool.get().context("DB connection")?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("Start transaction")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let doc = query::find_by_id_raw(&tx, slug, def, id, None)?
         .ok_or_else(|| anyhow!("Document {} not found in {}", id, slug))?;
@@ -244,9 +236,7 @@ pub fn delete_document(
         None
     };
 
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("Start transaction")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let hook_ctx = HookContext::builder(slug, "delete")
         .data([("id".to_string(), Value::String(id.to_string()))].into())
@@ -257,7 +247,9 @@ pub fn delete_document(
 
     query::delete(&tx, slug, id)?;
 
-    query::fts::fts_delete(&tx, slug, id)?;
+    if tx.supports_fts() {
+        query::fts::fts_delete(&tx, slug, id)?;
+    }
 
     let after_ctx = HookContext::builder(slug, "delete")
         .data([("id".to_string(), Value::String(id.to_string()))].into())

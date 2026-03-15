@@ -6,7 +6,11 @@ mod indexes;
 
 use anyhow::Result;
 
-use crate::{config::LocaleConfig, core::CollectionDefinition, db::query::fts};
+use crate::{
+    config::LocaleConfig,
+    core::CollectionDefinition,
+    db::{DbConnection, query::fts},
+};
 
 use crate::db::migrate::helpers::{sync_join_tables, sync_versions_table, table_exists};
 
@@ -14,7 +18,7 @@ use crate::db::migrate::helpers::{sync_join_tables, sync_versions_table, table_e
 pub(super) use create::create_collection_table;
 
 pub(super) fn sync_collection_table(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
@@ -36,7 +40,9 @@ pub(super) fn sync_collection_table(
     }
 
     // Sync FTS5 full-text search index
-    fts::sync_fts_table(conn, slug, def, locale_config)?;
+    if conn.supports_fts() {
+        fts::sync_fts_table(conn, slug, def, locale_config)?;
+    }
 
     // Sync B-tree indexes (field-level index=true + collection-level compound indexes)
     indexes::sync_indexes(conn, slug, def, locale_config)?;
@@ -46,22 +52,17 @@ pub(super) fn sync_collection_table(
 
 #[cfg(test)]
 pub(super) mod test_helpers {
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldType};
-    use crate::db::DbPool;
+    use crate::db::{DbPool, pool};
+    use tempfile::TempDir;
 
-    pub fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-                | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
-        );
-        r2d2::Pool::builder()
-            .max_size(2)
-            .build(manager)
-            .expect("in-memory pool")
+    pub fn in_memory_pool() -> (TempDir, DbPool) {
+        let dir = TempDir::new().expect("temp dir");
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).expect("in-memory pool");
+        (dir, p)
     }
 
     pub fn no_locale() -> LocaleConfig {
@@ -102,7 +103,7 @@ mod tests {
 
     #[test]
     fn versioned_collection_creates_versions_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("title")]);
         def.versions = Some(VersionsConfig::new(true, 10));

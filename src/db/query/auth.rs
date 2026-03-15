@@ -4,12 +4,12 @@ use anyhow::{Context as _, Result};
 
 use crate::{
     core::{CollectionDefinition, Document, HashedPassword, auth::hash_password},
-    db::{document::row_to_document, query::get_column_names},
+    db::{DbConnection, DbValue, document::row_to_document, query::get_column_names},
 };
 
 /// Find a document by email in an auth collection.
 pub fn find_by_email(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     email: &str,
@@ -17,66 +17,73 @@ pub fn find_by_email(
     let column_names = get_column_names(def);
 
     let sql = format!(
-        "SELECT {} FROM {} WHERE email = ?1",
+        "SELECT {} FROM {} WHERE email = {}",
         column_names.join(", "),
-        slug
+        slug,
+        conn.placeholder(1)
     );
 
-    let result = conn.query_row(&sql, [email], |row| row_to_document(row, &column_names));
-
-    match result {
-        Ok(doc) => Ok(Some(doc)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context(format!("Failed to find user by email in {}", slug)),
+    match conn.query_one(&sql, &[DbValue::Text(email.to_string())])? {
+        Some(row) => Ok(Some(row_to_document(conn, &row)?)),
+        None => Ok(None),
     }
 }
 
 /// Get the password hash for a document by ID. Returns None if no hash set.
 pub fn get_password_hash(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     id: &str,
 ) -> Result<Option<HashedPassword>> {
-    let sql = format!("SELECT _password_hash FROM {} WHERE id = ?1", slug);
+    let sql = format!(
+        "SELECT _password_hash FROM {} WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
 
-    let result = conn.query_row(&sql, [id], |row| row.get::<_, Option<String>>(0));
-
-    match result {
-        Ok(hash) => Ok(hash.map(HashedPassword::new)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context(format!(
-            "Failed to get password hash for {} in {}",
-            id, slug
-        )),
+    match conn.query_one(&sql, &[DbValue::Text(id.to_string())])? {
+        Some(row) => Ok(row
+            .get_opt_string("_password_hash")?
+            .map(HashedPassword::new)),
+        None => Ok(None),
     }
 }
 
 /// Update the password hash for a document by ID.
 /// Hashes the plaintext password before storing.
 pub fn update_password(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     id: &str,
     password: &str,
 ) -> Result<()> {
     let hash = hash_password(password)?;
-    let sql = format!("UPDATE {} SET _password_hash = ?1 WHERE id = ?2", slug);
-    conn.execute(&sql, rusqlite::params![hash.as_ref() as &str, id])
-        .with_context(|| format!("Failed to update password for {} in {}", id, slug))?;
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    let sql = format!(
+        "UPDATE {} SET _password_hash = {} WHERE id = {}",
+        slug, p1, p2
+    );
+    conn.execute(
+        &sql,
+        &[
+            DbValue::Text(hash.as_ref().to_string()),
+            DbValue::Text(id.to_string()),
+        ],
+    )
+    .with_context(|| format!("Failed to update password for {} in {}", id, slug))?;
     Ok(())
 }
 
 /// Check whether a user has a password set (non-NULL `_password_hash`).
-pub fn has_password(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<bool> {
+pub fn has_password(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
-        "SELECT _password_hash IS NOT NULL FROM {} WHERE id = ?1",
-        slug
+        "SELECT (_password_hash IS NOT NULL) AS has_pw FROM {} WHERE id = {}",
+        slug,
+        conn.placeholder(1)
     );
-    let result = conn.query_row(&sql, [id], |row| row.get::<_, bool>(0));
-    match result {
-        Ok(v) => Ok(v),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-        Err(e) => Err(e).context(format!("Failed to check password for {} in {}", id, slug)),
+    match conn.query_one(&sql, &[DbValue::Text(id.to_string())])? {
+        Some(row) => row.get_bool("has_pw"),
+        None => Ok(false),
     }
 }
 
@@ -84,24 +91,36 @@ pub fn has_password(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result
 
 /// Store a password reset token and expiry for a user.
 pub fn set_reset_token(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     user_id: &str,
     token: &str,
     exp: i64,
 ) -> Result<()> {
-    let sql = format!(
-        "UPDATE {} SET _reset_token = ?1, _reset_token_exp = ?2 WHERE id = ?3",
-        slug
+    let (p1, p2, p3) = (
+        conn.placeholder(1),
+        conn.placeholder(2),
+        conn.placeholder(3),
     );
-    conn.execute(&sql, rusqlite::params![token, exp, user_id])
-        .with_context(|| format!("Failed to set reset token for {} in {}", user_id, slug))?;
+    let sql = format!(
+        "UPDATE {} SET _reset_token = {}, _reset_token_exp = {} WHERE id = {}",
+        slug, p1, p2, p3
+    );
+    conn.execute(
+        &sql,
+        &[
+            DbValue::Text(token.to_string()),
+            DbValue::Integer(exp),
+            DbValue::Text(user_id.to_string()),
+        ],
+    )
+    .with_context(|| format!("Failed to set reset token for {} in {}", user_id, slug))?;
     Ok(())
 }
 
 /// Find a user by their reset token. Returns the document and token expiry.
 pub fn find_by_reset_token(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     token: &str,
@@ -109,30 +128,32 @@ pub fn find_by_reset_token(
     let column_names = get_column_names(def);
     let cols = column_names.join(", ");
     let sql = format!(
-        "SELECT {}, _reset_token_exp FROM {} WHERE _reset_token = ?1",
-        cols, slug
+        "SELECT {}, _reset_token_exp FROM {} WHERE _reset_token = {}",
+        cols,
+        slug,
+        conn.placeholder(1)
     );
 
-    let result = conn.query_row(&sql, [token], |row| {
-        let doc = row_to_document(row, &column_names)?;
-        let exp: i64 = row.get(column_names.len())?;
-        Ok((doc, exp))
-    });
-
-    match result {
-        Ok(pair) => Ok(Some(pair)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context(format!("Failed to find user by reset token in {}", slug)),
+    match conn.query_one(&sql, &[DbValue::Text(token.to_string())])? {
+        Some(row) => {
+            let doc = row_to_document(conn, &row)?;
+            let exp = row
+                .get_i64("_reset_token_exp")
+                .context("Failed to read _reset_token_exp")?;
+            Ok(Some((doc, exp)))
+        }
+        None => Ok(None),
     }
 }
 
 /// Clear the reset token for a user (after successful reset or expiry).
-pub fn clear_reset_token(conn: &rusqlite::Connection, slug: &str, user_id: &str) -> Result<()> {
+pub fn clear_reset_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _reset_token = NULL, _reset_token_exp = NULL WHERE id = ?1",
-        slug
+        "UPDATE {} SET _reset_token = NULL, _reset_token_exp = NULL WHERE id = {}",
+        slug,
+        conn.placeholder(1)
     );
-    conn.execute(&sql, [user_id])
+    conn.execute(&sql, &[DbValue::Text(user_id.to_string())])
         .with_context(|| format!("Failed to clear reset token for {} in {}", user_id, slug))?;
     Ok(())
 }
@@ -141,29 +162,41 @@ pub fn clear_reset_token(conn: &rusqlite::Connection, slug: &str, user_id: &str)
 
 /// Store a verification token and expiry for a user.
 pub fn set_verification_token(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     user_id: &str,
     token: &str,
     exp: i64,
 ) -> Result<()> {
-    let sql = format!(
-        "UPDATE {} SET _verification_token = ?1, _verification_token_exp = ?2 WHERE id = ?3",
-        slug
+    let (p1, p2, p3) = (
+        conn.placeholder(1),
+        conn.placeholder(2),
+        conn.placeholder(3),
     );
-    conn.execute(&sql, rusqlite::params![token, exp, user_id])
-        .with_context(|| {
-            format!(
-                "Failed to set verification token for {} in {}",
-                user_id, slug
-            )
-        })?;
+    let sql = format!(
+        "UPDATE {} SET _verification_token = {}, _verification_token_exp = {} WHERE id = {}",
+        slug, p1, p2, p3
+    );
+    conn.execute(
+        &sql,
+        &[
+            DbValue::Text(token.to_string()),
+            DbValue::Integer(exp),
+            DbValue::Text(user_id.to_string()),
+        ],
+    )
+    .with_context(|| {
+        format!(
+            "Failed to set verification token for {} in {}",
+            user_id, slug
+        )
+    })?;
     Ok(())
 }
 
 /// Find a user by their verification token. Returns the document and token expiry.
 pub fn find_by_verification_token(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     token: &str,
@@ -171,41 +204,51 @@ pub fn find_by_verification_token(
     let column_names = get_column_names(def);
     let cols = column_names.join(", ");
     let sql = format!(
-        "SELECT {}, _verification_token_exp FROM {} WHERE _verification_token = ?1",
-        cols, slug
+        "SELECT {}, _verification_token_exp FROM {} WHERE _verification_token = {}",
+        cols,
+        slug,
+        conn.placeholder(1)
     );
 
-    let result = conn.query_row(&sql, [token], |row| {
-        let doc = row_to_document(row, &column_names)?;
-        let exp: i64 = row.get(column_names.len()).unwrap_or(0);
-        Ok((doc, exp))
-    });
-
-    match result {
-        Ok(pair) => Ok(Some(pair)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context(format!(
-            "Failed to find user by verification token in {}",
-            slug
-        )),
+    match conn.query_one(&sql, &[DbValue::Text(token.to_string())])? {
+        Some(row) => {
+            let doc = row_to_document(conn, &row)?;
+            let exp = row
+                .get_named("_verification_token_exp")
+                .and_then(|v| {
+                    if let DbValue::Integer(i) = v {
+                        Some(*i)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            Ok(Some((doc, exp)))
+        }
+        None => Ok(None),
     }
 }
 
 /// Mark a user as verified (set _verified = 1, clear token and expiry).
-pub fn mark_verified(conn: &rusqlite::Connection, slug: &str, user_id: &str) -> Result<()> {
+pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verified = 1, _verification_token = NULL, _verification_token_exp = NULL WHERE id = ?1",
-        slug
+        "UPDATE {} SET _verified = 1, _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
+        slug,
+        conn.placeholder(1)
     );
-    conn.execute(&sql, [user_id])
+    conn.execute(&sql, &[DbValue::Text(user_id.to_string())])
         .with_context(|| format!("Failed to mark user {} as verified in {}", user_id, slug))?;
     Ok(())
 }
 
 /// Mark a user as unverified (set _verified = 0). Does NOT touch token fields.
-pub fn mark_unverified(conn: &rusqlite::Connection, slug: &str, user_id: &str) -> Result<()> {
-    let sql = format!("UPDATE {} SET _verified = 0 WHERE id = ?1", slug);
-    conn.execute(&sql, [user_id])
+pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _verified = 0 WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+    conn.execute(&sql, &[DbValue::Text(user_id.to_string())])
         .with_context(|| format!("Failed to mark user {} as unverified in {}", user_id, slug))?;
     Ok(())
 }
@@ -214,29 +257,35 @@ pub fn mark_unverified(conn: &rusqlite::Connection, slug: &str, user_id: &str) -
 
 /// Get user settings JSON blob from `_crap_user_settings` table.
 /// Returns None if no settings saved.
-pub fn get_user_settings(conn: &rusqlite::Connection, user_id: &str) -> Result<Option<String>> {
-    let result = conn.query_row(
-        "SELECT settings FROM _crap_user_settings WHERE user_id = ?1",
-        [user_id],
-        |row| row.get::<_, String>(0),
+pub fn get_user_settings(conn: &dyn DbConnection, user_id: &str) -> Result<Option<String>> {
+    let sql = format!(
+        "SELECT settings FROM _crap_user_settings WHERE user_id = {}",
+        conn.placeholder(1)
     );
-    match result {
-        Ok(settings) => Ok(Some(settings)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e).context(format!("Failed to get settings for user {}", user_id)),
+    match conn.query_one(&sql, &[DbValue::Text(user_id.to_string())])? {
+        Some(row) => Ok(Some(row.get_string("settings")?)),
+        None => Ok(None),
     }
 }
 
 /// Set user settings JSON blob (UPSERT into `_crap_user_settings`).
 pub fn set_user_settings(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     user_id: &str,
     settings_json: &str,
 ) -> Result<()> {
-    conn.execute(
-        "INSERT INTO _crap_user_settings (user_id, settings) VALUES (?1, ?2)
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    let sql = format!(
+        "INSERT INTO _crap_user_settings (user_id, settings) VALUES ({}, {})
          ON CONFLICT(user_id) DO UPDATE SET settings = excluded.settings",
-        rusqlite::params![user_id, settings_json],
+        p1, p2
+    );
+    conn.execute(
+        &sql,
+        &[
+            DbValue::Text(user_id.to_string()),
+            DbValue::Text(settings_json.to_string()),
+        ],
     )
     .with_context(|| format!("Failed to set settings for user {}", user_id))?;
     Ok(())
@@ -245,57 +294,71 @@ pub fn set_user_settings(
 // ── Lock/unlock functions ─────────────────────────────────────────────────
 
 /// Lock a user account (prevent login).
-pub fn lock_user(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<()> {
-    let sql = format!("UPDATE {} SET _locked = 1 WHERE id = ?1", slug);
-    conn.execute(&sql, [id])
+pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _locked = 1 WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+    conn.execute(&sql, &[DbValue::Text(id.to_string())])
         .with_context(|| format!("Failed to lock user {} in {}", id, slug))?;
     Ok(())
 }
 
 /// Unlock a user account (allow login).
-pub fn unlock_user(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<()> {
-    let sql = format!("UPDATE {} SET _locked = 0 WHERE id = ?1", slug);
-    conn.execute(&sql, [id])
+pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _locked = 0 WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+    conn.execute(&sql, &[DbValue::Text(id.to_string())])
         .with_context(|| format!("Failed to unlock user {} in {}", id, slug))?;
     Ok(())
 }
 
 /// Check if a user account is locked.
-pub fn is_locked(conn: &rusqlite::Connection, slug: &str, id: &str) -> Result<bool> {
-    let sql = format!("SELECT _locked FROM {} WHERE id = ?1", slug);
-    let result = conn.query_row(&sql, [id], |row| row.get::<_, Option<i64>>(0));
-    match result {
-        Ok(Some(v)) => Ok(v != 0),
-        Ok(None) => Ok(false),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-        Err(e) => Err(e).context(format!(
-            "Failed to check lock status for {} in {}",
-            id, slug
-        )),
+pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
+    let sql = format!(
+        "SELECT _locked FROM {} WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+    match conn.query_one(&sql, &[DbValue::Text(id.to_string())])? {
+        Some(row) => Ok(row.get_bool("_locked")?),
+        None => Ok(false),
     }
 }
 
 /// Check if a user is verified.
-pub fn is_verified(conn: &rusqlite::Connection, slug: &str, user_id: &str) -> Result<bool> {
-    let sql = format!("SELECT _verified FROM {} WHERE id = ?1", slug);
-    let result = conn.query_row(&sql, [user_id], |row| row.get::<_, Option<i64>>(0));
-    match result {
-        Ok(Some(v)) => Ok(v != 0),
-        Ok(None) => Ok(false),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(false),
-        Err(e) => Err(e).context(format!(
-            "Failed to check verification for {} in {}",
-            user_id, slug
-        )),
+pub fn is_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<bool> {
+    let sql = format!(
+        "SELECT _verified FROM {} WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+    match conn.query_one(&sql, &[DbValue::Text(user_id.to_string())])? {
+        Some(row) => Ok(row.get_bool("_verified")?),
+        None => Ok(false),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::CrapConfig;
     use crate::core::collection::*;
     use crate::core::field::*;
-    use rusqlite::Connection;
+    use crate::db::{BoxedConnection, DbConnection, pool};
+    use tempfile::TempDir;
+
+    fn setup_conn() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let db_pool = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = db_pool.get().unwrap();
+        (dir, conn)
+    }
 
     fn auth_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("users");
@@ -309,8 +372,7 @@ mod tests {
         def
     }
 
-    fn setup_auth_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    fn setup_auth_db(conn: &dyn DbConnection) {
         conn.execute_batch(
             "CREATE TABLE users (
                 id TEXT PRIMARY KEY,
@@ -331,14 +393,14 @@ mod tests {
             VALUES ('user1', 'test@example.com', 'Test User', '2024-01-01', '2024-01-01');",
         )
         .unwrap();
-        conn
     }
 
     // ── find_by_email tests ─────────────────────────────────────────────────
 
     #[test]
     fn find_by_email_found() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         let result = find_by_email(&conn, "users", &def, "test@example.com").unwrap();
         assert!(result.is_some(), "Should find existing user by email");
@@ -348,7 +410,8 @@ mod tests {
 
     #[test]
     fn find_by_email_not_found() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         let result = find_by_email(&conn, "users", &def, "nobody@example.com").unwrap();
         assert!(
@@ -361,7 +424,8 @@ mod tests {
 
     #[test]
     fn get_password_hash_none() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let result = get_password_hash(&conn, "users", "user1").unwrap();
         assert!(
             result.is_none(),
@@ -371,7 +435,8 @@ mod tests {
 
     #[test]
     fn update_password_then_get() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         update_password(&conn, "users", "user1", "secret123").unwrap();
         let hash = get_password_hash(&conn, "users", "user1").unwrap();
         assert!(hash.is_some(), "Should return Some after setting password");
@@ -389,7 +454,8 @@ mod tests {
 
     #[test]
     fn set_and_find_reset_token() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         let exp = 9999999999i64;
         set_reset_token(&conn, "users", "user1", "reset-abc", exp).unwrap();
@@ -402,7 +468,8 @@ mod tests {
 
     #[test]
     fn find_by_reset_token_wrong() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         set_reset_token(&conn, "users", "user1", "reset-abc", 9999999999).unwrap();
         let result = find_by_reset_token(&conn, "users", &def, "wrong-token").unwrap();
@@ -411,7 +478,8 @@ mod tests {
 
     #[test]
     fn find_by_reset_token_expired() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         // Set token with a past expiry (the DB function doesn't check expiry)
         let past_exp = 1000i64;
@@ -430,7 +498,8 @@ mod tests {
 
     #[test]
     fn clear_reset_token_works() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         set_reset_token(&conn, "users", "user1", "reset-xyz", 9999999999).unwrap();
         clear_reset_token(&conn, "users", "user1").unwrap();
@@ -445,7 +514,8 @@ mod tests {
 
     #[test]
     fn set_and_find_verification_token() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         let exp = 9999999999i64;
         set_verification_token(&conn, "users", "user1", "verify-abc", exp).unwrap();
@@ -458,7 +528,8 @@ mod tests {
 
     #[test]
     fn find_by_verification_token_wrong() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         set_verification_token(&conn, "users", "user1", "verify-abc", 9999999999).unwrap();
         let result = find_by_verification_token(&conn, "users", &def, "wrong-token").unwrap();
@@ -470,7 +541,8 @@ mod tests {
 
     #[test]
     fn find_by_verification_token_expired() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         let past_exp = 1000i64;
         set_verification_token(&conn, "users", "user1", "verify-expired", past_exp).unwrap();
@@ -488,14 +560,16 @@ mod tests {
 
     #[test]
     fn is_verified_default_false() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let result = is_verified(&conn, "users", "user1").unwrap();
         assert!(!result, "Newly created user should not be verified");
     }
 
     #[test]
     fn mark_verified_then_check() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         mark_verified(&conn, "users", "user1").unwrap();
         let result = is_verified(&conn, "users", "user1").unwrap();
         assert!(result, "User should be verified after mark_verified");
@@ -505,14 +579,16 @@ mod tests {
 
     #[test]
     fn is_locked_default_false() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let result = is_locked(&conn, "users", "user1").unwrap();
         assert!(!result, "Newly created user should not be locked");
     }
 
     #[test]
     fn lock_then_check() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         lock_user(&conn, "users", "user1").unwrap();
         let result = is_locked(&conn, "users", "user1").unwrap();
         assert!(result, "User should be locked after lock_user");
@@ -520,7 +596,8 @@ mod tests {
 
     #[test]
     fn lock_then_unlock() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         lock_user(&conn, "users", "user1").unwrap();
         assert!(is_locked(&conn, "users", "user1").unwrap());
         unlock_user(&conn, "users", "user1").unwrap();
@@ -532,21 +609,24 @@ mod tests {
 
     #[test]
     fn is_locked_nonexistent_user() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let result = is_locked(&conn, "users", "nonexistent").unwrap();
         assert!(!result, "Non-existent user should return false");
     }
 
     #[test]
     fn is_verified_nonexistent_user() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let result = is_verified(&conn, "users", "nonexistent").unwrap();
         assert!(!result, "Non-existent user should return false");
     }
 
     #[test]
     fn mark_unverified_then_check() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         // Start verified
         mark_verified(&conn, "users", "user1").unwrap();
         assert!(is_verified(&conn, "users", "user1").unwrap());
@@ -561,7 +641,8 @@ mod tests {
 
     #[test]
     fn mark_verified_then_unverify_preserves_token() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         // Set a verification token, then verify, then unverify
         set_verification_token(&conn, "users", "user1", "verify-tok", 9999999999).unwrap();
@@ -578,7 +659,8 @@ mod tests {
 
     #[test]
     fn mark_verified_clears_token() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let def = auth_def();
         set_verification_token(&conn, "users", "user1", "verify-abc", 9999999999).unwrap();
 
@@ -602,35 +684,40 @@ mod tests {
 
     #[test]
     fn has_password_false_when_no_hash() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         assert!(!has_password(&conn, "users", "user1").unwrap());
     }
 
     #[test]
     fn has_password_true_after_set() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         update_password(&conn, "users", "user1", "secret123").unwrap();
         assert!(has_password(&conn, "users", "user1").unwrap());
     }
 
     #[test]
     fn has_password_nonexistent_user() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         assert!(!has_password(&conn, "users", "nonexistent").unwrap());
     }
 
     #[test]
     fn get_password_hash_nonexistent_user() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         let result = get_password_hash(&conn, "users", "nonexistent").unwrap();
         assert!(result.is_none(), "Non-existent user should return None");
     }
 
     #[test]
     fn is_locked_null_value_treated_as_false() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         // user1 has _locked DEFAULT 0 which is an integer, but let's test NULL directly
-        conn.execute("UPDATE users SET _locked = NULL WHERE id = 'user1'", [])
+        conn.execute("UPDATE users SET _locked = NULL WHERE id = 'user1'", &[])
             .unwrap();
         let result = is_locked(&conn, "users", "user1").unwrap();
         assert!(!result, "NULL _locked should be treated as false");
@@ -638,8 +725,9 @@ mod tests {
 
     #[test]
     fn is_verified_null_value_treated_as_false() {
-        let conn = setup_auth_db();
-        conn.execute("UPDATE users SET _verified = NULL WHERE id = 'user1'", [])
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        conn.execute("UPDATE users SET _verified = NULL WHERE id = 'user1'", &[])
             .unwrap();
         let result = is_verified(&conn, "users", "user1").unwrap();
         assert!(!result, "NULL _verified should be treated as false");
@@ -647,7 +735,7 @@ mod tests {
 
     // ── user settings tests (_crap_user_settings table) ──────────────────────
 
-    fn setup_user_settings_table(conn: &Connection) {
+    fn setup_user_settings_table(conn: &dyn DbConnection) {
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS _crap_user_settings (
                 user_id TEXT PRIMARY KEY,
@@ -659,7 +747,8 @@ mod tests {
 
     #[test]
     fn get_user_settings_none_when_no_row() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         setup_user_settings_table(&conn);
         let result = get_user_settings(&conn, "user1").unwrap();
         assert!(
@@ -670,7 +759,8 @@ mod tests {
 
     #[test]
     fn set_then_get_user_settings() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         setup_user_settings_table(&conn);
         let settings = r#"{"posts":{"columns":["title","status"]}}"#;
         set_user_settings(&conn, "user1", settings).unwrap();
@@ -680,7 +770,8 @@ mod tests {
 
     #[test]
     fn set_user_settings_overwrites() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         setup_user_settings_table(&conn);
         set_user_settings(&conn, "user1", r#"{"a":1}"#).unwrap();
         set_user_settings(&conn, "user1", r#"{"b":2}"#).unwrap();
@@ -690,7 +781,8 @@ mod tests {
 
     #[test]
     fn get_user_settings_nonexistent_user() {
-        let conn = setup_auth_db();
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
         setup_user_settings_table(&conn);
         let result = get_user_settings(&conn, "nonexistent").unwrap();
         assert!(result.is_none(), "Non-existent user should return None");

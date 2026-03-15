@@ -874,7 +874,8 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
     // Construct a minimal AdminState for the test
     let tmp = tempfile::tempdir().unwrap();
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
-    let pool = r2d2::Pool::builder().max_size(4).build(manager).unwrap();
+    let pool =
+        crate::db::DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
     let shared_reg = std::sync::Arc::new(std::sync::RwLock::new(
         crate::core::registry::Registry::default(),
     ));
@@ -958,7 +959,8 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
 
     let tmp = tempfile::tempdir().unwrap();
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
-    let pool = r2d2::Pool::builder().max_size(4).build(manager).unwrap();
+    let pool =
+        crate::db::DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
     let shared_reg = std::sync::Arc::new(std::sync::RwLock::new(
         crate::core::registry::Registry::default(),
     ));
@@ -1017,7 +1019,8 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
 fn make_test_state() -> crate::admin::AdminState {
     let tmp = tempfile::tempdir().unwrap();
     let manager = r2d2_sqlite::SqliteConnectionManager::memory();
-    let pool = r2d2::Pool::builder().max_size(4).build(manager).unwrap();
+    let pool =
+        crate::db::DbPool::from_pool(r2d2::Pool::builder().max_size(4).build(manager).unwrap());
     let shared_reg = std::sync::Arc::new(std::sync::RwLock::new(
         crate::core::registry::Registry::default(),
     ));

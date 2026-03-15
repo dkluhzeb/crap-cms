@@ -170,7 +170,7 @@ mod tests {
     use super::super::super::{PopulateCache, PopulateContext, PopulateOpts};
     use super::populate_relationships_cached;
     use crate::core::{Document, Registry, field::*};
-    use crate::db::query::join;
+    use crate::db::{DbConnection, query::join};
     use std::collections::HashSet;
 
     #[test]

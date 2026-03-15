@@ -11,10 +11,11 @@ use crate::{
         registry::Registry,
         upload,
     },
-    db::query::{self, LocaleContext},
+    db::{
+        DbConnection,
+        query::{self, LocaleContext},
+    },
 };
-
-use rusqlite::Connection;
 
 use std::collections::HashMap;
 
@@ -25,7 +26,7 @@ pub(super) fn enrich_relationship(
     ctx: &mut Value,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
@@ -199,7 +200,7 @@ pub(super) fn enrich_upload(
     ctx: &mut Value,
     field_def: &FieldDefinition,
     doc_fields: &HashMap<String, Value>,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
 ) {
@@ -463,7 +464,7 @@ pub(super) fn enrich_blocks(
 pub(super) fn enrich_join(
     ctx: &mut Value,
     field_def: &FieldDefinition,
-    conn: &Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     rel_locale_ctx: Option<&LocaleContext>,
     doc_id: Option<&str>,

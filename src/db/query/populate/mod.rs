@@ -39,25 +39,21 @@ pub fn populate_relationships_batch(
     populate_relationships_batch_cached(ctx, docs, opts, &cache)
 }
 
-/// Shared test helpers used by single.rs and batch.rs test modules.
+/// Shared test helpers for populate tests — DB setup and collection definitions.
 #[cfg(test)]
 pub(crate) mod test_helpers {
-    use rusqlite::Connection;
-
     use crate::core::{Registry, Slug, collection::*, field::*};
+    use crate::db::{DbConnection, InMemoryConn};
 
-    pub fn make_field(name: &str, ft: FieldType) -> FieldDefinition {
-        FieldDefinition::builder(name, ft).build()
-    }
+    // Re-export shared helpers so callers keep `use test_helpers::*`
+    pub use crate::db::query::test_helpers::make_field;
 
     pub fn make_collection_def(slug: &str, fields: Vec<FieldDefinition>) -> CollectionDefinition {
-        let mut def = CollectionDefinition::new(slug);
-        def.fields = fields;
-        def
+        crate::db::query::test_helpers::make_collection_def(slug, fields, false)
     }
 
-    pub fn setup_populate_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    pub fn setup_populate_db() -> InMemoryConn {
+        let conn = InMemoryConn::open();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -101,8 +97,8 @@ pub(crate) mod test_helpers {
         registry
     }
 
-    pub fn setup_join_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    pub fn setup_join_db() -> InMemoryConn {
+        let conn = InMemoryConn::open();
         conn.execute_batch(
             "CREATE TABLE authors (
                 id TEXT PRIMARY KEY,
@@ -151,8 +147,8 @@ pub(crate) mod test_helpers {
         )
     }
 
-    pub fn setup_polymorphic_populate_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    pub fn setup_polymorphic_populate_db() -> InMemoryConn {
+        let conn = InMemoryConn::open();
         conn.execute_batch(
             "CREATE TABLE entries (
                 id TEXT PRIMARY KEY,

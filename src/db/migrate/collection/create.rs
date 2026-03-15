@@ -6,11 +6,14 @@ use serde_json::Value;
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldType},
-    db::migrate::helpers::{collect_column_specs, sanitize_locale},
+    db::{
+        DbConnection,
+        migrate::helpers::{collect_column_specs, sanitize_locale},
+    },
 };
 
 pub fn create_collection_table(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
@@ -21,7 +24,11 @@ pub fn create_collection_table(
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
-                let mut col = format!("{} {}", col_name, spec.field.field_type.sqlite_type());
+                let mut col = format!(
+                    "{} {}",
+                    col_name,
+                    conn.column_type_for(&spec.field.field_type)
+                );
 
                 if spec.field.required
                     && *locale == locale_config.default_locale
@@ -36,7 +43,11 @@ pub fn create_collection_table(
                 columns.push(col);
             }
         } else {
-            let mut col = format!("{} {}", spec.col_name, spec.field.field_type.sqlite_type());
+            let mut col = format!(
+                "{} {}",
+                spec.col_name,
+                conn.column_type_for(&spec.field.field_type)
+            );
 
             if spec.field.required && !def.has_drafts() {
                 col.push_str(" NOT NULL");
@@ -70,8 +81,8 @@ pub fn create_collection_table(
     }
 
     if def.timestamps {
-        columns.push("created_at TEXT DEFAULT (datetime('now'))".to_string());
-        columns.push("updated_at TEXT DEFAULT (datetime('now'))".to_string());
+        columns.push(format!("created_at {}", conn.timestamp_column_default()));
+        columns.push(format!("updated_at {}", conn.timestamp_column_default()));
     }
 
     let sql = format!("CREATE TABLE {} ({})", slug, columns.join(", "));
@@ -79,7 +90,7 @@ pub fn create_collection_table(
     tracing::info!("Creating collection table: {}", slug);
     tracing::debug!("SQL: {}", sql);
 
-    conn.execute(&sql, [])
+    conn.execute(&sql, &[])
         .with_context(|| format!("Failed to create table {}", slug))?;
 
     Ok(())
@@ -115,7 +126,7 @@ mod tests {
 
     #[test]
     fn create_simple_collection_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection("posts", vec![text_field("title"), text_field("body")]);
         create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
@@ -130,7 +141,7 @@ mod tests {
 
     #[test]
     fn create_with_localized_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection("posts", vec![localized_field("title")]);
         create_collection_table(&conn, "posts", &def, &locale_en_de()).unwrap();
@@ -143,7 +154,7 @@ mod tests {
 
     #[test]
     fn create_auth_collection_has_system_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_collection("users", vec![text_field("email")]);
         def.auth = Some({
@@ -165,7 +176,7 @@ mod tests {
 
     #[test]
     fn drafts_collection_has_status_column() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("title")]);
         def.versions = Some(VersionsConfig::new(true, 0));
@@ -177,7 +188,7 @@ mod tests {
 
     #[test]
     fn group_field_creates_prefixed_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -200,7 +211,7 @@ mod tests {
 
     #[test]
     fn create_with_default_values() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -220,7 +231,7 @@ mod tests {
 
     #[test]
     fn create_with_required_unique_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -237,7 +248,7 @@ mod tests {
 
     #[test]
     fn create_collection_no_timestamps() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_collection("posts", vec![text_field("title")]);
         def.timestamps = false;
@@ -250,7 +261,7 @@ mod tests {
 
     #[test]
     fn create_localized_group_subfield() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -273,7 +284,7 @@ mod tests {
 
     #[test]
     fn create_required_localized_field() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -293,7 +304,7 @@ mod tests {
 
     #[test]
     fn create_required_localized_group_subfield() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -317,7 +328,7 @@ mod tests {
 
     #[test]
     fn row_field_promotes_sub_fields_without_prefix() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -350,7 +361,7 @@ mod tests {
 
     #[test]
     fn collapsible_field_promotes_sub_fields_without_prefix() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -383,7 +394,7 @@ mod tests {
 
     #[test]
     fn tabs_field_promotes_sub_fields_without_prefix() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -412,7 +423,7 @@ mod tests {
 
     #[test]
     fn tabs_containing_group_creates_prefixed_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -455,7 +466,7 @@ mod tests {
 
     #[test]
     fn collapsible_containing_group_creates_prefixed_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -485,7 +496,7 @@ mod tests {
 
     #[test]
     fn deeply_nested_tabs_collapsible_group() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -526,7 +537,7 @@ mod tests {
 
     #[test]
     fn group_containing_row() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -554,7 +565,7 @@ mod tests {
 
     #[test]
     fn group_containing_collapsible() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -582,7 +593,7 @@ mod tests {
 
     #[test]
     fn group_containing_tabs() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -613,7 +624,7 @@ mod tests {
 
     #[test]
     fn group_tabs_group_three_levels() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -644,7 +655,7 @@ mod tests {
 
     #[test]
     fn group_row_group_collapsible_four_levels() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -676,7 +687,7 @@ mod tests {
 
     #[test]
     fn group_containing_tabs_with_locale() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",

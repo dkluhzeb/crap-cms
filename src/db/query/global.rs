@@ -1,21 +1,18 @@
 //! Global document query functions.
 
 use anyhow::{Context as _, Result};
-use rusqlite::params_from_iter;
 use std::collections::HashMap;
 
+use crate::core::{Document, FieldDefinition, FieldType, collection::GlobalDefinition};
 use crate::db::{
-    LocaleContext, LocaleMode,
+    DbConnection, DbRow, DbValue, LocaleContext, LocaleMode,
+    document::row_to_document,
     query::{coerce_value, group_locale_fields, locale_write_column},
-};
-use crate::{
-    core::{Document, FieldDefinition, FieldType, collection::GlobalDefinition},
-    db::document::row_to_document,
 };
 
 /// Get the single global document from `_global_{slug}`.
 pub fn get_global(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
     locale_ctx: Option<&LocaleContext>,
@@ -36,9 +33,18 @@ pub fn get_global(
         table_name
     );
 
-    let mut doc = conn
-        .query_row(&sql, [], |row| row_to_document(row, &result_names))
+    // Build a row with aliased column names so row_to_document sees the right names
+    let raw_row = conn
+        .query_one(&sql, &[])?
         .with_context(|| format!("Failed to get global '{}'", slug))?;
+
+    // Remap columns to result_names (for locale SELECT aliasing)
+    let values: Vec<DbValue> = (0..raw_row.column_count())
+        .filter_map(|i| raw_row.get_value(i).cloned())
+        .collect();
+    let remapped = DbRow::new(result_names.clone(), values);
+
+    let mut doc = row_to_document(conn, &remapped)?;
 
     if let Some(ctx) = locale_ctx
         && ctx.config.is_enabled()
@@ -55,7 +61,7 @@ pub fn get_global(
 
 /// Update the single global document in `_global_{slug}`. Returns the updated document.
 pub fn update_global(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
     data: &HashMap<String, String>,
@@ -67,7 +73,7 @@ pub fn update_global(
         .to_string();
 
     let mut set_clauses = Vec::new();
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut params: Vec<DbValue> = Vec::new();
     let mut idx = 1;
 
     collect_update_params(
@@ -81,7 +87,7 @@ pub fn update_global(
     );
 
     set_clauses.push(format!("updated_at = ?{}", idx));
-    params.push(Box::new(now));
+    params.push(DbValue::Text(now));
 
     if set_clauses.is_empty() {
         return get_global(conn, slug, def, locale_ctx);
@@ -93,9 +99,7 @@ pub fn update_global(
         set_clauses.join(", ")
     );
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-
-    conn.execute(&sql, params_from_iter(param_refs.iter()))
+    conn.execute(&sql, &params)
         .with_context(|| format!("Failed to update global '{}'", slug))?;
 
     get_global(conn, slug, def, locale_ctx)
@@ -108,7 +112,7 @@ fn collect_update_params(
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
     set_clauses: &mut Vec<String>,
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    params: &mut Vec<DbValue>,
     idx: &mut usize,
     prefix: &str,
 ) {
@@ -171,7 +175,7 @@ fn collect_update_params(
                     *idx += 1;
                 } else if field.field_type == FieldType::Checkbox {
                     set_clauses.push(format!("{} = ?{}", col_name, *idx));
-                    params.push(Box::new(0i32));
+                    params.push(DbValue::Integer(0));
                     *idx += 1;
                 }
             }
@@ -215,10 +219,19 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
-    use rusqlite::Connection;
+    use crate::db::{BoxedConnection, pool};
+    use tempfile::TempDir;
+
+    fn setup_conn() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let db_pool = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = db_pool.get().unwrap();
+        (dir, conn)
+    }
 
     fn global_def() -> GlobalDefinition {
         let mut def = GlobalDefinition::new("settings");
@@ -229,8 +242,7 @@ mod tests {
         def
     }
 
-    fn setup_global_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
+    fn setup_global_db(conn: &dyn DbConnection) {
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,
@@ -243,14 +255,13 @@ mod tests {
             VALUES ('default', NULL, NULL, '2024-01-01', '2024-01-01');",
         )
         .unwrap();
-        conn
     }
 
     /// Globals with group fields expand sub-fields into `field__subfield` columns
     /// (same as collections).
     #[test]
     fn get_global_with_group_fields_and_locale() {
-        let conn = Connection::open_in_memory().unwrap();
+        let (_dir, conn) = setup_conn();
         conn.execute_batch(
             "CREATE TABLE _global_site (
                 id TEXT PRIMARY KEY,
@@ -298,7 +309,8 @@ mod tests {
 
     #[test]
     fn get_global_default_row() {
-        let conn = setup_global_db();
+        let (_dir, conn) = setup_conn();
+        setup_global_db(&conn);
         let def = global_def();
         let doc = get_global(&conn, "settings", &def, None).unwrap();
         assert_eq!(doc.id, "default");
@@ -310,7 +322,8 @@ mod tests {
 
     #[test]
     fn update_global_sets_field() {
-        let conn = setup_global_db();
+        let (_dir, conn) = setup_conn();
+        setup_global_db(&conn);
         let def = global_def();
         let mut data = HashMap::new();
         data.insert("site_name".to_string(), "My Site".to_string());
@@ -320,7 +333,8 @@ mod tests {
 
     #[test]
     fn update_global_preserves_unset() {
-        let conn = setup_global_db();
+        let (_dir, conn) = setup_conn();
+        setup_global_db(&conn);
         let def = global_def();
 
         // First update: set site_name
@@ -347,7 +361,8 @@ mod tests {
 
     #[test]
     fn update_global_updates_timestamp() {
-        let conn = setup_global_db();
+        let (_dir, conn) = setup_conn();
+        setup_global_db(&conn);
         let def = global_def();
 
         let before = get_global(&conn, "settings", &def, None).unwrap();
@@ -367,7 +382,7 @@ mod tests {
 
     #[test]
     fn update_global_checkbox_defaults_to_zero() {
-        let conn = Connection::open_in_memory().unwrap();
+        let (_dir, conn) = setup_conn();
         conn.execute_batch(
             "CREATE TABLE _global_prefs (
                 id TEXT PRIMARY KEY,
@@ -392,7 +407,7 @@ mod tests {
 
     #[test]
     fn update_global_group_fields() {
-        let conn = Connection::open_in_memory().unwrap();
+        let (_dir, conn) = setup_conn();
         conn.execute_batch(
             "CREATE TABLE _global_branding (
                 id TEXT PRIMARY KEY,
@@ -454,7 +469,7 @@ mod tests {
 
     #[test]
     fn update_global_group_containing_row() {
-        let conn = Connection::open_in_memory().unwrap();
+        let (_dir, conn) = setup_conn();
         conn.execute_batch(
             "CREATE TABLE _global_branding (
                 id TEXT PRIMARY KEY,
@@ -502,7 +517,7 @@ mod tests {
     #[test]
     fn update_global_group_containing_tabs() {
         use crate::core::field::FieldTab;
-        let conn = Connection::open_in_memory().unwrap();
+        let (_dir, conn) = setup_conn();
         conn.execute_batch(
             "CREATE TABLE _global_settings (
                 id TEXT PRIMARY KEY,

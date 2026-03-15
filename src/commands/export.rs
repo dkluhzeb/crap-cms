@@ -10,7 +10,7 @@ use std::{
 use crate::{
     config::CrapConfig,
     core::{CollectionDefinition, FieldType},
-    db::query,
+    db::{DbConnection, DbValue, query},
 };
 
 /// Export collection data to JSON.
@@ -273,29 +273,24 @@ pub fn import(config_dir: &Path, file: &Path, collection_filter: Option<String>)
             let parent_vals = row.parent_vals;
             let join_data = row.join_data;
 
-            // INSERT OR REPLACE
+            // Upsert (INSERT OR REPLACE for SQLite, ON CONFLICT for Postgres)
             let placeholders: Vec<String> = (0..parent_cols.len())
-                .map(|i| format!("?{}", i + 1))
+                .map(|i| tx.placeholder(i + 1))
                 .collect();
-            let sql = format!(
-                "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
-                slug,
-                parent_cols
-                    .iter()
-                    .map(|c| format!("\"{}\"", c))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                placeholders.join(", ")
+            let col_refs: Vec<&str> = parent_cols.iter().map(String::as_str).collect();
+            let sql = tx.build_upsert(
+                &format!("\"{}\"", slug),
+                &col_refs,
+                &placeholders.join(", "),
+                "id",
             );
 
-            let params: Vec<Box<dyn rusqlite::types::ToSql>> = parent_vals
+            let params: Vec<DbValue> = parent_vals
                 .iter()
-                .map(|v| Box::new(v.clone()) as Box<dyn rusqlite::types::ToSql>)
+                .map(|v| DbValue::Text(v.clone()))
                 .collect();
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(|p| p.as_ref()).collect();
 
-            tx.execute(&sql, param_refs.as_slice())
+            tx.execute(&sql, &params)
                 .with_context(|| format!("Failed to insert document {} into '{}'", id, slug))?;
 
             // Save join table data

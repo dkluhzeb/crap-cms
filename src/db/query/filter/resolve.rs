@@ -7,7 +7,7 @@
 use anyhow::{Result, anyhow, bail};
 
 use crate::core::{BlockDefinition, FieldDefinition, FieldType};
-use crate::db::{FilterClause, query::is_valid_identifier};
+use crate::db::{DbConnection, FilterClause, query::is_valid_identifier};
 
 // ── Dot notation normalization ───────────────────────────────────────────
 
@@ -89,6 +89,7 @@ pub(super) enum SubqueryCondition {
 /// - **Blocks** → subquery with `json_extract` (and `json_each` for nesting)
 /// - **Relationship** (has-many) → subquery on `related_id`
 pub(super) fn resolve_filter(
+    conn: &dyn DbConnection,
     field: &str,
     slug: &str,
     fields: &[FieldDefinition],
@@ -110,8 +111,12 @@ pub(super) fn resolve_filter(
     let join_table = format!("{}_{}", slug, root);
 
     match field_def.field_type {
-        FieldType::Array => resolve_array_filter(root, rest, field, slug, field_def, join_table),
-        FieldType::Blocks => resolve_blocks_filter(root, rest, field, slug, field_def, join_table),
+        FieldType::Array => {
+            resolve_array_filter(conn, root, rest, field, slug, field_def, join_table)
+        }
+        FieldType::Blocks => {
+            resolve_blocks_filter(conn, root, rest, field, slug, field_def, join_table)
+        }
         FieldType::Relationship => {
             resolve_relationship_filter(root, rest, slug, field_def, join_table)
         }
@@ -126,6 +131,7 @@ pub(super) fn resolve_filter(
 }
 
 fn resolve_array_filter(
+    conn: &dyn DbConnection,
     root: &str,
     rest: &str,
     field: &str,
@@ -147,7 +153,7 @@ fn resolve_array_filter(
             Some(FieldType::Group) => {
                 // Group sub-fields in arrays are stored as JSON TEXT columns.
                 // Access nested values via json_extract.
-                let extract_expr = format!("json_extract({}, '$.{}')", first_seg, remaining);
+                let extract_expr = conn.json_extract_expr(first_seg, remaining);
                 Ok(ResolvedFilter::Subquery {
                     join_table,
                     parent_table: slug.to_string(),
@@ -176,6 +182,7 @@ fn resolve_array_filter(
 }
 
 fn resolve_blocks_filter(
+    conn: &dyn DbConnection,
     _root: &str,
     rest: &str,
     field: &str,
@@ -197,7 +204,7 @@ fn resolve_blocks_filter(
             }
         }
         let (each_joins, extract_expr) =
-            walk_block_fields(&rest_parts, &field_def.blocks, &join_table)?;
+            walk_block_fields(conn, &rest_parts, &field_def.blocks, &join_table)?;
         Ok(ResolvedFilter::Subquery {
             join_table,
             parent_table: slug.to_string(),
@@ -250,6 +257,7 @@ fn resolve_relationship_filter(
 /// - **Scalar** → leaf node, produce `json_extract` expression
 /// - **`_block_type`** → special: extract from current nesting level
 pub(super) fn walk_block_fields(
+    conn: &dyn DbConnection,
     segments: &[&str],
     block_defs: &[BlockDefinition],
     join_table: &str,
@@ -277,7 +285,7 @@ pub(super) fn walk_block_fields(
             if !remaining.is_empty() {
                 bail!("_block_type must be the last segment in a filter path");
             }
-            let expr = build_block_type_expr(&each_joins, &mut json_path_parts, join_table);
+            let expr = build_block_type_expr(conn, &each_joins, &mut json_path_parts, join_table);
 
             return Ok((each_joins, expr));
         }
@@ -290,7 +298,8 @@ pub(super) fn walk_block_fields(
         match field_def.field_type {
             FieldType::Blocks => {
                 // Nested blocks → json_each join
-                let source = build_json_each_source(&each_joins, &json_path_parts, seg, join_table);
+                let source =
+                    build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
                 let alias = format!("j{}", each_joins.len());
                 each_joins.push((source, alias));
                 json_path_parts.clear();
@@ -302,7 +311,8 @@ pub(super) fn walk_block_fields(
             }
             FieldType::Array => {
                 // Nested array in block JSON → json_each join
-                let source = build_json_each_source(&each_joins, &json_path_parts, seg, join_table);
+                let source =
+                    build_json_each_source(conn, &each_joins, &json_path_parts, seg, join_table);
                 let alias = format!("j{}", each_joins.len());
                 each_joins.push((source, alias));
                 json_path_parts.clear();
@@ -326,15 +336,12 @@ pub(super) fn walk_block_fields(
                     bail!("Scalar field '{}' cannot have sub-paths", seg);
                 }
                 json_path_parts.push(seg.to_string());
+                let path = json_path_parts.join(".");
                 let expr = if !each_joins.is_empty() {
                     let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
-                    format!(
-                        "json_extract({}.value, '$.{}')",
-                        last_alias,
-                        json_path_parts.join(".")
-                    )
+                    conn.json_extract_expr(&format!("{}.value", last_alias), &path)
                 } else {
-                    format!("json_extract(data, '$.{}')", json_path_parts.join("."))
+                    conn.json_extract_expr("data", &path)
                 };
 
                 return Ok((each_joins, expr));
@@ -346,26 +353,24 @@ pub(super) fn walk_block_fields(
 }
 
 fn build_block_type_expr(
+    conn: &dyn DbConnection,
     each_joins: &[(String, String)],
     json_path_parts: &mut Vec<String>,
     _join_table: &str,
 ) -> String {
     if !each_joins.is_empty() {
         let last_alias = &each_joins.last().expect("each_joins is non-empty").1;
+        let source = format!("{}.value", last_alias);
 
         if json_path_parts.is_empty() {
-            format!("json_extract({}.value, '$._block_type')", last_alias)
+            conn.json_extract_expr(&source, "_block_type")
         } else {
             json_path_parts.push("_block_type".to_string());
-            format!(
-                "json_extract({}.value, '$.{}')",
-                last_alias,
-                json_path_parts.join(".")
-            )
+            conn.json_extract_expr(&source, &json_path_parts.join("."))
         }
     } else {
         json_path_parts.push("_block_type".to_string());
-        format!("json_extract(data, '$.{}')", json_path_parts.join("."))
+        conn.json_extract_expr("data", &json_path_parts.join("."))
     }
 }
 
@@ -375,6 +380,7 @@ fn build_block_type_expr(
 /// Otherwise, references `{join_table}.data`. Accumulated group path parts
 /// are included in the JSON path.
 pub(super) fn build_json_each_source(
+    conn: &dyn DbConnection,
     each_joins: &[(String, String)],
     json_path_parts: &[String],
     segment: &str,
@@ -385,9 +391,9 @@ pub(super) fn build_json_each_source(
     let json_path = path_parts.join(".");
 
     if let Some((_src, alias)) = each_joins.last() {
-        format!("json_extract({}.value, '$.{}')", alias, json_path)
+        conn.json_extract_expr(&format!("{}.value", alias), &json_path)
     } else {
-        format!("json_extract({}.data, '$.{}')", join_table, json_path)
+        conn.json_extract_expr(&format!("{}.data", join_table), &json_path)
     }
 }
 
@@ -396,6 +402,13 @@ mod tests {
     use super::*;
     use crate::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
     use crate::db::query::{Filter, FilterClause, FilterOp};
+
+    fn test_conn() -> (tempfile::TempDir, crate::db::BoxedConnection) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = crate::config::CrapConfig::default();
+        let p = crate::db::pool::create_pool(dir.path(), &config).unwrap();
+        (dir, p.get().unwrap())
+    }
 
     fn make_field(name: &str, ft: FieldType, localized: bool) -> FieldDefinition {
         FieldDefinition::builder(name, ft)
@@ -513,7 +526,8 @@ mod tests {
 
     #[test]
     fn resolve_filter_no_dots_returns_column() {
-        let resolved = resolve_filter("status", "posts", &[]).unwrap();
+        let (_dir, conn) = test_conn();
+        let resolved = resolve_filter(&conn, "status", "posts", &[]).unwrap();
         match resolved {
             ResolvedFilter::Column(col) => assert_eq!(col, "status"),
             other => panic!("Expected Column, got {:?}", other),
@@ -522,11 +536,12 @@ mod tests {
 
     #[test]
     fn resolve_filter_array_subfield() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_array_field(
             "items",
             vec![make_field("name", FieldType::Text, false)],
         )];
-        let resolved = resolve_filter("items.name", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "items.name", "posts", &fields).unwrap();
         match resolved {
             ResolvedFilter::Subquery {
                 join_table,
@@ -546,11 +561,12 @@ mod tests {
 
     #[test]
     fn resolve_filter_array_group_in_array() {
+        let (_dir, conn) = test_conn();
         let mut addr = make_field("address", FieldType::Group, false);
         addr.fields = vec![make_field("city", FieldType::Text, false)];
         let fields = vec![make_array_field("items", vec![addr])];
 
-        let resolved = resolve_filter("items.address.city", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "items.address.city", "posts", &fields).unwrap();
         match resolved {
             ResolvedFilter::Subquery { condition, .. } => match condition {
                 SubqueryCondition::Json {
@@ -568,8 +584,9 @@ mod tests {
 
     #[test]
     fn resolve_filter_block_type() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_blocks_field("content", vec![])];
-        let resolved = resolve_filter("content._block_type", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "content._block_type", "posts", &fields).unwrap();
         match resolved {
             ResolvedFilter::Subquery { condition, .. } => {
                 assert!(matches!(condition, SubqueryCondition::BlockType));
@@ -580,6 +597,7 @@ mod tests {
 
     #[test]
     fn resolve_filter_block_scalar() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_blocks_field(
             "content",
             vec![make_block_def(
@@ -587,7 +605,7 @@ mod tests {
                 vec![make_field("body", FieldType::Textarea, false)],
             )],
         )];
-        let resolved = resolve_filter("content.body", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "content.body", "posts", &fields).unwrap();
         match resolved {
             ResolvedFilter::Subquery { condition, .. } => match condition {
                 SubqueryCondition::Json {
@@ -605,8 +623,9 @@ mod tests {
 
     #[test]
     fn resolve_filter_has_many_relationship() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_has_many_field("tags", "tags")];
-        let resolved = resolve_filter("tags.id", "posts", &fields).unwrap();
+        let resolved = resolve_filter(&conn, "tags.id", "posts", &fields).unwrap();
         match resolved {
             ResolvedFilter::Subquery {
                 join_table,
@@ -625,8 +644,9 @@ mod tests {
 
     #[test]
     fn resolve_filter_has_many_rejects_non_id() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_has_many_field("tags", "tags")];
-        let result = resolve_filter("tags.name", "posts", &fields);
+        let result = resolve_filter(&conn, "tags.name", "posts", &fields);
         assert!(result.is_err());
         assert!(
             result
@@ -638,20 +658,22 @@ mod tests {
 
     #[test]
     fn resolve_filter_has_one_relationship_rejects_dot() {
+        let (_dir, conn) = test_conn();
         let fields = vec![
             FieldDefinition::builder("author", FieldType::Relationship)
                 .relationship(RelationshipConfig::new("users", false))
                 .build(),
         ];
-        let result = resolve_filter("author.name", "posts", &fields);
+        let result = resolve_filter(&conn, "author.name", "posts", &fields);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Has-one"));
     }
 
     #[test]
     fn resolve_filter_unsupported_field_type() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_field("title", FieldType::Text, false)];
-        let result = resolve_filter("title.sub", "posts", &fields);
+        let result = resolve_filter(&conn, "title.sub", "posts", &fields);
         assert!(result.is_err());
         assert!(
             result
@@ -663,8 +685,9 @@ mod tests {
 
     #[test]
     fn resolve_filter_relationship_missing_config() {
+        let (_dir, conn) = test_conn();
         let fields = vec![FieldDefinition::builder("tags", FieldType::Relationship).build()];
-        let result = resolve_filter("tags.id", "posts", &fields);
+        let result = resolve_filter(&conn, "tags.id", "posts", &fields);
         assert!(result.is_err());
         assert!(
             result
@@ -676,36 +699,40 @@ mod tests {
 
     #[test]
     fn resolve_filter_unknown_root_field() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_field("title", FieldType::Text, false)];
-        let result = resolve_filter("nonexistent.sub", "posts", &fields);
+        let result = resolve_filter(&conn, "nonexistent.sub", "posts", &fields);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unknown field"));
     }
 
     #[test]
     fn resolve_filter_array_nested_non_group_error() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_array_field(
             "items",
             vec![make_field("name", FieldType::Text, false)],
         )];
-        let result = resolve_filter("items.name.deep", "posts", &fields);
+        let result = resolve_filter(&conn, "items.name.deep", "posts", &fields);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Nested dot path"));
     }
 
     #[test]
     fn resolve_filter_array_invalid_segment() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_array_field(
             "items",
             vec![make_field("name", FieldType::Text, false)],
         )];
-        let result = resolve_filter("items.bad field", "posts", &fields);
+        let result = resolve_filter(&conn, "items.bad field", "posts", &fields);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid segment"));
     }
 
     #[test]
     fn resolve_filter_blocks_invalid_segment() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_blocks_field(
             "content",
             vec![make_block_def(
@@ -713,7 +740,7 @@ mod tests {
                 vec![make_field("body", FieldType::Textarea, false)],
             )],
         )];
-        let result = resolve_filter("content.bad field", "posts", &fields);
+        let result = resolve_filter(&conn, "content.bad field", "posts", &fields);
         assert!(result.is_err());
     }
 
@@ -721,29 +748,33 @@ mod tests {
 
     #[test]
     fn walk_block_simple_scalar() {
+        let (_dir, conn) = test_conn();
         let block_defs = vec![make_block_def(
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
-        let (joins, expr) = walk_block_fields(&["body"], &block_defs, "posts_content").unwrap();
+        let (joins, expr) =
+            walk_block_fields(&conn, &["body"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.body')");
     }
 
     #[test]
     fn walk_block_group_then_scalar() {
+        let (_dir, conn) = test_conn();
         let mut grp = make_field("meta", FieldType::Group, false);
         grp.fields = vec![make_field("title", FieldType::Text, false)];
         let block_defs = vec![make_block_def("rich", vec![grp])];
 
         let (joins, expr) =
-            walk_block_fields(&["meta", "title"], &block_defs, "posts_content").unwrap();
+            walk_block_fields(&conn, &["meta", "title"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$.meta.title')");
     }
 
     #[test]
     fn walk_block_nested_blocks_scalar() {
+        let (_dir, conn) = test_conn();
         let inner_blocks = vec![make_block_def(
             "quote",
             vec![make_field("text", FieldType::Text, false)],
@@ -753,7 +784,7 @@ mod tests {
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
         let (joins, expr) =
-            walk_block_fields(&["nested", "text"], &block_defs, "posts_content").unwrap();
+            walk_block_fields(&conn, &["nested", "text"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.nested')");
         assert_eq!(joins[0].1, "j0");
@@ -762,6 +793,7 @@ mod tests {
 
     #[test]
     fn walk_block_deeply_nested() {
+        let (_dir, conn) = test_conn();
         // content -> nested -> deeper -> field
         let deep_blocks = vec![make_block_def(
             "leaf",
@@ -774,9 +806,13 @@ mod tests {
         nested.blocks = mid_blocks;
         let block_defs = vec![make_block_def("top", vec![nested])];
 
-        let (joins, expr) =
-            walk_block_fields(&["nested", "deeper", "field"], &block_defs, "posts_content")
-                .unwrap();
+        let (joins, expr) = walk_block_fields(
+            &conn,
+            &["nested", "deeper", "field"],
+            &block_defs,
+            "posts_content",
+        )
+        .unwrap();
         assert_eq!(joins.len(), 2);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.nested')");
         assert_eq!(joins[0].1, "j0");
@@ -787,6 +823,7 @@ mod tests {
 
     #[test]
     fn walk_block_nested_block_type() {
+        let (_dir, conn) = test_conn();
         let inner_blocks = vec![make_block_def(
             "quote",
             vec![make_field("text", FieldType::Text, false)],
@@ -795,14 +832,20 @@ mod tests {
         nested.blocks = inner_blocks;
         let block_defs = vec![make_block_def("rich", vec![nested])];
 
-        let (joins, expr) =
-            walk_block_fields(&["nested", "_block_type"], &block_defs, "posts_content").unwrap();
+        let (joins, expr) = walk_block_fields(
+            &conn,
+            &["nested", "_block_type"],
+            &block_defs,
+            "posts_content",
+        )
+        .unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(expr, "json_extract(j0.value, '$._block_type')");
     }
 
     #[test]
     fn walk_block_group_then_nested_blocks() {
+        let (_dir, conn) = test_conn();
         // group "sidebar" → blocks "nested" → scalar "body"
         let inner_blocks = vec![make_block_def(
             "text",
@@ -814,9 +857,13 @@ mod tests {
         sidebar.fields = vec![nested];
         let block_defs = vec![make_block_def("layout", vec![sidebar])];
 
-        let (joins, expr) =
-            walk_block_fields(&["sidebar", "nested", "body"], &block_defs, "posts_content")
-                .unwrap();
+        let (joins, expr) = walk_block_fields(
+            &conn,
+            &["sidebar", "nested", "body"],
+            &block_defs,
+            "posts_content",
+        )
+        .unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(
             joins[0].0,
@@ -827,29 +874,32 @@ mod tests {
 
     #[test]
     fn walk_block_empty_path_error() {
+        let (_dir, conn) = test_conn();
         let block_defs = vec![make_block_def("text", vec![])];
-        let result = walk_block_fields(&[], &block_defs, "table");
+        let result = walk_block_fields(&conn, &[], &block_defs, "table");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Empty path"));
     }
 
     #[test]
     fn walk_block_scalar_with_subpath_error() {
+        let (_dir, conn) = test_conn();
         let block_defs = vec![make_block_def(
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
-        let result = walk_block_fields(&["body", "extra"], &block_defs, "table");
+        let result = walk_block_fields(&conn, &["body", "extra"], &block_defs, "table");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Scalar field"));
     }
 
     #[test]
     fn walk_block_container_as_leaf_error() {
+        let (_dir, conn) = test_conn();
         let mut nested = make_field("nested", FieldType::Blocks, false);
         nested.blocks = vec![make_block_def("inner", vec![])];
         let block_defs = vec![make_block_def("outer", vec![nested])];
-        let result = walk_block_fields(&["nested"], &block_defs, "table");
+        let result = walk_block_fields(&conn, &["nested"], &block_defs, "table");
         assert!(result.is_err());
         assert!(
             result
@@ -861,11 +911,12 @@ mod tests {
 
     #[test]
     fn walk_block_block_type_not_last_error() {
+        let (_dir, conn) = test_conn();
         let block_defs = vec![make_block_def(
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
-        let result = walk_block_fields(&["_block_type", "extra"], &block_defs, "table");
+        let result = walk_block_fields(&conn, &["_block_type", "extra"], &block_defs, "table");
         assert!(result.is_err());
         assert!(
             result
@@ -877,24 +928,26 @@ mod tests {
 
     #[test]
     fn walk_block_top_level_block_type_without_joins() {
+        let (_dir, conn) = test_conn();
         let block_defs = vec![make_block_def(
             "text",
             vec![make_field("body", FieldType::Textarea, false)],
         )];
         let (joins, expr) =
-            walk_block_fields(&["_block_type"], &block_defs, "posts_content").unwrap();
+            walk_block_fields(&conn, &["_block_type"], &block_defs, "posts_content").unwrap();
         assert!(joins.is_empty());
         assert_eq!(expr, "json_extract(data, '$._block_type')");
     }
 
     #[test]
     fn walk_block_array_in_block() {
+        let (_dir, conn) = test_conn();
         let mut arr = make_field("items", FieldType::Array, false);
         arr.fields = vec![make_field("name", FieldType::Text, false)];
         let block_defs = vec![make_block_def("list", vec![arr])];
 
         let (joins, expr) =
-            walk_block_fields(&["items", "name"], &block_defs, "posts_content").unwrap();
+            walk_block_fields(&conn, &["items", "name"], &block_defs, "posts_content").unwrap();
         assert_eq!(joins.len(), 1);
         assert_eq!(joins[0].0, "json_extract(posts_content.data, '$.items')");
         assert_eq!(expr, "json_extract(j0.value, '$.name')");
@@ -902,6 +955,7 @@ mod tests {
 
     #[test]
     fn walk_block_nested_block_type_with_group_path() {
+        let (_dir, conn) = test_conn();
         // group "meta" → nested blocks → _block_type
         let inner_blocks = vec![make_block_def(
             "quote",
@@ -914,6 +968,7 @@ mod tests {
         let block_defs = vec![make_block_def("rich", vec![meta])];
 
         let (joins, expr) = walk_block_fields(
+            &conn,
             &["meta", "nested", "_block_type"],
             &block_defs,
             "posts_content",

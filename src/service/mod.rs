@@ -35,6 +35,7 @@ use serde_json::Value;
 
 use crate::{
     core::{Document, FieldDefinition, collection::Hooks},
+    db::DbConnection,
     hooks::{HookContext, HookEvent, HookRunner},
 };
 
@@ -62,7 +63,7 @@ pub(crate) fn run_after_change_hooks(
     fields: &[FieldDefinition],
     doc: &Document,
     input: AfterChangeInput<'_>,
-    tx: &rusqlite::Connection,
+    tx: &dyn DbConnection,
 ) -> Result<HashMap<String, Value>> {
     let mut after_data = doc.fields.clone();
     after_data.insert("id".to_string(), Value::String(doc.id.to_string()));

@@ -1,8 +1,8 @@
-//! Supported field types. Each variant maps to a SQLite column type (or join table).
+//! Supported field types. Each variant maps to a database column type (or join table).
 
 use serde::{Deserialize, Serialize};
 
-/// Supported field types. Each variant maps to a SQLite column type (or join table for Array/Blocks/has-many).
+/// Supported field types. Each variant maps to a database column type (or join table for Array/Blocks/has-many).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum FieldType {
@@ -54,32 +54,6 @@ pub enum FieldType {
 }
 
 impl FieldType {
-    /// Returns the SQLite column type for this field type.
-    pub fn sqlite_type(&self) -> &'static str {
-        match self {
-            FieldType::Text => "TEXT",
-            FieldType::Number => "REAL",
-            FieldType::Textarea => "TEXT",
-            FieldType::Select => "TEXT",
-            FieldType::Radio => "TEXT",
-            FieldType::Checkbox => "INTEGER",
-            FieldType::Date => "TEXT",
-            FieldType::Email => "TEXT",
-            FieldType::Json => "TEXT",
-            FieldType::Richtext => "TEXT",
-            FieldType::Relationship => "TEXT",
-            FieldType::Array => "TEXT", // never used — arrays use join tables
-            FieldType::Group => "TEXT", // never used — sub-fields get prefixed columns
-            FieldType::Upload => "TEXT",
-            FieldType::Blocks => "TEXT", // never used — blocks use join tables
-            FieldType::Row => "TEXT",    // never used — sub-fields are promoted to parent
-            FieldType::Collapsible => "TEXT", // never used — sub-fields are promoted to parent
-            FieldType::Tabs => "TEXT",   // never used — sub-fields are promoted to parent
-            FieldType::Code => "TEXT",
-            FieldType::Join => "TEXT", // never used — virtual field, no column
-        }
-    }
-
     /// Parse a string into a `FieldType`, defaulting to `Text` if unknown.
     pub fn parse_lossy(s: &str) -> Self {
         match s.to_lowercase().as_str() {
@@ -175,16 +149,6 @@ mod tests {
     fn from_str_unknown_defaults_to_text() {
         assert_eq!(FieldType::parse_lossy("unknown"), FieldType::Text);
         assert_eq!(FieldType::parse_lossy(""), FieldType::Text);
-    }
-
-    #[test]
-    fn sqlite_type_mapping() {
-        assert_eq!(FieldType::Text.sqlite_type(), "TEXT");
-        assert_eq!(FieldType::Number.sqlite_type(), "REAL");
-        assert_eq!(FieldType::Checkbox.sqlite_type(), "INTEGER");
-        assert_eq!(FieldType::Json.sqlite_type(), "TEXT");
-        assert_eq!(FieldType::Richtext.sqlite_type(), "TEXT");
-        assert_eq!(FieldType::Relationship.sqlite_type(), "TEXT");
     }
 
     #[test]

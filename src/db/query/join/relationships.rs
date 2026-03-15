@@ -2,11 +2,13 @@
 
 use anyhow::Result;
 
+use crate::db::{DbConnection, DbValue};
+
 /// Set related IDs for a has-many relationship junction table.
 /// Deletes all existing rows for the parent and inserts new ones with _order.
 /// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
 pub fn set_related_ids(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     field: &str,
     parent_id: &str,
@@ -16,37 +18,66 @@ pub fn set_related_ids(
     let table_name = format!("{}_{}", collection, field);
 
     if let Some(loc) = locale {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2",
+                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
-            rusqlite::params![parent_id, loc],
+            &[
+                DbValue::Text(parent_id.to_string()),
+                DbValue::Text(loc.to_string()),
+            ],
         )?;
     } else {
+        let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
-            [parent_id],
+            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &[DbValue::Text(parent_id.to_string())],
         )?;
     }
 
     if let Some(loc) = locale {
+        let (p1, p2, p3, p4) = (
+            conn.placeholder(1),
+            conn.placeholder(2),
+            conn.placeholder(3),
+            conn.placeholder(4),
+        );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, _order, _locale) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO {} (parent_id, related_id, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4})",
             table_name
         );
-        let mut stmt = conn.prepare(&sql)?;
         for (i, id) in ids.iter().enumerate() {
-            stmt.execute(rusqlite::params![parent_id, id, i as i64, loc])?;
+            conn.execute(
+                &sql,
+                &[
+                    DbValue::Text(parent_id.to_string()),
+                    DbValue::Text(id.clone()),
+                    DbValue::Integer(i as i64),
+                    DbValue::Text(loc.to_string()),
+                ],
+            )?;
         }
     } else {
+        let (p1, p2, p3) = (
+            conn.placeholder(1),
+            conn.placeholder(2),
+            conn.placeholder(3),
+        );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, _order) VALUES (?1, ?2, ?3)",
+            "INSERT INTO {} (parent_id, related_id, _order) VALUES ({p1}, {p2}, {p3})",
             table_name
         );
-        let mut stmt = conn.prepare(&sql)?;
         for (i, id) in ids.iter().enumerate() {
-            stmt.execute(rusqlite::params![parent_id, id, i as i64])?;
+            conn.execute(
+                &sql,
+                &[
+                    DbValue::Text(parent_id.to_string()),
+                    DbValue::Text(id.clone()),
+                    DbValue::Integer(i as i64),
+                ],
+            )?;
         }
     }
     Ok(())
@@ -55,7 +86,7 @@ pub fn set_related_ids(
 /// Find related IDs for a has-many relationship junction table, ordered.
 /// When `locale` is Some, filters by `_locale`.
 pub fn find_related_ids(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     field: &str,
     parent_id: &str,
@@ -63,38 +94,48 @@ pub fn find_related_ids(
 ) -> Result<Vec<String>> {
     let table_name = format!("{}_{}", collection, field);
 
-    if let Some(loc) = locale {
-        let sql = format!(
-            "SELECT related_id FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",
-            table_name
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let ids: Vec<String> = stmt
-            .query_map(rusqlite::params![parent_id, loc], |row| {
-                row.get::<_, String>(0)
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(ids)
+    let (sql, params) = if let Some(loc) = locale {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        (
+            format!(
+                "SELECT related_id FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                table_name
+            ),
+            vec![
+                DbValue::Text(parent_id.to_string()),
+                DbValue::Text(loc.to_string()),
+            ],
+        )
     } else {
-        let sql = format!(
-            "SELECT related_id FROM {} WHERE parent_id = ?1 ORDER BY _order",
-            table_name
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let ids: Vec<String> = stmt
-            .query_map([parent_id], |row| row.get::<_, String>(0))?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(ids)
-    }
+        let p1 = conn.placeholder(1);
+        (
+            format!(
+                "SELECT related_id FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                table_name
+            ),
+            vec![DbValue::Text(parent_id.to_string())],
+        )
+    };
+
+    let rows = conn.query_all(&sql, &params)?;
+    let ids = rows
+        .into_iter()
+        .filter_map(|row| {
+            if let Some(DbValue::Text(s)) = row.get_value(0) {
+                Some(s.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(ids)
 }
 
 /// Set related items for a polymorphic has-many relationship junction table.
 /// Each item is a `(related_collection, related_id)` pair.
 /// Deletes all existing rows for the parent and inserts new ones with _order.
 pub fn set_polymorphic_related(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     field: &str,
     parent_id: &str,
@@ -104,33 +145,66 @@ pub fn set_polymorphic_related(
     let table_name = format!("{}_{}", collection, field);
 
     if let Some(loc) = locale {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2",
+                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
-            rusqlite::params![parent_id, loc],
+            &[
+                DbValue::Text(parent_id.to_string()),
+                DbValue::Text(loc.to_string()),
+            ],
         )?;
+        let (p1, p2, p3, p4, p5) = (
+            conn.placeholder(1),
+            conn.placeholder(2),
+            conn.placeholder(3),
+            conn.placeholder(4),
+            conn.placeholder(5),
+        );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, related_collection, _order, _locale) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO {} (parent_id, related_id, related_collection, _order, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
             table_name
         );
-        let mut stmt = conn.prepare(&sql)?;
         for (i, (rel_col, rel_id)) in items.iter().enumerate() {
-            stmt.execute(rusqlite::params![parent_id, rel_id, rel_col, i as i64, loc])?;
+            conn.execute(
+                &sql,
+                &[
+                    DbValue::Text(parent_id.to_string()),
+                    DbValue::Text(rel_id.clone()),
+                    DbValue::Text(rel_col.clone()),
+                    DbValue::Integer(i as i64),
+                    DbValue::Text(loc.to_string()),
+                ],
+            )?;
         }
     } else {
+        let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
-            [parent_id],
+            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &[DbValue::Text(parent_id.to_string())],
         )?;
+        let (p1, p2, p3, p4) = (
+            conn.placeholder(1),
+            conn.placeholder(2),
+            conn.placeholder(3),
+            conn.placeholder(4),
+        );
         let sql = format!(
-            "INSERT INTO {} (parent_id, related_id, related_collection, _order) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO {} (parent_id, related_id, related_collection, _order) VALUES ({p1}, {p2}, {p3}, {p4})",
             table_name
         );
-        let mut stmt = conn.prepare(&sql)?;
         for (i, (rel_col, rel_id)) in items.iter().enumerate() {
-            stmt.execute(rusqlite::params![parent_id, rel_id, rel_col, i as i64])?;
+            conn.execute(
+                &sql,
+                &[
+                    DbValue::Text(parent_id.to_string()),
+                    DbValue::Text(rel_id.clone()),
+                    DbValue::Text(rel_col.clone()),
+                    DbValue::Integer(i as i64),
+                ],
+            )?;
         }
     }
     Ok(())
@@ -139,7 +213,7 @@ pub fn set_polymorphic_related(
 /// Find related items for a polymorphic has-many relationship junction table.
 /// Returns `(related_collection, related_id)` pairs ordered by _order.
 pub fn find_polymorphic_related(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     field: &str,
     parent_id: &str,
@@ -147,56 +221,77 @@ pub fn find_polymorphic_related(
 ) -> Result<Vec<(String, String)>> {
     let table_name = format!("{}_{}", collection, field);
 
-    if let Some(loc) = locale {
-        let sql = format!(
-            "SELECT related_collection, related_id FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",
-            table_name
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let items: Vec<(String, String)> = stmt
-            .query_map(rusqlite::params![parent_id, loc], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(items)
+    let (sql, params) = if let Some(loc) = locale {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        (
+            format!(
+                "SELECT related_collection, related_id FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                table_name
+            ),
+            vec![
+                DbValue::Text(parent_id.to_string()),
+                DbValue::Text(loc.to_string()),
+            ],
+        )
     } else {
-        let sql = format!(
-            "SELECT related_collection, related_id FROM {} WHERE parent_id = ?1 ORDER BY _order",
-            table_name
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let items: Vec<(String, String)> = stmt
-            .query_map([parent_id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-            })?
-            .filter_map(|r| r.ok())
-            .collect();
-        Ok(items)
-    }
+        let p1 = conn.placeholder(1);
+        (
+            format!(
+                "SELECT related_collection, related_id FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                table_name
+            ),
+            vec![DbValue::Text(parent_id.to_string())],
+        )
+    };
+
+    let rows = conn.query_all(&sql, &params)?;
+    let items = rows
+        .into_iter()
+        .filter_map(|row| {
+            let col = if let Some(DbValue::Text(s)) = row.get_value(0) {
+                s.clone()
+            } else {
+                return None;
+            };
+            let id = if let Some(DbValue::Text(s)) = row.get_value(1) {
+                s.clone()
+            } else {
+                return None;
+            };
+            Some((col, id))
+        })
+        .collect();
+    Ok(items)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rusqlite::Connection;
+    use crate::config::CrapConfig;
+    use crate::db::{BoxedConnection, pool};
+    use tempfile::TempDir;
 
-    fn setup_junction_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+    fn setup_conn(sql: &str) -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
+        conn.execute_batch(sql).unwrap();
+        (dir, conn)
+    }
+
+    fn setup_junction_db() -> (TempDir, BoxedConnection) {
+        setup_conn(
             "CREATE TABLE posts_tags (
                 parent_id TEXT,
                 related_id TEXT,
                 _order INTEGER
             );",
         )
-        .unwrap();
-        conn
     }
 
-    fn setup_polymorphic_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+    fn setup_polymorphic_db() -> (TempDir, BoxedConnection) {
+        setup_conn(
             "CREATE TABLE posts_refs (
                 parent_id TEXT,
                 related_id TEXT,
@@ -205,15 +300,13 @@ mod tests {
                 PRIMARY KEY (parent_id, related_id, related_collection)
             );",
         )
-        .unwrap();
-        conn
     }
 
     // ── set_related_ids + find_related_ids ───────────────────────────────────
 
     #[test]
     fn set_and_find_related_ids() {
-        let conn = setup_junction_db();
+        let (_dir, conn) = setup_junction_db();
         let ids = vec!["t1".to_string(), "t2".to_string(), "t3".to_string()];
         set_related_ids(&conn, "posts", "tags", "p1", &ids, None).unwrap();
 
@@ -227,7 +320,7 @@ mod tests {
 
     #[test]
     fn replace_related_ids() {
-        let conn = setup_junction_db();
+        let (_dir, conn) = setup_junction_db();
         let ids_old = vec!["t1".to_string(), "t2".to_string()];
         set_related_ids(&conn, "posts", "tags", "p1", &ids_old, None).unwrap();
 
@@ -244,7 +337,7 @@ mod tests {
 
     #[test]
     fn empty_related_ids() {
-        let conn = setup_junction_db();
+        let (_dir, conn) = setup_junction_db();
         let ids = vec!["t1".to_string()];
         set_related_ids(&conn, "posts", "tags", "p1", &ids, None).unwrap();
         set_related_ids(&conn, "posts", "tags", "p1", &[], None).unwrap();
@@ -258,16 +351,14 @@ mod tests {
 
     #[test]
     fn set_and_find_related_ids_with_locale() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_conn(
             "CREATE TABLE posts_tags (
                 parent_id TEXT,
                 related_id TEXT,
                 _order INTEGER,
                 _locale TEXT
             );",
-        )
-        .unwrap();
+        );
 
         set_related_ids(
             &conn,
@@ -314,7 +405,7 @@ mod tests {
 
     #[test]
     fn set_and_find_polymorphic_related() {
-        let conn = setup_polymorphic_db();
+        let (_dir, conn) = setup_polymorphic_db();
         let items = vec![
             ("articles".to_string(), "a1".to_string()),
             ("pages".to_string(), "pg1".to_string()),
@@ -335,7 +426,7 @@ mod tests {
 
     #[test]
     fn replace_polymorphic_related() {
-        let conn = setup_polymorphic_db();
+        let (_dir, conn) = setup_polymorphic_db();
         let old = vec![("articles".to_string(), "a1".to_string())];
         set_polymorphic_related(&conn, "posts", "refs", "p1", &old, None).unwrap();
 
@@ -357,8 +448,7 @@ mod tests {
 
     #[test]
     fn set_and_find_polymorphic_related_with_locale() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_conn(
             "CREATE TABLE posts_refs (
                 parent_id TEXT,
                 related_id TEXT,
@@ -366,8 +456,7 @@ mod tests {
                 _order INTEGER,
                 _locale TEXT
             );",
-        )
-        .unwrap();
+        );
 
         let items_en = vec![
             ("articles".to_string(), "a1".to_string()),

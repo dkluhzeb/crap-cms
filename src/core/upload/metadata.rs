@@ -8,7 +8,10 @@ use crate::{
         Document,
         upload::{CollectionUpload, ProcessedUpload, QueuedConversion},
     },
-    db::query::images::{NewImageEntry, insert_image_queue_entry},
+    db::{
+        DbConnection,
+        query::images::{NewImageEntry, insert_image_queue_entry},
+    },
 };
 
 /// Assemble per-size typed columns into a structured `sizes` object on the document.
@@ -142,7 +145,7 @@ pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, Value
 /// Insert queued format conversions into the image processing queue.
 /// Called after document creation, when the document ID is known.
 pub fn enqueue_conversions(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     document_id: &str,
     conversions: &[QueuedConversion],

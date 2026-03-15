@@ -1,7 +1,6 @@
 //! Version restore operations for collections and globals.
 
 use anyhow::{Context as _, Result, anyhow};
-use rusqlite::params_from_iter;
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
@@ -10,7 +9,7 @@ use crate::{
     core::{
         CollectionDefinition, Document, FieldDefinition, FieldType, collection::GlobalDefinition,
     },
-    db::query::sanitize_locale,
+    db::{DbConnection, DbValue, query::sanitize_locale},
 };
 
 use super::{
@@ -26,7 +25,7 @@ use super::{
 /// the default locale column. This ensures stale translations from later edits don't
 /// persist after restoring an older version.
 pub fn restore_version(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     parent_id: &str,
@@ -65,7 +64,7 @@ pub fn restore_version(
 /// Restore a version snapshot back to a global's main table.
 /// Group fields use expanded `field__subfield` sub-columns (same as collections).
 pub fn restore_global_version(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
     snapshot: &Value,
@@ -109,7 +108,7 @@ pub fn restore_global_version(
 /// Restore locale columns and join table data from a snapshot.
 /// Group fields are always expanded to `field__subfield` sub-columns.
 fn restore_locale_and_join_data(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     table: &str,
     parent_id: &str,
     fields: &[FieldDefinition],
@@ -121,7 +120,7 @@ fn restore_locale_and_join_data(
     // Restore localized main-table columns: clear ALL locale columns, set default from snapshot.
     if locales_enabled {
         let mut set_clauses = Vec::new();
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        let mut params: Vec<DbValue> = Vec::new();
         let mut idx = 1;
 
         for field in fields {
@@ -197,10 +196,8 @@ fn restore_locale_and_join_data(
                 set_clauses.join(", "),
                 idx
             );
-            params.push(Box::new(parent_id.to_string()));
-            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-                params.iter().map(|p| p.as_ref()).collect();
-            conn.execute(&sql, params_from_iter(param_refs.iter()))
+            params.push(DbValue::Text(parent_id.to_string()));
+            conn.execute(&sql, &params)
                 .context("Failed to restore locale columns")?;
         }
     }
@@ -222,7 +219,7 @@ fn collect_locale_restore_fields(
     obj: &Map<String, Value>,
     locale_config: &LocaleConfig,
     set_clauses: &mut Vec<String>,
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    params: &mut Vec<DbValue>,
     idx: &mut usize,
 ) {
     for field in fields {
@@ -280,7 +277,7 @@ fn restore_locale_columns(
     field_name: &str,
     locale_config: &LocaleConfig,
     set_clauses: &mut Vec<String>,
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    params: &mut Vec<DbValue>,
     idx: &mut usize,
 ) {
     for locale in &locale_config.locales {
@@ -291,17 +288,17 @@ fn restore_locale_columns(
             match snapshot_val {
                 Some(Value::String(s)) => {
                     set_clauses.push(format!("{} = ?{}", col, idx));
-                    params.push(Box::new(s.clone()));
+                    params.push(DbValue::Text(s.clone()));
                     *idx += 1;
                 }
                 Some(Value::Number(n)) => {
                     set_clauses.push(format!("{} = ?{}", col, idx));
-                    params.push(Box::new(n.to_string()));
+                    params.push(DbValue::Text(n.to_string()));
                     *idx += 1;
                 }
                 Some(Value::Bool(b)) => {
                     set_clauses.push(format!("{} = ?{}", col, idx));
-                    params.push(Box::new(if *b { 1i32 } else { 0i32 }));
+                    params.push(DbValue::Integer(if *b { 1 } else { 0 }));
                     *idx += 1;
                 }
                 _ => {
@@ -320,18 +317,27 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::{
         collection::{CollectionDefinition, VersionsConfig},
         field::{FieldDefinition, FieldTab},
     };
-    use crate::db::query::versions::crud::count_versions;
+    use crate::db::{BoxedConnection, pool, query::versions::crud::count_versions};
+    use tempfile::TempDir;
+
+    fn setup_conn() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let db_pool = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = db_pool.get().unwrap();
+        (dir, conn)
+    }
 
     #[test]
     fn restore_version_localized_blocks_inside_tabs() {
         // Regression: restore_locale_and_join_data tried to SET locale columns for
         // blocks fields inside Tabs (which don't have parent columns), causing SQL error.
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let (_dir, conn) = setup_conn();
         conn.execute_batch(
             "CREATE TABLE posts (
                 id TEXT PRIMARY KEY,
@@ -403,21 +409,22 @@ mod tests {
         assert_eq!(doc.id, "p1");
 
         // Verify title was restored to default locale
-        let title: String = conn
-            .query_row("SELECT title__en FROM posts WHERE id = 'p1'", [], |r| {
-                r.get(0)
-            })
+        let row = conn
+            .query_one("SELECT title__en FROM posts WHERE id = 'p1'", &[])
+            .unwrap()
             .unwrap();
+        let title = row.get_string("title__en").unwrap();
         assert_eq!(title, "Restored Title");
 
         // Verify blocks were restored to join table
-        let block_count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM posts_content WHERE parent_id = 'p1'",
-                [],
-                |r| r.get(0),
+        let row = conn
+            .query_one(
+                "SELECT COUNT(*) AS cnt FROM posts_content WHERE parent_id = 'p1'",
+                &[],
             )
+            .unwrap()
             .unwrap();
+        let block_count = row.get_i64("cnt").unwrap();
         assert_eq!(block_count, 1, "blocks from snapshot should be restored");
 
         // Verify a version was created for the restore

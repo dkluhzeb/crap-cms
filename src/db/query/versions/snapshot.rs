@@ -5,10 +5,11 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 use crate::core::{Document, FieldDefinition, FieldType};
+use crate::db::DbConnection;
 
 /// Build a JSON snapshot of a document's current state (fields + join data).
 pub fn build_snapshot(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     fields: &[FieldDefinition],
     doc: &Document,

@@ -2,7 +2,7 @@
 
 use anyhow::{Context as _, Result};
 
-use crate::{config::LocaleConfig, core::collection::GlobalDefinition};
+use crate::{config::LocaleConfig, core::collection::GlobalDefinition, db::DbConnection};
 
 use crate::db::migrate::helpers::{
     collect_column_specs, get_table_columns, sanitize_locale, sync_join_tables,
@@ -10,7 +10,7 @@ use crate::db::migrate::helpers::{
 };
 
 pub(super) fn sync_global_table(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &GlobalDefinition,
     locale_config: &LocaleConfig,
@@ -28,12 +28,16 @@ pub(super) fn sync_global_table(
                         "{}__{} {}",
                         spec.col_name,
                         sanitize_locale(locale),
-                        spec.field.field_type.sqlite_type()
+                        conn.column_type_for(&spec.field.field_type)
                     );
                     columns.push(col);
                 }
             } else {
-                let col = format!("{} {}", spec.col_name, spec.field.field_type.sqlite_type());
+                let col = format!(
+                    "{} {}",
+                    spec.col_name,
+                    conn.column_type_for(&spec.field.field_type)
+                );
                 columns.push(col);
             }
         }
@@ -43,22 +47,19 @@ pub(super) fn sync_global_table(
             columns.push("_status TEXT NOT NULL DEFAULT 'published'".to_string());
         }
 
-        columns.push("created_at TEXT DEFAULT (datetime('now'))".to_string());
-        columns.push("updated_at TEXT DEFAULT (datetime('now'))".to_string());
+        columns.push(format!("created_at {}", conn.timestamp_column_default()));
+        columns.push(format!("updated_at {}", conn.timestamp_column_default()));
 
         let sql = format!("CREATE TABLE {} ({})", table_name, columns.join(", "));
 
         tracing::info!("Creating global table: {}", table_name);
-        conn.execute(&sql, [])
+        conn.execute(&sql, &[])
             .with_context(|| format!("Failed to create table {}", table_name))?;
 
         // Insert the single global row
         conn.execute(
-            &format!(
-                "INSERT OR IGNORE INTO {} (id) VALUES ('default')",
-                table_name
-            ),
-            [],
+            &conn.build_insert_ignore(&table_name, "id", "'default'"),
+            &[],
         )?;
     } else {
         // ALTER TABLE: add columns for new scalar/group fields
@@ -74,10 +75,10 @@ pub(super) fn sync_global_table(
                             "ALTER TABLE {} ADD COLUMN {} {}",
                             table_name,
                             col_name,
-                            spec.field.field_type.sqlite_type()
+                            conn.column_type_for(&spec.field.field_type)
                         );
                         tracing::info!("Adding column to {}: {}", table_name, col_name);
-                        conn.execute(&sql, []).with_context(|| {
+                        conn.execute(&sql, &[]).with_context(|| {
                             format!("Failed to add column {} to {}", col_name, table_name)
                         })?;
                     }
@@ -87,10 +88,10 @@ pub(super) fn sync_global_table(
                     "ALTER TABLE {} ADD COLUMN {} {}",
                     table_name,
                     spec.col_name,
-                    spec.field.field_type.sqlite_type()
+                    conn.column_type_for(&spec.field.field_type)
                 );
                 tracing::info!("Adding column to {}: {}", table_name, spec.col_name);
-                conn.execute(&sql, []).with_context(|| {
+                conn.execute(&sql, &[]).with_context(|| {
                     format!("Failed to add column {} to {}", spec.col_name, table_name)
                 })?;
             }
@@ -107,7 +108,7 @@ pub(super) fn sync_global_table(
                 table_name
             );
             tracing::info!("Adding _status column to {}", table_name);
-            conn.execute(&sql, [])
+            conn.execute(&sql, &[])
                 .with_context(|| format!("Failed to add _status to {}", table_name))?;
         }
     }
@@ -126,22 +127,17 @@ pub(super) fn sync_global_table(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldType};
-    use crate::db::DbPool;
+    use crate::db::{DbConnection, DbPool, pool};
+    use tempfile::TempDir;
 
-    fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-                | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
-        );
-        r2d2::Pool::builder()
-            .max_size(2)
-            .build(manager)
-            .expect("in-memory pool")
+    fn in_memory_pool() -> (TempDir, DbPool) {
+        let dir = TempDir::new().expect("temp dir");
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).expect("in-memory pool");
+        (dir, p)
     }
 
     fn no_locale() -> LocaleConfig {
@@ -176,15 +172,17 @@ mod tests {
 
     #[test]
     fn global_table_created_with_default_row() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global("settings", vec![text_field("site_name")]);
         sync_global_table(&conn, "settings", &def, &no_locale()).unwrap();
 
         assert!(table_exists(&conn, "_global_settings").unwrap());
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM _global_settings", [], |r| r.get(0))
+        let row = conn
+            .query_one("SELECT COUNT(*) AS cnt FROM _global_settings", &[])
+            .unwrap()
             .unwrap();
+        let count = row.get_i64("cnt").unwrap();
         assert_eq!(count, 1, "should have exactly one default row");
     }
 
@@ -192,7 +190,7 @@ mod tests {
 
     #[test]
     fn global_table_alter_adds_new_column() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_global("settings", vec![text_field("site_name")]);
         sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
@@ -215,7 +213,7 @@ mod tests {
 
     #[test]
     fn global_table_localized_fields() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global("settings", vec![localized_field("site_name")]);
         sync_global_table(&conn, "settings", &def, &locale_en_de()).unwrap();
@@ -230,7 +228,7 @@ mod tests {
 
     #[test]
     fn global_table_alter_adds_localized_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_global("settings", vec![text_field("name")]);
         sync_global_table(&conn, "settings", &def1, &locale_en_de()).unwrap();
@@ -251,7 +249,7 @@ mod tests {
 
     #[test]
     fn global_table_group_fields_create() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -270,7 +268,7 @@ mod tests {
 
     #[test]
     fn global_table_group_fields_alter() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_global("settings", vec![text_field("name")]);
         sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
@@ -295,7 +293,7 @@ mod tests {
 
     #[test]
     fn global_table_localized_group_create() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -315,7 +313,7 @@ mod tests {
 
     #[test]
     fn global_table_localized_group_alter() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_global("settings", vec![text_field("name")]);
         sync_global_table(&conn, "settings", &def1, &locale_en_de()).unwrap();
@@ -341,7 +339,7 @@ mod tests {
 
     #[test]
     fn versioned_global_creates_versions_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let mut def = simple_global("settings", vec![text_field("name")]);
         def.versions = Some(VersionsConfig::new(true, 5));
@@ -359,7 +357,7 @@ mod tests {
 
     #[test]
     fn global_table_alter_adds_status_for_drafts() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_global("settings", vec![text_field("name")]);
         sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
@@ -380,7 +378,7 @@ mod tests {
 
     #[test]
     fn global_table_creates_join_tables() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -399,7 +397,7 @@ mod tests {
 
     #[test]
     fn global_table_collapsible_promotes_flat() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -422,7 +420,7 @@ mod tests {
     #[test]
     fn global_table_tabs_promotes_flat() {
         use crate::core::field::FieldTab;
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -448,7 +446,7 @@ mod tests {
     #[test]
     fn global_table_tabs_with_group_creates_prefixed_columns() {
         use crate::core::field::FieldTab;
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -486,7 +484,7 @@ mod tests {
 
     #[test]
     fn global_table_collapsible_with_group_creates_prefixed_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -518,7 +516,7 @@ mod tests {
     #[test]
     fn global_table_alter_adds_tabs_with_group() {
         use crate::core::field::FieldTab;
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def1 = simple_global("settings", vec![text_field("name")]);
         sync_global_table(&conn, "settings", &def1, &no_locale()).unwrap();
@@ -553,7 +551,7 @@ mod tests {
     #[test]
     fn global_deeply_nested_layout() {
         use crate::core::field::FieldTab;
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -592,7 +590,7 @@ mod tests {
 
     #[test]
     fn global_group_containing_row() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -618,7 +616,7 @@ mod tests {
     #[test]
     fn global_group_containing_tabs() {
         use crate::core::field::FieldTab;
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",
@@ -650,7 +648,7 @@ mod tests {
     #[test]
     fn global_group_tabs_group_three_levels() {
         use crate::core::field::FieldTab;
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_global(
             "settings",

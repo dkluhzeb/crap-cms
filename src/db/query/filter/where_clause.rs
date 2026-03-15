@@ -8,7 +8,7 @@ use super::{
 };
 use crate::core::{CollectionDefinition, FieldDefinition, FieldType};
 use crate::db::{
-    Filter, FilterClause, FilterOp, LocaleContext, LocaleMode,
+    DbConnection, DbValue, Filter, FilterClause, FilterOp, LocaleContext, LocaleMode,
     query::{is_valid_identifier, sanitize_locale},
 };
 
@@ -17,14 +17,16 @@ use crate::db::{
 /// Build a complete SQL condition for a single filter, dispatching between
 /// direct column conditions and EXISTS subqueries.
 fn build_filter_sql(
+    conn: &dyn DbConnection,
     f: &Filter,
     slug: &str,
     fields: &[FieldDefinition],
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    params: &mut Vec<DbValue>,
 ) -> Result<String> {
-    let resolved = resolve_filter(&f.field, slug, fields)?;
+    let resolved = resolve_filter(conn, &f.field, slug, fields)?;
     match resolved {
         ResolvedFilter::Column(col) => build_filter_condition(
+            conn,
             &Filter {
                 field: col,
                 op: f.op.clone(),
@@ -35,31 +37,32 @@ fn build_filter_sql(
             ref join_table,
             ref parent_table,
             ref condition,
-        } => build_subquery_sql(join_table, parent_table, condition, &f.op, params),
+        } => build_subquery_sql(conn, join_table, parent_table, condition, &f.op, params),
     }
 }
 
 /// Generate an `EXISTS (SELECT 1 FROM … WHERE …)` clause for a subquery filter.
 fn build_subquery_sql(
+    conn: &dyn DbConnection,
     join_table: &str,
     parent_table: &str,
     condition: &SubqueryCondition,
     op: &FilterOp,
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    params: &mut Vec<DbValue>,
 ) -> Result<String> {
     match condition {
         SubqueryCondition::Column(col) => {
             if !is_valid_identifier(col) {
                 bail!("Invalid column name '{}' in subquery", col);
             }
-            let cond = build_op_condition(col, op, params);
+            let cond = build_op_condition(conn, col, op, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM {} WHERE parent_id = {}.id AND {})",
                 join_table, parent_table, cond
             ))
         }
         SubqueryCondition::BlockType => {
-            let cond = build_op_condition("_block_type", op, params);
+            let cond = build_op_condition(conn, "_block_type", op, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM {} WHERE parent_id = {}.id AND {})",
                 join_table, parent_table, cond
@@ -71,9 +74,9 @@ fn build_subquery_sql(
         } => {
             let mut from_parts = vec![join_table.to_string()];
             for (source, alias) in each_joins {
-                from_parts.push(format!("json_each({}) AS {}", source, alias));
+                from_parts.push(conn.json_each_source(source, alias));
             }
-            let cond = build_op_condition(extract_expr, op, params);
+            let cond = build_op_condition(conn, extract_expr, op, params);
             Ok(format!(
                 "EXISTS (SELECT 1 FROM {} WHERE {}.parent_id = {}.id AND {})",
                 from_parts.join(", "),
@@ -100,10 +103,11 @@ fn build_subquery_sql(
 /// Returns an **empty string** when `filters` is empty (no WHERE at all),
 /// so callers can unconditionally append the result to their query.
 pub fn build_where_clause(
+    conn: &dyn DbConnection,
     filters: &[FilterClause],
     slug: &str,
     fields: &[FieldDefinition],
-    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    params: &mut Vec<DbValue>,
 ) -> Result<String> {
     if filters.is_empty() {
         return Ok(String::new());
@@ -113,20 +117,20 @@ pub fn build_where_clause(
     for clause in filters {
         match clause {
             FilterClause::Single(f) => {
-                conditions.push(build_filter_sql(f, slug, fields, params)?);
+                conditions.push(build_filter_sql(conn, f, slug, fields, params)?);
             }
             FilterClause::Or(groups) => {
                 if groups.len() == 1 && groups[0].len() == 1 {
-                    conditions.push(build_filter_sql(&groups[0][0], slug, fields, params)?);
+                    conditions.push(build_filter_sql(conn, &groups[0][0], slug, fields, params)?);
                 } else {
                     let mut or_parts = Vec::new();
                     for group in groups {
                         if group.len() == 1 {
-                            or_parts.push(build_filter_sql(&group[0], slug, fields, params)?);
+                            or_parts.push(build_filter_sql(conn, &group[0], slug, fields, params)?);
                         } else {
                             let and_parts: Vec<String> = group
                                 .iter()
-                                .map(|f| build_filter_sql(f, slug, fields, params))
+                                .map(|f| build_filter_sql(conn, f, slug, fields, params))
                                 .collect::<Result<_, _>>()?;
                             or_parts.push(format!("({})", and_parts.join(" AND ")));
                         }
@@ -284,7 +288,17 @@ mod tests {
     use crate::core::field::{
         BlockDefinition, FieldDefinition, FieldTab, FieldType, RelationshipConfig,
     };
-    use crate::db::query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode};
+    use crate::db::{
+        DbValue,
+        query::{Filter, FilterClause, FilterOp, LocaleContext, LocaleMode},
+    };
+
+    fn test_conn() -> (tempfile::TempDir, crate::db::BoxedConnection) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = crate::config::CrapConfig::default();
+        let p = crate::db::pool::create_pool(dir.path(), &config).unwrap();
+        (dir, p.get().unwrap())
+    }
 
     fn make_field(name: &str, ft: FieldType, localized: bool) -> FieldDefinition {
         FieldDefinition::builder(name, ft)
@@ -332,26 +346,29 @@ mod tests {
 
     #[test]
     fn where_clause_empty_filters() {
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_where_clause(&[], "test", &[], &mut params).unwrap();
+        let (_dir, conn) = test_conn();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &[], "test", &[], &mut params).unwrap();
         assert_eq!(sql, "");
         assert_eq!(params.len(), 0);
     }
 
     #[test]
     fn where_clause_single_filter() {
+        let (_dir, conn) = test_conn();
         let filters = vec![FilterClause::Single(Filter {
             field: "status".into(),
             op: FilterOp::Equals("active".into()),
         })];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
-        assert_eq!(sql, " WHERE status = ?");
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
+        assert_eq!(sql, " WHERE status = ?1");
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn where_clause_multiple_and() {
+        let (_dir, conn) = test_conn();
         let filters = vec![
             FilterClause::Single(Filter {
                 field: "status".into(),
@@ -362,14 +379,15 @@ mod tests {
                 op: FilterOp::Equals("admin".into()),
             }),
         ];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
-        assert_eq!(sql, " WHERE status = ? AND role = ?");
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
+        assert_eq!(sql, " WHERE status = ?1 AND role = ?2");
         assert_eq!(params.len(), 2);
     }
 
     #[test]
     fn where_clause_or_groups() {
+        let (_dir, conn) = test_conn();
         let filters = vec![FilterClause::Or(vec![
             vec![Filter {
                 field: "a".into(),
@@ -386,28 +404,30 @@ mod tests {
                 },
             ],
         ])];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
-        assert_eq!(sql, " WHERE (a = ? OR (b = ? AND c = ?))");
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
+        assert_eq!(sql, " WHERE (a = ?1 OR (b = ?2 AND c = ?3))");
         assert_eq!(params.len(), 3);
     }
 
     #[test]
     fn where_clause_or_single_item_group() {
+        let (_dir, conn) = test_conn();
         let filters = vec![FilterClause::Or(vec![vec![Filter {
             field: "a".into(),
             op: FilterOp::Equals("1".into()),
         }]])];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_where_clause(&filters, "test", &[], &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &filters, "test", &[], &mut params).unwrap();
         // Single-item OR should simplify to just the condition
-        assert_eq!(sql, " WHERE a = ?");
+        assert_eq!(sql, " WHERE a = ?1");
     }
 
     // ── build_where_clause with subqueries ──────────────────────────────
 
     #[test]
     fn where_clause_mixed_column_and_subquery() {
+        let (_dir, conn) = test_conn();
         let fields = vec![
             make_field("status", FieldType::Text, false),
             make_array_field("items", vec![make_field("name", FieldType::Text, false)]),
@@ -422,17 +442,18 @@ mod tests {
                 op: FilterOp::Equals("X".into()),
             }),
         ];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_where_clause(&filters, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE status = ? AND EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?)"
+            " WHERE status = ?1 AND EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?2)"
         );
         assert_eq!(params.len(), 2);
     }
 
     #[test]
     fn where_clause_or_with_subquery() {
+        let (_dir, conn) = test_conn();
         let fields = vec![
             make_field("status", FieldType::Text, false),
             make_has_many_field("tags", "tags"),
@@ -447,11 +468,11 @@ mod tests {
                 op: FilterOp::Equals("t1".into()),
             }],
         ])];
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_where_clause(&filters, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE (status = ? OR EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?))"
+            " WHERE (status = ?1 OR EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?2))"
         );
         assert_eq!(params.len(), 2);
     }
@@ -460,6 +481,7 @@ mod tests {
 
     #[test]
     fn subquery_array_column() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_array_field(
             "items",
             vec![make_field("name", FieldType::Text, false)],
@@ -468,33 +490,35 @@ mod tests {
             field: "items.name".into(),
             op: FilterOp::Equals("X".into()),
         };
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?)"
+            "EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn subquery_block_type() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_blocks_field("content", vec![])];
         let f = Filter {
             field: "content._block_type".into(),
             op: FilterOp::Equals("image".into()),
         };
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content WHERE parent_id = posts.id AND _block_type = ?)"
+            "EXISTS (SELECT 1 FROM posts_content WHERE parent_id = posts.id AND _block_type = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn subquery_block_json_simple() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_blocks_field(
             "content",
             vec![make_block_def(
@@ -506,17 +530,18 @@ mod tests {
             field: "content.body".into(),
             op: FilterOp::Contains("hello".into()),
         };
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content WHERE posts_content.parent_id = posts.id AND json_extract(data, '$.body') LIKE ? ESCAPE '\\')"
+            "EXISTS (SELECT 1 FROM posts_content WHERE posts_content.parent_id = posts.id AND json_extract(data, '$.body') LIKE ?1 ESCAPE '\\')"
         );
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn subquery_block_nested_with_json_each() {
+        let (_dir, conn) = test_conn();
         let inner_blocks = vec![make_block_def(
             "quote",
             vec![make_field("text", FieldType::Text, false)],
@@ -531,42 +556,44 @@ mod tests {
             field: "content.nested.text".into(),
             op: FilterOp::Equals("hi".into()),
         };
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content, json_each(json_extract(posts_content.data, '$.nested')) AS j0 WHERE posts_content.parent_id = posts.id AND json_extract(j0.value, '$.text') = ?)"
+            "EXISTS (SELECT 1 FROM posts_content, json_each(json_extract(posts_content.data, '$.nested')) AS j0 WHERE posts_content.parent_id = posts.id AND json_extract(j0.value, '$.text') = ?1)"
         );
     }
 
     #[test]
     fn subquery_has_many_relationship() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_has_many_field("tags", "tags")];
         let f = Filter {
             field: "tags.id".into(),
             op: FilterOp::Equals("tag1".into()),
         };
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?)"
+            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
 
     #[test]
     fn subquery_with_in_operator() {
+        let (_dir, conn) = test_conn();
         let fields = vec![make_has_many_field("tags", "tags")];
         let f = Filter {
             field: "tags.id".into(),
             op: FilterOp::In(vec!["a".into(), "b".into()]),
         };
-        let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-        let sql = build_filter_sql(&f, "posts", &fields, &mut params).unwrap();
+        let mut params: Vec<DbValue> = Vec::new();
+        let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id IN (?, ?))"
+            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id IN (?1, ?2))"
         );
         assert_eq!(params.len(), 2);
     }

@@ -1,20 +1,19 @@
 //! `count`, `count_with_search`, `count_where_field_eq` — document counting.
 
 use anyhow::{Context as _, Result, bail};
-use rusqlite::params_from_iter;
 
 use crate::core::CollectionDefinition;
 use crate::db::{
-    FilterClause, LocaleContext,
+    DbConnection, DbValue, FilterClause, LocaleContext,
     query::{
         filter::{build_where_clause, resolve_filters},
-        is_valid_identifier,
+        fts, is_valid_identifier,
     },
 };
 
 /// Count documents in a collection.
 pub fn count(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     filters: &[FilterClause],
@@ -25,7 +24,7 @@ pub fn count(
 
 /// Count documents with optional FTS search filter.
 pub fn count_with_search(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     slug: &str,
     def: &CollectionDefinition,
     filters: &[FilterClause],
@@ -48,34 +47,52 @@ pub fn count_with_search(
         }
     }
 
-    let mut sql = format!("SELECT COUNT(*) FROM {}", slug);
-    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+    let mut sql = format!("SELECT COUNT(*) FROM {slug}");
+    let mut params: Vec<DbValue> = Vec::new();
 
     let resolved_filters = resolve_filters(filters, def, locale_ctx);
-    let where_clause = build_where_clause(&resolved_filters, slug, &def.fields, &mut params)?;
+    let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
 
     if !where_clause.is_empty() {
         sql.push_str(&where_clause);
     }
 
     // FTS5 full-text search filter
-    if let Some(search_term) = search
-        && let Some((fts_clause, sanitized)) =
-            super::super::fts::fts_where_clause(conn, slug, search_term)
-    {
-        if where_clause.is_empty() {
-            sql.push_str(&format!(" WHERE {}", fts_clause));
-        } else {
-            sql.push_str(&format!(" AND {}", fts_clause));
+    if let Some(search_term) = search {
+        let sanitized = fts::sanitize_fts_query(search_term);
+        if !sanitized.is_empty() {
+            let fts_table = format!("_fts_{slug}");
+            let fts_exists = conn.table_exists(&fts_table).unwrap_or(false);
+
+            if fts_exists {
+                let ph = conn.placeholder(params.len() + 1);
+                let fts_clause =
+                    format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})");
+                if where_clause.is_empty() {
+                    sql.push_str(&format!(" WHERE {fts_clause}"));
+                } else {
+                    sql.push_str(&format!(" AND {fts_clause}"));
+                }
+                params.push(DbValue::Text(sanitized));
+            }
         }
-        params.push(Box::new(sanitized));
     }
 
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
+    let row = conn
+        .query_one(&sql, &params)
+        .with_context(|| format!("Failed to count documents in '{slug}'"))?;
 
-    let count: i64 = conn
-        .query_row(&sql, params_from_iter(param_refs.iter()), |row| row.get(0))
-        .with_context(|| format!("Failed to count documents in '{}'", slug))?;
+    let count = row
+        .as_ref()
+        .and_then(|r| r.get_value(0))
+        .and_then(|v| {
+            if let DbValue::Integer(i) = v {
+                Some(*i)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
 
     Ok(count)
 }
@@ -83,7 +100,7 @@ pub fn count_with_search(
 /// Count rows where a field equals a value, optionally excluding an ID.
 /// Used for unique constraint validation.
 pub fn count_where_field_eq(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     table: &str,
     field: &str,
     value: &str,
@@ -95,23 +112,39 @@ pub fn count_where_field_eq(
             field
         );
     }
-    let count = match exclude_id {
+    let row = match exclude_id {
         Some(eid) => {
-            let sql = format!(
-                "SELECT COUNT(*) FROM {} WHERE {} = ?1 AND id != ?2",
-                table, field
-            );
-            conn.query_row(&sql, rusqlite::params![value, eid], |row| {
-                row.get::<_, i64>(0)
-            })
-            .with_context(|| format!("Unique check on {}.{}", table, field))?
+            let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {field} = {p1} AND id != {p2}");
+            conn.query_one(
+                &sql,
+                &[
+                    DbValue::Text(value.to_string()),
+                    DbValue::Text(eid.to_string()),
+                ],
+            )
+            .with_context(|| format!("Unique check on {table}.{field}"))?
         }
         None => {
-            let sql = format!("SELECT COUNT(*) FROM {} WHERE {} = ?1", table, field);
-            conn.query_row(&sql, [value], |row| row.get::<_, i64>(0))
-                .with_context(|| format!("Unique check on {}.{}", table, field))?
+            let p1 = conn.placeholder(1);
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {field} = {p1}");
+            conn.query_one(&sql, &[DbValue::Text(value.to_string())])
+                .with_context(|| format!("Unique check on {table}.{field}"))?
         }
     };
+
+    let count = row
+        .as_ref()
+        .and_then(|r| r.get_value(0))
+        .and_then(|v| {
+            if let DbValue::Integer(i) = v {
+                Some(*i)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+
     Ok(count)
 }
 
@@ -120,10 +153,12 @@ mod tests {
     use super::super::super::write::create;
     use super::super::super::{Filter, FilterClause, FilterOp};
     use super::*;
+    use crate::config::{CrapConfig, DatabaseConfig};
     use crate::core::collection::*;
     use crate::core::field::*;
-    use rusqlite::Connection;
+    use crate::db::{DbPool, pool};
     use std::collections::HashMap;
+    use tempfile::TempDir;
 
     fn test_def() -> CollectionDefinition {
         let mut def = CollectionDefinition::new("posts");
@@ -134,24 +169,36 @@ mod tests {
         def
     }
 
-    fn setup_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE posts (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                status TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            )",
-        )
-        .unwrap();
-        conn
+    fn setup_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE posts (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    status TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
     }
 
     #[test]
     fn count_empty() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let c = count(&conn, "posts", &def, &[], None).unwrap();
@@ -160,7 +207,8 @@ mod tests {
 
     #[test]
     fn count_with_filter() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         let mut d1 = HashMap::new();
@@ -186,8 +234,10 @@ mod tests {
 
     #[test]
     fn count_where_field_eq_basic() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
+
         let mut d1 = HashMap::new();
         d1.insert("title".to_string(), "AAA".to_string());
         d1.insert("status".to_string(), "draft".to_string());
@@ -209,7 +259,8 @@ mod tests {
 
     #[test]
     fn count_where_field_eq_invalid_field_name() {
-        let conn = setup_db();
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let result = count_where_field_eq(&conn, "posts", "bad field!", "val", None);
         assert!(result.is_err(), "Invalid field name should error");
         assert!(
@@ -227,18 +278,8 @@ mod tests {
         use crate::config::LocaleConfig;
         use crate::db::query::fts;
 
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE posts (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                status TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            )",
-        )
-        .unwrap();
-
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
         let def = test_def();
 
         // Create some posts

@@ -2,8 +2,6 @@
 
 use anyhow::{Context as _, Result};
 
-use rusqlite::TransactionBehavior;
-
 use crate::{
     core::{Document, collection::GlobalDefinition},
     db::{DbPool, query},
@@ -29,9 +27,7 @@ pub fn update_global_document(
     let is_draft = input.draft && def.has_drafts();
 
     let mut conn = pool.get().context("DB connection")?;
-    let tx = conn
-        .transaction_with_behavior(TransactionBehavior::Immediate)
-        .context("Start transaction")?;
+    let tx = conn.transaction_immediate().context("Start transaction")?;
 
     let global_table = format!("_global_{}", slug);
 

@@ -6,31 +6,22 @@ use std::collections::HashSet;
 use crate::{
     config::LocaleConfig,
     core::{FieldDefinition, FieldType, field::flatten_array_sub_fields},
+    db::DbConnection,
 };
 
-pub fn table_exists(conn: &rusqlite::Connection, name: &str) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
-        [name],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
+pub fn table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
+    conn.table_exists(name)
 }
 
-pub fn get_table_columns(conn: &rusqlite::Connection, table: &str) -> Result<HashSet<String>> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({})", table))?;
-    let columns: HashSet<String> = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(|r| r.ok())
-        .collect();
-    Ok(columns)
+pub fn get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
+    conn.get_table_columns(table)
 }
 
 pub use crate::db::query::sanitize_locale;
 
 /// Ensure a `_locale` column exists on a junction table (for ALTER TABLE on existing tables).
 pub(super) fn ensure_locale_column(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     table_name: &str,
     default_locale: &str,
 ) -> Result<()> {
@@ -43,7 +34,7 @@ pub(super) fn ensure_locale_column(
             sanitize_locale(default_locale)
         );
         tracing::info!("Adding _locale column to {}", table_name);
-        conn.execute(&sql, [])
+        conn.execute(&sql, &[])
             .with_context(|| format!("Failed to add _locale to {}", table_name))?;
     }
     Ok(())
@@ -51,7 +42,7 @@ pub(super) fn ensure_locale_column(
 
 /// Ensure a named column exists on a table (ALTER TABLE ADD COLUMN if missing).
 pub(super) fn ensure_column_exists(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     table_name: &str,
     column: &str,
     col_type: &str,
@@ -64,7 +55,7 @@ pub(super) fn ensure_column_exists(
             table_name, column, col_type
         );
         tracing::info!("Adding {} column to {}", column, table_name);
-        conn.execute(&sql, [])
+        conn.execute(&sql, &[])
             .with_context(|| format!("Failed to add {} to {}", column, table_name))?;
     }
     Ok(())
@@ -157,7 +148,7 @@ fn collect_column_specs_inner<'a>(
 
 /// Sync join tables for has-many relationships and array fields.
 pub(super) fn sync_join_tables(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection_slug: &str,
     fields: &[FieldDefinition],
     locale_config: &LocaleConfig,
@@ -212,7 +203,7 @@ pub(super) fn sync_join_tables(
                             )
                         };
                         tracing::info!("Creating junction table: {}", table_name);
-                        conn.execute(&sql, []).with_context(|| {
+                        conn.execute(&sql, &[]).with_context(|| {
                             format!("Failed to create junction table {}", table_name)
                         })?;
                     } else {
@@ -255,12 +246,12 @@ pub(super) fn sync_join_tables(
                         columns.push(format!(
                             "{} {}",
                             sub_field.name,
-                            sub_field.field_type.sqlite_type()
+                            conn.column_type_for(&sub_field.field_type)
                         ));
                     }
                     let sql = format!("CREATE TABLE {} ({})", table_name, columns.join(", "));
                     tracing::info!("Creating array table: {}", table_name);
-                    conn.execute(&sql, [])
+                    conn.execute(&sql, &[])
                         .with_context(|| format!("Failed to create array table {}", table_name))?;
                 } else {
                     if has_locale_col {
@@ -274,10 +265,10 @@ pub(super) fn sync_join_tables(
                                 "ALTER TABLE {} ADD COLUMN {} {}",
                                 table_name,
                                 sub_field.name,
-                                sub_field.field_type.sqlite_type()
+                                conn.column_type_for(&sub_field.field_type)
                             );
                             tracing::info!("Adding column to {}: {}", table_name, sub_field.name);
-                            conn.execute(&sql, []).with_context(|| {
+                            conn.execute(&sql, &[]).with_context(|| {
                                 format!("Failed to add column {} to {}", sub_field.name, table_name)
                             })?;
                         }
@@ -308,7 +299,7 @@ pub(super) fn sync_join_tables(
                         table_name, collection_slug, locale_col
                     );
                     tracing::info!("Creating blocks table: {}", table_name);
-                    conn.execute(&sql, [])
+                    conn.execute(&sql, &[])
                         .with_context(|| format!("Failed to create blocks table {}", table_name))?;
                 } else if has_locale_col {
                     ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
@@ -330,7 +321,7 @@ pub(super) fn sync_join_tables(
 }
 
 /// Create or verify the `_versions_{slug}` table for document version history.
-pub(super) fn sync_versions_table(conn: &rusqlite::Connection, slug: &str) -> Result<()> {
+pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result<()> {
     let table_name = format!("_versions_{}", slug);
 
     if !table_exists(conn, &table_name)? {
@@ -342,13 +333,16 @@ pub(super) fn sync_versions_table(conn: &rusqlite::Connection, slug: &str) -> Re
                 _status TEXT NOT NULL, \
                 _latest INTEGER NOT NULL DEFAULT 0, \
                 snapshot TEXT NOT NULL, \
-                created_at TEXT DEFAULT (datetime('now')), \
-                updated_at TEXT DEFAULT (datetime('now'))\
+                created_at {}, \
+                updated_at {}\
             )",
-            table_name, slug
+            table_name,
+            slug,
+            conn.timestamp_column_default(),
+            conn.timestamp_column_default()
         );
         tracing::info!("Creating versions table: {}", table_name);
-        conn.execute(&sql, [])
+        conn.execute(&sql, &[])
             .with_context(|| format!("Failed to create versions table {}", table_name))?;
 
         // Indexes for efficient version lookups
@@ -358,14 +352,14 @@ pub(super) fn sync_versions_table(conn: &rusqlite::Connection, slug: &str) -> Re
                 slug = slug,
                 table = table_name
             ),
-            [],
+            &[],
         )?;
         conn.execute(
             &format!(
                 "CREATE INDEX IF NOT EXISTS idx_{slug}_parent_version ON {table} (_parent, _version DESC)",
                 slug = slug, table = table_name
             ),
-            [],
+            &[],
         )?;
     }
     Ok(())
@@ -374,22 +368,17 @@ pub(super) fn sync_versions_table(conn: &rusqlite::Connection, slug: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LocaleConfig;
+    use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig};
-    use crate::db::DbPool;
+    use crate::db::{DbConnection, DbPool, pool};
+    use tempfile::TempDir;
 
-    fn in_memory_pool() -> DbPool {
-        let manager = r2d2_sqlite::SqliteConnectionManager::memory().with_flags(
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-                | rusqlite::OpenFlags::SQLITE_OPEN_FULL_MUTEX
-                | rusqlite::OpenFlags::SQLITE_OPEN_SHARED_CACHE,
-        );
-        r2d2::Pool::builder()
-            .max_size(2)
-            .build(manager)
-            .expect("in-memory pool")
+    fn in_memory_pool() -> (TempDir, DbPool) {
+        let dir = TempDir::new().expect("temp dir");
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).expect("in-memory pool");
+        (dir, p)
     }
 
     fn no_locale() -> LocaleConfig {
@@ -418,16 +407,16 @@ mod tests {
 
     #[test]
     fn table_exists_false_initially() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         assert!(!table_exists(&conn, "nonexistent").unwrap());
     }
 
     #[test]
     fn table_exists_true_after_create() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE test_table (id TEXT PRIMARY KEY)", [])
+        conn.execute("CREATE TABLE test_table (id TEXT PRIMARY KEY)", &[])
             .unwrap();
         assert!(table_exists(&conn, "test_table").unwrap());
     }
@@ -436,9 +425,9 @@ mod tests {
 
     #[test]
     fn get_table_columns_returns_column_names() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE t (id TEXT, name TEXT, age INTEGER)", [])
+        conn.execute("CREATE TABLE t (id TEXT, name TEXT, age INTEGER)", &[])
             .unwrap();
         let cols = get_table_columns(&conn, "t").unwrap();
         assert!(cols.contains("id"));
@@ -451,7 +440,7 @@ mod tests {
 
     #[test]
     fn has_many_relationship_creates_junction_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -475,7 +464,7 @@ mod tests {
 
     #[test]
     fn array_field_creates_join_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -499,7 +488,7 @@ mod tests {
 
     #[test]
     fn blocks_field_creates_join_table() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -520,7 +509,7 @@ mod tests {
     #[test]
     fn blocks_inside_tabs_creates_join_table() {
         // Regression: blocks inside Tabs didn't get their join table created
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();
@@ -550,7 +539,7 @@ mod tests {
     #[test]
     fn array_inside_row_creates_join_table() {
         // Regression: array inside Row didn't get its join table created
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
         let array_field = FieldDefinition::builder("items", FieldType::Array)
@@ -577,7 +566,7 @@ mod tests {
     #[test]
     fn blocks_inside_collapsible_creates_join_table() {
         // Regression: blocks inside Collapsible didn't get its join table created
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
         let blocks_field = FieldDefinition::builder("content", FieldType::Blocks).build();
@@ -602,7 +591,7 @@ mod tests {
 
     #[test]
     fn localized_has_many_creates_junction_with_locale() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -629,7 +618,7 @@ mod tests {
 
     #[test]
     fn localized_array_creates_table_with_locale() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -653,7 +642,7 @@ mod tests {
 
     #[test]
     fn localized_blocks_creates_table_with_locale() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         let def = simple_collection(
             "posts",
@@ -676,11 +665,11 @@ mod tests {
 
     #[test]
     fn ensure_locale_column_adds_to_existing() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         conn.execute(
             "CREATE TABLE test_join (parent_id TEXT, related_id TEXT)",
-            [],
+            &[],
         )
         .unwrap();
 
@@ -697,14 +686,14 @@ mod tests {
 
     #[test]
     fn existing_has_many_adds_locale_column() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         // Create parent and junction table without _locale
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
             .unwrap();
         conn.execute(
             "CREATE TABLE posts_tags (parent_id TEXT, related_id TEXT, _order INTEGER)",
-            [],
+            &[],
         )
         .unwrap();
 
@@ -727,11 +716,11 @@ mod tests {
 
     #[test]
     fn existing_array_adds_new_subfield_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
             .unwrap();
-        conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", []).unwrap();
+        conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", &[]).unwrap();
 
         let def = simple_collection(
             "posts",
@@ -754,13 +743,13 @@ mod tests {
 
     #[test]
     fn existing_blocks_adds_locale_column() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
             .unwrap();
         conn.execute(
             "CREATE TABLE posts_content (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, _block_type TEXT, data TEXT)",
-            [],
+            &[],
         ).unwrap();
 
         let def = simple_collection(
@@ -781,11 +770,11 @@ mod tests {
 
     #[test]
     fn existing_array_adds_locale_column() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
-        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", [])
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
             .unwrap();
-        conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", []).unwrap();
+        conn.execute("CREATE TABLE posts_items (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, label TEXT)", &[]).unwrap();
 
         let def = simple_collection(
             "posts",
@@ -901,7 +890,7 @@ mod tests {
 
     #[test]
     fn array_with_tabs_creates_flat_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
         let array_field = FieldDefinition::builder("items", FieldType::Array)
@@ -933,7 +922,7 @@ mod tests {
 
     #[test]
     fn array_with_row_creates_flat_columns() {
-        let pool = in_memory_pool();
+        let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
 
         let array_field = FieldDefinition::builder("items", FieldType::Array)

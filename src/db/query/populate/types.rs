@@ -3,7 +3,7 @@
 use dashmap::DashMap;
 
 use crate::core::{CollectionDefinition, Document, Registry};
-use crate::db::LocaleContext;
+use crate::db::{DbConnection, LocaleContext};
 
 /// Shared cache for populated documents. Key is (collection_slug, document_id).
 /// Uses DashMap for concurrent cross-request sharing with interior mutability.
@@ -15,7 +15,7 @@ pub type PopulateCache = DashMap<(String, String), Document>;
 /// that every recursive population function needs. The remaining per-call params
 /// (doc/docs, field_name, rel_collection, rel_def, visited) stay as regular args.
 pub(crate) struct PopulateCtx<'a> {
-    pub conn: &'a rusqlite::Connection,
+    pub conn: &'a dyn DbConnection,
     pub registry: &'a Registry,
     pub effective_depth: i32,
     pub locale_ctx: Option<&'a LocaleContext>,
@@ -24,7 +24,7 @@ pub(crate) struct PopulateCtx<'a> {
 
 /// Collection and registry context for population.
 pub struct PopulateContext<'a> {
-    pub(crate) conn: &'a rusqlite::Connection,
+    pub(crate) conn: &'a dyn DbConnection,
     pub(crate) registry: &'a Registry,
     pub(crate) collection_slug: &'a str,
     pub(crate) def: &'a CollectionDefinition,
@@ -32,7 +32,7 @@ pub struct PopulateContext<'a> {
 
 impl<'a> PopulateContext<'a> {
     pub fn new(
-        conn: &'a rusqlite::Connection,
+        conn: &'a dyn DbConnection,
         registry: &'a Registry,
         collection_slug: &'a str,
         def: &'a CollectionDefinition,

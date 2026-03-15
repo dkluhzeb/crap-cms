@@ -4,9 +4,12 @@ use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
 
-use crate::core::{
-    BlockDefinition, FieldDefinition, FieldType, Registry, RelationshipConfig,
-    field::{flatten_array_sub_fields, to_title_case},
+use crate::{
+    core::{
+        BlockDefinition, FieldDefinition, FieldType, Registry, RelationshipConfig,
+        field::{flatten_array_sub_fields, to_title_case},
+    },
+    db::{DbConnection, DbValue},
 };
 
 use super::back_references::field_display_label;
@@ -41,7 +44,7 @@ impl MissingRelation {
 
 /// Check a version snapshot for relationship/upload fields whose targets no longer exist.
 pub fn find_missing_relations(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     registry: &Registry,
     snapshot: &Value,
     fields: &[FieldDefinition],
@@ -57,7 +60,7 @@ pub fn find_missing_relations(
 
 /// Recursively walk the field tree and collect missing relations from the snapshot.
 fn collect_missing_fields(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     registry: &Registry,
     obj: &Map<String, Value>,
     fields: &[FieldDefinition],
@@ -201,7 +204,7 @@ fn parse_ref_id(s: &str, is_polymorphic: bool) -> Option<(String, String)> {
 
 /// Check which IDs are missing from the database.
 fn check_ids_exist(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     registry: &Registry,
     ids: &[(String, String)],
     rc: &RelationshipConfig,
@@ -249,41 +252,41 @@ fn check_ids_exist(
 
 /// Query which IDs exist in a collection table.
 fn query_existing_ids(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     ids: &[String],
 ) -> HashSet<String> {
     if ids.is_empty() {
         return HashSet::new();
     }
-    let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
+    let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
     let sql = format!(
         "SELECT id FROM \"{}\" WHERE id IN ({})",
         collection,
         placeholders.join(", ")
     );
-    let mut stmt = match conn.prepare(&sql) {
-        Ok(s) => s,
+    let params: Vec<DbValue> = ids.iter().map(|s| DbValue::Text(s.clone())).collect();
+    match conn.query_all(&sql, &params) {
+        Ok(rows) => rows
+            .into_iter()
+            .filter_map(|row| {
+                if let Some(DbValue::Text(s)) = row.get_value(0) {
+                    Some(s.clone())
+                } else {
+                    None
+                }
+            })
+            .collect(),
         Err(e) => {
             tracing::debug!("Missing relations check skipping {}: {}", collection, e);
-
-            return HashSet::new();
+            HashSet::new()
         }
-    };
-    let params: Vec<&dyn rusqlite::types::ToSql> = ids
-        .iter()
-        .map(|s| s as &dyn rusqlite::types::ToSql)
-        .collect();
-    let result = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0));
-    match result {
-        Ok(rows) => rows.filter_map(|r| r.ok()).collect(),
-        Err(_) => HashSet::new(),
     }
 }
 
 /// Check array sub-fields for missing relations.
 fn collect_missing_in_array(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     registry: &Registry,
     rows: &[Value],
     fields: &[FieldDefinition],
@@ -331,7 +334,7 @@ fn collect_missing_in_array(
 
 /// Check blocks sub-fields for missing relations.
 fn collect_missing_in_blocks(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     registry: &Registry,
     rows: &[Value],
     blocks: &[BlockDefinition],
@@ -399,7 +402,7 @@ mod tests {
     use crate::{
         config::{CrapConfig, DatabaseConfig, LocaleConfig},
         core::{Registry, Slug, collection::*, field::*},
-        db::{DbPool, migrate, pool},
+        db::{DbConnection, DbPool, DbValue, migrate, pool},
     };
 
     fn no_locale() -> LocaleConfig {
@@ -437,9 +440,12 @@ mod tests {
         (tmp, db_pool, registry)
     }
 
-    fn insert_doc(conn: &rusqlite::Connection, table: &str, id: &str) {
-        conn.execute(&format!("INSERT INTO \"{}\" (id) VALUES (?1)", table), [id])
-            .unwrap();
+    fn insert_doc(conn: &dyn DbConnection, table: &str, id: &str) {
+        conn.execute(
+            &format!("INSERT INTO \"{}\" (id) VALUES (?1)", table),
+            &[DbValue::Text(id.to_string())],
+        )
+        .unwrap();
     }
 
     #[test]

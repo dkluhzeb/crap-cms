@@ -1,33 +1,38 @@
-//! Row-to-document conversion from SQLite result sets.
+//! Row-to-document conversion from database result sets.
 
-use serde_json::{Number, Value};
+use anyhow::Result;
+use serde_json::Value;
 
 use crate::core::Document;
-use rusqlite::Row;
 use std::collections::HashMap;
 
-/// Convert a rusqlite Row to a Document given the column names.
-pub fn row_to_document(row: &Row, column_names: &[String]) -> rusqlite::Result<Document> {
-    let id: String = row.get("id")?;
+use super::{
+    connection::DbConnection,
+    types::{DbRow, DbValue},
+};
+
+/// Convert a `DbRow` to a `Document`.
+pub fn row_to_document(conn: &dyn DbConnection, row: &DbRow) -> Result<Document> {
+    let id = row.get_string("id")?;
     let mut fields = HashMap::new();
     let mut created_at = None;
     let mut updated_at = None;
 
-    for name in column_names {
+    for (i, name) in row.column_names().iter().enumerate() {
         match name.as_str() {
             "id" => continue,
             "created_at" => {
-                created_at = row
-                    .get::<_, Option<String>>(name.as_str())?
-                    .map(normalize_timestamp);
+                if let Some(DbValue::Text(s)) = row.get_value(i) {
+                    created_at = Some(conn.normalize_timestamp(s));
+                }
             }
             "updated_at" => {
-                updated_at = row
-                    .get::<_, Option<String>>(name.as_str())?
-                    .map(normalize_timestamp);
+                if let Some(DbValue::Text(s)) = row.get_value(i) {
+                    updated_at = Some(conn.normalize_timestamp(s));
+                }
             }
             _ => {
-                let value = sqlite_value_to_json(row, name)?;
+                let value = row.get_value(i).map(|v| v.to_json()).unwrap_or(Value::Null);
                 fields.insert(name.clone(), value);
             }
         }
@@ -40,136 +45,55 @@ pub fn row_to_document(row: &Row, column_names: &[String]) -> rusqlite::Result<D
         .build())
 }
 
-/// Normalize legacy "YYYY-MM-DD HH:MM:SS" timestamps to ISO 8601 "YYYY-MM-DDTHH:MM:SS.000Z".
-/// Already-normalized timestamps pass through unchanged.
-fn normalize_timestamp(ts: String) -> String {
-    if ts.len() == 19 && ts.as_bytes().get(10) == Some(&b' ') {
-        format!("{}T{}.000Z", &ts[..10], &ts[11..])
-    } else {
-        ts
-    }
-}
-
-/// Convert a SQLite column value to a JSON value.
-fn sqlite_value_to_json(row: &Row, column: &str) -> rusqlite::Result<Value> {
-    // Try each type in order: integer, real, text, null
-    if let Ok(v) = row.get::<_, i64>(column) {
-        return Ok(Value::Number(v.into()));
-    }
-    if let Ok(v) = row.get::<_, f64>(column)
-        && let Some(n) = Number::from_f64(v)
-    {
-        return Ok(Value::Number(n));
-    }
-    if let Ok(v) = row.get::<_, String>(column) {
-        return Ok(Value::String(v));
-    }
-    Ok(Value::Null)
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
-    use rusqlite::Connection;
+    use crate::db::{
+        InMemoryConn,
+        types::{DbRow, DbValue},
+    };
 
-    fn setup_test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE test (
-                id TEXT PRIMARY KEY,
-                int_col INTEGER,
-                real_col REAL,
-                text_col TEXT,
-                null_col TEXT,
-                created_at TEXT,
-                updated_at TEXT
-            )",
-        )
-        .unwrap();
-        conn
+    fn make_row(columns: Vec<&str>, values: Vec<DbValue>) -> DbRow {
+        DbRow::new(columns.into_iter().map(|s| s.to_string()).collect(), values)
     }
 
     #[test]
-    fn sqlite_value_to_json_integer() {
-        let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, int_col) VALUES ('1', 42)", [])
-            .unwrap();
-        let mut stmt = conn
-            .prepare("SELECT int_col FROM test WHERE id='1'")
-            .unwrap();
-        let val: Value = stmt
-            .query_row([], |row| sqlite_value_to_json(row, "int_col"))
-            .unwrap();
-        assert_eq!(val, json!(42));
+    fn dbvalue_to_json_integer() {
+        assert_eq!(DbValue::Integer(42).to_json(), json!(42));
     }
 
     #[test]
-    fn sqlite_value_to_json_float() {
-        let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, real_col) VALUES ('1', 3.14)", [])
-            .unwrap();
-        let mut stmt = conn
-            .prepare("SELECT real_col FROM test WHERE id='1'")
-            .unwrap();
-        let val: Value = stmt
-            .query_row([], |row| sqlite_value_to_json(row, "real_col"))
-            .unwrap();
-        // SQLite stores 3.14 as float; check it's close
+    fn dbvalue_to_json_float() {
+        let val = DbValue::Real(3.14).to_json();
         assert!(val.as_f64().unwrap() > 3.13 && val.as_f64().unwrap() < 3.15);
     }
 
     #[test]
-    fn sqlite_value_to_json_text() {
-        let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, text_col) VALUES ('1', 'hello')", [])
-            .unwrap();
-        let mut stmt = conn
-            .prepare("SELECT text_col FROM test WHERE id='1'")
-            .unwrap();
-        let val: Value = stmt
-            .query_row([], |row| sqlite_value_to_json(row, "text_col"))
-            .unwrap();
-        assert_eq!(val, json!("hello"));
+    fn dbvalue_to_json_text() {
+        assert_eq!(DbValue::Text("hello".into()).to_json(), json!("hello"));
     }
 
     #[test]
-    fn sqlite_value_to_json_null() {
-        let conn = setup_test_db();
-        conn.execute("INSERT INTO test (id, null_col) VALUES ('1', NULL)", [])
-            .unwrap();
-        let mut stmt = conn
-            .prepare("SELECT null_col FROM test WHERE id='1'")
-            .unwrap();
-        let val: Value = stmt
-            .query_row([], |row| sqlite_value_to_json(row, "null_col"))
-            .unwrap();
-        assert!(val.is_null());
+    fn dbvalue_to_json_null() {
+        assert!(DbValue::Null.to_json().is_null());
     }
 
     #[test]
     fn row_to_document_basic() {
-        let conn = setup_test_db();
-        conn.execute(
-            "INSERT INTO test (id, text_col, int_col, created_at, updated_at) VALUES ('doc1', 'hello', 42, '2024-01-01', '2024-01-02')",
-            [],
-        ).unwrap();
-        let columns = vec![
-            "id".to_string(),
-            "text_col".to_string(),
-            "int_col".to_string(),
-            "created_at".to_string(),
-            "updated_at".to_string(),
-        ];
-        let mut stmt = conn
-            .prepare(
-                "SELECT id, text_col, int_col, created_at, updated_at FROM test WHERE id='doc1'",
-            )
-            .unwrap();
-        let doc = stmt
-            .query_row([], |row| row_to_document(row, &columns))
-            .unwrap();
+        let conn = InMemoryConn::open();
+        let row = make_row(
+            vec!["id", "text_col", "int_col", "created_at", "updated_at"],
+            vec![
+                DbValue::Text("doc1".into()),
+                DbValue::Text("hello".into()),
+                DbValue::Integer(42),
+                DbValue::Text("2024-01-01".into()),
+                DbValue::Text("2024-01-02".into()),
+            ],
+        );
+        let doc = row_to_document(&conn, &row).unwrap();
         assert_eq!(doc.id, "doc1");
         assert_eq!(doc.fields.get("text_col").unwrap(), &json!("hello"));
         assert_eq!(doc.fields.get("int_col").unwrap(), &json!(42));
@@ -179,5 +103,23 @@ mod tests {
         assert!(!doc.fields.contains_key("id"));
         assert!(!doc.fields.contains_key("created_at"));
         assert!(!doc.fields.contains_key("updated_at"));
+    }
+
+    #[test]
+    fn normalize_legacy_timestamp() {
+        let conn = InMemoryConn::open();
+        assert_eq!(
+            conn.normalize_timestamp("2024-01-01 12:00:00"),
+            "2024-01-01T12:00:00.000Z"
+        );
+    }
+
+    #[test]
+    fn normalize_already_iso() {
+        let conn = InMemoryConn::open();
+        assert_eq!(
+            conn.normalize_timestamp("2024-01-01T12:00:00.000Z"),
+            "2024-01-01T12:00:00.000Z"
+        );
     }
 }

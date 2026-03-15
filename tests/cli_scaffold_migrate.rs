@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crap_cms::commands;
 use crap_cms::config::CrapConfig;
-use crap_cms::db::{DbPool, migrate, ops, pool, query};
+use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 use crap_cms::typegen;
@@ -138,7 +138,11 @@ fn roundtrip_data_preserved() {
             let status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("");
             tx.execute(
                 "INSERT OR REPLACE INTO posts (id, title, status) VALUES (?1, ?2, ?3)",
-                rusqlite::params![id, title, status],
+                &[
+                    DbValue::Text(id.to_string()),
+                    DbValue::Text(title.to_string()),
+                    DbValue::Text(status.to_string()),
+                ],
             )
             .unwrap();
         }

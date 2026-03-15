@@ -19,7 +19,7 @@ use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::core::{JwtSecret, Registry};
-use crap_cms::db::{migrate, pool, query};
+use crap_cms::db::{DbConnection, migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -1448,11 +1448,11 @@ async fn delete_confirm_shows_back_references_warning() {
 
     // Create a media document and a post referencing it
     let conn = app.pool.get().unwrap();
-    conn.execute("INSERT INTO media (id) VALUES ('m1')", [])
+    conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
         .unwrap();
     conn.execute(
         "INSERT INTO posts (id, title, image) VALUES ('p1', 'My Post', 'm1')",
-        [],
+        &[],
     )
     .unwrap();
     drop(conn);
@@ -1495,7 +1495,7 @@ async fn delete_confirm_no_warning_when_unreferenced() {
 
     // Create a media document with no references
     let conn = app.pool.get().unwrap();
-    conn.execute("INSERT INTO media (id) VALUES ('m1')", [])
+    conn.execute("INSERT INTO media (id) VALUES ('m1')", &[])
         .unwrap();
     drop(conn);
 

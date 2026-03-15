@@ -10,7 +10,7 @@ use std::{
 use crate::{
     config::{CrapConfig, LocaleConfig},
     core::{FieldType, Registry},
-    db::{migrate, pool},
+    db::{DbConnection, migrate, pool},
     hooks,
     hooks::HookRunner,
     scaffold,
@@ -228,13 +228,13 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
     let backup_db_path = backup_dir.join("crap.db");
     println!("Creating database snapshot...");
     {
-        let conn =
-            rusqlite::Connection::open(&db_path).context("Failed to open database for backup")?;
-        conn.execute(
-            "VACUUM INTO ?1",
-            [backup_db_path.to_string_lossy().as_ref()],
-        )
-        .context("VACUUM INTO failed")?;
+        let pool =
+            pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
+        let conn = pool
+            .get()
+            .context("Failed to get DB connection for backup")?;
+        conn.vacuum_into(&backup_db_path)
+            .context("VACUUM INTO failed")?;
     }
     let db_size = std::fs::metadata(&backup_db_path)
         .map(|m| m.len())
@@ -389,15 +389,17 @@ pub fn restore(
         .with_context(|| format!("Failed to copy database to {}", db_path.display()))?;
     println!("Database restored.");
 
-    // Remove WAL/SHM files if they exist (stale from previous instance)
-    let wal_path = db_path.with_extension("db-wal");
-    let shm_path = db_path.with_extension("db-shm");
-
-    if wal_path.exists() {
-        let _ = std::fs::remove_file(&wal_path);
-    }
-    if shm_path.exists() {
-        let _ = std::fs::remove_file(&shm_path);
+    // Remove sidecar files (e.g. WAL/SHM for SQLite) if they exist
+    {
+        let pool =
+            pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
+        let conn = pool.get().context("Failed to get DB connection")?;
+        for ext in conn.sidecar_extensions() {
+            let sidecar = db_path.with_extension(ext);
+            if sidecar.exists() {
+                let _ = std::fs::remove_file(&sidecar);
+            }
+        }
     }
 
     // Optionally restore uploads
@@ -464,7 +466,7 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 
     let conn = pool.get().context("Failed to get database connection")?;
 
-    let orphans = find_orphan_columns(&conn, &reg, &cfg.locale)?;
+    let orphans = find_orphan_columns(&conn as &dyn DbConnection, &reg, &cfg.locale)?;
 
     if orphans.is_empty() {
         println!("No orphan columns found. All columns match Lua definitions.");
@@ -489,23 +491,17 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
         return Ok(());
     }
 
-    // SQLite supports DROP COLUMN since 3.35.0 (2021-03-12).
-    // Check version first.
-    let version: String = conn.query_row("SELECT sqlite_version()", [], |row| row.get(0))?;
-    let parts: Vec<u32> = version.split('.').filter_map(|s| s.parse().ok()).collect();
-
-    if parts.len() >= 2 && (parts[0] < 3 || (parts[0] == 3 && parts[1] < 35)) {
+    if !conn.supports_drop_column() {
         bail!(
-            "SQLite {} does not support DROP COLUMN (requires 3.35.0+). \
-             Consider recreating the table manually.",
-            version
+            "Database does not support DROP COLUMN. \
+             Consider recreating the table manually."
         );
     }
 
     for (table, cols) in &orphans {
         for col in cols {
             let sql = format!("ALTER TABLE {} DROP COLUMN {}", table, col);
-            conn.execute(&sql, [])
+            conn.execute(&sql, &[])
                 .with_context(|| format!("Failed to drop column {}.{}", table, col))?;
             println!("Dropped: {}.{}", table, col);
         }
@@ -522,7 +518,7 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 /// Plugin columns are NOT orphans because plugins run during `init_lua` and their
 /// fields are included in the registry definitions.
 pub fn find_orphan_columns(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     reg: &Registry,
     locale_config: &LocaleConfig,
 ) -> Result<Vec<(String, Vec<String>)>> {
@@ -630,10 +626,16 @@ pub fn find_orphan_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LocaleConfig;
-    use crate::core::Registry;
-    use crate::core::collection::*;
-    use crate::core::field::{FieldDefinition, FieldType};
+    use crate::{
+        config::LocaleConfig,
+        core::{
+            Registry,
+            collection::*,
+            field::{FieldDefinition, FieldType},
+        },
+        db::{BoxedConnection, pool},
+    };
+    use tempfile::TempDir;
 
     fn no_locale() -> LocaleConfig {
         LocaleConfig::default()
@@ -658,16 +660,19 @@ mod tests {
         FieldDefinition::builder(name, FieldType::Text).build()
     }
 
-    fn make_conn() -> rusqlite::Connection {
-        rusqlite::Connection::open_in_memory().unwrap()
+    fn make_conn() -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let cfg = crate::config::CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &cfg).unwrap();
+        let conn = p.get().unwrap();
+        (dir, conn)
     }
 
     #[test]
     fn no_orphans_when_columns_match() {
-        let conn = make_conn();
-        conn.execute(
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
             "CREATE TABLE posts (id TEXT, title TEXT, created_at TEXT, updated_at TEXT)",
-            [],
         )
         .unwrap();
 
@@ -683,8 +688,8 @@ mod tests {
 
     #[test]
     fn detects_orphan_column() {
-        let conn = make_conn();
-        conn.execute("CREATE TABLE posts (id TEXT, title TEXT, old_field TEXT, created_at TEXT, updated_at TEXT)", []).unwrap();
+        let (_dir, conn) = make_conn();
+        conn.execute_batch("CREATE TABLE posts (id TEXT, title TEXT, old_field TEXT, created_at TEXT, updated_at TEXT)").unwrap();
 
         let mut reg = Registry::default();
         reg.collections.insert(
@@ -700,10 +705,9 @@ mod tests {
 
     #[test]
     fn system_columns_not_orphans() {
-        let conn = make_conn();
-        conn.execute(
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
             "CREATE TABLE users (id TEXT, email TEXT, _password_hash TEXT, _locked INTEGER, created_at TEXT, updated_at TEXT)",
-            [],
         ).unwrap();
 
         let mut reg = Registry::default();
@@ -718,10 +722,9 @@ mod tests {
 
     #[test]
     fn group_fields_not_orphans() {
-        let conn = make_conn();
-        conn.execute(
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
             "CREATE TABLE posts (id TEXT, seo__meta_title TEXT, seo__meta_desc TEXT, created_at TEXT, updated_at TEXT)",
-            [],
         ).unwrap();
 
         let mut reg = Registry::default();
@@ -743,10 +746,9 @@ mod tests {
 
     #[test]
     fn localized_columns_not_orphans() {
-        let conn = make_conn();
-        conn.execute(
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
             "CREATE TABLE posts (id TEXT, title__en TEXT, title__de TEXT, created_at TEXT, updated_at TEXT)",
-            [],
         ).unwrap();
 
         let mut reg = Registry::default();
@@ -768,10 +770,9 @@ mod tests {
 
     #[test]
     fn detects_orphan_among_valid_columns() {
-        let conn = make_conn();
-        conn.execute(
+        let (_dir, conn) = make_conn();
+        conn.execute_batch(
             "CREATE TABLE posts (id TEXT, title TEXT, removed_field TEXT, seo__meta TEXT, created_at TEXT, updated_at TEXT)",
-            [],
         ).unwrap();
 
         let mut reg = Registry::default();

@@ -115,8 +115,10 @@ pub(super) fn register_delete(
                 .map_err(|e| mlua::Error::RuntimeError(format!("delete error: {}", e)))?;
 
             // Sync FTS index
-            query::fts::fts_delete(conn, &collection, &id)
-                .map_err(|e| mlua::Error::RuntimeError(format!("FTS delete error: {}", e)))?;
+            if conn.supports_fts() {
+                query::fts::fts_delete(conn, &collection, &id)
+                    .map_err(|e| mlua::Error::RuntimeError(format!("FTS delete error: {}", e)))?;
+            }
 
             if hooks_enabled {
                 let after_ctx = HookContext::builder(&collection, "delete")
@@ -258,8 +260,11 @@ pub(super) fn register_update_many(
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| mlua::Error::RuntimeError(format!("join data error: {}", e)))?;
-                query::fts::fts_upsert(conn, &collection, &updated, Some(&def))
-                    .map_err(|e| mlua::Error::RuntimeError(format!("FTS upsert error: {}", e)))?;
+                if conn.supports_fts() {
+                    query::fts::fts_upsert(conn, &collection, &updated, Some(&def)).map_err(
+                        |e| mlua::Error::RuntimeError(format!("FTS upsert error: {}", e)),
+                    )?;
+                }
                 modified += 1;
             }
 
@@ -375,8 +380,11 @@ pub(super) fn register_delete_many(
             for doc in &docs {
                 query::delete(conn, &collection, &doc.id)
                     .map_err(|e| mlua::Error::RuntimeError(format!("delete error: {}", e)))?;
-                query::fts::fts_delete(conn, &collection, &doc.id)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("FTS delete error: {}", e)))?;
+                if conn.supports_fts() {
+                    query::fts::fts_delete(conn, &collection, &doc.id).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("FTS delete error: {}", e))
+                    })?;
+                }
                 deleted += 1;
             }
 

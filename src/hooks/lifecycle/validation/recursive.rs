@@ -165,6 +165,7 @@ fn validate_scalar_field(
 #[cfg(test)]
 mod tests {
     use crate::core::field::{FieldDefinition, FieldTab, FieldType, JoinConfig};
+    use crate::db::InMemoryConn;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
     use std::collections::HashMap;
@@ -172,9 +173,8 @@ mod tests {
     #[test]
     fn test_validate_group_subfield_required() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)");
         let fields = vec![
             FieldDefinition::builder("seo", FieldType::Group)
                 .fields(vec![
@@ -200,9 +200,8 @@ mod tests {
     #[test]
     fn test_validate_required_inside_collapsible() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, notes TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, notes TEXT)");
         let fields = vec![
             FieldDefinition::builder("extra", FieldType::Collapsible)
                 .fields(vec![
@@ -227,9 +226,8 @@ mod tests {
     #[test]
     fn test_validate_required_inside_tabs() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)");
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
@@ -257,9 +255,8 @@ mod tests {
     #[test]
     fn test_validate_group_inside_tabs_required() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)");
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
@@ -291,9 +288,8 @@ mod tests {
     #[test]
     fn test_validate_group_inside_collapsible_required() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, seo__title TEXT)");
         let fields = vec![
             FieldDefinition::builder("extra", FieldType::Collapsible)
                 .fields(vec![
@@ -322,9 +318,8 @@ mod tests {
     #[test]
     fn test_validate_date_inside_tabs() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, publish_date TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, publish_date TEXT)");
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
@@ -348,12 +343,11 @@ mod tests {
     #[test]
     fn test_validate_unique_inside_tabs() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let conn = InMemoryConn::open();
+        conn.setup(
             "CREATE TABLE test (id TEXT PRIMARY KEY, slug TEXT);
              INSERT INTO test (id, slug) VALUES ('existing', 'taken');",
-        )
-        .unwrap();
+        );
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
@@ -394,9 +388,8 @@ mod tests {
         )
         .exec()
         .unwrap();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)");
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
@@ -428,9 +421,8 @@ mod tests {
     #[test]
     fn test_validate_deeply_nested_tabs_collapsible_group() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, og__title TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, og__title TEXT)");
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
@@ -469,9 +461,8 @@ mod tests {
     #[test]
     fn test_validate_layout_fields_skipped_for_drafts() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, body TEXT)");
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Tabs)
                 .tabs(vec![FieldTab::new(
@@ -503,9 +494,8 @@ mod tests {
     #[test]
     fn test_validate_group_containing_row_required() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)");
         let fields = vec![
             FieldDefinition::builder("meta", FieldType::Group)
                 .fields(vec![
@@ -534,9 +524,8 @@ mod tests {
     #[test]
     fn test_validate_group_containing_collapsible_required() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, seo__robots TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, seo__robots TEXT)");
         let fields = vec![
             FieldDefinition::builder("seo", FieldType::Group)
                 .fields(vec![
@@ -568,9 +557,8 @@ mod tests {
     #[test]
     fn test_validate_group_containing_tabs_required() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, settings__theme TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, settings__theme TEXT)");
         let fields = vec![
             FieldDefinition::builder("settings", FieldType::Group)
                 .fields(vec![
@@ -602,9 +590,8 @@ mod tests {
     #[test]
     fn test_validate_group_tabs_group_three_levels_required() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__deep TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__deep TEXT)");
         let fields = vec![
             FieldDefinition::builder("outer", FieldType::Group)
                 .fields(vec![
@@ -643,12 +630,11 @@ mod tests {
     #[test]
     fn test_validate_group_containing_tabs_unique() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let conn = InMemoryConn::open();
+        conn.setup(
             "CREATE TABLE test (id TEXT PRIMARY KEY, config__slug TEXT);
              INSERT INTO test (id, config__slug) VALUES ('existing', 'taken');",
-        )
-        .unwrap();
+        );
         let fields = vec![
             FieldDefinition::builder("config", FieldType::Group)
                 .fields(vec![
@@ -683,9 +669,8 @@ mod tests {
     #[test]
     fn test_validate_group_containing_row_date_format() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__date TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, meta__date TEXT)");
         let fields = vec![
             FieldDefinition::builder("meta", FieldType::Group)
                 .fields(vec![
@@ -712,9 +697,8 @@ mod tests {
     #[test]
     fn test_validate_group_containing_row_valid_passes() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, meta__title TEXT)");
         let fields = vec![
             FieldDefinition::builder("meta", FieldType::Group)
                 .fields(vec![
@@ -742,9 +726,8 @@ mod tests {
     #[test]
     fn join_field_skipped_in_validation() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY)");
         let fields = vec![
             FieldDefinition::builder("posts", FieldType::Join)
                 .required(true)
@@ -767,9 +750,8 @@ mod tests {
     #[test]
     fn test_validate_nested_group_in_group_prefix() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__field TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, outer__inner__field TEXT)");
         let fields = vec![
             FieldDefinition::builder("outer", FieldType::Group)
                 .fields(vec![
@@ -801,9 +783,8 @@ mod tests {
     #[test]
     fn test_validate_date_inside_collapsible_top_level() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, pub_date TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, pub_date TEXT)");
         let fields = vec![
             FieldDefinition::builder("extra", FieldType::Collapsible)
                 .fields(vec![
@@ -829,9 +810,8 @@ mod tests {
     #[test]
     fn test_validate_date_inside_row_top_level() {
         let lua = mlua::Lua::new();
-        let conn = rusqlite::Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, event_date TEXT)")
-            .unwrap();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE test (id TEXT PRIMARY KEY, event_date TEXT)");
         let fields = vec![
             FieldDefinition::builder("layout", FieldType::Row)
                 .fields(vec![

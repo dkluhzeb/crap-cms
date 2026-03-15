@@ -3,11 +3,13 @@
 use anyhow::{Context as _, Result};
 use serde_json::{Map, Value};
 
+use crate::db::{DbConnection, DbValue};
+
 /// Set block rows for a blocks field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
 /// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
 pub fn set_block_rows(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     field_name: &str,
     parent_id: &str,
@@ -17,18 +19,23 @@ pub fn set_block_rows(
     let table_name = format!("{}_{}", collection, field_name);
 
     if let Some(loc) = locale {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
         conn.execute(
             &format!(
-                "DELETE FROM {} WHERE parent_id = ?1 AND _locale = ?2",
+                "DELETE FROM {} WHERE parent_id = {p1} AND _locale = {p2}",
                 table_name
             ),
-            rusqlite::params![parent_id, loc],
+            &[
+                DbValue::Text(parent_id.to_string()),
+                DbValue::Text(loc.to_string()),
+            ],
         )
         .with_context(|| format!("Failed to clear blocks table {}", table_name))?;
     } else {
+        let p1 = conn.placeholder(1);
         conn.execute(
-            &format!("DELETE FROM {} WHERE parent_id = ?1", table_name),
-            [parent_id],
+            &format!("DELETE FROM {} WHERE parent_id = {p1}", table_name),
+            &[DbValue::Text(parent_id.to_string())],
         )
         .with_context(|| format!("Failed to clear blocks table {}", table_name))?;
     }
@@ -38,11 +45,18 @@ pub fn set_block_rows(
     }
 
     if let Some(loc) = locale {
+        let (p1, p2, p3, p4, p5, p6) = (
+            conn.placeholder(1),
+            conn.placeholder(2),
+            conn.placeholder(3),
+            conn.placeholder(4),
+            conn.placeholder(5),
+            conn.placeholder(6),
+        );
         let sql = format!(
-            "INSERT INTO {} (id, parent_id, _order, _block_type, data, _locale) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO {} (id, parent_id, _order, _block_type, data, _locale) VALUES ({p1}, {p2}, {p3}, {p4}, {p5}, {p6})",
             table_name
         );
-        let mut stmt = conn.prepare(&sql)?;
         for (order, row) in rows.iter().enumerate() {
             let id = nanoid::nanoid!();
             let block_type = row
@@ -57,21 +71,30 @@ pub fn set_block_rows(
             data_map.remove("_block_type");
             data_map.remove("id");
             let data_json = Value::Object(data_map).to_string();
-            stmt.execute(rusqlite::params![
-                id,
-                parent_id,
-                order as i64,
-                block_type,
-                data_json,
-                loc
-            ])?;
+            conn.execute(
+                &sql,
+                &[
+                    DbValue::Text(id),
+                    DbValue::Text(parent_id.to_string()),
+                    DbValue::Integer(order as i64),
+                    DbValue::Text(block_type),
+                    DbValue::Text(data_json),
+                    DbValue::Text(loc.to_string()),
+                ],
+            )?;
         }
     } else {
+        let (p1, p2, p3, p4, p5) = (
+            conn.placeholder(1),
+            conn.placeholder(2),
+            conn.placeholder(3),
+            conn.placeholder(4),
+            conn.placeholder(5),
+        );
         let sql = format!(
-            "INSERT INTO {} (id, parent_id, _order, _block_type, data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO {} (id, parent_id, _order, _block_type, data) VALUES ({p1}, {p2}, {p3}, {p4}, {p5})",
             table_name
         );
-        let mut stmt = conn.prepare(&sql)?;
         for (order, row) in rows.iter().enumerate() {
             let id = nanoid::nanoid!();
             let block_type = row
@@ -86,13 +109,16 @@ pub fn set_block_rows(
             data_map.remove("_block_type");
             data_map.remove("id");
             let data_json = Value::Object(data_map).to_string();
-            stmt.execute(rusqlite::params![
-                id,
-                parent_id,
-                order as i64,
-                block_type,
-                data_json
-            ])?;
+            conn.execute(
+                &sql,
+                &[
+                    DbValue::Text(id),
+                    DbValue::Text(parent_id.to_string()),
+                    DbValue::Integer(order as i64),
+                    DbValue::Text(block_type),
+                    DbValue::Text(data_json),
+                ],
+            )?;
         }
     }
     Ok(())
@@ -101,50 +127,70 @@ pub fn set_block_rows(
 /// Find block rows for a blocks field join table, ordered.
 /// When `locale` is Some, filters by `_locale`.
 pub fn find_block_rows(
-    conn: &rusqlite::Connection,
+    conn: &dyn DbConnection,
     collection: &str,
     field_name: &str,
     parent_id: &str,
     locale: Option<&str>,
 ) -> Result<Vec<Value>> {
     let table_name = format!("{}_{}", collection, field_name);
-    let sql = if locale.is_some() {
-        format!(
-            "SELECT id, _block_type, data FROM {} WHERE parent_id = ?1 AND _locale = ?2 ORDER BY _order",
-            table_name
+    let (sql, params) = if let Some(loc) = locale {
+        let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+        (
+            format!(
+                "SELECT id, _block_type, data FROM {} WHERE parent_id = {p1} AND _locale = {p2} ORDER BY _order",
+                table_name
+            ),
+            vec![
+                DbValue::Text(parent_id.to_string()),
+                DbValue::Text(loc.to_string()),
+            ],
         )
     } else {
-        format!(
-            "SELECT id, _block_type, data FROM {} WHERE parent_id = ?1 ORDER BY _order",
-            table_name
+        let p1 = conn.placeholder(1);
+        (
+            format!(
+                "SELECT id, _block_type, data FROM {} WHERE parent_id = {p1} ORDER BY _order",
+                table_name
+            ),
+            vec![DbValue::Text(parent_id.to_string())],
         )
     };
-    let mut stmt = conn.prepare(&sql)?;
-    let params: Vec<Box<dyn rusqlite::types::ToSql>> = if let Some(loc) = locale {
-        vec![Box::new(parent_id.to_string()), Box::new(loc.to_string())]
-    } else {
-        vec![Box::new(parent_id.to_string())]
-    };
-    let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();
-    let rows = stmt
-        .query_map(rusqlite::params_from_iter(param_refs.iter()), |row| {
-            let id: String = row.get(0)?;
-            let block_type: String = row.get(1)?;
-            let data_json: String = row.get(2)?;
-            Ok((id, block_type, data_json))
-        })?
-        .filter_map(|r| r.ok())
-        .map(|(id, block_type, data_json)| {
-            let mut map = match serde_json::from_str::<Value>(&data_json) {
+
+    let db_rows = conn.query_all(&sql, &params)?;
+    let result = db_rows
+        .into_iter()
+        .filter_map(|row| {
+            let id = row.get_value(0).cloned()?;
+            let block_type = row.get_value(1).cloned()?;
+            let data_raw = row.get_value(2).cloned()?;
+
+            let id_str = if let DbValue::Text(s) = id {
+                s
+            } else {
+                return None;
+            };
+            let bt_str = if let DbValue::Text(s) = block_type {
+                s
+            } else {
+                return None;
+            };
+            let data_str = if let DbValue::Text(s) = data_raw {
+                s
+            } else {
+                String::new()
+            };
+
+            let mut map = match serde_json::from_str::<Value>(&data_str) {
                 Ok(Value::Object(m)) => m,
                 _ => Map::new(),
             };
-            map.insert("id".to_string(), Value::String(id));
-            map.insert("_block_type".to_string(), Value::String(block_type));
-            Value::Object(map)
+            map.insert("id".to_string(), Value::String(id_str));
+            map.insert("_block_type".to_string(), Value::String(bt_str));
+            Some(Value::Object(map))
         })
         .collect();
-    Ok(rows)
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -152,11 +198,21 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use rusqlite::Connection;
+    use crate::config::CrapConfig;
+    use crate::db::{BoxedConnection, pool};
+    use tempfile::TempDir;
 
-    fn setup_blocks_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+    fn setup_conn(sql: &str) -> (TempDir, BoxedConnection) {
+        let dir = TempDir::new().unwrap();
+        let config = CrapConfig::default();
+        let p = pool::create_pool(dir.path(), &config).unwrap();
+        let conn = p.get().unwrap();
+        conn.execute_batch(sql).unwrap();
+        (dir, conn)
+    }
+
+    fn setup_blocks_db() -> (TempDir, BoxedConnection) {
+        setup_conn(
             "CREATE TABLE posts (id TEXT PRIMARY KEY);
              CREATE TABLE posts_content (
                  id TEXT PRIMARY KEY,
@@ -167,15 +223,13 @@ mod tests {
              );
              INSERT INTO posts (id) VALUES ('p1');",
         )
-        .unwrap();
-        conn
     }
 
     // ── set_block_rows + find_block_rows ─────────────────────────────────────
 
     #[test]
     fn set_and_find_block_rows() {
-        let conn = setup_blocks_db();
+        let (_dir, conn) = setup_blocks_db();
         let blocks = vec![
             json!({"_block_type": "paragraph", "text": "Hello world"}),
             json!({"_block_type": "image", "url": "/img/photo.jpg", "alt": "A photo"}),
@@ -195,7 +249,7 @@ mod tests {
 
     #[test]
     fn replace_block_rows() {
-        let conn = setup_blocks_db();
+        let (_dir, conn) = setup_blocks_db();
         let blocks_old = vec![json!({"_block_type": "paragraph", "text": "Old text"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks_old, None).unwrap();
 
@@ -210,8 +264,7 @@ mod tests {
 
     #[test]
     fn set_and_find_block_rows_with_locale() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_conn(
             "CREATE TABLE posts_content (
                 id TEXT PRIMARY KEY,
                 parent_id TEXT,
@@ -220,8 +273,7 @@ mod tests {
                 data TEXT,
                 _locale TEXT
             );",
-        )
-        .unwrap();
+        );
 
         let blocks_en = vec![json!({"_block_type": "text", "body": "Hello"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks_en, Some("en")).unwrap();
@@ -240,8 +292,7 @@ mod tests {
 
     #[test]
     fn set_block_rows_empty_clears_locale() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
+        let (_dir, conn) = setup_conn(
             "CREATE TABLE posts_content (
                 id TEXT PRIMARY KEY,
                 parent_id TEXT,
@@ -250,8 +301,7 @@ mod tests {
                 data TEXT,
                 _locale TEXT
             );",
-        )
-        .unwrap();
+        );
 
         let blocks = vec![json!({"_block_type": "text", "body": "Hi"})];
         set_block_rows(&conn, "posts", "content", "p1", &blocks, Some("en")).unwrap();

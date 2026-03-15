@@ -1,18 +1,18 @@
 //! Builder for [`FieldWriteCtx`].
 
-use crate::core::Document;
+use crate::{core::Document, db::DbConnection};
 
 use super::run::FieldWriteCtx;
 
 /// Builder for [`FieldWriteCtx`]. Created via [`FieldWriteCtx::builder`].
 pub struct FieldWriteCtxBuilder<'a> {
-    conn: &'a rusqlite::Connection,
+    conn: &'a dyn DbConnection,
     user: Option<&'a Document>,
     ui_locale: Option<&'a str>,
 }
 
 impl<'a> FieldWriteCtxBuilder<'a> {
-    pub(crate) fn new(conn: &'a rusqlite::Connection) -> Self {
+    pub(crate) fn new(conn: &'a dyn DbConnection) -> Self {
         Self {
             conn,
             user: None,
