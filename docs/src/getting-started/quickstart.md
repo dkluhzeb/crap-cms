@@ -98,7 +98,7 @@ grpcurl -plaintext localhost:50051 crap.ContentAPI/Create \
 The repository includes an `example/` config directory with sample collections, useful if you're building from source:
 
 ```bash
-git clone https://github.com/your-org/crap-cms.git
+git clone https://github.com/dkluhzeb/crap-cms.git
 cd crap-cms
 cargo build --release
 ./target/release/crap-cms serve ./example

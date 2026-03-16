@@ -6,7 +6,7 @@
 
 Headless CMS in Rust. Lua config (neovim-style) + gRPC API + HTMX admin UI.
 
-For usage documentation, see the [user manual](https://crapcms.com/docs) (source in `docs/`).
+For usage documentation, see the [user manual](https://dkluhzeb.github.io/crap-cms/) (source in `docs/`).
 
 ## Motivation
 
@@ -121,7 +121,7 @@ docker run -v /path/to/config:/config -p 3000:3000 -p 50051:50051 \
   ghcr.io/dkluhzeb/crap-cms:nightly
 ```
 
-Images are Alpine-based (~15 MB) and published to `ghcr.io/dkluhzeb/crap-cms`. Tags:
+Images are Alpine-based (~30 MB) and published to `ghcr.io/dkluhzeb/crap-cms`. Tags:
 
 | Tag | Description |
 |-----|-------------|
