@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-bb4fd1e2.js";
+            window.path_to_searchindex_js = "../searchindex-985a8296.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8f88eb31.js"></script>
@@ -412,7 +412,7 @@ end
 crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
 </code></pre>
 <h2 id="access-control-in-hooks"><a class="header" href="#access-control-in-hooks">Access Control in Hooks</a></h2>
-<p>By default, all Lua CRUD functions bypass access control (<code>overrideAccess = true</code>). This matches PayloadCMS behavior — hooks are trusted server-side code with full access.</p>
+<p>By default, all Lua CRUD functions bypass access control (<code>overrideAccess = true</code>). Hooks are trusted server-side code with full access.</p>
 <p>When you set <code>overrideAccess = false</code>, the function enforces the same access rules as the external API:</p>
 <ul>
 <li><strong>Collection-level access</strong> — the relevant access function (<code>read</code>, <code>create</code>, <code>update</code>, <code>delete</code>) is called with the authenticated user from the original request.</li>

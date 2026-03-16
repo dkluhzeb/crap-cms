@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-bb4fd1e2.js";
+            window.path_to_searchindex_js = "searchindex-985a8296.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f88eb31.js"></script>
@@ -180,6 +180,20 @@
                     <main>
                         <h1 id="crap-cms"><a class="header" href="#crap-cms">Crap CMS</a></h1>
 <p>Crap CMS is a headless content management system built in Rust. It combines a compiled core with Lua hooks (neovim-style) and an overridable HTMX admin UI.</p>
+<h2 id="motivation"><a class="header" href="#motivation">Motivation</a></h2>
+<p>I built several Rust/WebAssembly frontend projects and couldn’t find a CMS that fit the stack. So I built one.</p>
+<p>The idea: a simple CMS written in Rust, extensible via a lightweight scripting language, with no complicated build steps or infrastructure requirements. It’s also a playground for me to explore ideas and learn — which means things may change, break, or get rewritten.</p>
+<p>Inspiration came from what I consider the best solutions out there:</p>
+<ul>
+<li><strong>Lua scripting API</strong> — modeled after Neovim and Awesome WM, where Lua gives users deep control without touching core code</li>
+<li><strong>Configuration &amp; hook system</strong> — inspired by <a href="https://payloadcms.com">Payload CMS</a>, an excellent and highly recommended CMS for anyone needing a production-ready solution</li>
+<li><strong>CLI tooling</strong> — influenced by Laravel’s comprehensive Artisan CLI</li>
+<li><strong>SQLite + WAL + FTS</strong> — sufficient for most of my use cases, and it bundles cleanly into a single binary with zero external dependencies</li>
+<li><strong>Pure JavaScript with JSDoc types</strong> — no TypeScript, no bundler, no build step. Type safety through JSDoc annotations, checkable with <code>tsc --checkJs</code> without compiling anything</li>
+<li><strong>HTMX + Web Components</strong> — easy to theme (similar to WordPress child themes), no frontend build step. Web Components are a native browser standard — no framework updates, no outdated dependencies, no breaking changes</li>
+<li><strong>gRPC API</strong> — because I wanted it. A separate <a href="https://github.com/dkluhzeb/crap-rest">REST proxy</a> is available for those who prefer plain JSON over HTTP</li>
+</ul>
+<p>The project is functional but not yet production-ready — it still needs to prove itself.</p>
 <h2 id="design-philosophy"><a class="header" href="#design-philosophy">Design Philosophy</a></h2>
 <ul>
 <li><strong>Lua is the single source of truth for schemas.</strong> Collections and fields are defined in Lua files, not in the database. The database stores content, not structure.</li>
@@ -189,7 +203,6 @@
 <li><strong>Hooks are the extension system.</strong> Lua hooks at three levels (field, collection, global) provide full lifecycle control with transaction-safe CRUD access.</li>
 </ul>
 <h2 id="feature-set"><a class="header" href="#feature-set">Feature Set</a></h2>
-<p>Crap CMS targets PayloadCMS feature parity:</p>
 <ul>
 <li><strong>Collections</strong> with 14 field types (text, number, textarea, richtext, select, checkbox, date, email, json, relationship, array, group, upload, blocks)</li>
 <li><strong>Globals</strong> — single-document collections for site-wide settings</li>
@@ -831,7 +844,7 @@ vm_pool_size = 8
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="localization"><a class="header" href="#localization">Localization</a></h1>
-<p>Crap CMS supports per-field localization, allowing content to be managed in multiple languages. This follows the same pattern as PayloadCMS — any field type can be marked <code>localized</code>, and the API returns data differently based on a <code>locale</code> parameter.</p>
+<p>Crap CMS supports per-field localization, allowing content to be managed in multiple languages. Any field type can be marked <code>localized</code>, and the API returns data differently based on a <code>locale</code> parameter.</p>
 <h2 id="configuration"><a class="header" href="#configuration">Configuration</a></h2>
 <p>Enable localization by adding a <code>[locale]</code> section to <code>crap.toml</code>:</p>
 <pre><code class="language-toml">[locale]
@@ -1971,7 +1984,7 @@ crap.fields.date({ name = "published_at", index = true }),
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="versions--drafts"><a class="header" href="#versions--drafts">Versions &amp; Drafts</a></h1>
-<p>Crap CMS supports document versioning with an optional draft/publish workflow, inspired by PayloadCMS.</p>
+<p>Crap CMS supports document versioning with an optional draft/publish workflow.</p>
 <h2 id="enabling-versions"><a class="header" href="#enabling-versions">Enabling Versions</a></h2>
 <p>Add <code>versions</code> to your collection definition:</p>
 <pre><code class="language-lua">-- Simple: enables versions with drafts
@@ -2751,7 +2764,7 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
 <ul>
 <li>Pure dates are stored with UTC noon (<code>T12:00:00.000Z</code>) so timezone offsets up to ±12h never flip the calendar date</li>
 <li>Comparison operators (<code>greater_than</code>, <code>less_than</code>) work correctly on the normalized ISO string representation</li>
-<li>The <code>picker_appearance</code> option matches PayloadCMS semantics</li>
+<li>The <code>picker_appearance</code> option controls whether the picker shows date-only or date+time</li>
 </ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="email-1"><a class="header" href="#email-1">Email</a></h1>
@@ -6767,7 +6780,7 @@ end
 crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
 </code></pre>
 <h2 id="access-control-in-hooks"><a class="header" href="#access-control-in-hooks">Access Control in Hooks</a></h2>
-<p>By default, all Lua CRUD functions bypass access control (<code>overrideAccess = true</code>). This matches PayloadCMS behavior — hooks are trusted server-side code with full access.</p>
+<p>By default, all Lua CRUD functions bypass access control (<code>overrideAccess = true</code>). Hooks are trusted server-side code with full access.</p>
 <p>When you set <code>overrideAccess = false</code>, the function enforces the same access rules as the external API:</p>
 <ul>
 <li><strong>Collection-level access</strong> — the relevant access function (<code>read</code>, <code>create</code>, <code>update</code>, <code>delete</code>) is called with the authenticated user from the original request.</li>
@@ -10597,7 +10610,7 @@ CREATE TABLE posts_slides (
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="api-surface-comparison"><a class="header" href="#api-surface-comparison">API Surface Comparison</a></h1>
-<p>This document compares the three API surfaces — <strong>Admin UI</strong>, <strong>gRPC API</strong>, and <strong>Lua CRUD</strong> (hook local API) — to track feature parity.</p>
+<p>This document compares the three API surfaces — <strong>Admin UI</strong>, <strong>gRPC API</strong>, and <strong>Lua CRUD</strong> (hook local API) — to track feature consistency.</p>
 <h2 id="create-lifecycle"><a class="header" href="#create-lifecycle">CREATE Lifecycle</a></h2>
 <div class="table-wrapper">
 <table>
