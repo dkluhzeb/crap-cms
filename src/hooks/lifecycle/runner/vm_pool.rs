@@ -1,11 +1,16 @@
 //! Lua VM pool for concurrent hook execution.
 
 use anyhow::{anyhow, bail};
-use mlua::Lua;
+use mlua::{HookTriggers, Lua, VmState};
 use std::{
-    sync::{Condvar, Mutex},
+    sync::{
+        Arc, Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
+
+use super::super::types::MaxInstructions;
 
 /// Pool of Lua VMs for concurrent hook execution.
 pub(super) struct VmPool {
@@ -30,6 +35,7 @@ impl VmPool {
             .map_err(|e| anyhow!("VM pool lock poisoned: {}", e))?;
         loop {
             if let Some(vm) = pool.pop() {
+                set_instruction_hook(&vm);
                 return Ok(VmGuard {
                     pool: self,
                     vm: Some(vm),
@@ -44,6 +50,7 @@ impl VmPool {
             if wait_result.timed_out() {
                 // Try one more time after timeout — another thread may have returned a VM
                 if let Some(vm) = pool.pop() {
+                    set_instruction_hook(&vm);
                     return Ok(VmGuard {
                         pool: self,
                         vm: Some(vm),
@@ -79,9 +86,34 @@ impl Drop for VmGuard<'_> {
         if let Some(vm) = self.vm.take()
             && let Ok(mut pool) = self.pool.vms.lock()
         {
+            vm.remove_hook();
             pool.push(vm);
             self.pool.available.notify_one();
         }
+    }
+}
+
+/// Set an instruction-counting hook on the VM if `MaxInstructions` is configured.
+fn set_instruction_hook(vm: &Lua) {
+    let max = vm
+        .app_data_ref::<MaxInstructions>()
+        .map(|m| m.0)
+        .unwrap_or(0);
+    if max > 0 {
+        let counter = Arc::new(AtomicU64::new(0));
+        let c = counter.clone();
+        let _ = vm.set_hook(
+            HookTriggers::new().every_nth_instruction(10_000),
+            move |_lua, _debug| {
+                let count = c.fetch_add(10_000, Ordering::Relaxed);
+                if count + 10_000 > max {
+                    return Err(mlua::Error::RuntimeError(
+                        "Lua execution exceeded instruction limit".into(),
+                    ));
+                }
+                Ok(VmState::Continue)
+            },
+        );
     }
 }
 
@@ -152,6 +184,58 @@ mod tests {
         let result_b = handle_b.join().expect("thread B panicked");
         assert_eq!(result_a, 1);
         assert_eq!(result_b, 2);
+    }
+
+    fn make_pool_with_instruction_limit(n: usize, max_instructions: u64) -> VmPool {
+        let vms = (0..n)
+            .map(|_| {
+                let lua = Lua::new();
+                lua.set_app_data(MaxInstructions(max_instructions));
+                lua
+            })
+            .collect();
+        VmPool::new(vms)
+    }
+
+    #[test]
+    fn instruction_limit_terminates_infinite_loop() {
+        let pool = make_pool_with_instruction_limit(1, 50_000);
+        let guard = pool.acquire().expect("should acquire VM");
+        let result = guard.load("while true do end").exec();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("instruction limit"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn instruction_limit_allows_normal_code() {
+        let pool = make_pool_with_instruction_limit(1, 10_000_000);
+        let guard = pool.acquire().expect("should acquire VM");
+        let result: i64 = guard
+            .load("local s = 0; for i = 1, 1000 do s = s + i end; return s")
+            .eval()
+            .expect("normal code should succeed");
+        assert_eq!(result, 500500);
+    }
+
+    #[test]
+    fn instruction_hook_resets_between_acquires() {
+        // After returning a VM to the pool and re-acquiring, the counter resets.
+        let pool = make_pool_with_instruction_limit(1, 10_000_000);
+        {
+            let guard = pool.acquire().expect("first acquire");
+            let _: i64 = guard
+                .load("local s = 0; for i = 1, 1000 do s = s + i end; return s")
+                .eval()
+                .expect("first run should succeed");
+        }
+        // Re-acquire — fresh counter
+        let guard = pool.acquire().expect("second acquire");
+        let result: i64 = guard
+            .load("local s = 0; for i = 1, 1000 do s = s + i end; return s")
+            .eval()
+            .expect("second run should succeed with fresh counter");
+        assert_eq!(result, 500500);
     }
 
     #[test]

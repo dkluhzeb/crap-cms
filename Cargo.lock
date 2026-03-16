@@ -700,6 +700,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "ureq",
+ "url",
  "webp",
 ]
 

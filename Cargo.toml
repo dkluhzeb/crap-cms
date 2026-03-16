@@ -77,6 +77,9 @@ cron = "0.12"
 # Tower (rate limiting layer for gRPC)
 tower = { version = "0.5", features = ["util"] }
 
+# URL parsing
+url = "2"
+
 # Utilities
 rpassword = "7"
 nanoid = "0.4"

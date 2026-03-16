@@ -4,9 +4,14 @@ use anyhow::Result;
 use mlua::{Lua, Table};
 
 /// Register `crap.http` — outbound HTTP via ureq (blocking, safe in spawn_blocking context).
-pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
+pub(super) fn register_http(
+    lua: &Lua,
+    crap: &Table,
+    allow_private_networks: bool,
+    max_response_bytes: u64,
+) -> Result<()> {
     let http_table = lua.create_table()?;
-    let http_request_fn = lua.create_function(|lua, opts: Table| -> mlua::Result<Table> {
+    let http_request_fn = lua.create_function(move |lua, opts: Table| -> mlua::Result<Table> {
         let url: String = opts.get("url")?;
         let method: String = opts
             .get::<Option<String>>("method")?
@@ -14,6 +19,10 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
             .to_uppercase();
         let timeout: u64 = opts.get::<Option<u64>>("timeout")?.unwrap_or(30);
         let body: Option<String> = opts.get("body")?;
+
+        if !allow_private_networks {
+            validate_url(&url).map_err(mlua::Error::RuntimeError)?;
+        }
 
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(timeout)))
@@ -80,9 +89,14 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
                     }
                 }
                 result.set("headers", headers_out)?;
-                let body_str = resp.body_mut().read_to_string().map_err(|e| {
-                    mlua::Error::RuntimeError(format!("failed to read response body: {}", e))
-                })?;
+                let body_str = resp
+                    .body_mut()
+                    .with_config()
+                    .limit(max_response_bytes)
+                    .read_to_string()
+                    .map_err(|e| {
+                        mlua::Error::RuntimeError(format!("failed to read response body: {}", e))
+                    })?;
                 result.set("body", body_str)?;
             }
             Err(e) => {
@@ -98,4 +112,90 @@ pub(super) fn register_http(lua: &Lua, crap: &Table) -> Result<()> {
     http_table.set("request", http_request_fn)?;
     crap.set("http", http_table)?;
     Ok(())
+}
+
+/// Validate that a URL does not target private/loopback/link-local networks.
+fn validate_url(url_str: &str) -> std::result::Result<(), String> {
+    let parsed = url::Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
+
+    // Only allow http/https
+    match parsed.scheme() {
+        "http" | "https" => {}
+        s => return Err(format!("unsupported scheme: {s}")),
+    }
+
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| "URL has no host".to_string())?;
+
+    // Resolve hostname and check all addresses
+    use std::net::ToSocketAddrs;
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let addrs = format!("{host}:{port}")
+        .to_socket_addrs()
+        .map_err(|e| format!("DNS resolution failed: {e}"))?;
+
+    for addr in addrs {
+        let ip = addr.ip();
+        if ip.is_loopback() || ip.is_unspecified() {
+            return Err(format!("requests to {ip} are blocked"));
+        }
+        if let std::net::IpAddr::V4(v4) = ip
+            && (v4.is_private() || v4.is_link_local())
+        {
+            return Err(format!("requests to private network {ip} are blocked"));
+        }
+        if let std::net::IpAddr::V6(v6) = ip {
+            if v6.is_loopback() {
+                return Err(format!("requests to {ip} are blocked"));
+            }
+            let segments = v6.segments();
+            // fc00::/7 (unique local) and fe80::/10 (link-local)
+            if (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80 {
+                return Err(format!("requests to private network {ip} are blocked"));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_url_rejects_loopback() {
+        let err = validate_url("http://127.0.0.1/foo").unwrap_err();
+        assert!(err.contains("blocked"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_url_rejects_private_10() {
+        let err = validate_url("http://10.0.0.1/foo").unwrap_err();
+        assert!(err.contains("private network"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_url_rejects_private_192() {
+        let err = validate_url("http://192.168.1.1/foo").unwrap_err();
+        assert!(err.contains("private network"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_url_rejects_link_local() {
+        let err = validate_url("http://169.254.0.1/foo").unwrap_err();
+        assert!(err.contains("private network"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_url_rejects_unsupported_scheme() {
+        let err = validate_url("ftp://example.com/foo").unwrap_err();
+        assert!(err.contains("unsupported scheme"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_url_allows_public() {
+        // example.com resolves to 93.184.215.14 (public)
+        assert!(validate_url("https://example.com").is_ok());
+    }
 }

@@ -78,7 +78,6 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     let code = format!(
         r#"
         package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path
-        package.cpath = "{0}/?.so;{0}/?.dll;" .. package.cpath
         "#,
         config_str
     );

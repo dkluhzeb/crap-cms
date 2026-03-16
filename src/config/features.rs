@@ -299,6 +299,19 @@ pub struct HooksConfig {
     /// Number of Lua VMs in the hook runner pool. Default: max(available_parallelism, 4), capped at 32.
     /// Higher values allow more concurrent hook execution.
     pub vm_pool_size: usize,
+    /// Maximum Lua instructions per hook invocation. 0 = unlimited. Default: 10_000_000.
+    pub max_instructions: u64,
+    /// Maximum Lua memory in bytes per VM. 0 = unlimited. Default: 52_428_800 (50 MB).
+    /// Accepts integer bytes or human-readable string ("50MB", "100MB").
+    #[serde(with = "serde_filesize")]
+    pub max_memory: u64,
+    /// Allow Lua HTTP requests to private/internal networks. Default: false.
+    pub allow_private_networks: bool,
+    /// Maximum HTTP response body size in bytes for `crap.http.request`. Default: 10_485_760 (10 MB).
+    /// Increase if hooks need to download large files (e.g. video processing).
+    /// Accepts integer bytes or human-readable string ("10MB", "1GB").
+    #[serde(with = "serde_filesize")]
+    pub http_max_response_bytes: u64,
 }
 
 impl Default for HooksConfig {
@@ -309,6 +322,10 @@ impl Default for HooksConfig {
             vm_pool_size: std::thread::available_parallelism()
                 .map(|n| n.get().clamp(4, 32))
                 .unwrap_or(8),
+            max_instructions: 10_000_000,
+            max_memory: 52_428_800, // 50 MB
+            allow_private_networks: false,
+            http_max_response_bytes: 10 * 1024 * 1024, // 10 MB
         }
     }
 }
@@ -398,6 +415,10 @@ mod tests {
         assert!(hooks.on_init.is_empty());
         assert_eq!(hooks.max_depth, 3);
         assert!(hooks.vm_pool_size >= 4 && hooks.vm_pool_size <= 32);
+        assert_eq!(hooks.max_instructions, 10_000_000);
+        assert_eq!(hooks.max_memory, 52_428_800);
+        assert!(!hooks.allow_private_networks);
+        assert_eq!(hooks.http_max_response_bytes, 10 * 1024 * 1024);
     }
 
     #[test]

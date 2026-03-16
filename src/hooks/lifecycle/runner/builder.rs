@@ -14,7 +14,7 @@ use crate::{
         lifecycle::{
             crud::register_crud_functions,
             execution::scan_registered_events,
-            types::{DefaultDeny, HookDepth, MaxHookDepth},
+            types::{DefaultDeny, HookDepth, MaxHookDepth, MaxInstructions},
         },
     },
 };
@@ -90,6 +90,9 @@ fn create_lua_vm(
     vm_index: usize,
 ) -> Result<Lua> {
     let lua = Lua::new();
+    if config.hooks.max_memory > 0 {
+        lua.set_memory_limit(config.hooks.max_memory as usize)?;
+    }
     lua.set_app_data(VmLabel(format!("vm-{}", vm_index)));
 
     // Set up package paths
@@ -97,7 +100,6 @@ fn create_lua_vm(
     let code = format!(
         r#"
         package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path
-        package.cpath = "{0}/?.so;{0}/?.dll;" .. package.cpath
         "#,
         config_str
     );
@@ -116,6 +118,7 @@ fn create_lua_vm(
     lua.set_app_data(HookDepth(0));
     lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
     lua.set_app_data(DefaultDeny(config.access.default_deny));
+    lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
 
     // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
     let collections_dir = config_dir.join("collections");

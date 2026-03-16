@@ -114,6 +114,9 @@ unsafe impl Sync for UserContext {}
 /// Lua hooks read this to get the current user's preferred UI language.
 pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 
+/// Maximum Lua instructions per hook invocation. Stored in app_data.
+pub(crate) struct MaxInstructions(pub(crate) u64);
+
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
 pub(crate) struct HookDepth(pub(crate) u32);

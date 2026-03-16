@@ -20,7 +20,7 @@ use crate::{
     admin, api,
     config::{AuthConfig, CrapConfig},
     core::{Registry, SharedRegistry, event::EventBus, upload::format_filesize},
-    db::{migrate, pool},
+    db::{DbConnection, migrate, pool},
     hooks,
     hooks::HookRunner,
     scheduler, typegen,
@@ -436,6 +436,14 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     })?;
 
     remove_pid_file(&config_dir);
+
+    // Checkpoint WAL before exit — process::exit() skips destructors
+    if let Ok(conn) = pool.get()
+        && let Err(e) = conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+    {
+        warn!("WAL checkpoint failed: {}", e);
+    }
+
     info!("All servers stopped. Goodbye.");
 
     // Force-exit: the tokio runtime's blocking pool shutdown waits indefinitely

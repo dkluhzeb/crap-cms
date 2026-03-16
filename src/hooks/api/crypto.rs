@@ -96,6 +96,13 @@ pub(super) fn register_crypto(lua: &Lua, crap: &Table, auth_secret: &str) -> Res
     crypto_table.set("decrypt", decrypt_fn)?;
 
     let random_bytes_fn = lua.create_function(|_, n: usize| -> mlua::Result<String> {
+        const MAX_RANDOM_BYTES: usize = 1024 * 1024; // 1 MB
+        if n > MAX_RANDOM_BYTES {
+            return Err(mlua::Error::RuntimeError(format!(
+                "random_bytes: requested {} bytes exceeds maximum of {}",
+                n, MAX_RANDOM_BYTES
+            )));
+        }
         use rand::RngCore;
         let mut buf = vec![0u8; n];
         rand::rng().fill_bytes(&mut buf);
@@ -357,6 +364,27 @@ mod tests {
             .eval()
             .unwrap();
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn random_bytes_over_limit_errors() {
+        let lua = setup_lua("s");
+        let result = lua
+            .load("return crap.crypto.random_bytes(1048577)") // 1 MB + 1
+            .eval::<String>();
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("exceeds maximum"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn random_bytes_at_limit_succeeds() {
+        let lua = setup_lua("s");
+        let result: String = lua
+            .load("return crap.crypto.random_bytes(1048576)") // exactly 1 MB
+            .eval()
+            .unwrap();
+        assert_eq!(result.len(), 1048576 * 2); // hex encoding doubles length
     }
 
     #[test]

@@ -50,7 +50,12 @@ pub fn register_api(
     hooks::register_hooks(lua, &crap)?;
     auth::register_auth(lua, &crap)?;
     env::register_env(lua, &crap)?;
-    http::register_http(lua, &crap)?;
+    http::register_http(
+        lua,
+        &crap,
+        config.hooks.allow_private_networks,
+        config.hooks.http_max_response_bytes,
+    )?;
     config::register_config(lua, &crap, config)?;
     config::register_locale(lua, &crap, config)?;
     jobs::register_jobs(lua, &crap, registry.clone())?;

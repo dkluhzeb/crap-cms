@@ -413,7 +413,7 @@ fn lua_http_request_invalid_url() {
             if ok then return "SHOULD_HAVE_FAILED" end
             -- err should contain some transport/connection error message
             local err_str = tostring(err)
-            if err_str:find("transport") or err_str:find("Connection") or err_str:find("connection") then
+            if err_str:find("transport") or err_str:find("Connection") or err_str:find("connection") or err_str:find("blocked") then
                 return "ok"
             end
             return "UNEXPECTED_ERROR:" .. err_str
@@ -423,7 +423,7 @@ fn lua_http_request_invalid_url() {
     ).expect("eval failed");
     assert_eq!(
         result, "ok",
-        "HTTP request to invalid port should produce a transport error"
+        "HTTP request to invalid port should produce a transport or SSRF error"
     );
 }
 
@@ -467,6 +467,10 @@ fn http_request_unsupported_method() {
             if ok then return "SHOULD_HAVE_FAILED" end
             local err_str = tostring(err)
             if err_str:find("method") or err_str:find("unsupported") or err_str:find("OPTIONS") then
+                return "ok"
+            end
+            -- SSRF protection may block before method validation
+            if err_str:find("blocked") then
                 return "ok"
             end
             -- Some implementations might still try to make the request, which will get a transport error
