@@ -35,7 +35,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-985a8296.js";
+            window.path_to_searchindex_js = "searchindex-6f7fe291.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f88eb31.js"></script>
@@ -187,12 +187,13 @@
 <li><strong>Lua scripting API</strong> — modeled after Neovim and Awesome WM, where Lua gives users deep control without touching core code</li>
 <li><strong>Configuration &amp; hook system</strong> — inspired by <a href="https://payloadcms.com">Payload CMS</a>, an excellent and highly recommended CMS for anyone needing a production-ready solution</li>
 <li><strong>CLI tooling</strong> — influenced by Laravel’s comprehensive Artisan CLI</li>
-<li><strong>SQLite + WAL + FTS</strong> — sufficient for most of my use cases, and it bundles cleanly into a single binary with zero external dependencies</li>
+<li><strong>SQLite + WAL + FTS</strong> — sufficient for most of my use cases, and it bundles cleanly into a single binary with zero external dependencies. The database layer is abstracted behind a trait, so alternative relational backends could be added in the future if the need arises</li>
 <li><strong>Pure JavaScript with JSDoc types</strong> — no TypeScript, no bundler, no build step. Type safety through JSDoc annotations, checkable with <code>tsc --checkJs</code> without compiling anything</li>
 <li><strong>HTMX + Web Components</strong> — easy to theme (similar to WordPress child themes), no frontend build step. Web Components are a native browser standard — no framework updates, no outdated dependencies, no breaking changes</li>
-<li><strong>gRPC API</strong> — because I wanted it. A separate <a href="https://github.com/dkluhzeb/crap-rest">REST proxy</a> is available for those who prefer plain JSON over HTTP</li>
+<li><strong>gRPC API</strong> — binary protocol with streaming support, ideal for service-to-service communication. And because I wanted it. A separate <a href="https://github.com/dkluhzeb/crap-rest">REST proxy</a> is available for those who prefer plain JSON over HTTP</li>
 </ul>
 <p>The project is functional but not yet production-ready — it still needs to prove itself.</p>
+<p><strong>Warning:</strong> While in alpha (<code>0.x</code>), breaking changes may appear without prior notice.</p>
 <h2 id="design-philosophy"><a class="header" href="#design-philosophy">Design Philosophy</a></h2>
 <ul>
 <li><strong>Lua is the single source of truth for schemas.</strong> Collections and fields are defined in Lua files, not in the database. The database stores content, not structure.</li>
@@ -224,7 +225,7 @@
 <tr><th>Component</th><th>Technology</th></tr>
 </thead>
 <tbody>
-<tr><td>Language</td><td>Rust (edition 2021)</td></tr>
+<tr><td>Language</td><td>Rust (edition 2024)</td></tr>
 <tr><td>Web framework</td><td>Axum</td></tr>
 <tr><td>gRPC</td><td>Tonic + Prost</td></tr>
 <tr><td>Database</td><td>SQLite via rusqlite, r2d2 pool, WAL mode</td></tr>

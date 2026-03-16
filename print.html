@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-985a8296.js";
+            window.path_to_searchindex_js = "searchindex-6f7fe291.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f88eb31.js"></script>
@@ -188,12 +188,13 @@
 <li><strong>Lua scripting API</strong> — modeled after Neovim and Awesome WM, where Lua gives users deep control without touching core code</li>
 <li><strong>Configuration &amp; hook system</strong> — inspired by <a href="https://payloadcms.com">Payload CMS</a>, an excellent and highly recommended CMS for anyone needing a production-ready solution</li>
 <li><strong>CLI tooling</strong> — influenced by Laravel’s comprehensive Artisan CLI</li>
-<li><strong>SQLite + WAL + FTS</strong> — sufficient for most of my use cases, and it bundles cleanly into a single binary with zero external dependencies</li>
+<li><strong>SQLite + WAL + FTS</strong> — sufficient for most of my use cases, and it bundles cleanly into a single binary with zero external dependencies. The database layer is abstracted behind a trait, so alternative relational backends could be added in the future if the need arises</li>
 <li><strong>Pure JavaScript with JSDoc types</strong> — no TypeScript, no bundler, no build step. Type safety through JSDoc annotations, checkable with <code>tsc --checkJs</code> without compiling anything</li>
 <li><strong>HTMX + Web Components</strong> — easy to theme (similar to WordPress child themes), no frontend build step. Web Components are a native browser standard — no framework updates, no outdated dependencies, no breaking changes</li>
-<li><strong>gRPC API</strong> — because I wanted it. A separate <a href="https://github.com/dkluhzeb/crap-rest">REST proxy</a> is available for those who prefer plain JSON over HTTP</li>
+<li><strong>gRPC API</strong> — binary protocol with streaming support, ideal for service-to-service communication. And because I wanted it. A separate <a href="https://github.com/dkluhzeb/crap-rest">REST proxy</a> is available for those who prefer plain JSON over HTTP</li>
 </ul>
 <p>The project is functional but not yet production-ready — it still needs to prove itself.</p>
+<p><strong>Warning:</strong> While in alpha (<code>0.x</code>), breaking changes may appear without prior notice.</p>
 <h2 id="design-philosophy"><a class="header" href="#design-philosophy">Design Philosophy</a></h2>
 <ul>
 <li><strong>Lua is the single source of truth for schemas.</strong> Collections and fields are defined in Lua files, not in the database. The database stores content, not structure.</li>
@@ -225,7 +226,7 @@
 <tr><th>Component</th><th>Technology</th></tr>
 </thead>
 <tbody>
-<tr><td>Language</td><td>Rust (edition 2021)</td></tr>
+<tr><td>Language</td><td>Rust (edition 2024)</td></tr>
 <tr><td>Web framework</td><td>Axum</td></tr>
 <tr><td>gRPC</td><td>Tonic + Prost</td></tr>
 <tr><td>Database</td><td>SQLite via rusqlite, r2d2 pool, WAL mode</td></tr>
@@ -237,28 +238,38 @@
 </div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
-<h2 id="prerequisites"><a class="header" href="#prerequisites">Prerequisites</a></h2>
-<ul>
-<li><strong>Rust</strong> (edition 2021) — install via <a href="https://rustup.rs/">rustup</a></li>
-<li><strong>SQLite</strong> development libraries (usually pre-installed on macOS/Linux)</li>
-<li><strong>C compiler</strong> — required by rusqlite and image processing dependencies</li>
-</ul>
-<p>On Debian/Ubuntu:</p>
-<pre><code class="language-bash">sudo apt install build-essential libsqlite3-dev
+<h2 id="static-binary-recommended"><a class="header" href="#static-binary-recommended">Static Binary (recommended)</a></h2>
+<p>Pre-built static binaries are attached to each <a href="https://github.com/dkluhzeb/crap-cms/releases">GitHub Release</a>. No runtime dependencies required.</p>
+<pre><code class="language-bash">curl -L -o crap-cms \
+  https://github.com/dkluhzeb/crap-cms/releases/latest/download/crap-cms-linux-x86_64
+chmod +x crap-cms
+sudo mv crap-cms /usr/local/bin/
 </code></pre>
-<p>On macOS (with Homebrew):</p>
-<pre><code class="language-bash">brew install sqlite3
+<p>Available binaries:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>File</th><th>Platform</th></tr>
+</thead>
+<tbody>
+<tr><td><code>crap-cms-linux-x86_64</code></td><td>Linux x86_64 (musl, fully static)</td></tr>
+<tr><td><code>crap-cms-linux-aarch64</code></td><td>Linux ARM64 (musl, fully static)</td></tr>
+<tr><td><code>crap-cms-windows-x86_64.exe</code></td><td>Windows x86_64</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="docker"><a class="header" href="#docker">Docker</a></h2>
+<pre><code class="language-bash">docker run -p 3000:3000 -p 50051:50051 \
+  ghcr.io/dkluhzeb/crap-cms:nightly serve /example
 </code></pre>
-<p>On Arch Linux:</p>
-<pre><code class="language-bash">sudo pacman -S sqlite
-</code></pre>
-<h2 id="building"><a class="header" href="#building">Building</a></h2>
-<p>Clone the repository and build:</p>
-<pre><code class="language-bash">git clone https://github.com/your-org/crap-cms.git
+<p>Images are Alpine-based (~30 MB) and published to <code>ghcr.io/dkluhzeb/crap-cms</code>. See the <a href="https://github.com/dkluhzeb/crap-cms#docker">README</a> for production usage and available tags.</p>
+<h2 id="building-from-source"><a class="header" href="#building-from-source">Building from Source</a></h2>
+<p>Requires a Rust toolchain (edition 2024) via <a href="https://rustup.rs/">rustup</a> and a C compiler:</p>
+<pre><code class="language-bash">git clone https://github.com/dkluhzeb/crap-cms.git
 cd crap-cms
 cargo build --release
 </code></pre>
-<p>The binary is at <code>target/release/crap-cms</code>.</p>
+<p>The binary is at <code>target/release/crap-cms</code>. SQLite and Lua are bundled — no system libraries needed.</p>
 <h2 id="optional-tools"><a class="header" href="#optional-tools">Optional Tools</a></h2>
 <ul>
 <li><strong>grpcurl</strong> — for testing the gRPC API from the command line. See <a href="https://github.com/fullstorydev/grpcurl#installation">grpcurl installation</a>.</li>
@@ -341,7 +352,7 @@ grpcurl -plaintext localhost:50051 crap.ContentAPI/Create \
 </code></pre>
 <h2 id="alternative-run-with-the-example-config"><a class="header" href="#alternative-run-with-the-example-config">Alternative: Run with the example config</a></h2>
 <p>The repository includes an <code>example/</code> config directory with sample collections, useful if you’re building from source:</p>
-<pre><code class="language-bash">git clone https://github.com/your-org/crap-cms.git
+<pre><code class="language-bash">git clone https://github.com/dkluhzeb/crap-cms.git
 cd crap-cms
 cargo build --release
 ./target/release/crap-cms serve ./example
@@ -4470,6 +4481,20 @@ return M
 vm_pool_size = 4  # default: min(available_parallelism, 8)
 </code></pre>
 <p>Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, <code>init.lua</code> execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.</p>
+<h2 id="resource-limits"><a class="header" href="#resource-limits">Resource Limits</a></h2>
+<p>Lua VMs have configurable instruction and memory limits to prevent runaway hooks:</p>
+<pre><code class="language-toml">[hooks]
+max_instructions = 10000000       # per hook invocation (0 = unlimited)
+max_memory = 52428800             # per VM in bytes, 50 MB (0 = unlimited)
+allow_private_networks = false    # block HTTP to internal IPs
+http_max_response_bytes = 10485760  # 10 MB (increase for large file downloads)
+</code></pre>
+<ul>
+<li><strong>Instruction limit</strong> — a hook that exceeds the instruction count is terminated with an error. The default (10M) is generous for complex hooks.</li>
+<li><strong>Memory limit</strong> — caps total Lua memory per VM. Exceeding it raises a memory error.</li>
+<li><strong>Private network blocking</strong> — <code>crap.http.request</code> resolves hostnames and rejects private/loopback/link-local IPs unless <code>allow_private_networks = true</code>.</li>
+<li><strong><code>crap.crypto.random_bytes</code></strong> — capped at 1 MB per call.</li>
+</ul>
 <h2 id="state--module-caching"><a class="header" href="#state--module-caching">State &amp; Module Caching</a></h2>
 <p>Lua’s <code>require</code> function caches modules in <code>package.loaded</code>. This means module-level variables persist across requests on the same VM:</p>
 <pre><code class="language-lua">-- hooks/posts.lua
