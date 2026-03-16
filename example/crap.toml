@@ -22,10 +22,10 @@ max_depth = 10
 max_file_size = "50MB"
 
 [email]
-smtp_host = "${CRAP_SMTP_HOST}"
+smtp_host = "${CRAP_SMTP_HOST:-}"
 smtp_port = 587
-smtp_user = "${CRAP_SMTP_USER}"
-smtp_pass = "${CRAP_SMTP_PASS}"
+smtp_user = "${CRAP_SMTP_USER:-}"
+smtp_pass = "${CRAP_SMTP_PASS:-}"
 smtp_tls = "${CRAP_SMTP_TLS:-starttls}"
 from_address = "${CRAP_SMTP_FROM:-noreply@crap.studio}"
 from_name = "Crap Studio"
