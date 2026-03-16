@@ -1,6 +1,6 @@
 # API Surface Comparison
 
-This document compares the three API surfaces — **Admin UI**, **gRPC API**, and **Lua CRUD** (hook local API) — to track feature parity.
+This document compares the three API surfaces — **Admin UI**, **gRPC API**, and **Lua CRUD** (hook local API) — to track feature consistency.
 
 ## CREATE Lifecycle
 

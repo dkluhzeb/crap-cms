@@ -1,6 +1,6 @@
 # Versions & Drafts
 
-Crap CMS supports document versioning with an optional draft/publish workflow, inspired by PayloadCMS.
+Crap CMS supports document versioning with an optional draft/publish workflow.
 
 ## Enabling Versions
 

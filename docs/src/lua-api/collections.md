@@ -263,7 +263,7 @@ crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
 
 ## Access Control in Hooks
 
-By default, all Lua CRUD functions bypass access control (`overrideAccess = true`). This matches PayloadCMS behavior — hooks are trusted server-side code with full access.
+By default, all Lua CRUD functions bypass access control (`overrideAccess = true`). Hooks are trusted server-side code with full access.
 
 When you set `overrideAccess = false`, the function enforces the same access rules as the external API:
 

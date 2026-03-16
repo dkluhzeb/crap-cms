@@ -58,4 +58,4 @@ Non-empty date values are validated against recognized date/datetime/time/month 
 
 - Pure dates are stored with UTC noon (`T12:00:00.000Z`) so timezone offsets up to ±12h never flip the calendar date
 - Comparison operators (`greater_than`, `less_than`) work correctly on the normalized ISO string representation
-- The `picker_appearance` option matches PayloadCMS semantics
+- The `picker_appearance` option controls whether the picker shows date-only or date+time

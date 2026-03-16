@@ -8,6 +8,24 @@ Headless CMS in Rust. Lua config (neovim-style) + gRPC API + HTMX admin UI.
 
 For usage documentation, see the [user manual](https://crapcms.com/docs) (source in `docs/`).
 
+## Motivation
+
+I built several Rust/WebAssembly frontend projects and couldn't find a CMS that fit the stack. So I built one.
+
+The idea: a simple CMS written in Rust, extensible via a lightweight scripting language, with no complicated build steps or infrastructure requirements. It's also a playground for me to explore ideas and learn — which means things may change, break, or get rewritten.
+
+Inspiration came from what I consider the best solutions out there:
+
+- **Lua scripting API** — modeled after Neovim and Awesome WM, where Lua gives users deep control without touching core code
+- **Configuration & hook system** — inspired by [Payload CMS](https://payloadcms.com), an excellent and highly recommended CMS for anyone needing a production-ready solution
+- **CLI tooling** — influenced by Laravel's comprehensive Artisan CLI
+- **SQLite + WAL + FTS** — sufficient for most of my use cases, and it bundles cleanly into a single binary with zero external dependencies
+- **Pure JavaScript with JSDoc types** — no TypeScript, no bundler, no build step. Type safety through JSDoc annotations, checkable with `tsc --checkJs` without compiling anything
+- **HTMX + Web Components** — easy to theme (similar to WordPress child themes), no frontend build step. Web Components are a native browser standard — no framework updates, no outdated dependencies, no breaking changes
+- **gRPC API** — because I wanted it. A separate [REST proxy](https://github.com/dkluhzeb/crap-rest) is available for those who prefer plain JSON over HTTP
+
+The project is functional but not yet production-ready — it still needs to prove itself.
+
 ## Tech Stack
 
 | Component    | Technology                            |

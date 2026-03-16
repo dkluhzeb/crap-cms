@@ -1,6 +1,6 @@
 # Localization
 
-Crap CMS supports per-field localization, allowing content to be managed in multiple languages. This follows the same pattern as PayloadCMS — any field type can be marked `localized`, and the API returns data differently based on a `locale` parameter.
+Crap CMS supports per-field localization, allowing content to be managed in multiple languages. Any field type can be marked `localized`, and the API returns data differently based on a `locale` parameter.
 
 ## Configuration
 
