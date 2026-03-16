@@ -50,7 +50,7 @@ The project is functional but not yet production-ready — it still needs to pro
 
 | Component | Technology |
 |-----------|-----------|
-| Language | Rust (edition 2021) |
+| Language | Rust (edition 2024) |
 | Web framework | Axum |
 | gRPC | Tonic + Prost |
 | Database | SQLite via rusqlite, r2d2 pool, WAL mode |
