@@ -63,7 +63,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def.access.read.as_deref(),
                 &auth_user,
@@ -162,7 +163,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_owned.access.update.as_deref(),
                 &auth_user,
@@ -402,7 +404,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let user_doc = auth_user.as_ref().map(|u| &u.user_doc);
 
             let tx = conn.transaction().map_err(|e| {
@@ -566,7 +569,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 access_read.as_deref(),
                 &auth_user,
@@ -640,7 +644,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 access_update.as_deref(),
                 &auth_user,
@@ -707,7 +712,8 @@ impl ContentService {
                 tracing::error!("ListJobs pool error: {}", e);
                 Status::internal("Internal error")
             })?;
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
@@ -761,7 +767,8 @@ impl ContentService {
             })?;
 
             // Auth check first — before job lookup
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
@@ -831,7 +838,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }
@@ -874,7 +882,8 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             if auth_user.is_none() {
                 return Err(Status::unauthenticated("Authentication required"));
             }

@@ -134,18 +134,31 @@ impl ContentService {
 
     /// Resolve an auth user from a token using an existing connection.
     ///
+    /// Returns `Ok(None)` when no token is present (anonymous), `Ok(Some(user))`
+    /// for a valid token, or `Err(Status::unauthenticated)` for an invalid/expired token.
+    ///
     /// Pure data lookup — safe to call inside `spawn_blocking`.
     pub(in crate::api::service) fn resolve_auth_user(
         token: Option<String>,
         jwt_secret: &JwtSecret,
         registry: &Registry,
         conn: &dyn crate::db::DbConnection,
-    ) -> Option<AuthUser> {
-        let token = token?;
-        let claims = validate_token(&token, jwt_secret.as_ref()).ok()?;
-        let def = registry.get_collection(&claims.collection)?.clone();
-        let doc = query::find_by_id(conn, &claims.collection, &def, &claims.sub, None).ok()??;
-        Some(AuthUser::new(claims, doc))
+    ) -> Result<Option<AuthUser>, Status> {
+        let token = match token {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+        let claims = validate_token(&token, jwt_secret.as_ref())
+            .map_err(|_| Status::unauthenticated("Invalid or expired token"))?;
+        let def = match registry.get_collection(&claims.collection) {
+            Some(d) => d.clone(),
+            None => return Ok(None),
+        };
+        let doc = match query::find_by_id(conn, &claims.collection, &def, &claims.sub, None) {
+            Ok(Some(d)) => d,
+            _ => return Ok(None),
+        };
+        Ok(Some(AuthUser::new(claims, doc)))
     }
 
     /// Check collection-level access using an existing connection.

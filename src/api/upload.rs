@@ -43,13 +43,43 @@ pub fn upload_router(state: AdminState) -> Router<AdminState> {
 }
 
 /// Extract an authenticated user from the `Authorization: Bearer <jwt>` header.
+///
+/// Returns `Ok(None)` when no Authorization header is present (anonymous),
+/// `Ok(Some(user))` for a valid token, or `Err(401)` for an invalid/expired token.
 #[cfg(not(tarpaulin_include))]
-fn extract_bearer_user(state: &AdminState, headers: &HeaderMap) -> Option<AuthUser> {
-    let auth_header = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
-    let token = auth_header.strip_prefix("Bearer ")?;
-    let claims = auth::validate_token(token, state.jwt_secret.as_ref()).ok()?;
+fn extract_bearer_user(
+    state: &AdminState,
+    headers: &HeaderMap,
+) -> Result<Option<AuthUser>, Box<Response>> {
+    let auth_header = match headers.get(header::AUTHORIZATION) {
+        Some(h) => match h.to_str() {
+            Ok(s) => s,
+            Err(_) => {
+                return Err(Box::new(json_error(
+                    StatusCode::UNAUTHORIZED,
+                    "Invalid Authorization header",
+                )));
+            }
+        },
+        None => return Ok(None),
+    };
+    let token = match auth_header.strip_prefix("Bearer ") {
+        Some(t) => t,
+        None => return Ok(None),
+    };
+    let claims = auth::validate_token(token, state.jwt_secret.as_ref()).map_err(|_| {
+        Box::new(json_error(
+            StatusCode::UNAUTHORIZED,
+            "Invalid or expired token",
+        ))
+    })?;
 
-    load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+    Ok(load_auth_user(
+        &state.pool,
+        &state.registry,
+        &claims,
+        &state.config.locale,
+    ))
 }
 
 /// Return a JSON error response.
@@ -83,7 +113,10 @@ async fn create_upload(
     headers: HeaderMap,
     request: axum::extract::Request,
 ) -> Response {
-    let auth_user = extract_bearer_user(&state, &headers);
+    let auth_user = match extract_bearer_user(&state, &headers) {
+        Ok(u) => u,
+        Err(e) => return *e,
+    };
 
     // Look up collection definition
     let def = match state.registry.get_collection(&slug) {
@@ -298,7 +331,10 @@ async fn update_upload(
     headers: HeaderMap,
     request: axum::extract::Request,
 ) -> Response {
-    let auth_user = extract_bearer_user(&state, &headers);
+    let auth_user = match extract_bearer_user(&state, &headers) {
+        Ok(u) => u,
+        Err(e) => return *e,
+    };
 
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),
@@ -522,7 +558,10 @@ async fn delete_upload(
     Path((slug, id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Response {
-    let auth_user = extract_bearer_user(&state, &headers);
+    let auth_user = match extract_bearer_user(&state, &headers) {
+        Ok(u) => u,
+        Err(e) => return *e,
+    };
 
     let def = match state.registry.get_collection(&slug) {
         Some(d) => d.clone(),

@@ -26,12 +26,15 @@ pub fn make_migration(config_dir: &Path, name: &str) -> Result<()> {
     let lua = r#"local M = {}
 
 function M.up()
-    -- TODO: implement migration
-    -- crap.* API available (find, create, update, delete)
+    -- Example: update all documents in a collection
+    -- local docs = crap.collections.find("posts", { where = { status = { equals = "draft" } } })
+    -- for _, doc in ipairs(docs) do
+    --     crap.collections.update("posts", doc.id, { status = "published" })
+    -- end
 end
 
 function M.down()
-    -- TODO: implement rollback (best-effort)
+    -- Reverse the migration (best-effort, optional)
 end
 
 return M

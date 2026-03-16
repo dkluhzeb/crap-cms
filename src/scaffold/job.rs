@@ -79,7 +79,9 @@ function M.run(context)
     -- ---@type {pascal}Data
     -- local data = context.data
 
-    -- TODO: implement
+    -- Example:
+    -- local docs = crap.collections.find("posts", {{ limit = 10 }})
+    -- crap.log.info("Processing " .. #docs .. " documents")
 
     return nil
 end

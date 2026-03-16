@@ -243,7 +243,9 @@ pub(crate) fn type_specific_stub(field_type: &str) -> Option<&'static str> {
         "select" | "radio" => {
             Some("            options = { { label = \"Option 1\", value = \"option_1\" } },\n")
         }
-        "relationship" => Some("            relationship = { collection = \"TODO\" },\n"),
+        "relationship" => Some(
+            "            relationship = { collection = \"other_collection\" }, -- change to target collection slug\n",
+        ),
         "upload" => Some("            relationship = { collection = \"media\" },\n"),
         "array" => Some("            fields = { crap.fields.text({ name = \"item\" }) },\n"),
         "blocks" => Some(
@@ -255,7 +257,9 @@ pub(crate) fn type_specific_stub(field_type: &str) -> Option<&'static str> {
         "tabs" => Some(
             "            tabs = { { label = \"Tab 1\", fields = { crap.fields.text({ name = \"item\" }) } } },\n",
         ),
-        "join" => Some("            collection = \"TODO\",\n            on = \"TODO\",\n"),
+        "join" => Some(
+            "            collection = \"other_collection\", -- target collection slug\n            on = \"field_name\",               -- relationship field on target that points back\n",
+        ),
         "code" => Some("            admin = { language = \"javascript\" },\n"),
         _ => None,
     }
@@ -573,7 +577,7 @@ mod tests {
             "relationship factory"
         );
         assert!(
-            content.contains("relationship = { collection = \"TODO\" }"),
+            content.contains("relationship = { collection = \"other_collection\" }"),
             "relationship stub"
         );
         assert!(content.contains("crap.fields.select({"), "select factory");
@@ -592,10 +596,10 @@ mod tests {
             "code stub"
         );
         assert!(
-            content.contains("collection = \"TODO\","),
+            content.contains("collection = \"other_collection\","),
             "join collection stub"
         );
-        assert!(content.contains("on = \"TODO\","), "join on stub");
+        assert!(content.contains("on = \"field_name\","), "join on stub");
         assert!(content.contains("crap.fields.upload({"), "upload factory");
         assert!(
             content.contains("relationship = { collection = \"media\" }"),

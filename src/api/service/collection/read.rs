@@ -114,7 +114,8 @@ impl ContentService {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             // Auth + access (all on blocking thread)
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_owned.access.read.as_deref(),
                 &auth_user,
@@ -323,7 +324,8 @@ impl ContentService {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             // Auth + access (all on blocking thread)
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_owned.access.read.as_deref(),
                 &auth_user,
@@ -481,7 +483,8 @@ impl ContentService {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             // Auth + access (all on blocking thread)
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_owned.access.read.as_deref(),
                 &auth_user,

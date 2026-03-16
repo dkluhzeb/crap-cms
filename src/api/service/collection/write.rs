@@ -74,7 +74,8 @@ impl ContentService {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             // Auth + access (all on blocking thread)
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_owned.access.create.as_deref(),
                 &auth_user,
@@ -282,7 +283,7 @@ impl ContentService {
                     let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
                     let auth_user =
-                        ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+                        ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
                     let access_result = ContentService::check_access_blocking(
                         def_owned.access.update.as_deref(),
                         &auth_user,
@@ -368,7 +369,8 @@ impl ContentService {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             // Auth + access (all on blocking thread)
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_owned.access.update.as_deref(),
                 &auth_user,
@@ -497,7 +499,8 @@ impl ContentService {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
             // Auth + access (all on blocking thread)
-            let auth_user = ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn);
+            let auth_user =
+                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
             let access_result = ContentService::check_access_blocking(
                 def_clone.access.delete.as_deref(),
                 &auth_user,
