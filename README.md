@@ -50,7 +50,7 @@ For full documentation, see the [user manual](https://dkluhzeb.github.io/crap-cm
 
 I built several Rust/WebAssembly frontend projects and couldn't find a CMS that fit the stack. So I built one.
 
-The idea: a simple CMS written in Rust, extensible via Lua, with no complicated build steps or infrastructure requirements. It's also a playground for me to explore ideas and learn — which means things may change, break, or get rewritten.
+The idea: a simple CMS written in Rust, extensible via Lua, with no complicated build steps or infrastructure requirements.
 
 Inspiration came from what I consider the best solutions out there:
 

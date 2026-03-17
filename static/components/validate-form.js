@@ -160,7 +160,7 @@ class CrapValidateForm extends HTMLElement {
       if (!wrapper) continue;
 
       // Remove any existing server-rendered error
-      const existing = wrapper.querySelector('.form__error');
+      const existing = wrapper.querySelector(':scope > .form__error');
       if (existing) existing.remove();
 
       const errorEl = document.createElement('p');
@@ -169,6 +169,27 @@ class CrapValidateForm extends HTMLElement {
       errorEl.textContent = message;
       wrapper.appendChild(errorEl);
       errorCount++;
+
+      // Mark parent array/blocks row as having errors and expand it
+      const row = wrapper.closest('.form__array-row');
+      if (row) {
+        row.classList.add('form__array-row--has-errors');
+        row.classList.remove('form__array-row--collapsed');
+        row.setAttribute('data-validate-row-error', '');
+        const toggleBtn = row.querySelector('.form__array-row-toggle');
+        if (toggleBtn) toggleBtn.setAttribute('aria-expanded', 'true');
+        // Add error badge if not already present
+        const header = row.querySelector('.form__array-row-header');
+        if (header && !header.querySelector('.form__array-row-error-badge')) {
+          const badge = document.createElement('span');
+          badge.className = 'form__array-row-error-badge';
+          badge.setAttribute('data-validate-error', '');
+          badge.innerHTML = '<span class="material-symbols-outlined icon--sm" aria-hidden="true">error</span>';
+          // Insert after the toggle button
+          const toggle = header.querySelector('.form__array-row-toggle');
+          if (toggle) toggle.after(badge);
+        }
+      }
     }
 
     if (errorCount > 0) {
@@ -183,6 +204,12 @@ class CrapValidateForm extends HTMLElement {
     const errors = this.querySelectorAll('[data-validate-error]');
     for (const el of errors) {
       el.remove();
+    }
+    // Clear row error state added by validation
+    const errorRows = this.querySelectorAll('[data-validate-row-error]');
+    for (const row of errorRows) {
+      row.classList.remove('form__array-row--has-errors');
+      row.removeAttribute('data-validate-row-error');
     }
   }
 

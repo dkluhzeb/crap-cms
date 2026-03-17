@@ -7,9 +7,7 @@ use crate::{
     config::CrapConfig,
     core::{FieldType, SharedRegistry},
     hooks,
-    scaffold::{
-        self, CollectionOptions, ConditionFieldInfo, HookType, MakeHookOptions, VALID_FIELD_TYPES,
-    },
+    scaffold::{self, CollectionOptions, ConditionFieldInfo, HookType, MakeHookOptions},
 };
 
 /// Dispatch the `make` subcommand.
@@ -55,7 +53,12 @@ pub fn run(action: super::MakeAction) -> Result<()> {
                         .context("Failed to read global slug")?
                 }
             };
-            scaffold::make_global(&config, &slug, fields.as_deref(), force)
+            {
+                let parsed = fields
+                    .map(|s| scaffold::parse_fields_shorthand(&s))
+                    .transpose()?;
+                scaffold::make_global(&config, &slug, parsed.as_deref(), force)
+            }
         }
         super::MakeAction::Hook {
             config,
@@ -110,7 +113,7 @@ pub(crate) fn make_collection_command(
     interactive: bool,
     opts: &CollectionOptions,
 ) -> Result<()> {
-    use dialoguer::{Confirm, Input, Select};
+    use dialoguer::{Confirm, Input};
 
     // 1. Resolve slug
     let slug = match slug {
@@ -139,70 +142,60 @@ pub(crate) fn make_collection_command(
         }
     };
 
-    // 2. Resolve fields — survey when interactive and not provided via --fields
-    let fields_shorthand = match fields {
-        Some(s) => Some(s),
-        None if interactive => {
-            println!("Define fields (empty name to finish):");
-            let mut parts: Vec<String> = Vec::new();
+    // 2. Resolve collection type flags (before fields, so the wizard can adapt)
+    let auth = if opts.auth {
+        true
+    } else if interactive {
+        Confirm::new()
+            .with_prompt("Auth collection (email/password login)?")
+            .default(false)
+            .interact()
+            .context("Failed to read auth preference")?
+    } else {
+        false
+    };
 
-            loop {
-                let name: String = Input::new()
-                    .with_prompt("Field name")
-                    .allow_empty(true)
-                    .interact_text()
-                    .context("Failed to read field name")?;
+    let upload = if opts.upload {
+        true
+    } else if interactive {
+        Confirm::new()
+            .with_prompt("Upload collection (file uploads)?")
+            .default(false)
+            .interact()
+            .context("Failed to read upload preference")?
+    } else {
+        false
+    };
 
-                if name.is_empty() {
-                    break;
-                }
-
-                let type_idx = Select::new()
-                    .with_prompt("Field type")
-                    .items(VALID_FIELD_TYPES)
-                    .default(0)
-                    .interact()
-                    .context("Failed to read field type")?;
-                let field_type = VALID_FIELD_TYPES[type_idx];
-
-                let required = Confirm::new()
-                    .with_prompt("Required?")
-                    .default(false)
-                    .interact()
-                    .context("Failed to read required flag")?;
-
-                // Only prompt for localized if localization is enabled in config
-                let localized = if has_locales_enabled(config_dir) {
-                    Confirm::new()
-                        .with_prompt("Localized?")
-                        .default(false)
-                        .interact()
-                        .context("Failed to read localized flag")?
-                } else {
-                    false
-                };
-
-                let mut part = format!("{}:{}", name, field_type);
-
-                if required {
-                    part.push_str(":required");
-                }
-                if localized {
-                    part.push_str(":localized");
-                }
-                parts.push(part);
-            }
-
-            if parts.is_empty() {
-                None // will use default title:text:required
+    // 3. Resolve fields — survey when interactive and not provided via --fields
+    let parsed_fields: Option<Vec<scaffold::FieldStub>> = match fields {
+        Some(s) => Some(scaffold::parse_fields_shorthand(&s)?),
+        None if interactive && (auth || upload) => {
+            let hint = if auth {
+                "email/password are included automatically"
             } else {
-                Some(parts.join(","))
+                "filename/mime_type/size are included automatically"
+            };
+            if Confirm::new()
+                .with_prompt(format!("Add custom fields? ({})", hint))
+                .default(false)
+                .interact()
+                .context("Failed to read custom fields preference")?
+            {
+                let f = scaffold::interactive_field_wizard(has_locales_enabled(config_dir))?;
+                if f.is_empty() { None } else { Some(f) }
+            } else {
+                None
             }
+        }
+        None if interactive => {
+            let f = scaffold::interactive_field_wizard(has_locales_enabled(config_dir))?;
+            if f.is_empty() { None } else { Some(f) }
         }
         None => None, // non-interactive, use defaults
     };
 
-    // 3. Resolve timestamps (only prompt in interactive mode)
+    // 4. Resolve timestamps (only prompt in interactive mode)
     let no_timestamps = if opts.no_timestamps {
         true
     } else if interactive {
@@ -216,33 +209,7 @@ pub(crate) fn make_collection_command(
         false
     };
 
-    // 4. Resolve auth (only prompt in interactive mode)
-    let auth = if opts.auth {
-        true
-    } else if interactive {
-        Confirm::new()
-            .with_prompt("Auth collection (email/password login)?")
-            .default(false)
-            .interact()
-            .context("Failed to read auth preference")?
-    } else {
-        false
-    };
-
-    // 5. Resolve upload (only prompt in interactive mode)
-    let upload = if opts.upload {
-        true
-    } else if interactive {
-        Confirm::new()
-            .with_prompt("Upload collection (file uploads)?")
-            .default(false)
-            .interact()
-            .context("Failed to read upload preference")?
-    } else {
-        false
-    };
-
-    // 6. Resolve versioning (only prompt in interactive mode)
+    // 5. Resolve versioning (only prompt in interactive mode)
     let versions = if opts.versions {
         true
     } else if interactive {
@@ -262,7 +229,7 @@ pub(crate) fn make_collection_command(
         versions,
         force: opts.force,
     };
-    scaffold::make_collection(config_dir, &slug, fields_shorthand.as_deref(), &final_opts)
+    scaffold::make_collection(config_dir, &slug, parsed_fields.as_deref(), &final_opts)
 }
 
 /// Handle the `make hook` subcommand — resolve missing flags via interactive survey.

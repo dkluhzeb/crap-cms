@@ -28,6 +28,7 @@
 - [Textarea](fields/textarea.md)
 - [Rich Text](fields/richtext.md)
 - [Select](fields/select.md)
+- [Radio](fields/radio.md)
 - [Checkbox](fields/checkbox.md)
 - [Date](fields/date.md)
 - [Email](fields/email.md)
@@ -105,6 +106,7 @@
 - [crap.locale](lua-api/locale.md)
 - [crap.crypto](lua-api/crypto.md)
 - [crap.schema](lua-api/schema.md)
+- [crap.richtext](lua-api/richtext.md)
 - [crap.jobs](lua-api/jobs.md)
 - [Filter Operators](lua-api/filter-operators.md)
 

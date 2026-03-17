@@ -285,7 +285,7 @@ end
             format!(
                 r#"--- Display condition for {collection} (client-evaluated).
 ---
---- Returns a condition table — evaluated instantly in the browser,
+--- Returns a condition table -- evaluated instantly in the browser,
 --- no server round-trip. Prefer this over boolean returns when possible.
 ---
 --- Condition table operators:

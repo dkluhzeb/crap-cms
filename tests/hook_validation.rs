@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crap_cms::config::CrapConfig;
-use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType};
+use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
@@ -1343,4 +1343,96 @@ fn validate_blocks_non_object_row_skips() {
     let result =
         runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
     assert!(result.is_ok(), "Non-object block rows should be skipped");
+}
+
+// ── Deep nesting validation (Array → container → container → leaf) ──────────
+
+#[test]
+fn validate_row_inside_tabs_inside_array_via_hook_runner() {
+    let (_tmp, pool, _registry, runner) = setup();
+
+    // Array > Tabs > Row > required text (team_members pattern)
+    let fields = vec![
+        FieldDefinition::builder("team_members", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("tabs", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Personal",
+                        vec![
+                            FieldDefinition::builder("name_row", FieldType::Row)
+                                .fields(vec![
+                                    FieldDefinition::builder("first_name", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                    FieldDefinition::builder("last_name", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                ])
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let mut data = HashMap::new();
+    data.insert(
+        "team_members".to_string(),
+        serde_json::json!([{"first_name": "", "last_name": ""}]),
+    );
+
+    let conn = pool.get().expect("DB connection");
+    let result =
+        runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
+    assert!(
+        result.is_err(),
+        "Required field inside Row inside Tabs inside Array must be rejected by HookRunner"
+    );
+    let err = result.unwrap_err();
+    assert_eq!(err.errors.len(), 2);
+    assert!(err.errors.iter().any(|e| e.field.contains("first_name")));
+    assert!(err.errors.iter().any(|e| e.field.contains("last_name")));
+}
+
+#[test]
+fn validate_group_inside_tabs_inside_array_via_hook_runner() {
+    let (_tmp, pool, _registry, runner) = setup();
+
+    // Array > Tabs > Group > required text
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("tabs", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "SEO",
+                        vec![
+                            FieldDefinition::builder("meta", FieldType::Group)
+                                .fields(vec![
+                                    FieldDefinition::builder("title", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                ])
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let mut data = HashMap::new();
+    data.insert(
+        "items".to_string(),
+        serde_json::json!([{"meta__title": ""}]),
+    );
+
+    let conn = pool.get().expect("DB connection");
+    let result =
+        runner.validate_fields(&fields, &data, &ValidationCtx::builder(&conn, "t").build());
+    assert!(
+        result.is_err(),
+        "Required field inside Group inside Tabs inside Array must be rejected by HookRunner"
+    );
+    assert!(result.unwrap_err().errors[0].field.contains("meta__title"));
 }

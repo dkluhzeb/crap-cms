@@ -306,7 +306,7 @@ pub fn user_create(
                 Value::String(s) => s.clone(),
                 other => other.to_string(),
             };
-            eprint!("{} [{}]: ", field.name, val);
+            eprint!("{} (required) [{}]: ", field.name, val);
             let mut input = String::new();
             std::io::stdin()
                 .read_line(&mut input)
@@ -321,7 +321,7 @@ pub fn user_create(
             continue;
         }
         // Required field, no default — must prompt
-        eprint!("{}: ", field.name);
+        eprint!("{} (required): ", field.name);
         let mut input = String::new();
         std::io::stdin()
             .read_line(&mut input)

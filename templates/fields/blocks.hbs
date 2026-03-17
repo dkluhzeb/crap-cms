@@ -41,7 +41,7 @@
         <input type="hidden" name="{{../name}}[{{this.index}}][_block_type]" value="{{this._block_type}}" />
         <div class="form__array-row-fields">
           {{#each this.sub_fields}}
-          <div class="form__field">
+          <div class="form__field" data-field-name="{{name}}">
             {{{render_field this}}}
           </div>
           {{/each}}
@@ -81,7 +81,7 @@
         <input type="hidden" name="{{../name}}[__INDEX__][_block_type]" value="{{this.block_type}}" />
         <div class="form__array-row-fields">
           {{#each this.fields}}
-          <div class="form__field">
+          <div class="form__field" data-field-name="{{name}}">
             {{{render_field this}}}
           </div>
           {{/each}}

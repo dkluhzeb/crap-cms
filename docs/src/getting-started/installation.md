@@ -1,6 +1,6 @@
 # Installation
 
-## Static Binary (recommended)
+## Static Binary
 
 Pre-built static binaries are attached to each [GitHub Release](https://github.com/dkluhzeb/crap-cms/releases). No runtime dependencies required.
 
@@ -23,7 +23,7 @@ Available binaries:
 
 ```bash
 docker run -p 3000:3000 -p 50051:50051 \
-  ghcr.io/dkluhzeb/crap-cms:nightly serve /example
+  ghcr.io/dkluhzeb/crap-cms:latest serve /example
 ```
 
 Images are Alpine-based (~30 MB) and published to `ghcr.io/dkluhzeb/crap-cms`. See the [README](https://github.com/dkluhzeb/crap-cms#docker) for production usage and available tags.

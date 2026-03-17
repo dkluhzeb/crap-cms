@@ -5,11 +5,11 @@ use std::{fs, path::Path};
 
 /// Generate a global Lua file at `<config_dir>/globals/<slug>.lua`.
 ///
-/// Optionally accepts inline field shorthand (e.g., "title:text:required,tagline:textarea").
+/// Accepts pre-parsed field stubs or `None` for defaults.
 pub fn make_global(
     config_dir: &Path,
     slug: &str,
-    fields_shorthand: Option<&str>,
+    fields: Option<&[super::collection::FieldStub]>,
     force: bool,
 ) -> Result<()> {
     super::validate_slug(slug)?;
@@ -28,14 +28,21 @@ pub fn make_global(
 
     let label = super::to_title_case(slug);
 
-    let fields = match fields_shorthand {
-        Some(s) => super::collection::parse_fields_shorthand(s)?,
-        None => vec![super::collection::FieldStub {
-            name: "title".to_string(),
-            field_type: "text".to_string(),
-            required: true,
-            localized: false,
-        }],
+    let default_fields;
+    let fields = match fields {
+        Some(f) => f,
+        None => {
+            default_fields = [super::collection::FieldStub {
+                name: "title".to_string(),
+                field_type: "text".to_string(),
+                required: true,
+                localized: false,
+                fields: vec![],
+                blocks: vec![],
+                tabs: vec![],
+            }];
+            &default_fields
+        }
     };
 
     let mut lua = String::new();
@@ -45,20 +52,8 @@ pub fn make_global(
     lua.push_str("    },\n");
     lua.push_str("    fields = {\n");
 
-    for field in &fields {
-        lua.push_str(&format!("        crap.fields.{}({{\n", field.field_type));
-        lua.push_str(&format!("            name = \"{}\",\n", field.name));
-
-        if field.required {
-            lua.push_str("            required = true,\n");
-        }
-        if field.localized {
-            lua.push_str("            localized = true,\n");
-        }
-        if let Some(stub) = super::collection::type_specific_stub(&field.field_type) {
-            lua.push_str(stub);
-        }
-        lua.push_str("        }),\n");
+    for field in fields {
+        super::collection::write_field_lua(&mut lua, field, 8);
     }
 
     lua.push_str("    },\n");
@@ -108,13 +103,10 @@ mod tests {
     #[test]
     fn test_make_global_with_fields() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_global(
-            tmp.path(),
-            "nav",
-            Some("title:text:required,links:array"),
-            false,
-        )
-        .unwrap();
+        let fields =
+            crate::scaffold::collection::parse_fields_shorthand("title:text:required,links:array")
+                .unwrap();
+        make_global(tmp.path(), "nav", Some(&fields), false).unwrap();
 
         let content = fs::read_to_string(tmp.path().join("globals/nav.lua")).unwrap();
         assert!(content.contains("crap.fields.text({"));
@@ -144,5 +136,39 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let result = make_global(tmp.path(), "Bad Slug", None, false);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_make_global_with_nested_group() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fields = crate::scaffold::collection::parse_fields_shorthand(
+            "seo:group(meta_title:text:required,meta_desc:textarea)",
+        )
+        .unwrap();
+        make_global(tmp.path(), "site_seo", Some(&fields), false).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("globals/site_seo.lua")).unwrap();
+        assert!(content.contains("crap.globals.define(\"site_seo\""));
+        assert!(content.contains("crap.fields.group({"));
+        assert!(content.contains("name = \"seo\""));
+        assert!(content.contains("name = \"meta_title\""));
+        assert!(content.contains("required = true"));
+        assert!(content.contains("name = \"meta_desc\""));
+    }
+
+    #[test]
+    fn test_make_global_all_containers() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fields = crate::scaffold::collection::parse_fields_shorthand(
+            "items:array(label:text),meta:group(key:text),layout:blocks(hero|Hero(title:text)),panels:tabs(General(name:text))",
+        )
+        .unwrap();
+        make_global(tmp.path(), "kitchen_sink", Some(&fields), false).unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("globals/kitchen_sink.lua")).unwrap();
+        assert!(content.contains("crap.fields.array({"));
+        assert!(content.contains("crap.fields.group({"));
+        assert!(content.contains("crap.fields.blocks({"));
+        assert!(content.contains("crap.fields.tabs({"));
     }
 }

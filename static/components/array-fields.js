@@ -211,6 +211,12 @@ class CrapArrayField extends HTMLElement {
             if (input.name) input.name = input.name.replace(pattern, `$1${idx}$2`);
           }
         );
+        child.querySelectorAll('[data-field-name]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            const fn = el.getAttribute('data-field-name');
+            if (fn) el.setAttribute('data-field-name', fn.replace(pattern, `$1${idx}$2`));
+          }
+        );
       }
     );
   }

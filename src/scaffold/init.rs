@@ -73,13 +73,13 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     // Build crap.toml dynamically from InitOptions
     let mut toml = String::new();
     toml.push_str(&format!(
-        "[server]\nadmin_port = {}\ngrpc_port = {}\nhost = \"0.0.0.0\"\n# compression = \"off\"             # \"off\" (default), \"gzip\", \"br\", \"all\"\n# grpc_reflection = true           # enable gRPC server reflection (default: true)\n# grpc_rate_limit_requests = 0    # per-IP request limit (0 = disabled)\n# grpc_rate_limit_window = 60     # sliding window in seconds (or \"1m\")\n",
-        opts.admin_port, opts.grpc_port
+        "crap_version = \"{}\"\n\n[server]\nadmin_port = {}\ngrpc_port = {}\nhost = \"0.0.0.0\"\n# compression = \"off\"             # \"off\" (default), \"gzip\", \"br\", \"all\"\n# grpc_reflection = true           # enable gRPC server reflection (default: true)\n# grpc_rate_limit_requests = 0    # per-IP request limit (0 = disabled)\n# grpc_rate_limit_window = 60     # sliding window in seconds (or \"1m\")\n",
+        env!("CARGO_PKG_VERSION"), opts.admin_port, opts.grpc_port
     ));
     toml.push_str("\n[database]\npath = \"data/crap.db\"\n# pool_max_size = 32             # max connections in pool\n# busy_timeout = \"30s\"          # SQLite busy timeout (ms or \"30s\", \"1m\")\n# connection_timeout = 5          # pool checkout timeout (seconds or \"5s\")\n");
     toml.push_str("\n[admin]\ndev_mode = true\n# require_auth = true               # block admin when no auth collection exists (default: true)\n# access = \"access.admin_panel\"     # Lua function: which users can access the admin UI\n");
     toml.push_str(&format!(
-        "\n[auth]\nsecret = \"{}\"\n# token_expiry = 7200           # seconds, default 2 hours\n# max_forgot_password_attempts = 3  # rate limit forgot-password per email\n# forgot_password_window_seconds = 900  # rate limit window (15 minutes)\n",
+        "\n[auth]\nsecret = \"{}\"\n# token_expiry = 7200              # seconds, default 2 hours\n# max_login_attempts = 5           # failed logins before lockout\n# login_lockout_seconds = 300      # lockout duration (5 minutes)\n# reset_token_expiry = 3600        # password reset token lifetime (1 hour)\n# max_forgot_password_attempts = 3 # rate limit forgot-password per email\n# forgot_password_window_seconds = 900  # rate limit window (15 minutes)\n",
         opts.auth_secret
     ));
     toml.push_str("\n# [auth.password_policy]\n# min_length = 8                # minimum password length\n# max_length = 128              # maximum password length\n# require_uppercase = false     # require uppercase letter\n# require_lowercase = false     # require lowercase letter\n# require_digit = false         # require digit\n# require_special = false       # require special character\n");
@@ -100,22 +100,22 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
         ));
     }
 
-    toml.push_str("\n# [depth]\n# default_depth = 1              # default relationship population depth for FindByID\n# max_depth = 10                 # hard cap on population depth\n");
+    toml.push_str("\n# [depth]\n# default_depth = 1              # default relationship population depth for FindByID\n# max_depth = 10                 # hard cap on population depth\n# populate_cache = false          # enable cross-request populate cache\n# populate_cache_max_age_secs = 0 # max age in seconds for populate cache (0 = indefinite)\n");
     toml.push_str("\n# [pagination]\n# default_limit = 20            # default page size when no limit specified\n# max_limit = 1000               # maximum allowed limit (requests above this are clamped)\n# mode = \"page\"                  # pagination mode: \"page\" (offset-based) or \"cursor\" (keyset-based)\n");
     toml.push_str("\n# [upload]\n# max_file_size = \"50MB\"         # global max upload size (integer bytes or \"50MB\", \"1GB\")\n");
     toml.push_str("\n# [email]\n# smtp_host = \"\"                 # SMTP server (empty = email disabled)\n# smtp_port = 587\n# smtp_user = \"\"\n# smtp_pass = \"\"\n# smtp_tls = \"starttls\"           # \"starttls\" (default), \"tls\" (implicit), \"none\" (plain)\n# from_address = \"noreply@example.com\"\n# from_name = \"Crap CMS\"\n# smtp_timeout = 30               # SMTP connection/send timeout (seconds or \"30s\")\n");
-    toml.push_str("\n# [hooks]\n# on_init = []                   # hook functions to run at startup\n# max_depth = 3                  # max hook recursion depth (hook → CRUD → hook)\n# vm_pool_size = 8               # number of Lua VMs for concurrent hook execution (default: max(cpus, 4), cap 32)\n");
-    toml.push_str("\n# [jobs]\n# poll_interval = 1              # seconds between job queue polls\n# cron_interval = 60             # seconds between cron schedule checks\n");
-    toml.push_str("\n# [cors]\n# allowed_origins = []           # empty = CORS disabled; [\"*\"] = allow any origin\n# allowed_methods = [\"GET\", \"POST\", \"PUT\", \"DELETE\", \"PATCH\", \"OPTIONS\"]\n# allowed_headers = [\"Content-Type\", \"Authorization\"]\n# max_age_seconds = 3600\n# allow_credentials = false      # cannot be used with wildcard origin\n");
+    toml.push_str("\n# [hooks]\n# on_init = []                   # hook functions to run at startup\n# max_depth = 3                  # max hook recursion depth (hook > CRUD > hook)\n# vm_pool_size = 8               # number of Lua VMs for concurrent hook execution (default: max(cpus, 4), cap 32)\n# max_instructions = 10000000    # max Lua instructions per hook invocation\n# max_memory = \"50MB\"            # max Lua memory per VM\n# allow_private_networks = false # allow Lua HTTP requests to private/internal networks\n# http_max_response_bytes = \"10MB\" # max HTTP response body size for crap.http.request\n");
+    toml.push_str("\n# [jobs]\n# max_concurrent = 10             # max concurrent job executions\n# poll_interval = 1              # seconds between job queue polls\n# cron_interval = 60             # seconds between cron schedule checks\n# heartbeat_interval = 10        # seconds between running job heartbeats\n# auto_purge = 604800            # auto-purge completed/failed jobs older than N seconds (7 days)\n# image_queue_batch_size = 10    # image conversions per scheduler poll\n");
+    toml.push_str("\n# [cors]\n# allowed_origins = []           # empty = CORS disabled; [\"*\"] = allow any origin\n# allowed_methods = [\"GET\", \"POST\", \"PUT\", \"DELETE\", \"PATCH\", \"OPTIONS\"]\n# allowed_headers = [\"Content-Type\", \"Authorization\"]\n# exposed_headers = []           # response headers exposed to the browser\n# max_age_seconds = 3600\n# allow_credentials = false      # cannot be used with wildcard origin\n");
     toml.push_str("\n# [access]\n# default_deny = false           # when true, collections without access functions deny all\n");
-    toml.push_str("\n# [mcp]\n# enabled = true                 # enable MCP (Model Context Protocol) server\n# http = false                   # enable HTTP transport on /mcp (POST)\n# config_tools = false           # enable config generation tools (write access to config dir)\n# api_key = \"\"                   # API key for HTTP transport auth (empty = no auth)\n# include_collections = []       # whitelist (empty = all)\n# exclude_collections = []       # blacklist (takes precedence over include)\n");
+    toml.push_str("\n# [mcp]\n# enabled = false                # enable MCP (Model Context Protocol) server\n# http = false                   # enable HTTP transport on /mcp (POST)\n# config_tools = false           # enable config generation tools (write access to config dir)\n# api_key = \"\"                   # API key for HTTP transport auth (empty = no auth)\n# include_collections = []       # whitelist (empty = all)\n# exclude_collections = []       # blacklist (takes precedence over include)\n");
 
     fs::write(&toml_path, &toml).context("Failed to write crap.toml")?;
 
     // init.lua — entry point with commented examples
     fs::write(
         target.join("init.lua"),
-        r#"-- init.lua — runs once at startup.
+        r#"-- init.lua -- runs once at startup.
 -- Register global hooks, load plugins, or set up shared state.
 
 -- Example: register a global hook that runs for ALL collections
@@ -208,6 +208,7 @@ mod tests {
         init(Some(target.clone()), &opts).unwrap();
 
         let content = fs::read_to_string(target.join("crap.toml")).unwrap();
+        assert!(content.contains(&format!("crap_version = \"{}\"", env!("CARGO_PKG_VERSION"))));
         assert!(content.contains("admin_port = 4000"));
         assert!(content.contains("grpc_port = 50052"));
         assert!(content.contains("secret = \"test-secret-123\""));
@@ -243,6 +244,48 @@ mod tests {
         assert!(content.contains("default_locale = \"en\""));
         assert!(content.contains("locales = [\"en\", \"de\", \"fr\"]"));
         assert!(content.contains("fallback = true"));
+    }
+
+    #[test]
+    fn test_init_with_single_locale() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("single_locale");
+        let opts = InitOptions {
+            locales: vec!["en".to_string()],
+            default_locale: "en".to_string(),
+            ..InitOptions::default()
+        };
+        init(Some(target.clone()), &opts).unwrap();
+
+        let content = fs::read_to_string(target.join("crap.toml")).unwrap();
+        // Single locale still gets active [locale] section
+        assert!(content.contains("[locale]"));
+        assert!(content.contains("default_locale = \"en\""));
+        assert!(content.contains("locales = [\"en\"]"));
+        assert!(content.contains("fallback = true"));
+    }
+
+    #[test]
+    fn test_init_types_lua_content() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let target = tmp.path().join("types_check");
+        init(Some(target.clone()), &InitOptions::default()).unwrap();
+
+        let content = fs::read_to_string(target.join("types/crap.lua")).unwrap();
+        assert!(!content.is_empty(), "types/crap.lua should not be empty");
+        // Should contain key Lua API markers
+        assert!(
+            content.contains("crap"),
+            "types/crap.lua should reference 'crap' global"
+        );
+        assert!(
+            content.contains("collections"),
+            "types/crap.lua should reference collections API"
+        );
+        assert!(
+            content.contains("fields"),
+            "types/crap.lua should reference fields API"
+        );
     }
 
     #[test]

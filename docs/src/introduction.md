@@ -6,7 +6,7 @@ Crap CMS is a headless content management system built in Rust. It combines a co
 
 I built several Rust/WebAssembly frontend projects and couldn't find a CMS that fit the stack. So I built one.
 
-The idea: a simple CMS written in Rust, extensible via a lightweight scripting language, with no complicated build steps or infrastructure requirements. It's also a playground for me to explore ideas and learn — which means things may change, break, or get rewritten.
+The idea: a simple CMS written in Rust, extensible via a lightweight scripting language, with no complicated build steps or infrastructure requirements.
 
 Inspiration came from what I consider the best solutions out there:
 
@@ -32,7 +32,7 @@ The project is functional but not yet production-ready — it still needs to pro
 
 ## Feature Set
 
-- **Collections** with 14 field types (text, number, textarea, richtext, select, checkbox, date, email, json, relationship, array, group, upload, blocks)
+- **Collections** with 20 field types (text, number, textarea, richtext, select, radio, checkbox, date, email, json, code, relationship, array, group, upload, blocks, row, collapsible, tabs, join)
 - **Globals** — single-document collections for site-wide settings
 - **Hooks** — field-level, collection-level, and globally registered lifecycle hooks
 - **Access Control** — collection-level and field-level, with filter constraint support

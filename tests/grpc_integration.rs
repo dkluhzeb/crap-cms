@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use prost_types::{Struct, Value, value::Kind};
+use prost_types::{ListValue, Struct, Value, value::Kind};
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -734,4 +734,130 @@ async fn describe_nonexistent_collection() {
         .unwrap_err();
 
     assert_eq!(err.code(), tonic::Code::NotFound);
+}
+
+// ── Deep nesting validation via gRPC ────────────────────────────────────
+
+fn str_val(s: &str) -> Value {
+    Value {
+        kind: Some(Kind::StringValue(s.to_string())),
+    }
+}
+
+fn struct_val(pairs: &[(&str, Value)]) -> Value {
+    let mut fields = BTreeMap::new();
+    for (k, v) in pairs {
+        fields.insert(k.to_string(), v.clone());
+    }
+    Value {
+        kind: Some(Kind::StructValue(Struct { fields })),
+    }
+}
+
+fn list_val(items: Vec<Value>) -> Value {
+    Value {
+        kind: Some(Kind::ListValue(ListValue { values: items })),
+    }
+}
+
+fn make_nested_array_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("nested_test");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Nested Test".to_string())),
+        plural: Some(LocalizedString::Plain("Nested Tests".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("name", FieldType::Text)
+            .required(true)
+            .build(),
+        // Array > Tabs > Row > required fields (team_members pattern)
+        FieldDefinition::builder("team_members", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("tabs", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Personal",
+                        vec![
+                            FieldDefinition::builder("name_row", FieldType::Row)
+                                .fields(vec![
+                                    FieldDefinition::builder("first_name", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                    FieldDefinition::builder("last_name", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                ])
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build(),
+    ];
+    def
+}
+
+#[tokio::test]
+async fn grpc_create_rejects_empty_required_in_nested_array() {
+    let ts = setup_service(vec![make_nested_array_def()], vec![]);
+
+    // Row with empty required fields inside Array > Tabs > Row
+    let row = struct_val(&[("first_name", str_val("")), ("last_name", str_val(""))]);
+
+    let mut fields = BTreeMap::new();
+    fields.insert("name".to_string(), str_val("Test"));
+    fields.insert("team_members".to_string(), list_val(vec![row]));
+
+    let err = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "nested_test".to_string(),
+            data: Some(Struct { fields }),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "gRPC create must reject empty required fields inside Array > Tabs > Row"
+    );
+    let msg = err.message().to_string();
+    assert!(
+        msg.contains("first_name") || msg.contains("required"),
+        "Error should reference the nested required field: {}",
+        msg
+    );
+}
+
+#[tokio::test]
+async fn grpc_create_accepts_valid_nested_array() {
+    let ts = setup_service(vec![make_nested_array_def()], vec![]);
+
+    let row = struct_val(&[
+        ("first_name", str_val("Jane")),
+        ("last_name", str_val("Doe")),
+    ]);
+
+    let mut fields = BTreeMap::new();
+    fields.insert("name".to_string(), str_val("Test"));
+    fields.insert("team_members".to_string(), list_val(vec![row]));
+
+    let resp = ts
+        .service
+        .create(Request::new(content::CreateRequest {
+            collection: "nested_test".to_string(),
+            data: Some(Struct { fields }),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .expect("Valid nested data should be accepted");
+
+    assert!(
+        !resp.get_ref().document.as_ref().unwrap().id.is_empty(),
+        "Created document should have an ID"
+    );
 }

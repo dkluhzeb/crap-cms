@@ -62,21 +62,22 @@ Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across re
 
 ```toml
 [hooks]
-vm_pool_size = 4  # default: min(available_parallelism, 8)
+vm_pool_size = 8  # default: max(available_parallelism, 4), capped at 32
 ```
 
 Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, `init.lua` execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.
 
 ## Resource Limits
 
-Lua VMs have configurable instruction and memory limits to prevent runaway hooks:
+Lua VMs have configurable instruction, memory, and recursion limits to prevent runaway hooks:
 
 ```toml
 [hooks]
-max_instructions = 10000000       # per hook invocation (0 = unlimited)
-max_memory = 52428800             # per VM in bytes, 50 MB (0 = unlimited)
-allow_private_networks = false    # block HTTP to internal IPs
-http_max_response_bytes = 10485760  # 10 MB (increase for large file downloads)
+max_depth = 3                      # max hook recursion depth (hook → CRUD → hook; 0 = no hooks from Lua CRUD)
+max_instructions = 10000000        # per hook invocation (0 = unlimited)
+max_memory = 52428800              # per VM in bytes, 50 MB (0 = unlimited)
+allow_private_networks = false     # block HTTP to internal IPs
+http_max_response_bytes = 10485760 # 10 MB (increase for large file downloads)
 ```
 
 - **Instruction limit** — a hook that exceeds the instruction count is terminated with an error. The default (10M) is generous for complex hooks.

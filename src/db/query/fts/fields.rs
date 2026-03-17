@@ -8,14 +8,40 @@ use crate::{
     db::query::sanitize_locale,
 };
 
+/// Field types that live in separate tables and have no column on the parent table.
+const CONTAINER_FIELD_TYPES: &[FieldType] = &[
+    FieldType::Array,
+    FieldType::Blocks,
+    FieldType::Group,
+    FieldType::Row,
+    FieldType::Collapsible,
+    FieldType::Tabs,
+];
+
 /// Determine which logical fields should be indexed in the FTS5 table.
 ///
 /// Uses `list_searchable_fields` if configured, otherwise falls back to all
 /// text-like fields (Text, Textarea, Richtext, Email, Code) at the parent level
 /// (no group sub-fields, no array/block sub-fields).
+///
+/// Container types (array, blocks, group, row, collapsible, tabs) are always
+/// excluded because they don't have columns on the parent table.
 pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
     if !def.admin.list_searchable_fields.is_empty() {
-        return def.admin.list_searchable_fields.clone();
+        // Only keep fields that actually exist as columns on the parent table.
+        // Exclude: container types (stored in separate tables) and names that
+        // don't match any field definition at all.
+        return def
+            .admin
+            .list_searchable_fields
+            .iter()
+            .filter(|name| {
+                def.fields
+                    .iter()
+                    .any(|f| f.name == **name && !CONTAINER_FIELD_TYPES.contains(&f.field_type))
+            })
+            .cloned()
+            .collect();
     }
 
     def.fields
@@ -233,5 +259,37 @@ mod tests {
         ]);
         let cols = get_fts_columns(&def, &locale_config_en_de());
         assert!(cols.is_empty());
+    }
+
+    #[test]
+    fn get_fts_fields_excludes_container_from_searchable() {
+        // Even when user explicitly lists an array field in list_searchable_fields,
+        // it should be filtered out since array fields have no parent table column.
+        let mut def = simple_def(vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("label")])
+                .build(),
+            text_field("title"),
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![text_field("description")])
+                .build(),
+        ]);
+        def.admin.list_searchable_fields = vec!["items".into(), "title".into(), "meta".into()];
+        // Only "title" should survive — "items" (array) and "meta" (group) are excluded
+        assert_eq!(get_fts_fields(&def), vec!["title"]);
+    }
+
+    #[test]
+    fn get_fts_fields_excludes_nonexistent_from_searchable() {
+        // A field name in list_searchable_fields that doesn't match any field definition
+        // should be silently filtered out (e.g. scaffolded default "title" when no title exists).
+        let mut def = simple_def(vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("label")])
+                .build(),
+        ]);
+        def.admin.list_searchable_fields = vec!["title".into(), "nonexistent".into()];
+        // Neither exists as a scalar field — result should be empty
+        assert!(get_fts_fields(&def).is_empty());
     }
 }

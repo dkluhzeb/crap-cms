@@ -63,8 +63,12 @@ enum Command {
 
     /// Scaffold a new config directory
     Init {
-        /// Directory to create (default: ./crap-cms)
+        /// Directory to create (prompted if omitted)
         dir: Option<PathBuf>,
+
+        /// Non-interactive mode — skip all prompts, use defaults
+        #[arg(long)]
+        no_input: bool,
     },
 
     /// Generate scaffolding files (collection, global, hook, migration)
@@ -242,7 +246,7 @@ async fn main() -> Result<()> {
         }
         Command::Status { config } => commands::status::run(&config),
         Command::User { action } => commands::user::run(action),
-        Command::Init { dir } => commands::init::run(dir),
+        Command::Init { dir, no_input } => commands::init::run(dir, no_input),
         Command::Make { action } => commands::make::run(action),
         Command::Blueprint { action } => match action {
             BlueprintAction::Save {

@@ -908,3 +908,58 @@ fn util_is_empty() {
     );
     assert_eq!(result, "ok");
 }
+
+// ── Deep nesting validation via Lua CRUD ────────────────────────────────
+
+#[test]
+fn lua_create_rejects_empty_required_in_nested_array() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        -- Array > Tabs > Row > required field must be validated
+        local ok, err = pcall(function()
+            crap.collections.create("team", {
+                name = "Test Team",
+                members = {
+                    { first_name = "", last_name = "" },
+                },
+            })
+        end)
+        if ok then return "SHOULD_HAVE_FAILED" end
+        local err_str = tostring(err)
+        if err_str:find("required") or err_str:find("first_name") then
+            return "ok"
+        end
+        return "UNEXPECTED_ERROR:" .. err_str
+    "#,
+    );
+    assert_eq!(
+        result, "ok",
+        "Lua create must reject empty required fields inside Array > Tabs > Row"
+    );
+}
+
+#[test]
+fn lua_create_accepts_valid_nested_array() {
+    let (_tmp, pool, _reg, runner) = setup_with_db();
+    let result = eval_lua_db(
+        &runner,
+        &pool,
+        r#"
+        local doc = crap.collections.create("team", {
+            name = "Test Team",
+            members = {
+                { first_name = "Jane", last_name = "Doe", email = "jane@example.com" },
+            },
+        })
+        if not doc or not doc.id then return "NO_DOC" end
+        return "ok"
+    "#,
+    );
+    assert_eq!(
+        result, "ok",
+        "Lua create should accept valid nested array data"
+    );
+}

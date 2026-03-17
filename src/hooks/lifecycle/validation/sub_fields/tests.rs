@@ -853,3 +853,235 @@ fn test_validate_checkbox_inside_array_not_required_when_absent() {
         "Checkbox inside array should not be required even when required=true"
     );
 }
+
+#[test]
+fn test_validate_row_inside_tabs_inside_array_required() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    // Array > Tabs > Row > required text (the team_members pattern)
+    let fields = vec![
+        FieldDefinition::builder("team_members", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("member_tabs", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Personal",
+                        vec![
+                            FieldDefinition::builder("name_row", FieldType::Row)
+                                .fields(vec![
+                                    FieldDefinition::builder("first_name", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                    FieldDefinition::builder("last_name", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                ])
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = HashMap::new();
+    data.insert(
+        "team_members".to_string(),
+        json!([{"first_name": "", "last_name": ""}]),
+    );
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "Required field inside Row inside Tabs inside Array should be validated"
+    );
+    let err = result.unwrap_err();
+    assert_eq!(err.errors.len(), 2);
+    assert!(err.errors[0].field.contains("team_members[0][first_name]"));
+    assert!(err.errors[1].field.contains("team_members[0][last_name]"));
+}
+
+#[test]
+fn test_validate_group_inside_tabs_inside_array_required() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    // Array > Tabs > Group > required text
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "SEO",
+                        vec![
+                            FieldDefinition::builder("meta", FieldType::Group)
+                                .fields(vec![
+                                    FieldDefinition::builder("title", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                ])
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"meta__title": ""}]));
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "Required field inside Group inside Tabs inside Array should be validated"
+    );
+    assert!(
+        result.unwrap_err().errors[0]
+            .field
+            .contains("items[0][meta__title]")
+    );
+}
+
+#[test]
+fn test_validate_collapsible_inside_tabs_inside_array_required() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    // Array > Tabs > Collapsible > required text
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("layout", FieldType::Tabs)
+                    .tabs(vec![FieldTab::new(
+                        "Advanced",
+                        vec![
+                            FieldDefinition::builder("extra", FieldType::Collapsible)
+                                .fields(vec![
+                                    FieldDefinition::builder("note", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                ])
+                                .build(),
+                        ],
+                    )])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"note": ""}]));
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "Required field inside Collapsible inside Tabs inside Array should be validated"
+    );
+    assert!(
+        result.unwrap_err().errors[0]
+            .field
+            .contains("items[0][note]")
+    );
+}
+
+#[test]
+fn test_validate_group_inside_row_inside_array_required() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    // Array > Row > Group > required text
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("r", FieldType::Row)
+                    .fields(vec![
+                        FieldDefinition::builder("seo", FieldType::Group)
+                            .fields(vec![
+                                FieldDefinition::builder("title", FieldType::Text)
+                                    .required(true)
+                                    .build(),
+                            ])
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"seo__title": ""}]));
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "Required field inside Group inside Row inside Array should be validated"
+    );
+    assert!(
+        result.unwrap_err().errors[0]
+            .field
+            .contains("items[0][seo__title]")
+    );
+}
+
+#[test]
+fn test_validate_tabs_inside_collapsible_inside_array_required() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+    // Array > Collapsible > Tabs > required text
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("section", FieldType::Collapsible)
+                    .fields(vec![
+                        FieldDefinition::builder("layout", FieldType::Tabs)
+                            .tabs(vec![FieldTab::new(
+                                "Content",
+                                vec![
+                                    FieldDefinition::builder("body", FieldType::Text)
+                                        .required(true)
+                                        .build(),
+                                ],
+                            )])
+                            .build(),
+                    ])
+                    .build(),
+            ])
+            .build(),
+    ];
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"body": ""}]));
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").build(),
+    );
+    assert!(
+        result.is_err(),
+        "Required field inside Tabs inside Collapsible inside Array should be validated"
+    );
+    assert!(
+        result.unwrap_err().errors[0]
+            .field
+            .contains("items[0][body]")
+    );
+}
