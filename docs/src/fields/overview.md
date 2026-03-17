@@ -62,6 +62,7 @@ Every field type accepts these properties:
 | `textarea` | TEXT | Multi-line text |
 | `richtext` | TEXT | Rich text (HTML string) |
 | `select` | TEXT | Single value from predefined options |
+| `radio` | TEXT | Single value from predefined options (radio button UI) |
 | `checkbox` | INTEGER | Boolean (0 or 1) |
 | `date` | TEXT | Date/datetime/time/month with `picker_appearance` control |
 | `email` | TEXT | Email address |

@@ -16,7 +16,7 @@ Get a configuration value by dot-separated key path.
 ```lua
 local port = crap.config.get("server.admin_port")   -- 3000
 local host = crap.config.get("server.host")          -- "0.0.0.0"
-local dev = crap.config.get("admin.dev_mode")        -- true
+local dev = crap.config.get("admin.dev_mode")        -- false
 local depth = crap.config.get("depth.max_depth")     -- 10
 local expiry = crap.config.get("auth.token_expiry")  -- 7200
 ```
@@ -31,7 +31,7 @@ The config structure mirrors `crap.toml`:
 | `server.grpc_port` | integer | 50051 |
 | `server.host` | string | "0.0.0.0" |
 | `database.path` | string | "data/crap.db" |
-| `admin.dev_mode` | boolean | true |
+| `admin.dev_mode` | boolean | false |
 | `auth.secret` | string | "" |
 | `auth.token_expiry` | integer | 7200 |
 | `depth.default_depth` | integer | 1 |

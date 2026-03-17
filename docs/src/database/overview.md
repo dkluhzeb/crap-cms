@@ -119,6 +119,6 @@ All write operations follow this pattern:
 2. Begin transaction
 3. Run before-hooks (with transaction access)
 4. Execute query (inside same transaction)
-5. Commit transaction
-6. Fire after-hooks (background, no transaction)
+5. Run after-hooks (inside same transaction, errors roll back)
+6. Commit transaction
 ```

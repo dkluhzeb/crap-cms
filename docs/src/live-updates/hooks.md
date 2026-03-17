@@ -57,7 +57,7 @@ If any hook returns `false`/`nil`, the event is suppressed and no further hooks 
 
 ### CRUD Access
 
-`before_broadcast` hooks run inside the transaction and **do** have CRUD access via `crap.collections.*` and `crap.globals.*`.
+`before_broadcast` hooks run after the transaction has committed and do **not** have CRUD access.
 
 ## `live` Setting Functions
 

@@ -2,7 +2,7 @@
 
 The `crap.toml` file configures the server, database, authentication, and other global settings. All sections and fields are optional — sensible defaults are used when omitted.
 
-A `crap.toml` file must exist in the config directory — the server will refuse to start without one. It can be empty (all defaults apply), but the file itself is required.
+If no `crap.toml` file exists in the config directory, all defaults are used. An empty file is also valid — all defaults apply.
 
 ## Top-Level Fields
 
@@ -260,6 +260,7 @@ Password strength requirements applied to all password-setting paths (create, up
 | `smtp_port` | integer | `587` | SMTP port. 587 is the standard STARTTLS port. |
 | `smtp_user` | string | `""` | SMTP authentication username. |
 | `smtp_pass` | string | `""` | SMTP authentication password. |
+| `smtp_tls` | string | `"starttls"` | TLS mode: `"starttls"` (default, port 587), `"tls"` (implicit TLS, port 465), `"none"` (plain, for testing). |
 | `from_address` | string | `"noreply@example.com"` | Sender email address for outgoing mail. |
 | `from_name` | string | `"Crap CMS"` | Sender display name. |
 | `smtp_timeout` | integer/string | `30` | SMTP connection and send timeout in seconds. Accepts integer or duration string (`"30s"`, `"1m"`). |

@@ -200,3 +200,5 @@ The `find_*` tools accept these parameters:
 Supported operators: `equals`, `not_equals`, `greater_than`, `greater_than_equal`,
 `less_than`, `less_than_equal`, `like`, `contains`, `in` (array), `not_in` (array),
 `exists`, `not_exists`.
+
+> **Note:** MCP uses shortened operator names (`greater_than_equal`, `less_than_equal`) compared to the gRPC/Lua API which uses `greater_than_or_equal` and `less_than_or_equal`.

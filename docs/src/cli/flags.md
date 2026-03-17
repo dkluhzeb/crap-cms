@@ -235,11 +235,17 @@ crap-cms make collection ./my-project posts \
 #### `make global`
 
 ```bash
-crap-cms make global <CONFIG> <SLUG> [-f]
+crap-cms make global <CONFIG> [SLUG] [-F <FIELDS>] [-f]
 ```
+
+| Flag | Short | Description |
+|------|-------|-------------|
+| `--fields` | `-F` | Inline field shorthand (same syntax as `make collection`) |
+| `--force` | `-f` | Overwrite existing file |
 
 ```bash
 crap-cms make global ./my-project site_settings
+crap-cms make global ./my-project nav -F "links:array(label:text:required,url:text)"
 ```
 
 #### `make hook`
@@ -561,16 +567,26 @@ Lists all defined jobs with their configuration (handler, schedule, queue, retri
 #### `jobs trigger`
 
 ```bash
-crap-cms jobs trigger <CONFIG> <SLUG>
+crap-cms jobs trigger <CONFIG> <SLUG> [-d <DATA>]
 ```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--data` | `-d` | `"{}"` | JSON data to pass to the job |
 
 Manually queue a job for execution. Works even while the server is running (SQLite WAL allows concurrent access). Prints the queued job run ID.
 
 #### `jobs status`
 
 ```bash
-crap-cms jobs status <CONFIG> [--id <ID>]
+crap-cms jobs status <CONFIG> [--id <ID>] [-s <SLUG>] [-l <LIMIT>]
 ```
+
+| Flag | Short | Default | Description |
+|------|-------|---------|-------------|
+| `--id` | — | — | Show details for a specific run |
+| `--slug` | `-s` | — | Filter by job slug |
+| `--limit` | `-l` | `20` | Max results to show |
 
 Show recent job runs. If `--id` is given, shows details for that specific run. Otherwise lists recent runs across all jobs.
 

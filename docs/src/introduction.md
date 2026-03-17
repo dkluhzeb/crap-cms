@@ -32,7 +32,7 @@ The project is functional but not yet production-ready — it still needs to pro
 
 ## Feature Set
 
-- **Collections** with 14 field types (text, number, textarea, richtext, select, checkbox, date, email, json, relationship, array, group, upload, blocks)
+- **Collections** with 20 field types (text, number, textarea, richtext, select, radio, checkbox, date, email, json, code, relationship, array, group, upload, blocks, row, collapsible, tabs, join)
 - **Globals** — single-document collections for site-wide settings
 - **Hooks** — field-level, collection-level, and globally registered lifecycle hooks
 - **Access Control** — collection-level and field-level, with filter constraint support

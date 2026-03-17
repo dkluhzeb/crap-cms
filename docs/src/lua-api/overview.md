@@ -8,13 +8,20 @@ The `crap` global table is the entry point for all CMS operations in Lua. It's a
 |-----------|-------------|
 | `crap.collections` | Collection definition and CRUD operations |
 | `crap.globals` | Global definition and get/update operations |
+| `crap.fields` | Field factory functions (`crap.fields.text()`, etc.) |
 | `crap.hooks` | Global hook registration |
+| `crap.jobs` | Job definition |
 | `crap.log` | Structured logging |
 | `crap.util` | Utility functions |
 | `crap.auth` | Password hashing and verification (Argon2id) |
 | `crap.env` | Read-only environment variable access |
 | `crap.http` | Outbound HTTP requests (blocking) |
 | `crap.config` | Read-only access to crap.toml values |
+| `crap.locale` | Locale configuration queries |
+| `crap.email` | Send email via configured SMTP |
+| `crap.crypto` | Cryptographic utilities (HMAC, random bytes, hashing) |
+| `crap.schema` | Runtime schema introspection |
+| `crap.richtext` | Custom rich text node registration |
 
 ## CRUD Availability
 
@@ -36,11 +43,11 @@ crap.collections CRUD functions are only available inside hooks
 with transaction context (before_change, before_delete, etc.)
 ```
 
-## Two Lua VMs
+## Lua VM Architecture
 
-Crap CMS uses two Lua VMs:
+Crap CMS uses two stages of Lua execution:
 
-1. **Startup VM** — loads collection/global definitions and runs `init.lua`. Used only during initialization.
-2. **HookRunner VM** — handles runtime hook execution. Gets its own copy of the `crap.*` API with CRUD functions registered.
+1. **Startup VM** — a single VM that loads collection/global definitions and runs `init.lua`. Used only during initialization, then discarded.
+2. **HookRunner pool** — a pool of Lua VMs for runtime hook execution (size configured via `hooks.vm_pool_size`). Each VM gets its own copy of the `crap.*` API with CRUD functions registered.
 
-Both VMs have the config directory on their package path, so `require("hooks.posts")` works in both.
+All VMs have the config directory on their package path, so `require("hooks.posts")` works in both stages.
