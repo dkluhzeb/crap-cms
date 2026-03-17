@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-6f7fe291.js";
+            window.path_to_searchindex_js = "searchindex-0a849469.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8f88eb31.js"></script>
@@ -418,7 +418,7 @@ cargo build --release
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="craptoml"><a class="header" href="#craptoml">crap.toml</a></h1>
 <p>The <code>crap.toml</code> file configures the server, database, authentication, and other global settings. All sections and fields are optional — sensible defaults are used when omitted.</p>
-<p>If <code>crap.toml</code> does not exist in the config directory, all defaults apply.</p>
+<p>A <code>crap.toml</code> file must exist in the config directory — the server will refuse to start without one. It can be empty (all defaults apply), but the file itself is required.</p>
 <h2 id="top-level-fields"><a class="header" href="#top-level-fields">Top-Level Fields</a></h2>
 <div class="table-wrapper">
 <table>
@@ -541,6 +541,10 @@ from_name = "Crap CMS"  # Sender display name
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
                          # Default: max(available_parallelism, 4), capped at 32
+max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
+max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
+allow_private_networks = false  # Block HTTP requests to private/loopback IPs
+http_max_response_bytes = "10MB"  # Max HTTP response body size
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
@@ -716,6 +720,10 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>on_init</code></td><td>string[]</td><td><code>[]</code></td><td>Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup.</td></tr>
 <tr><td><code>max_depth</code></td><td>integer</td><td><code>3</code></td><td>Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. <code>0</code> = never run hooks from Lua CRUD.</td></tr>
 <tr><td><code>vm_pool_size</code></td><td>integer</td><td><code>max(cpus, 4)</code> capped at 32</td><td>Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores with a floor of 4 and ceiling of 32.</td></tr>
+<tr><td><code>max_instructions</code></td><td>integer</td><td><code>10000000</code></td><td>Maximum Lua instructions per hook invocation. <code>0</code> = unlimited.</td></tr>
+<tr><td><code>max_memory</code></td><td>integer/string</td><td><code>52428800</code> (50 MB)</td><td>Maximum Lua memory per VM in bytes. Accepts integer or filesize string (<code>"50MB"</code>, <code>"100MB"</code>). <code>0</code> = unlimited.</td></tr>
+<tr><td><code>allow_private_networks</code></td><td>boolean</td><td><code>false</code></td><td>Allow <code>crap.http.request</code> to reach private/loopback/link-local IPs.</td></tr>
+<tr><td><code>http_max_response_bytes</code></td><td>integer/string</td><td><code>10485760</code> (10 MB)</td><td>Maximum HTTP response body size. Accepts integer or filesize string (<code>"10MB"</code>, <code>"1GB"</code>).</td></tr>
 </tbody>
 </table>
 </div>
@@ -852,6 +860,10 @@ from_name = "My App"
 [hooks]
 on_init = ["hooks.seed.run"]
 vm_pool_size = 8
+max_instructions = 10000000
+max_memory = "50MB"
+allow_private_networks = false
+http_max_response_bytes = "10MB"
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="localization"><a class="header" href="#localization">Localization</a></h1>
@@ -1579,6 +1591,20 @@ crap-cms templates extract ./my-project --all --force
 <pre><code class="language-bash">crap-cms jobs status &lt;CONFIG&gt; [--id &lt;ID&gt;]
 </code></pre>
 <p>Show recent job runs. If <code>--id</code> is given, shows details for that specific run. Otherwise lists recent runs across all jobs.</p>
+<h4 id="jobs-cancel"><a class="header" href="#jobs-cancel"><code>jobs cancel</code></a></h4>
+<pre><code class="language-bash">crap-cms jobs cancel &lt;CONFIG&gt; [--slug &lt;SLUG&gt;]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--slug</code>, <code>-s</code></td><td><em>(all)</em></td><td>Only cancel pending jobs with this slug. Without it, cancels all pending jobs.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Deletes pending jobs from the queue. Useful for clearing stuck or unwanted jobs that keep retrying.</p>
 <h4 id="jobs-purge"><a class="header" href="#jobs-purge"><code>jobs purge</code></a></h4>
 <pre><code class="language-bash">crap-cms jobs purge &lt;CONFIG&gt; [--older-than &lt;DURATION&gt;]
 </code></pre>
@@ -1601,6 +1627,8 @@ crap-cms templates extract ./my-project --all --force
 crap-cms jobs trigger ./my-project cleanup_expired
 crap-cms jobs status ./my-project
 crap-cms jobs status ./my-project --id abc123
+crap-cms jobs cancel ./my-project
+crap-cms jobs cancel ./my-project -s process_inquiry
 crap-cms jobs purge ./my-project --older-than 30d
 crap-cms jobs healthcheck ./my-project
 </code></pre>

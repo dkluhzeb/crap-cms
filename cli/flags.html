@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-6f7fe291.js";
+            window.path_to_searchindex_js = "../searchindex-0a849469.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8f88eb31.js"></script>
@@ -688,6 +688,20 @@ crap-cms templates extract ./my-project --all --force
 <pre><code class="language-bash">crap-cms jobs status &lt;CONFIG&gt; [--id &lt;ID&gt;]
 </code></pre>
 <p>Show recent job runs. If <code>--id</code> is given, shows details for that specific run. Otherwise lists recent runs across all jobs.</p>
+<h4 id="jobs-cancel"><a class="header" href="#jobs-cancel"><code>jobs cancel</code></a></h4>
+<pre><code class="language-bash">crap-cms jobs cancel &lt;CONFIG&gt; [--slug &lt;SLUG&gt;]
+</code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--slug</code>, <code>-s</code></td><td><em>(all)</em></td><td>Only cancel pending jobs with this slug. Without it, cancels all pending jobs.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Deletes pending jobs from the queue. Useful for clearing stuck or unwanted jobs that keep retrying.</p>
 <h4 id="jobs-purge"><a class="header" href="#jobs-purge"><code>jobs purge</code></a></h4>
 <pre><code class="language-bash">crap-cms jobs purge &lt;CONFIG&gt; [--older-than &lt;DURATION&gt;]
 </code></pre>
@@ -710,6 +724,8 @@ crap-cms templates extract ./my-project --all --force
 crap-cms jobs trigger ./my-project cleanup_expired
 crap-cms jobs status ./my-project
 crap-cms jobs status ./my-project --id abc123
+crap-cms jobs cancel ./my-project
+crap-cms jobs cancel ./my-project -s process_inquiry
 crap-cms jobs purge ./my-project --older-than 30d
 crap-cms jobs healthcheck ./my-project
 </code></pre>
