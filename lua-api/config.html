@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0a849469.js";
+            window.path_to_searchindex_js = "../searchindex-95b5fa60.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8f88eb31.js"></script>
+        <script src="../toc-8a8be9f9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -189,7 +189,7 @@
 <p><strong>Returns:</strong> any — The value at that key path, or <code>nil</code> if the path doesn’t exist.</p>
 <pre><code class="language-lua">local port = crap.config.get("server.admin_port")   -- 3000
 local host = crap.config.get("server.host")          -- "0.0.0.0"
-local dev = crap.config.get("admin.dev_mode")        -- true
+local dev = crap.config.get("admin.dev_mode")        -- false
 local depth = crap.config.get("depth.max_depth")     -- 10
 local expiry = crap.config.get("auth.token_expiry")  -- 7200
 </code></pre>
@@ -205,7 +205,7 @@ local expiry = crap.config.get("auth.token_expiry")  -- 7200
 <tr><td><code>server.grpc_port</code></td><td>integer</td><td>50051</td></tr>
 <tr><td><code>server.host</code></td><td>string</td><td>“0.0.0.0”</td></tr>
 <tr><td><code>database.path</code></td><td>string</td><td>“data/crap.db”</td></tr>
-<tr><td><code>admin.dev_mode</code></td><td>boolean</td><td>true</td></tr>
+<tr><td><code>admin.dev_mode</code></td><td>boolean</td><td>false</td></tr>
 <tr><td><code>auth.secret</code></td><td>string</td><td>“”</td></tr>
 <tr><td><code>auth.token_expiry</code></td><td>integer</td><td>7200</td></tr>
 <tr><td><code>depth.default_depth</code></td><td>integer</td><td>1</td></tr>

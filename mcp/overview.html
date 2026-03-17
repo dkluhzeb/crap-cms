@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0a849469.js";
+            window.path_to_searchindex_js = "../searchindex-95b5fa60.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8f88eb31.js"></script>
+        <script src="../toc-8a8be9f9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -362,6 +362,9 @@ audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC
 <p>Supported operators: <code>equals</code>, <code>not_equals</code>, <code>greater_than</code>, <code>greater_than_equal</code>,
 <code>less_than</code>, <code>less_than_equal</code>, <code>like</code>, <code>contains</code>, <code>in</code> (array), <code>not_in</code> (array),
 <code>exists</code>, <code>not_exists</code>.</p>
+<blockquote>
+<p><strong>Note:</strong> MCP uses shortened operator names (<code>greater_than_equal</code>, <code>less_than_equal</code>) compared to the gRPC/Lua API which uses <code>greater_than_or_equal</code> and <code>less_than_or_equal</code>.</p>
+</blockquote>
 
                     </main>
 

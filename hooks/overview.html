@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0a849469.js";
+            window.path_to_searchindex_js = "../searchindex-95b5fa60.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8f88eb31.js"></script>
+        <script src="../toc-8a8be9f9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -218,16 +218,17 @@ return M
 <h2 id="concurrency"><a class="header" href="#concurrency">Concurrency</a></h2>
 <p>Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across requests. The pool size is configurable:</p>
 <pre><code class="language-toml">[hooks]
-vm_pool_size = 4  # default: min(available_parallelism, 8)
+vm_pool_size = 8  # default: max(available_parallelism, 4), capped at 32
 </code></pre>
 <p>Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, <code>init.lua</code> execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.</p>
 <h2 id="resource-limits"><a class="header" href="#resource-limits">Resource Limits</a></h2>
-<p>Lua VMs have configurable instruction and memory limits to prevent runaway hooks:</p>
+<p>Lua VMs have configurable instruction, memory, and recursion limits to prevent runaway hooks:</p>
 <pre><code class="language-toml">[hooks]
-max_instructions = 10000000       # per hook invocation (0 = unlimited)
-max_memory = 52428800             # per VM in bytes, 50 MB (0 = unlimited)
-allow_private_networks = false    # block HTTP to internal IPs
-http_max_response_bytes = 10485760  # 10 MB (increase for large file downloads)
+max_depth = 3                      # max hook recursion depth (hook → CRUD → hook; 0 = no hooks from Lua CRUD)
+max_instructions = 10000000        # per hook invocation (0 = unlimited)
+max_memory = 52428800              # per VM in bytes, 50 MB (0 = unlimited)
+allow_private_networks = false     # block HTTP to internal IPs
+http_max_response_bytes = 10485760 # 10 MB (increase for large file downloads)
 </code></pre>
 <ul>
 <li><strong>Instruction limit</strong> — a hook that exceeds the instruction count is terminated with an error. The default (10M) is generous for complex hooks.</li>

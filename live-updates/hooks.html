@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0a849469.js";
+            window.path_to_searchindex_js = "../searchindex-95b5fa60.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8f88eb31.js"></script>
+        <script src="../toc-8a8be9f9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -222,7 +222,7 @@ end)
 </ol>
 <p>If any hook returns <code>false</code>/<code>nil</code>, the event is suppressed and no further hooks run.</p>
 <h3 id="crud-access"><a class="header" href="#crud-access">CRUD Access</a></h3>
-<p><code>before_broadcast</code> hooks run inside the transaction and <strong>do</strong> have CRUD access via <code>crap.collections.*</code> and <code>crap.globals.*</code>.</p>
+<p><code>before_broadcast</code> hooks run after the transaction has committed and do <strong>not</strong> have CRUD access.</p>
 <h2 id="live-setting-functions"><a class="header" href="#live-setting-functions"><code>live</code> Setting Functions</a></h2>
 <p>When <code>live</code> is a string (Lua function reference), the function is called before <code>before_broadcast</code> hooks:</p>
 <pre><code class="language-lua">crap.collections.define("posts", {

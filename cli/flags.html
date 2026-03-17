@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0a849469.js";
+            window.path_to_searchindex_js = "../searchindex-95b5fa60.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8f88eb31.js"></script>
+        <script src="../toc-8a8be9f9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -383,9 +383,21 @@ crap-cms make collection ./my-project posts \
     -F "title:text:required,body:richtext" --versions --no-input
 </code></pre>
 <h4 id="make-global"><a class="header" href="#make-global"><code>make global</code></a></h4>
-<pre><code class="language-bash">crap-cms make global &lt;CONFIG&gt; &lt;SLUG&gt; [-f]
+<pre><code class="language-bash">crap-cms make global &lt;CONFIG&gt; [SLUG] [-F &lt;FIELDS&gt;] [-f]
 </code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--fields</code></td><td><code>-F</code></td><td>Inline field shorthand (same syntax as <code>make collection</code>)</td></tr>
+<tr><td><code>--force</code></td><td><code>-f</code></td><td>Overwrite existing file</td></tr>
+</tbody>
+</table>
+</div>
 <pre><code class="language-bash">crap-cms make global ./my-project site_settings
+crap-cms make global ./my-project nav -F "links:array(label:text:required,url:text)"
 </code></pre>
 <h4 id="make-hook"><a class="header" href="#make-hook"><code>make hook</code></a></h4>
 <pre><code class="language-bash">crap-cms make hook &lt;CONFIG&gt; [NAME] [-t &lt;TYPE&gt;] [-c &lt;COLLECTION&gt;] [-l &lt;POSITION&gt;] [-F &lt;FIELD&gt;] [--force]
@@ -681,12 +693,34 @@ crap-cms templates extract ./my-project --all --force
 </code></pre>
 <p>Lists all defined jobs with their configuration (handler, schedule, queue, retries, timeout, concurrency).</p>
 <h4 id="jobs-trigger"><a class="header" href="#jobs-trigger"><code>jobs trigger</code></a></h4>
-<pre><code class="language-bash">crap-cms jobs trigger &lt;CONFIG&gt; &lt;SLUG&gt;
+<pre><code class="language-bash">crap-cms jobs trigger &lt;CONFIG&gt; &lt;SLUG&gt; [-d &lt;DATA&gt;]
 </code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--data</code></td><td><code>-d</code></td><td><code>"{}"</code></td><td>JSON data to pass to the job</td></tr>
+</tbody>
+</table>
+</div>
 <p>Manually queue a job for execution. Works even while the server is running (SQLite WAL allows concurrent access). Prints the queued job run ID.</p>
 <h4 id="jobs-status"><a class="header" href="#jobs-status"><code>jobs status</code></a></h4>
-<pre><code class="language-bash">crap-cms jobs status &lt;CONFIG&gt; [--id &lt;ID&gt;]
+<pre><code class="language-bash">crap-cms jobs status &lt;CONFIG&gt; [--id &lt;ID&gt;] [-s &lt;SLUG&gt;] [-l &lt;LIMIT&gt;]
 </code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--id</code></td><td>—</td><td>—</td><td>Show details for a specific run</td></tr>
+<tr><td><code>--slug</code></td><td><code>-s</code></td><td>—</td><td>Filter by job slug</td></tr>
+<tr><td><code>--limit</code></td><td><code>-l</code></td><td><code>20</code></td><td>Max results to show</td></tr>
+</tbody>
+</table>
+</div>
 <p>Show recent job runs. If <code>--id</code> is given, shows details for that specific run. Otherwise lists recent runs across all jobs.</p>
 <h4 id="jobs-cancel"><a class="header" href="#jobs-cancel"><code>jobs cancel</code></a></h4>
 <pre><code class="language-bash">crap-cms jobs cancel &lt;CONFIG&gt; [--slug &lt;SLUG&gt;]

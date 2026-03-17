@@ -35,10 +35,10 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0a849469.js";
+            window.path_to_searchindex_js = "../searchindex-95b5fa60.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="../toc-8f88eb31.js"></script>
+        <script src="../toc-8a8be9f9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -188,13 +188,20 @@
 <tbody>
 <tr><td><code>crap.collections</code></td><td>Collection definition and CRUD operations</td></tr>
 <tr><td><code>crap.globals</code></td><td>Global definition and get/update operations</td></tr>
+<tr><td><code>crap.fields</code></td><td>Field factory functions (<code>crap.fields.text()</code>, etc.)</td></tr>
 <tr><td><code>crap.hooks</code></td><td>Global hook registration</td></tr>
+<tr><td><code>crap.jobs</code></td><td>Job definition</td></tr>
 <tr><td><code>crap.log</code></td><td>Structured logging</td></tr>
 <tr><td><code>crap.util</code></td><td>Utility functions</td></tr>
 <tr><td><code>crap.auth</code></td><td>Password hashing and verification (Argon2id)</td></tr>
 <tr><td><code>crap.env</code></td><td>Read-only environment variable access</td></tr>
 <tr><td><code>crap.http</code></td><td>Outbound HTTP requests (blocking)</td></tr>
 <tr><td><code>crap.config</code></td><td>Read-only access to crap.toml values</td></tr>
+<tr><td><code>crap.locale</code></td><td>Locale configuration queries</td></tr>
+<tr><td><code>crap.email</code></td><td>Send email via configured SMTP</td></tr>
+<tr><td><code>crap.crypto</code></td><td>Cryptographic utilities (HMAC, random bytes, hashing)</td></tr>
+<tr><td><code>crap.schema</code></td><td>Runtime schema introspection</td></tr>
+<tr><td><code>crap.richtext</code></td><td>Custom rich text node registration</td></tr>
 </tbody>
 </table>
 </div>
@@ -214,13 +221,13 @@
 <pre><code>crap.collections CRUD functions are only available inside hooks
 with transaction context (before_change, before_delete, etc.)
 </code></pre>
-<h2 id="two-lua-vms"><a class="header" href="#two-lua-vms">Two Lua VMs</a></h2>
-<p>Crap CMS uses two Lua VMs:</p>
+<h2 id="lua-vm-architecture"><a class="header" href="#lua-vm-architecture">Lua VM Architecture</a></h2>
+<p>Crap CMS uses two stages of Lua execution:</p>
 <ol>
-<li><strong>Startup VM</strong> — loads collection/global definitions and runs <code>init.lua</code>. Used only during initialization.</li>
-<li><strong>HookRunner VM</strong> — handles runtime hook execution. Gets its own copy of the <code>crap.*</code> API with CRUD functions registered.</li>
+<li><strong>Startup VM</strong> — a single VM that loads collection/global definitions and runs <code>init.lua</code>. Used only during initialization, then discarded.</li>
+<li><strong>HookRunner pool</strong> — a pool of Lua VMs for runtime hook execution (size configured via <code>hooks.vm_pool_size</code>). Each VM gets its own copy of the <code>crap.*</code> API with CRUD functions registered.</li>
 </ol>
-<p>Both VMs have the config directory on their package path, so <code>require("hooks.posts")</code> works in both.</p>
+<p>All VMs have the config directory on their package path, so <code>require("hooks.posts")</code> works in both stages.</p>
 
                     </main>
 

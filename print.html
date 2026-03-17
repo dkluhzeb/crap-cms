@@ -36,10 +36,10 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0a849469.js";
+            window.path_to_searchindex_js = "searchindex-95b5fa60.js";
         </script>
         <!-- Start loading toc.js asap -->
-        <script src="toc-8f88eb31.js"></script>
+        <script src="toc-8a8be9f9.js"></script>
     </head>
     <body>
     <div id="mdbook-help-container">
@@ -182,7 +182,7 @@
 <p>Crap CMS is a headless content management system built in Rust. It combines a compiled core with Lua hooks (neovim-style) and an overridable HTMX admin UI.</p>
 <h2 id="motivation"><a class="header" href="#motivation">Motivation</a></h2>
 <p>I built several Rust/WebAssembly frontend projects and couldn’t find a CMS that fit the stack. So I built one.</p>
-<p>The idea: a simple CMS written in Rust, extensible via a lightweight scripting language, with no complicated build steps or infrastructure requirements. It’s also a playground for me to explore ideas and learn — which means things may change, break, or get rewritten.</p>
+<p>The idea: a simple CMS written in Rust, extensible via a lightweight scripting language, with no complicated build steps or infrastructure requirements.</p>
 <p>Inspiration came from what I consider the best solutions out there:</p>
 <ul>
 <li><strong>Lua scripting API</strong> — modeled after Neovim and Awesome WM, where Lua gives users deep control without touching core code</li>
@@ -205,7 +205,7 @@
 </ul>
 <h2 id="feature-set"><a class="header" href="#feature-set">Feature Set</a></h2>
 <ul>
-<li><strong>Collections</strong> with 14 field types (text, number, textarea, richtext, select, checkbox, date, email, json, relationship, array, group, upload, blocks)</li>
+<li><strong>Collections</strong> with 20 field types (text, number, textarea, richtext, select, radio, checkbox, date, email, json, code, relationship, array, group, upload, blocks, row, collapsible, tabs, join)</li>
 <li><strong>Globals</strong> — single-document collections for site-wide settings</li>
 <li><strong>Hooks</strong> — field-level, collection-level, and globally registered lifecycle hooks</li>
 <li><strong>Access Control</strong> — collection-level and field-level, with filter constraint support</li>
@@ -238,7 +238,7 @@
 </div>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="installation"><a class="header" href="#installation">Installation</a></h1>
-<h2 id="static-binary-recommended"><a class="header" href="#static-binary-recommended">Static Binary (recommended)</a></h2>
+<h2 id="static-binary"><a class="header" href="#static-binary">Static Binary</a></h2>
 <p>Pre-built static binaries are attached to each <a href="https://github.com/dkluhzeb/crap-cms/releases">GitHub Release</a>. No runtime dependencies required.</p>
 <pre><code class="language-bash">curl -L -o crap-cms \
   https://github.com/dkluhzeb/crap-cms/releases/latest/download/crap-cms-linux-x86_64
@@ -260,7 +260,7 @@ sudo mv crap-cms /usr/local/bin/
 </div>
 <h2 id="docker"><a class="header" href="#docker">Docker</a></h2>
 <pre><code class="language-bash">docker run -p 3000:3000 -p 50051:50051 \
-  ghcr.io/dkluhzeb/crap-cms:nightly serve /example
+  ghcr.io/dkluhzeb/crap-cms:latest serve /example
 </code></pre>
 <p>Images are Alpine-based (~30 MB) and published to <code>ghcr.io/dkluhzeb/crap-cms</code>. See the <a href="https://github.com/dkluhzeb/crap-cms#docker">README</a> for production usage and available tags.</p>
 <h2 id="building-from-source"><a class="header" href="#building-from-source">Building from Source</a></h2>
@@ -418,7 +418,7 @@ cargo build --release
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="craptoml"><a class="header" href="#craptoml">crap.toml</a></h1>
 <p>The <code>crap.toml</code> file configures the server, database, authentication, and other global settings. All sections and fields are optional — sensible defaults are used when omitted.</p>
-<p>A <code>crap.toml</code> file must exist in the config directory — the server will refuse to start without one. It can be empty (all defaults apply), but the file itself is required.</p>
+<p>If no <code>crap.toml</code> file exists in the config directory, all defaults are used. An empty file is also valid — all defaults apply.</p>
 <h2 id="top-level-fields"><a class="header" href="#top-level-fields">Top-Level Fields</a></h2>
 <div class="table-wrapper">
 <table>
@@ -703,6 +703,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 <tr><td><code>smtp_port</code></td><td>integer</td><td><code>587</code></td><td>SMTP port. 587 is the standard STARTTLS port.</td></tr>
 <tr><td><code>smtp_user</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication username.</td></tr>
 <tr><td><code>smtp_pass</code></td><td>string</td><td><code>""</code></td><td>SMTP authentication password.</td></tr>
+<tr><td><code>smtp_tls</code></td><td>string</td><td><code>"starttls"</code></td><td>TLS mode: <code>"starttls"</code> (default, port 587), <code>"tls"</code> (implicit TLS, port 465), <code>"none"</code> (plain, for testing).</td></tr>
 <tr><td><code>from_address</code></td><td>string</td><td><code>"noreply@example.com"</code></td><td>Sender email address for outgoing mail.</td></tr>
 <tr><td><code>from_name</code></td><td>string</td><td><code>"Crap CMS"</code></td><td>Sender display name.</td></tr>
 <tr><td><code>smtp_timeout</code></td><td>integer/string</td><td><code>30</code></td><td>SMTP connection and send timeout in seconds. Accepts integer or duration string (<code>"30s"</code>, <code>"1m"</code>).</td></tr>
@@ -1286,9 +1287,21 @@ crap-cms make collection ./my-project posts \
     -F "title:text:required,body:richtext" --versions --no-input
 </code></pre>
 <h4 id="make-global"><a class="header" href="#make-global"><code>make global</code></a></h4>
-<pre><code class="language-bash">crap-cms make global &lt;CONFIG&gt; &lt;SLUG&gt; [-f]
+<pre><code class="language-bash">crap-cms make global &lt;CONFIG&gt; [SLUG] [-F &lt;FIELDS&gt;] [-f]
 </code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--fields</code></td><td><code>-F</code></td><td>Inline field shorthand (same syntax as <code>make collection</code>)</td></tr>
+<tr><td><code>--force</code></td><td><code>-f</code></td><td>Overwrite existing file</td></tr>
+</tbody>
+</table>
+</div>
 <pre><code class="language-bash">crap-cms make global ./my-project site_settings
+crap-cms make global ./my-project nav -F "links:array(label:text:required,url:text)"
 </code></pre>
 <h4 id="make-hook"><a class="header" href="#make-hook"><code>make hook</code></a></h4>
 <pre><code class="language-bash">crap-cms make hook &lt;CONFIG&gt; [NAME] [-t &lt;TYPE&gt;] [-c &lt;COLLECTION&gt;] [-l &lt;POSITION&gt;] [-F &lt;FIELD&gt;] [--force]
@@ -1584,12 +1597,34 @@ crap-cms templates extract ./my-project --all --force
 </code></pre>
 <p>Lists all defined jobs with their configuration (handler, schedule, queue, retries, timeout, concurrency).</p>
 <h4 id="jobs-trigger"><a class="header" href="#jobs-trigger"><code>jobs trigger</code></a></h4>
-<pre><code class="language-bash">crap-cms jobs trigger &lt;CONFIG&gt; &lt;SLUG&gt;
+<pre><code class="language-bash">crap-cms jobs trigger &lt;CONFIG&gt; &lt;SLUG&gt; [-d &lt;DATA&gt;]
 </code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--data</code></td><td><code>-d</code></td><td><code>"{}"</code></td><td>JSON data to pass to the job</td></tr>
+</tbody>
+</table>
+</div>
 <p>Manually queue a job for execution. Works even while the server is running (SQLite WAL allows concurrent access). Prints the queued job run ID.</p>
 <h4 id="jobs-status"><a class="header" href="#jobs-status"><code>jobs status</code></a></h4>
-<pre><code class="language-bash">crap-cms jobs status &lt;CONFIG&gt; [--id &lt;ID&gt;]
+<pre><code class="language-bash">crap-cms jobs status &lt;CONFIG&gt; [--id &lt;ID&gt;] [-s &lt;SLUG&gt;] [-l &lt;LIMIT&gt;]
 </code></pre>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Flag</th><th>Short</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>--id</code></td><td>—</td><td>—</td><td>Show details for a specific run</td></tr>
+<tr><td><code>--slug</code></td><td><code>-s</code></td><td>—</td><td>Filter by job slug</td></tr>
+<tr><td><code>--limit</code></td><td><code>-l</code></td><td><code>20</code></td><td>Max results to show</td></tr>
+</tbody>
+</table>
+</div>
 <p>Show recent job runs. If <code>--id</code> is given, shows details for that specific run. Otherwise lists recent runs across all jobs.</p>
 <h4 id="jobs-cancel"><a class="header" href="#jobs-cancel"><code>jobs cancel</code></a></h4>
 <pre><code class="language-bash">crap-cms jobs cancel &lt;CONFIG&gt; [--slug &lt;SLUG&gt;]
@@ -2304,6 +2339,7 @@ end
 <tr><td><code>textarea</code></td><td>TEXT</td><td>Multi-line text</td></tr>
 <tr><td><code>richtext</code></td><td>TEXT</td><td>Rich text (HTML string)</td></tr>
 <tr><td><code>select</code></td><td>TEXT</td><td>Single value from predefined options</td></tr>
+<tr><td><code>radio</code></td><td>TEXT</td><td>Single value from predefined options (radio button UI)</td></tr>
 <tr><td><code>checkbox</code></td><td>INTEGER</td><td>Boolean (0 or 1)</td></tr>
 <tr><td><code>date</code></td><td>TEXT</td><td>Date/datetime/time/month with <code>picker_appearance</code> control</td></tr>
 <tr><td><code>email</code></td><td>TEXT</td><td>Email address</td></tr>
@@ -2731,17 +2767,48 @@ double-click to edit attributes.</p>
 <h2 id="admin-rendering-4"><a class="header" href="#admin-rendering-4">Admin Rendering</a></h2>
 <p>Renders as a <code>&lt;select&gt;</code> dropdown.</p>
 <div style="break-before: page; page-break-before: always;"></div>
+<h1 id="radio"><a class="header" href="#radio">Radio</a></h1>
+<p>Single-value selection from predefined options, rendered as radio buttons.</p>
+<h2 id="sqlite-storage-5"><a class="header" href="#sqlite-storage-5">SQLite Storage</a></h2>
+<p><code>TEXT</code> column storing the selected <code>value</code>.</p>
+<h2 id="definition-5"><a class="header" href="#definition-5">Definition</a></h2>
+<pre><code class="language-lua">crap.fields.radio({
+    name = "priority",
+    required = true,
+    options = {
+        { label = "Low", value = "low" },
+        { label = "Medium", value = "medium" },
+        { label = "High", value = "high" },
+    },
+})
+</code></pre>
+<h2 id="options-format-1"><a class="header" href="#options-format-1">Options Format</a></h2>
+<p>Each option is a table with:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Property</th><th>Type</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>label</code></td><td>string</td><td>Display text in the admin UI</td></tr>
+<tr><td><code>value</code></td><td>string</td><td>Stored value in the database</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="admin-rendering-5"><a class="header" href="#admin-rendering-5">Admin Rendering</a></h2>
+<p>Renders as a group of radio buttons (one selectable at a time). Functionally identical to <a href="#select">Select</a> but with a different UI presentation — use radio when there are few options and you want them all visible at once.</p>
+<div style="break-before: page; page-break-before: always;"></div>
 <h1 id="checkbox"><a class="header" href="#checkbox">Checkbox</a></h1>
 <p>Boolean field stored as an integer (0 or 1).</p>
-<h2 id="sqlite-storage-5"><a class="header" href="#sqlite-storage-5">SQLite Storage</a></h2>
+<h2 id="sqlite-storage-6"><a class="header" href="#sqlite-storage-6">SQLite Storage</a></h2>
 <p><code>INTEGER</code> column with <code>DEFAULT 0</code>.</p>
-<h2 id="definition-5"><a class="header" href="#definition-5">Definition</a></h2>
+<h2 id="definition-6"><a class="header" href="#definition-6">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.checkbox({
     name = "published",
     default_value = false,
 })
 </code></pre>
-<h2 id="admin-rendering-5"><a class="header" href="#admin-rendering-5">Admin Rendering</a></h2>
+<h2 id="admin-rendering-6"><a class="header" href="#admin-rendering-6">Admin Rendering</a></h2>
 <p>Renders as an <code>&lt;input type="checkbox"&gt;</code> element.</p>
 <h2 id="value-coercion-1"><a class="header" href="#value-coercion-1">Value Coercion</a></h2>
 <p>The following string values are treated as <code>true</code>: <code>"on"</code>, <code>"true"</code>, <code>"1"</code>, <code>"yes"</code>. Everything else (including absence) is <code>false</code>.</p>
@@ -2754,9 +2821,9 @@ double-click to edit attributes.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="date"><a class="header" href="#date">Date</a></h1>
 <p>Date, datetime, time, or month field with configurable picker appearance and automatic normalization.</p>
-<h2 id="sqlite-storage-6"><a class="header" href="#sqlite-storage-6">SQLite Storage</a></h2>
+<h2 id="sqlite-storage-7"><a class="header" href="#sqlite-storage-7">SQLite Storage</a></h2>
 <p><code>TEXT</code> column. Values are normalized on write (see Storage Format below).</p>
-<h2 id="definition-6"><a class="header" href="#definition-6">Definition</a></h2>
+<h2 id="definition-7"><a class="header" href="#definition-7">Definition</a></h2>
 <pre><code class="language-lua">-- Date only (default) — stored as UTC noon to prevent timezone drift
 crap.fields.date({ name = "birthday" })
 crap.fields.date({ name = "birthday", picker_appearance = "dayOnly" })
@@ -2795,7 +2862,7 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
 <li><strong>Month only</strong> (<code>2026-01</code>) → stored as-is</li>
 </ul>
 <p>This normalization ensures consistent storage and correct behavior when filtering and sorting.</p>
-<h2 id="admin-rendering-6"><a class="header" href="#admin-rendering-6">Admin Rendering</a></h2>
+<h2 id="admin-rendering-7"><a class="header" href="#admin-rendering-7">Admin Rendering</a></h2>
 <p>Renders as the appropriate HTML5 input type based on <code>picker_appearance</code>. For <code>dayOnly</code> and <code>dayAndTime</code>, the stored ISO string is automatically converted to the format the HTML input expects (<code>YYYY-MM-DD</code> and <code>YYYY-MM-DDTHH:MM</code> respectively).</p>
 <h2 id="validation-1"><a class="header" href="#validation-1">Validation</a></h2>
 <p>Non-empty date values are validated against recognized date/datetime/time/month formats. Invalid formats produce a validation error.</p>
@@ -2808,9 +2875,9 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="email-1"><a class="header" href="#email-1">Email</a></h1>
 <p>Email address field.</p>
-<h2 id="sqlite-storage-7"><a class="header" href="#sqlite-storage-7">SQLite Storage</a></h2>
+<h2 id="sqlite-storage-8"><a class="header" href="#sqlite-storage-8">SQLite Storage</a></h2>
 <p><code>TEXT</code> column.</p>
-<h2 id="definition-7"><a class="header" href="#definition-7">Definition</a></h2>
+<h2 id="definition-8"><a class="header" href="#definition-8">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.email({
     name = "contact_email",
     required = true,
@@ -2820,16 +2887,16 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
     },
 })
 </code></pre>
-<h2 id="admin-rendering-7"><a class="header" href="#admin-rendering-7">Admin Rendering</a></h2>
+<h2 id="admin-rendering-8"><a class="header" href="#admin-rendering-8">Admin Rendering</a></h2>
 <p>Renders as an <code>&lt;input type="email"&gt;</code> element with browser-native validation.</p>
 <h2 id="auto-injection"><a class="header" href="#auto-injection">Auto-Injection</a></h2>
 <p>When a collection has <code>auth = true</code> and no <code>email</code> field is defined, one is automatically injected with <code>required = true</code> and <code>unique = true</code>. See <a href="#auth-collections">Auth Collections</a>.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="json"><a class="header" href="#json">JSON</a></h1>
 <p>Arbitrary JSON data stored as a text blob.</p>
-<h2 id="sqlite-storage-8"><a class="header" href="#sqlite-storage-8">SQLite Storage</a></h2>
+<h2 id="sqlite-storage-9"><a class="header" href="#sqlite-storage-9">SQLite Storage</a></h2>
 <p><code>TEXT</code> column containing a JSON string.</p>
-<h2 id="definition-8"><a class="header" href="#definition-8">Definition</a></h2>
+<h2 id="definition-9"><a class="header" href="#definition-9">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.json({
     name = "metadata",
     admin = {
@@ -2837,7 +2904,7 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
     },
 })
 </code></pre>
-<h2 id="admin-rendering-8"><a class="header" href="#admin-rendering-8">Admin Rendering</a></h2>
+<h2 id="admin-rendering-9"><a class="header" href="#admin-rendering-9">Admin Rendering</a></h2>
 <p>Renders as a <code>&lt;textarea&gt;</code> with monospace font for JSON editing.</p>
 <h2 id="notes-3"><a class="header" href="#notes-3">Notes</a></h2>
 <ul>
@@ -2913,7 +2980,7 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
     PRIMARY KEY (parent_id, related_id)
 );
 </code></pre>
-<h2 id="admin-rendering-9"><a class="header" href="#admin-rendering-9">Admin Rendering</a></h2>
+<h2 id="admin-rendering-10"><a class="header" href="#admin-rendering-10">Admin Rendering</a></h2>
 <p>Has-one renders as a searchable input. Has-many renders as a multi-select with chips for selected items.</p>
 <h2 id="drawer-picker"><a class="header" href="#drawer-picker">Drawer Picker</a></h2>
 <p>Add <code>admin.picker = "drawer"</code> to enable a browse button next to the search input. Clicking it opens a slide-in drawer panel with a searchable list for browsing documents.</p>
@@ -2948,7 +3015,7 @@ crap.fields.date({ name = "birth_month", picker_appearance = "monthOnly" })
 </tbody>
 </table>
 </div>
-<h2 id="definition-9"><a class="header" href="#definition-9">Definition</a></h2>
+<h2 id="definition-10"><a class="header" href="#definition-10">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.array({
     name = "slides",
     fields = {
@@ -3099,7 +3166,7 @@ return M
 })
 </code></pre>
 <p>With this config, the add button reads “Add Slide” instead of “Add Row”.</p>
-<h2 id="admin-rendering-10"><a class="header" href="#admin-rendering-10">Admin Rendering</a></h2>
+<h2 id="admin-rendering-11"><a class="header" href="#admin-rendering-11">Admin Rendering</a></h2>
 <p>Renders as a repeatable fieldset with:</p>
 <ul>
 <li>Drag handle for drag-and-drop reordering</li>
@@ -3120,7 +3187,7 @@ return M
 <li><code>seo__title TEXT</code></li>
 <li><code>seo__description TEXT</code></li>
 </ul>
-<h2 id="definition-10"><a class="header" href="#definition-10">Definition</a></h2>
+<h2 id="definition-11"><a class="header" href="#definition-11">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.group({
     name = "seo",
     fields = {
@@ -3164,7 +3231,7 @@ return M
 </code></pre>
 <p>The equivalent double-underscore syntax also works: <code>seo__title</code>.</p>
 <p>See <a href="#nested-field-filters-dot-notation">Query &amp; Filters</a> for filtering on other nested field types (arrays, blocks, relationships).</p>
-<h2 id="admin-rendering-11"><a class="header" href="#admin-rendering-11">Admin Rendering</a></h2>
+<h2 id="admin-rendering-12"><a class="header" href="#admin-rendering-12">Admin Rendering</a></h2>
 <p>Renders as a <code>&lt;fieldset&gt;</code> with a legend. Each sub-field is rendered using its own field type template (text, checkbox, select, etc.).</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="row"><a class="header" href="#row">Row</a></h1>
@@ -3177,7 +3244,7 @@ return M
 <li><code>lastname TEXT</code></li>
 </ul>
 <p>This is different from <a href="#group">Group</a>, which prefixes sub-field columns (<code>seo__title</code>).</p>
-<h2 id="definition-11"><a class="header" href="#definition-11">Definition</a></h2>
+<h2 id="definition-12"><a class="header" href="#definition-12">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.row({
     name = "name_row",
     fields = {
@@ -3205,7 +3272,7 @@ return M
 <blockquote>
 <p><strong>Depth limit:</strong> The admin UI caps layout nesting at 5 levels. The data layer has no limit.</p>
 </blockquote>
-<h2 id="admin-rendering-12"><a class="header" href="#admin-rendering-12">Admin Rendering</a></h2>
+<h2 id="admin-rendering-13"><a class="header" href="#admin-rendering-13">Admin Rendering</a></h2>
 <p>Sub-fields are rendered in a horizontal row layout. The row itself has no fieldset, legend, or collapsible wrapper — it is purely a layout mechanism for placing related fields side by side.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="collapsible"><a class="header" href="#collapsible">Collapsible</a></h1>
@@ -3217,7 +3284,7 @@ return M
 <li><code>meta_title TEXT</code></li>
 <li><code>meta_description TEXT</code></li>
 </ul>
-<h2 id="definition-12"><a class="header" href="#definition-12">Definition</a></h2>
+<h2 id="definition-13"><a class="header" href="#definition-13">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.collapsible({
     name = "seo_section",
     admin = {
@@ -3250,7 +3317,7 @@ return M
 <blockquote>
 <p><strong>Depth limit:</strong> The admin UI caps layout nesting at 5 levels. The data layer has no limit.</p>
 </blockquote>
-<h2 id="admin-rendering-13"><a class="header" href="#admin-rendering-13">Admin Rendering</a></h2>
+<h2 id="admin-rendering-14"><a class="header" href="#admin-rendering-14">Admin Rendering</a></h2>
 <p>Sub-fields are rendered inside a collapsible section with a toggle header. The section starts collapsed by default (<code>admin.collapsed = true</code>). Set <code>admin.collapsed = false</code> to start expanded. Clicking the header toggles visibility. This is useful for grouping related fields that don’t need to be visible at all times (e.g., SEO settings, advanced options).</p>
 <h2 id="comparison-with-group-and-row"><a class="header" href="#comparison-with-group-and-row">Comparison with Group and Row</a></h2>
 <div class="table-wrapper">
@@ -3278,7 +3345,7 @@ return M
 <li><code>meta_title TEXT</code></li>
 <li><code>meta_description TEXT</code></li>
 </ul>
-<h2 id="definition-13"><a class="header" href="#definition-13">Definition</a></h2>
+<h2 id="definition-14"><a class="header" href="#definition-14">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.tabs({
     name = "content_tabs",
     tabs = {
@@ -3329,7 +3396,7 @@ return M
 <blockquote>
 <p><strong>Depth limit:</strong> The admin UI caps layout nesting at 5 levels. The data layer has no limit.</p>
 </blockquote>
-<h2 id="admin-rendering-14"><a class="header" href="#admin-rendering-14">Admin Rendering</a></h2>
+<h2 id="admin-rendering-15"><a class="header" href="#admin-rendering-15">Admin Rendering</a></h2>
 <p>Sub-fields are organized into tabs with a tab bar at the top. The first tab is active by default. Clicking a tab button switches the visible panel. Each tab can have its own description text.</p>
 <h2 id="comparison-with-other-layout-types"><a class="header" href="#comparison-with-other-layout-types">Comparison with Other Layout Types</a></h2>
 <div class="table-wrapper">
@@ -3348,9 +3415,9 @@ return M
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="code"><a class="header" href="#code">Code</a></h1>
 <p>Code editor field stored as a plain text string. Renders a CodeMirror 6 editor in the admin UI with syntax highlighting and language-aware features.</p>
-<h2 id="sqlite-storage-9"><a class="header" href="#sqlite-storage-9">SQLite Storage</a></h2>
+<h2 id="sqlite-storage-10"><a class="header" href="#sqlite-storage-10">SQLite Storage</a></h2>
 <p><code>TEXT</code> column containing the raw code string.</p>
-<h2 id="definition-14"><a class="header" href="#definition-14">Definition</a></h2>
+<h2 id="definition-15"><a class="header" href="#definition-15">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.code({
     name = "metadata",
     admin = {
@@ -3385,7 +3452,7 @@ return M
 </tbody>
 </table>
 </div>
-<h2 id="admin-rendering-15"><a class="header" href="#admin-rendering-15">Admin Rendering</a></h2>
+<h2 id="admin-rendering-16"><a class="header" href="#admin-rendering-16">Admin Rendering</a></h2>
 <p>Renders as a CodeMirror 6 editor with line numbers, bracket matching, code folding, auto-completion, and search. Falls back to a plain <code>&lt;textarea&gt;</code> if the CodeMirror bundle is not loaded.</p>
 <h2 id="notes-4"><a class="header" href="#notes-4">Notes</a></h2>
 <ul>
@@ -3443,7 +3510,7 @@ return {
 <li><strong>Has-one</strong> (default): stores the referenced media document’s ID in a TEXT column on the parent table.</li>
 <li><strong>Has-many</strong> (<code>has_many = true</code>): stores references in a junction table <code>{collection}_{field}</code>, same as has-many relationships.</li>
 </ul>
-<h2 id="definition-15"><a class="header" href="#definition-15">Definition</a></h2>
+<h2 id="definition-16"><a class="header" href="#definition-16">Definition</a></h2>
 <p>Single file (has-one):</p>
 <pre><code class="language-lua">crap.fields.upload({
     name = "featured_image",
@@ -3509,7 +3576,7 @@ return {
   ]
 }
 </code></pre>
-<h2 id="admin-rendering-16"><a class="header" href="#admin-rendering-16">Admin Rendering</a></h2>
+<h2 id="admin-rendering-17"><a class="header" href="#admin-rendering-17">Admin Rendering</a></h2>
 <ul>
 <li><strong>Has-one</strong>: renders as a searchable input with filename as the display label and image preview above.</li>
 <li><strong>Has-many</strong>: renders as a searchable multi-select widget (same as has-many relationships) with chips for selected files.</li>
@@ -3547,7 +3614,7 @@ crap.fields.upload({
 </table>
 </div>
 <p>Unlike arrays (which have typed columns per sub-field), blocks use a single JSON <code>data</code> column because each block type can have a different schema.</p>
-<h2 id="definition-16"><a class="header" href="#definition-16">Definition</a></h2>
+<h2 id="definition-17"><a class="header" href="#definition-17">Definition</a></h2>
 <pre><code class="language-lua">crap.fields.blocks({
     name = "content",
     blocks = {
@@ -3827,7 +3894,7 @@ return M
 }
 </code></pre>
 <p>Blocks without an <code>image_url</code> show a generic widget icon. Both <code>group</code> and <code>image_url</code> can be combined with the card picker.</p>
-<h2 id="admin-rendering-17"><a class="header" href="#admin-rendering-17">Admin Rendering</a></h2>
+<h2 id="admin-rendering-18"><a class="header" href="#admin-rendering-18">Admin Rendering</a></h2>
 <p>Renders as a repeatable fieldset with:</p>
 <ul>
 <li>Drag handle for drag-and-drop reordering</li>
@@ -3842,7 +3909,7 @@ return M
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="globals"><a class="header" href="#globals">Globals</a></h1>
 <p>Globals are single-document collections for site-wide settings. Each global stores exactly one row.</p>
-<h2 id="definition-17"><a class="header" href="#definition-17">Definition</a></h2>
+<h2 id="definition-18"><a class="header" href="#definition-18">Definition</a></h2>
 <p>Define globals in <code>globals/*.lua</code> using <code>crap.globals.define()</code>:</p>
 <pre><code class="language-lua">-- globals/site_settings.lua
 crap.globals.define("site_settings", {
@@ -4506,16 +4573,17 @@ return M
 <h2 id="concurrency"><a class="header" href="#concurrency">Concurrency</a></h2>
 <p>Hooks execute in a pool of Lua VMs, allowing concurrent hook execution across requests. The pool size is configurable:</p>
 <pre><code class="language-toml">[hooks]
-vm_pool_size = 4  # default: min(available_parallelism, 8)
+vm_pool_size = 8  # default: max(available_parallelism, 4), capped at 32
 </code></pre>
 <p>Each VM is fully initialized at startup with the same configuration (package paths, API registration, CRUD functions, <code>init.lua</code> execution). When a request needs to execute a hook, it acquires a VM from the pool and returns it when done. This prevents hook execution from serializing under concurrent load.</p>
 <h2 id="resource-limits"><a class="header" href="#resource-limits">Resource Limits</a></h2>
-<p>Lua VMs have configurable instruction and memory limits to prevent runaway hooks:</p>
+<p>Lua VMs have configurable instruction, memory, and recursion limits to prevent runaway hooks:</p>
 <pre><code class="language-toml">[hooks]
-max_instructions = 10000000       # per hook invocation (0 = unlimited)
-max_memory = 52428800             # per VM in bytes, 50 MB (0 = unlimited)
-allow_private_networks = false    # block HTTP to internal IPs
-http_max_response_bytes = 10485760  # 10 MB (increase for large file downloads)
+max_depth = 3                      # max hook recursion depth (hook → CRUD → hook; 0 = no hooks from Lua CRUD)
+max_instructions = 10000000        # per hook invocation (0 = unlimited)
+max_memory = 52428800              # per VM in bytes, 50 MB (0 = unlimited)
+allow_private_networks = false     # block HTTP to internal IPs
+http_max_response_bytes = 10485760 # 10 MB (increase for large file downloads)
 </code></pre>
 <ul>
 <li><strong>Instruction limit</strong> — a hook that exceeds the instruction count is terminated with an error. The default (10M) is generous for complex hooks.</li>
@@ -4719,7 +4787,7 @@ end
 </tbody>
 </table>
 </div>
-<h2 id="definition-18"><a class="header" href="#definition-18">Definition</a></h2>
+<h2 id="definition-19"><a class="header" href="#definition-19">Definition</a></h2>
 <pre><code class="language-lua">{
     name = "title",
     type = "text",
@@ -6564,13 +6632,20 @@ grpcurl -plaintext -d '{
 <tbody>
 <tr><td><code>crap.collections</code></td><td>Collection definition and CRUD operations</td></tr>
 <tr><td><code>crap.globals</code></td><td>Global definition and get/update operations</td></tr>
+<tr><td><code>crap.fields</code></td><td>Field factory functions (<code>crap.fields.text()</code>, etc.)</td></tr>
 <tr><td><code>crap.hooks</code></td><td>Global hook registration</td></tr>
+<tr><td><code>crap.jobs</code></td><td>Job definition</td></tr>
 <tr><td><code>crap.log</code></td><td>Structured logging</td></tr>
 <tr><td><code>crap.util</code></td><td>Utility functions</td></tr>
 <tr><td><code>crap.auth</code></td><td>Password hashing and verification (Argon2id)</td></tr>
 <tr><td><code>crap.env</code></td><td>Read-only environment variable access</td></tr>
 <tr><td><code>crap.http</code></td><td>Outbound HTTP requests (blocking)</td></tr>
 <tr><td><code>crap.config</code></td><td>Read-only access to crap.toml values</td></tr>
+<tr><td><code>crap.locale</code></td><td>Locale configuration queries</td></tr>
+<tr><td><code>crap.email</code></td><td>Send email via configured SMTP</td></tr>
+<tr><td><code>crap.crypto</code></td><td>Cryptographic utilities (HMAC, random bytes, hashing)</td></tr>
+<tr><td><code>crap.schema</code></td><td>Runtime schema introspection</td></tr>
+<tr><td><code>crap.richtext</code></td><td>Custom rich text node registration</td></tr>
 </tbody>
 </table>
 </div>
@@ -6590,13 +6665,13 @@ grpcurl -plaintext -d '{
 <pre><code>crap.collections CRUD functions are only available inside hooks
 with transaction context (before_change, before_delete, etc.)
 </code></pre>
-<h2 id="two-lua-vms"><a class="header" href="#two-lua-vms">Two Lua VMs</a></h2>
-<p>Crap CMS uses two Lua VMs:</p>
+<h2 id="lua-vm-architecture"><a class="header" href="#lua-vm-architecture">Lua VM Architecture</a></h2>
+<p>Crap CMS uses two stages of Lua execution:</p>
 <ol>
-<li><strong>Startup VM</strong> — loads collection/global definitions and runs <code>init.lua</code>. Used only during initialization.</li>
-<li><strong>HookRunner VM</strong> — handles runtime hook execution. Gets its own copy of the <code>crap.*</code> API with CRUD functions registered.</li>
+<li><strong>Startup VM</strong> — a single VM that loads collection/global definitions and runs <code>init.lua</code>. Used only during initialization, then discarded.</li>
+<li><strong>HookRunner pool</strong> — a pool of Lua VMs for runtime hook execution (size configured via <code>hooks.vm_pool_size</code>). Each VM gets its own copy of the <code>crap.*</code> API with CRUD functions registered.</li>
 </ol>
-<p>Both VMs have the config directory on their package path, so <code>require("hooks.posts")</code> works in both.</p>
+<p>All VMs have the config directory on their package path, so <code>require("hooks.posts")</code> works in both stages.</p>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="crapcollections"><a class="header" href="#crapcollections">crap.collections</a></h1>
 <p>Collection definition and runtime CRUD operations.</p>
@@ -7388,7 +7463,7 @@ local resp = crap.http.request({
 <p><strong>Returns:</strong> any — The value at that key path, or <code>nil</code> if the path doesn’t exist.</p>
 <pre><code class="language-lua">local port = crap.config.get("server.admin_port")   -- 3000
 local host = crap.config.get("server.host")          -- "0.0.0.0"
-local dev = crap.config.get("admin.dev_mode")        -- true
+local dev = crap.config.get("admin.dev_mode")        -- false
 local depth = crap.config.get("depth.max_depth")     -- 10
 local expiry = crap.config.get("auth.token_expiry")  -- 7200
 </code></pre>
@@ -7404,7 +7479,7 @@ local expiry = crap.config.get("auth.token_expiry")  -- 7200
 <tr><td><code>server.grpc_port</code></td><td>integer</td><td>50051</td></tr>
 <tr><td><code>server.host</code></td><td>string</td><td>“0.0.0.0”</td></tr>
 <tr><td><code>database.path</code></td><td>string</td><td>“data/crap.db”</td></tr>
-<tr><td><code>admin.dev_mode</code></td><td>boolean</td><td>true</td></tr>
+<tr><td><code>admin.dev_mode</code></td><td>boolean</td><td>false</td></tr>
 <tr><td><code>auth.secret</code></td><td>string</td><td>“”</td></tr>
 <tr><td><code>auth.token_expiry</code></td><td>integer</td><td>7200</td></tr>
 <tr><td><code>depth.default_depth</code></td><td>integer</td><td>1</td></tr>
@@ -7615,6 +7690,66 @@ for _, g in ipairs(globals) do
     print(g.slug, g.labels.singular)
 end
 </code></pre>
+<div style="break-before: page; page-break-before: always;"></div>
+<h1 id="craprichtext"><a class="header" href="#craprichtext">crap.richtext</a></h1>
+<p>Register custom ProseMirror node types for the rich text editor and render rich text content to HTML.</p>
+<h2 id="functions-6"><a class="header" href="#functions-6">Functions</a></h2>
+<h3 id="craprichtextregister_nodename-spec"><a class="header" href="#craprichtextregister_nodename-spec"><code>crap.richtext.register_node(name, spec)</code></a></h3>
+<p>Register a custom rich text node type.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>name</code> (string) — Node name (alphanumeric + underscores only).</li>
+<li><code>spec</code> (table) — Node specification.</li>
+</ul>
+<p><strong>Spec fields:</strong></p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Field</th><th>Type</th><th>Default</th><th>Description</th></tr>
+</thead>
+<tbody>
+<tr><td><code>label</code></td><td>string</td><td><code>name</code></td><td>Display label in the editor toolbar</td></tr>
+<tr><td><code>inline</code></td><td>boolean</td><td><code>false</code></td><td>Whether this is an inline node (vs block)</td></tr>
+<tr><td><code>attrs</code></td><td>table[]</td><td><code>{}</code></td><td>Node attributes (name, type, options)</td></tr>
+<tr><td><code>searchable_attrs</code></td><td>string[]</td><td><code>{}</code></td><td>Attribute names included in full-text search</td></tr>
+<tr><td><code>render</code></td><td>function</td><td><code>nil</code></td><td>Custom HTML render function <code>(attrs) -&gt; string</code></td></tr>
+</tbody>
+</table>
+</div>
+<pre><code class="language-lua">crap.richtext.register_node("callout", {
+    label = "Callout",
+    attrs = {
+        { name = "type", type = "select", options = {
+            { label = "Info", value = "info" },
+            { label = "Warning", value = "warning" },
+        }},
+        { name = "body", type = "text" },
+    },
+    searchable_attrs = { "body" },
+    render = function(attrs)
+        return string.format(
+            '&lt;div class="callout callout-%s"&gt;%s&lt;/div&gt;',
+            attrs.type or "info",
+            attrs.body or ""
+        )
+    end,
+})
+</code></pre>
+<h3 id="craprichtextrendercontent"><a class="header" href="#craprichtextrendercontent"><code>crap.richtext.render(content)</code></a></h3>
+<p>Render a rich text JSON string to HTML, including any registered custom nodes.</p>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li><code>content</code> (string) — ProseMirror JSON content string.</li>
+</ul>
+<p><strong>Returns:</strong> string — Rendered HTML.</p>
+<pre><code class="language-lua">local html = crap.richtext.render(doc.body)
+</code></pre>
+<h2 id="notes-9"><a class="header" href="#notes-9">Notes</a></h2>
+<ul>
+<li>Register nodes in <code>init.lua</code> so they’re available to all VMs.</li>
+<li>Custom nodes appear in the rich text editor toolbar for fields that include them.</li>
+<li>The <code>render</code> function is called during <code>crap.richtext.render()</code> to convert custom nodes to HTML.</li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="crapjobs"><a class="header" href="#crapjobs">crap.jobs</a></h1>
 <p>Background job definition and queuing.</p>
@@ -8027,6 +8162,9 @@ audit purposes. Hooks still fire on all MCP writes (same lifecycle as admin/gRPC
 <p>Supported operators: <code>equals</code>, <code>not_equals</code>, <code>greater_than</code>, <code>greater_than_equal</code>,
 <code>less_than</code>, <code>less_than_equal</code>, <code>like</code>, <code>contains</code>, <code>in</code> (array), <code>not_in</code> (array),
 <code>exists</code>, <code>not_exists</code>.</p>
+<blockquote>
+<p><strong>Note:</strong> MCP uses shortened operator names (<code>greater_than_equal</code>, <code>less_than_equal</code>) compared to the gRPC/Lua API which uses <code>greater_than_or_equal</code> and <code>less_than_or_equal</code>.</p>
+</blockquote>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="grpc-api-3"><a class="header" href="#grpc-api-3">gRPC API</a></h1>
 <p>Crap CMS exposes a gRPC API via Tonic for programmatic access to all content operations.</p>
@@ -9180,7 +9318,7 @@ end)
 </ol>
 <p>If any hook returns <code>false</code>/<code>nil</code>, the event is suppressed and no further hooks run.</p>
 <h3 id="crud-access-2"><a class="header" href="#crud-access-2">CRUD Access</a></h3>
-<p><code>before_broadcast</code> hooks run inside the transaction and <strong>do</strong> have CRUD access via <code>crap.collections.*</code> and <code>crap.globals.*</code>.</p>
+<p><code>before_broadcast</code> hooks run after the transaction has committed and do <strong>not</strong> have CRUD access.</p>
 <h2 id="live-setting-functions"><a class="header" href="#live-setting-functions"><code>live</code> Setting Functions</a></h2>
 <p>When <code>live</code> is a string (Lua function reference), the function is called before <code>before_broadcast</code> hooks:</p>
 <pre><code class="language-lua">crap.collections.define("posts", {
@@ -10658,8 +10796,8 @@ CREATE TABLE posts_slides (
 2. Begin transaction
 3. Run before-hooks (with transaction access)
 4. Execute query (inside same transaction)
-5. Commit transaction
-6. Fire after-hooks (background, no transaction)
+5. Run after-hooks (inside same transaction, errors roll back)
+6. Commit transaction
 </code></pre>
 <div style="break-before: page; page-break-before: always;"></div>
 <h1 id="api-surface-comparison"><a class="header" href="#api-surface-comparison">API Surface Comparison</a></h1>
