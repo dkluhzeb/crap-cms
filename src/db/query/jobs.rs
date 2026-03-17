@@ -326,6 +326,19 @@ pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> 
 
 /// Delete completed/failed job runs older than the given threshold.
 /// Returns the number of rows deleted.
+/// Cancel pending jobs. Optionally filter by job slug.
+pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64> {
+    let deleted = if let Some(slug) = slug {
+        conn.execute(
+            "DELETE FROM _crap_jobs WHERE status = 'pending' AND name = ?1",
+            &[DbValue::Text(slug.to_string())],
+        )? as i64
+    } else {
+        conn.execute("DELETE FROM _crap_jobs WHERE status = 'pending'", &[])? as i64
+    };
+    Ok(deleted)
+}
+
 pub fn purge_old_jobs(conn: &dyn DbConnection, older_than_secs: u64) -> Result<i64> {
     let (offset_sql, offset_param) = conn.date_offset_expr(older_than_secs as i64, 1);
     let deleted = conn.execute(
