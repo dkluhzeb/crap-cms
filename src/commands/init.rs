@@ -1,15 +1,50 @@
 //! `init` command — scaffold a new config directory with interactive survey.
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use std::path::PathBuf;
 
 /// Handle the `init` subcommand — scaffold directory, then optionally create collections
 /// and a first admin user via interactive survey.
 #[cfg(not(tarpaulin_include))]
-pub fn run(dir: Option<PathBuf>) -> Result<()> {
+pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
     use dialoguer::{Confirm, Input};
 
-    let config_dir = dir.clone().unwrap_or_else(|| PathBuf::from("./crap-cms"));
+    let config_dir = match dir {
+        Some(d) => d,
+        None if no_input => bail!("Directory path is required with --no-input"),
+        None => {
+            let path: String = Input::new()
+                .with_prompt("Project path")
+                .default("./crap-cms".to_string())
+                .interact_text()
+                .context("Failed to read project path")?;
+            PathBuf::from(path)
+        }
+    };
+
+    if no_input {
+        // Non-interactive: scaffold with defaults, create auth + upload collections
+        let opts = crate::scaffold::InitOptions::default();
+        crate::scaffold::init(Some(config_dir.clone()), &opts)?;
+
+        let auth_opts = crate::scaffold::CollectionOptions {
+            auth: true,
+            ..crate::scaffold::CollectionOptions::default()
+        };
+        crate::scaffold::make_collection(&config_dir, "users", None, &auth_opts)?;
+
+        let upload_opts = crate::scaffold::CollectionOptions {
+            upload: true,
+            ..crate::scaffold::CollectionOptions::default()
+        };
+        crate::scaffold::make_collection(&config_dir, "media", None, &upload_opts)?;
+
+        println!();
+        println!("Start the server: crap-cms serve {}", config_dir.display());
+        return Ok(());
+    }
+
+    // --- Interactive mode ---
 
     // Collect init options via interactive prompts
     let admin_port: u16 = Input::new()
@@ -66,7 +101,7 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
     };
 
     // 1. Scaffold the base directory
-    crate::scaffold::init(dir, &opts)?;
+    crate::scaffold::init(Some(config_dir.clone()), &opts)?;
 
     println!();
 
@@ -85,11 +120,29 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             })
             .interact_text()
             .context("Failed to read auth slug")?;
+
+        // Prompt for custom fields (email/password are always included automatically)
+        let fields = if Confirm::new()
+            .with_prompt("Add custom fields? (email/password are included automatically)")
+            .default(false)
+            .interact()
+            .context("Failed to read custom fields preference")?
+        {
+            crate::scaffold::interactive_field_wizard(enable_locale)?
+        } else {
+            vec![]
+        };
+
         let opts = crate::scaffold::CollectionOptions {
             auth: true,
             ..crate::scaffold::CollectionOptions::default()
         };
-        crate::scaffold::make_collection(&config_dir, &slug, None, &opts)?;
+        let fields_opt = if fields.is_empty() {
+            None
+        } else {
+            Some(fields)
+        };
+        crate::scaffold::make_collection(&config_dir, &slug, fields_opt.as_deref(), &opts)?;
         Some(slug)
     } else {
         None
@@ -108,7 +161,7 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             let cfg =
                 crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
             let (pool, registry) = super::load_config_and_sync(&config_dir)?;
-            super::user::user_create(
+            match super::user::user_create(
                 &pool,
                 &registry,
                 auth_collection,
@@ -116,7 +169,14 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
                 None,
                 vec![],
                 &cfg.auth.password_policy,
-            )?;
+            ) {
+                Ok(()) => {}
+                Err(e) => {
+                    println!("Could not create user: {e}");
+                    println!("You can create a user later with:");
+                    println!("  crap-cms user create {}", config_dir.display());
+                }
+            }
         } else {
             println!("You can create a user later with:");
             println!("  crap-cms user create {}", config_dir.display());
@@ -139,11 +199,29 @@ pub fn run(dir: Option<PathBuf>) -> Result<()> {
             })
             .interact_text()
             .context("Failed to read upload slug")?;
+
+        // Prompt for custom fields (filename/mime_type/size are included automatically)
+        let fields = if Confirm::new()
+            .with_prompt("Add custom fields? (filename/mime_type/size are included automatically)")
+            .default(false)
+            .interact()
+            .context("Failed to read custom fields preference")?
+        {
+            crate::scaffold::interactive_field_wizard(enable_locale)?
+        } else {
+            vec![]
+        };
+
         let opts = crate::scaffold::CollectionOptions {
             upload: true,
             ..crate::scaffold::CollectionOptions::default()
         };
-        crate::scaffold::make_collection(&config_dir, &slug, None, &opts)?;
+        let fields_opt = if fields.is_empty() {
+            None
+        } else {
+            Some(fields)
+        };
+        crate::scaffold::make_collection(&config_dir, &slug, fields_opt.as_deref(), &opts)?;
     }
 
     // 5. Additional collections

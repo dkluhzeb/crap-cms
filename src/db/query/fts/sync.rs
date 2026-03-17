@@ -453,8 +453,10 @@ mod tests {
     #[test]
     fn sync_fts_table_rejects_invalid_field_names() {
         let (_dir, conn) = setup_db();
-        let mut def = simple_def(vec![text_field("title")]);
-        def.admin.list_searchable_fields = vec!["valid".into(), "has space".into()];
+        // Include the bad-named fields in the definition so they aren't filtered
+        // out as non-existent — tests that the SQL validation layer catches them.
+        let mut def = simple_def(vec![text_field("title"), text_field("has space")]);
+        def.admin.list_searchable_fields = vec!["title".into(), "has space".into()];
         let result = sync_fts_table(&conn, "posts", &def, &LocaleConfig::default());
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -468,7 +470,11 @@ mod tests {
     #[test]
     fn sync_fts_table_rejects_sql_injection_field_names() {
         let (_dir, conn) = setup_db();
-        let mut def = simple_def(vec![text_field("title")]);
+        // Include the injection-named field in the definition so it reaches the validator.
+        let mut def = simple_def(vec![
+            text_field("title"),
+            text_field("title; DROP TABLE posts"),
+        ]);
         def.admin.list_searchable_fields = vec!["title; DROP TABLE posts".into()];
         let result = sync_fts_table(&conn, "posts", &def, &LocaleConfig::default());
         assert!(result.is_err());

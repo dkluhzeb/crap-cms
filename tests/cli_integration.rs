@@ -360,10 +360,11 @@ fn make_collection_default() {
 #[test]
 fn make_collection_fields_shorthand() {
     let tmp = tempfile::tempdir().expect("tempdir");
+    let fields = scaffold::parse_fields_shorthand("title:text:required,body:textarea").unwrap();
     scaffold::make_collection(
         tmp.path(),
         "articles",
-        Some("title:text:required,body:textarea"),
+        Some(&fields),
         &scaffold::CollectionOptions::default(),
     )
     .unwrap();
@@ -442,10 +443,11 @@ fn make_collection_roundtrip() {
     let config_dir = tmp.path().join("project");
     scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
 
+    let fields = scaffold::parse_fields_shorthand("title:text:required,body:richtext").unwrap();
     scaffold::make_collection(
         &config_dir,
         "articles",
-        Some("title:text:required,body:richtext"),
+        Some(&fields),
         &scaffold::CollectionOptions::default(),
     )
     .unwrap();

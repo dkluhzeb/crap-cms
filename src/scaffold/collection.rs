@@ -54,20 +54,34 @@ impl Default for CollectionOptions {
     }
 }
 
-pub(crate) struct FieldStub {
-    pub(crate) name: String,
-    pub(crate) field_type: String,
-    pub(crate) required: bool,
-    pub(crate) localized: bool,
+pub struct FieldStub {
+    pub name: String,
+    pub field_type: String,
+    pub required: bool,
+    pub localized: bool,
+    pub fields: Vec<FieldStub>,
+    pub blocks: Vec<BlockStub>,
+    pub tabs: Vec<TabStub>,
+}
+
+pub struct BlockStub {
+    pub block_type: String,
+    pub label: String,
+    pub fields: Vec<FieldStub>,
+}
+
+pub struct TabStub {
+    pub label: String,
+    pub fields: Vec<FieldStub>,
 }
 
 /// Generate a collection Lua file at `<config_dir>/collections/<slug>.lua`.
 ///
-/// Optionally accepts inline field shorthand (e.g., "title:text:required,body:textarea").
+/// Accepts pre-parsed field stubs or `None` for defaults.
 pub fn make_collection(
     config_dir: &Path,
     slug: &str,
-    fields_shorthand: Option<&str>,
+    fields: Option<&[FieldStub]>,
     opts: &CollectionOptions,
 ) -> Result<()> {
     super::validate_slug(slug)?;
@@ -89,23 +103,34 @@ pub fn make_collection(
     let label_plural = pluralize(&label_singular);
     let timestamps = if opts.no_timestamps { "false" } else { "true" };
 
-    let fields = match fields_shorthand {
-        Some(s) => parse_fields_shorthand(s)?,
-        None if opts.upload => vec![FieldStub {
-            name: "alt".to_string(),
-            field_type: "text".to_string(),
-            required: false,
-            localized: false,
-        }],
-        None => vec![FieldStub {
-            name: "title".to_string(),
-            field_type: "text".to_string(),
-            required: true,
-            localized: false,
-        }],
+    let default_fields;
+    let fields = match fields {
+        Some(f) => f,
+        None if opts.upload => &[] as &[FieldStub],
+        None if opts.auth => &[] as &[FieldStub],
+        None => {
+            default_fields = [FieldStub {
+                name: "title".to_string(),
+                field_type: "text".to_string(),
+                required: true,
+                localized: false,
+                fields: vec![],
+                blocks: vec![],
+                tabs: vec![],
+            }];
+            &default_fields
+        }
     };
 
-    let title_field = fields.first().map(|f| f.name.as_str()).unwrap_or("title");
+    // Pick the first scalar (non-container) field for use_as_title / list_searchable_fields.
+    let title_field = fields
+        .iter()
+        .find(|f| {
+            !CONTAINER_TYPES.contains(&f.field_type.as_str())
+                && f.field_type != "blocks"
+                && f.field_type != "tabs"
+        })
+        .map(|f| f.name.as_str());
 
     let mut lua = String::new();
     lua.push_str(&format!("crap.collections.define(\"{}\", {{\n", slug));
@@ -137,34 +162,32 @@ pub fn make_collection(
     if opts.versions {
         lua.push_str("    versions = true,\n");
     }
-    let use_as_title = if opts.auth { "email" } else { title_field };
+    let use_as_title = if opts.auth {
+        Some("email")
+    } else if opts.upload {
+        Some("filename")
+    } else {
+        title_field
+    };
     lua.push_str("    admin = {\n");
-    lua.push_str(&format!("        use_as_title = \"{}\",\n", use_as_title));
+    if let Some(title) = use_as_title {
+        lua.push_str(&format!("        use_as_title = \"{}\",\n", title));
+    }
 
     if !opts.no_timestamps {
         lua.push_str("        default_sort = \"-created_at\",\n");
     }
-    lua.push_str(&format!(
-        "        list_searchable_fields = {{ \"{}\" }},\n",
-        use_as_title
-    ));
+    if let Some(title) = use_as_title {
+        lua.push_str(&format!(
+            "        list_searchable_fields = {{ \"{}\" }},\n",
+            title
+        ));
+    }
     lua.push_str("    },\n");
     lua.push_str("    fields = {\n");
 
-    for field in &fields {
-        lua.push_str(&format!("        crap.fields.{}({{\n", field.field_type));
-        lua.push_str(&format!("            name = \"{}\",\n", field.name));
-
-        if field.required {
-            lua.push_str("            required = true,\n");
-        }
-        if field.localized {
-            lua.push_str("            localized = true,\n");
-        }
-        if let Some(stub) = type_specific_stub(&field.field_type) {
-            lua.push_str(stub);
-        }
-        lua.push_str("        }),\n");
+    for field in fields {
+        write_field_lua(&mut lua, field, 8);
     }
 
     lua.push_str("    },\n");
@@ -237,84 +260,347 @@ fn pluralize(s: &str) -> String {
     }
 }
 
-/// Return type-specific Lua stub lines for complex field types.
-pub(crate) fn type_specific_stub(field_type: &str) -> Option<&'static str> {
+/// Return type-specific Lua stub lines for non-container field types.
+pub fn type_specific_stub(field_type: &str) -> Option<&'static str> {
     match field_type {
         "select" | "radio" => {
-            Some("            options = { { label = \"Option 1\", value = \"option_1\" } },\n")
+            Some("options = { { label = \"Option 1\", value = \"option_1\" } },\n")
         }
         "relationship" => Some(
-            "            relationship = { collection = \"other_collection\" }, -- change to target collection slug\n",
+            "relationship = { collection = \"other_collection\" }, -- change to target collection slug\n",
         ),
-        "upload" => Some("            relationship = { collection = \"media\" },\n"),
-        "array" => Some("            fields = { crap.fields.text({ name = \"item\" }) },\n"),
-        "blocks" => Some(
-            "            blocks = { { type = \"block_type\", label = \"Block\", fields = { crap.fields.text({ name = \"content\" }) } } },\n",
-        ),
-        "group" | "collapsible" | "row" => {
-            Some("            fields = { crap.fields.text({ name = \"item\" }) },\n")
-        }
-        "tabs" => Some(
-            "            tabs = { { label = \"Tab 1\", fields = { crap.fields.text({ name = \"item\" }) } } },\n",
-        ),
+        "upload" => Some("relationship = { collection = \"media\" },\n"),
         "join" => Some(
-            "            collection = \"other_collection\", -- target collection slug\n            on = \"field_name\",               -- relationship field on target that points back\n",
+            "collection = \"other_collection\", -- target collection slug\n            on = \"field_name\",               -- relationship field on target that points back\n",
         ),
-        "code" => Some("            admin = { language = \"javascript\" },\n"),
+        "code" => Some("admin = { language = \"javascript\" },\n"),
         _ => None,
     }
 }
 
-/// Parse inline field shorthand: "title:text:required,status:select,body:textarea:localized"
-///
-/// Modifiers after the type are order-independent flags: `required`, `localized`.
-/// E.g., `"title:text:required:localized"` or `"title:text:localized:required"`.
-pub(crate) fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
-    let mut fields = Vec::new();
-    for part in s.split(',') {
-        let part = part.trim();
+/// Write a single field's Lua representation with proper indentation and recursion.
+pub fn write_field_lua(lua: &mut String, field: &FieldStub, indent: usize) {
+    let pad = " ".repeat(indent);
+    let inner = " ".repeat(indent + 4);
 
+    lua.push_str(&format!("{}crap.fields.{}({{\n", pad, field.field_type));
+    lua.push_str(&format!("{}name = \"{}\",\n", inner, field.name));
+
+    if field.required {
+        lua.push_str(&format!("{}required = true,\n", inner));
+    }
+    if field.localized {
+        lua.push_str(&format!("{}localized = true,\n", inner));
+    }
+
+    // Nested fields (group, array, row, collapsible)
+    if !field.fields.is_empty() {
+        lua.push_str(&format!("{}fields = {{\n", inner));
+        for sub in &field.fields {
+            write_field_lua(lua, sub, indent + 8);
+        }
+        lua.push_str(&format!("{}}},\n", inner));
+    } else if !field.blocks.is_empty() {
+        // Blocks
+        lua.push_str(&format!("{}blocks = {{\n", inner));
+        for block in &field.blocks {
+            lua.push_str(&format!("{}{{\n", " ".repeat(indent + 8)));
+            lua.push_str(&format!(
+                "{}type = \"{}\",\n",
+                " ".repeat(indent + 12),
+                block.block_type
+            ));
+            lua.push_str(&format!(
+                "{}label = \"{}\",\n",
+                " ".repeat(indent + 12),
+                block.label
+            ));
+            lua.push_str(&format!("{}fields = {{\n", " ".repeat(indent + 12)));
+            for sub in &block.fields {
+                write_field_lua(lua, sub, indent + 16);
+            }
+            lua.push_str(&format!("{}}},\n", " ".repeat(indent + 12)));
+            lua.push_str(&format!("{}}},\n", " ".repeat(indent + 8)));
+        }
+        lua.push_str(&format!("{}}},\n", inner));
+    } else if !field.tabs.is_empty() {
+        // Tabs
+        lua.push_str(&format!("{}tabs = {{\n", inner));
+        for tab in &field.tabs {
+            lua.push_str(&format!("{}{{\n", " ".repeat(indent + 8)));
+            lua.push_str(&format!(
+                "{}label = \"{}\",\n",
+                " ".repeat(indent + 12),
+                tab.label
+            ));
+            lua.push_str(&format!("{}fields = {{\n", " ".repeat(indent + 12)));
+            for sub in &tab.fields {
+                write_field_lua(lua, sub, indent + 16);
+            }
+            lua.push_str(&format!("{}}},\n", " ".repeat(indent + 12)));
+            lua.push_str(&format!("{}}},\n", " ".repeat(indent + 8)));
+        }
+        lua.push_str(&format!("{}}},\n", inner));
+    } else if CONTAINER_TYPES.contains(&field.field_type.as_str()) {
+        // Container with no user-defined children — emit default stub
+        lua.push_str(&format!(
+            "{}fields = {{ crap.fields.text({{ name = \"item\" }}) }},\n",
+            inner
+        ));
+    } else if field.field_type == "blocks" {
+        lua.push_str(&format!(
+            "{}blocks = {{ {{ type = \"block_type\", label = \"Block\", fields = {{ crap.fields.text({{ name = \"content\" }}) }} }} }},\n",
+            inner
+        ));
+    } else if field.field_type == "tabs" {
+        lua.push_str(&format!(
+            "{}tabs = {{ {{ label = \"Tab 1\", fields = {{ crap.fields.text({{ name = \"item\" }}) }} }} }},\n",
+            inner
+        ));
+    } else if let Some(stub) = type_specific_stub(&field.field_type) {
+        lua.push_str(&format!("{}{}", inner, stub));
+    }
+
+    lua.push_str(&format!("{}}}),\n", pad));
+}
+
+/// Container field types that support nested subfields.
+const CONTAINER_TYPES: &[&str] = &["group", "array", "row", "collapsible"];
+
+/// Split `s` on `sep` only when parenthesis depth is zero.
+fn split_at_depth_zero(s: &str, sep: char) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            c if c == sep && depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts
+}
+
+/// Find the index of the closing `)` that matches the opening `(` at position 0.
+fn find_matching_paren(s: &str) -> Result<usize> {
+    let mut depth = 0usize;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    bail!("Unbalanced parentheses — missing closing ')'");
+}
+
+/// Parse a single field token like `name:type(subfields):required:localized`.
+fn parse_field_token(token: &str) -> Result<FieldStub> {
+    let token = token.trim();
+    if token.is_empty() {
+        bail!("Empty field token");
+    }
+
+    // Split on ':' at depth zero to handle colons inside parens
+    let segments = split_at_depth_zero(token, ':');
+    if segments.len() < 2 {
+        bail!(
+            "Invalid field shorthand '{}' — expected 'name:type[:required][:localized]'",
+            token
+        );
+    }
+
+    let name = segments[0].to_string();
+    let type_segment = segments[1];
+
+    // Check if there's a '(' in the type segment indicating subfields
+    let (field_type, subfield_content) = if let Some(paren_pos) = type_segment.find('(') {
+        let ft = type_segment[..paren_pos].to_lowercase();
+        let rest = &type_segment[paren_pos..];
+        let close = find_matching_paren(rest)?;
+        let content = &rest[1..close];
+        // Anything after the closing paren in this segment should be empty
+        let after = &rest[close + 1..];
+        if !after.is_empty() {
+            bail!(
+                "Unexpected characters '{}' after closing ')' in field '{}'",
+                after,
+                name
+            );
+        }
+        (ft, Some(content.to_string()))
+    } else {
+        (type_segment.to_lowercase(), None)
+    };
+
+    if !VALID_FIELD_TYPES.contains(&field_type.as_str()) {
+        bail!(
+            "Unknown field type '{}' — valid types: {}",
+            field_type,
+            VALID_FIELD_TYPES.join(", ")
+        );
+    }
+
+    // Parse modifiers from remaining segments
+    let mut required = false;
+    let mut localized = false;
+    for seg in &segments[2..] {
+        match *seg {
+            "required" => required = true,
+            "localized" => localized = true,
+            "index" => {} // accepted but not stored
+            other => bail!(
+                "Unknown modifier '{}' in field '{}' — valid: required, localized, index",
+                other,
+                name
+            ),
+        }
+    }
+
+    // Parse subfield content based on type
+    let mut fields = Vec::new();
+    let mut blocks = Vec::new();
+    let mut tabs = Vec::new();
+
+    if let Some(content) = subfield_content {
+        if CONTAINER_TYPES.contains(&field_type.as_str()) {
+            fields = parse_fields_shorthand(&content)?;
+        } else if field_type == "blocks" {
+            blocks = parse_block_entries(&content)?;
+        } else if field_type == "tabs" {
+            tabs = parse_tab_entries(&content)?;
+        } else {
+            bail!(
+                "Field type '{}' does not support subfields — only group, array, row, collapsible, blocks, and tabs do",
+                field_type
+            );
+        }
+    }
+
+    Ok(FieldStub {
+        name,
+        field_type,
+        required,
+        localized,
+        fields,
+        blocks,
+        tabs,
+    })
+}
+
+/// Parse block entries: `type|label(fields),type|label(fields),...`
+fn parse_block_entries(s: &str) -> Result<Vec<BlockStub>> {
+    let parts = split_at_depth_zero(s, ',');
+    let mut blocks = Vec::new();
+    for part in parts {
+        let part = part.trim();
         if part.is_empty() {
             continue;
         }
-        let segments: Vec<&str> = part.split(':').collect();
+        // Format: type|label(fields)
+        let pipe_pos = part.find('|').ok_or_else(|| {
+            anyhow::anyhow!(
+                "Block entry '{}' missing '|' separator — expected 'type|label(fields)'",
+                part
+            )
+        })?;
+        let block_type = part[..pipe_pos].to_string();
+        let rest = &part[pipe_pos + 1..];
 
-        if segments.len() < 2 {
+        let (label, fields) = if let Some(paren_pos) = rest.find('(') {
+            let label = rest[..paren_pos].to_string();
+            let paren_rest = &rest[paren_pos..];
+            let close = find_matching_paren(paren_rest)?;
+            let content = &paren_rest[1..close];
+            (label, parse_fields_shorthand(content)?)
+        } else {
+            (rest.to_string(), Vec::new())
+        };
+
+        if block_type.is_empty() {
+            bail!("Block type cannot be empty");
+        }
+        if label.is_empty() {
             bail!(
-                "Invalid field shorthand '{}' — expected 'name:type[:required][:localized]'",
+                "Block label cannot be empty for block type '{}'",
+                block_type
+            );
+        }
+
+        blocks.push(BlockStub {
+            block_type,
+            label,
+            fields,
+        });
+    }
+    if blocks.is_empty() {
+        bail!("No blocks parsed from entries");
+    }
+    Ok(blocks)
+}
+
+/// Parse tab entries: `label(fields),label(fields),...`
+fn parse_tab_entries(s: &str) -> Result<Vec<TabStub>> {
+    let parts = split_at_depth_zero(s, ',');
+    let mut tabs = Vec::new();
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let (label, fields) = if let Some(paren_pos) = part.find('(') {
+            let label = part[..paren_pos].to_string();
+            let paren_rest = &part[paren_pos..];
+            let close = find_matching_paren(paren_rest)?;
+            let content = &paren_rest[1..close];
+            (label, parse_fields_shorthand(content)?)
+        } else {
+            bail!(
+                "Tab entry '{}' missing '(fields)' — expected 'label(fields)'",
                 part
             );
-        }
-        let name = segments[0].to_string();
-        let field_type = segments[1].to_lowercase();
+        };
 
-        if !VALID_FIELD_TYPES.contains(&field_type.as_str()) {
-            bail!(
-                "Unknown field type '{}' — valid types: {}",
-                field_type,
-                VALID_FIELD_TYPES.join(", ")
-            );
+        if label.is_empty() {
+            bail!("Tab label cannot be empty");
         }
-        let mut required = false;
-        let mut localized = false;
-        for seg in &segments[2..] {
-            match *seg {
-                "required" => required = true,
-                "localized" => localized = true,
-                "index" => {} // accepted but not stored in FieldStub (handled at Lua level)
-                other => bail!(
-                    "Unknown modifier '{}' in field '{}' — valid: required, localized, index",
-                    other,
-                    name
-                ),
-            }
+
+        tabs.push(TabStub { label, fields });
+    }
+    if tabs.is_empty() {
+        bail!("No tabs parsed from entries");
+    }
+    Ok(tabs)
+}
+
+/// Parse inline field shorthand: "title:text:required,status:select,body:textarea:localized"
+///
+/// Supports nested syntax for container types:
+/// - `group|array|row|collapsible`: `name:type(subfields):modifiers`
+/// - `blocks`: `name:blocks(type|label(fields),...)`
+/// - `tabs`: `name:tabs(label(fields),...)`
+///
+/// Modifiers after the type (or closing `)`) are order-independent flags: `required`, `localized`.
+pub fn parse_fields_shorthand(s: &str) -> Result<Vec<FieldStub>> {
+    let parts = split_at_depth_zero(s, ',');
+    let mut fields = Vec::new();
+    for part in parts {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
         }
-        fields.push(FieldStub {
-            name,
-            field_type,
-            required,
-            localized,
-        });
+        fields.push(parse_field_token(part)?);
     }
 
     if fields.is_empty() {
@@ -405,6 +691,17 @@ mod tests {
         assert!(content.contains("required = true"));
     }
 
+    /// Helper: parse shorthand and call make_collection with the result.
+    fn make_collection_from_shorthand(
+        config_dir: &Path,
+        slug: &str,
+        shorthand: Option<&str>,
+        opts: &CollectionOptions,
+    ) -> Result<()> {
+        let parsed = shorthand.map(parse_fields_shorthand).transpose()?;
+        make_collection(config_dir, slug, parsed.as_deref(), opts)
+    }
+
     #[test]
     fn test_make_collection_with_fields() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -412,7 +709,7 @@ mod tests {
             no_timestamps: true,
             ..CollectionOptions::default()
         };
-        make_collection(
+        make_collection_from_shorthand(
             tmp.path(),
             "articles",
             Some("headline:text:required,body:richtext,draft:checkbox"),
@@ -476,6 +773,29 @@ mod tests {
         let content = fs::read_to_string(tmp.path().join("collections/users.lua")).unwrap();
         assert!(content.contains("auth = true"));
         assert!(content.contains("use_as_title = \"email\""));
+        assert!(content.contains("list_searchable_fields = { \"email\" }"));
+        // No default fields — email/password are injected at runtime
+        assert!(
+            !content.contains("crap.fields."),
+            "auth collection without custom fields should have empty fields block"
+        );
+    }
+
+    #[test]
+    fn test_make_collection_auth_with_custom_fields() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = CollectionOptions {
+            auth: true,
+            ..CollectionOptions::default()
+        };
+        make_collection_from_shorthand(tmp.path(), "users", Some("name:text,role:select"), &opts)
+            .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/users.lua")).unwrap();
+        assert!(content.contains("auth = true"));
+        assert!(content.contains("use_as_title = \"email\""));
+        assert!(content.contains("name = \"name\""));
+        assert!(content.contains("name = \"role\""));
     }
 
     #[test]
@@ -489,7 +809,35 @@ mod tests {
 
         let content = fs::read_to_string(tmp.path().join("collections/media.lua")).unwrap();
         assert!(content.contains("upload = true"));
+        assert!(content.contains("use_as_title = \"filename\""));
+        assert!(content.contains("list_searchable_fields = { \"filename\" }"));
+        // No default fields — filename/mime_type/size are injected at runtime
+        assert!(
+            !content.contains("crap.fields."),
+            "upload collection without custom fields should have empty fields block"
+        );
+    }
+
+    #[test]
+    fn test_make_collection_upload_with_custom_fields() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let opts = CollectionOptions {
+            upload: true,
+            ..CollectionOptions::default()
+        };
+        make_collection_from_shorthand(
+            tmp.path(),
+            "media",
+            Some("alt:text,caption:textarea"),
+            &opts,
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/media.lua")).unwrap();
+        assert!(content.contains("upload = true"));
+        assert!(content.contains("use_as_title = \"filename\""));
         assert!(content.contains("name = \"alt\""));
+        assert!(content.contains("name = \"caption\""));
     }
 
     #[test]
@@ -508,7 +856,7 @@ mod tests {
     #[test]
     fn test_make_collection_with_localized_fields() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(
+        make_collection_from_shorthand(
             tmp.path(),
             "posts",
             Some("title:text:required:localized,body:textarea:localized"),
@@ -565,7 +913,7 @@ mod tests {
     #[test]
     fn test_complex_field_type_stubs() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        make_collection(
+        make_collection_from_shorthand(
             tmp.path(), "posts",
             Some("author:relationship,status:select,body:array,layout:blocks,meta:group,content:tabs,snippet:code,related:join,pic:upload,style:radio,section:collapsible,cols:row"),
             &CollectionOptions::default(),
@@ -704,5 +1052,265 @@ mod tests {
         assert!(content.contains("-- indexes = {"));
         assert!(content.contains("--     { fields = { \"status\", \"created_at\" } },"));
         assert!(content.contains("--     { fields = { \"slug\" }, unique = true },"));
+    }
+
+    // ── Nested parsing tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_split_at_depth_zero() {
+        let parts = super::split_at_depth_zero("a,b(c,d),e", ',');
+        assert_eq!(parts, vec!["a", "b(c,d)", "e"]);
+
+        let parts = super::split_at_depth_zero("a:b(c:d):req", ':');
+        assert_eq!(parts, vec!["a", "b(c:d)", "req"]);
+
+        // nested parens
+        let parts = super::split_at_depth_zero("a(b(c,d),e),f", ',');
+        assert_eq!(parts, vec!["a(b(c,d),e)", "f"]);
+    }
+
+    #[test]
+    fn test_find_matching_paren() {
+        assert_eq!(super::find_matching_paren("(abc)").unwrap(), 4);
+        assert_eq!(super::find_matching_paren("(a(b)c)").unwrap(), 6);
+        assert!(super::find_matching_paren("(abc").is_err());
+    }
+
+    #[test]
+    fn test_parse_nested_group() {
+        let fields =
+            parse_fields_shorthand("seo:group(meta_title:text,meta_desc:textarea):required")
+                .unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name, "seo");
+        assert_eq!(fields[0].field_type, "group");
+        assert!(fields[0].required);
+        assert_eq!(fields[0].fields.len(), 2);
+        assert_eq!(fields[0].fields[0].name, "meta_title");
+        assert_eq!(fields[0].fields[0].field_type, "text");
+        assert_eq!(fields[0].fields[1].name, "meta_desc");
+        assert_eq!(fields[0].fields[1].field_type, "textarea");
+    }
+
+    #[test]
+    fn test_parse_nested_array() {
+        let fields =
+            parse_fields_shorthand("variants:array(color:text:required,size:number)").unwrap();
+        assert_eq!(fields[0].field_type, "array");
+        assert_eq!(fields[0].fields.len(), 2);
+        assert!(fields[0].fields[0].required);
+        assert_eq!(fields[0].fields[1].field_type, "number");
+    }
+
+    #[test]
+    fn test_parse_nested_blocks() {
+        let fields = parse_fields_shorthand(
+            "content:blocks(paragraph|Paragraph(body:textarea),hero|Hero(title:text,image:upload))",
+        )
+        .unwrap();
+        assert_eq!(fields[0].field_type, "blocks");
+        assert_eq!(fields[0].blocks.len(), 2);
+        assert_eq!(fields[0].blocks[0].block_type, "paragraph");
+        assert_eq!(fields[0].blocks[0].label, "Paragraph");
+        assert_eq!(fields[0].blocks[0].fields.len(), 1);
+        assert_eq!(fields[0].blocks[0].fields[0].name, "body");
+        assert_eq!(fields[0].blocks[1].block_type, "hero");
+        assert_eq!(fields[0].blocks[1].label, "Hero");
+        assert_eq!(fields[0].blocks[1].fields.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_nested_tabs() {
+        let fields = parse_fields_shorthand(
+            "settings:tabs(General(name:text,email:email),Advanced(api_key:text))",
+        )
+        .unwrap();
+        assert_eq!(fields[0].field_type, "tabs");
+        assert_eq!(fields[0].tabs.len(), 2);
+        assert_eq!(fields[0].tabs[0].label, "General");
+        assert_eq!(fields[0].tabs[0].fields.len(), 2);
+        assert_eq!(fields[0].tabs[1].label, "Advanced");
+        assert_eq!(fields[0].tabs[1].fields.len(), 1);
+        assert_eq!(fields[0].tabs[1].fields[0].name, "api_key");
+    }
+
+    #[test]
+    fn test_parse_deeply_nested() {
+        // array containing a group
+        let fields = parse_fields_shorthand(
+            "variants:array(color:text,dimensions:group(width:number,height:number))",
+        )
+        .unwrap();
+        assert_eq!(fields[0].fields.len(), 2);
+        assert_eq!(fields[0].fields[1].field_type, "group");
+        assert_eq!(fields[0].fields[1].fields.len(), 2);
+        assert_eq!(fields[0].fields[1].fields[0].name, "width");
+    }
+
+    #[test]
+    fn test_parse_mixed_flat_and_nested() {
+        let fields = parse_fields_shorthand(
+            "title:text:required,seo:group(meta_title:text,meta_desc:textarea),body:richtext",
+        )
+        .unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].name, "title");
+        assert!(fields[0].fields.is_empty());
+        assert_eq!(fields[1].name, "seo");
+        assert_eq!(fields[1].fields.len(), 2);
+        assert_eq!(fields[2].name, "body");
+    }
+
+    #[test]
+    fn test_parse_nested_error_unbalanced_parens() {
+        assert!(parse_fields_shorthand("seo:group(title:text").is_err());
+    }
+
+    #[test]
+    fn test_parse_nested_error_subfields_on_non_container() {
+        assert!(parse_fields_shorthand("title:text(sub:number)").is_err());
+    }
+
+    #[test]
+    fn test_parse_nested_error_missing_block_label() {
+        assert!(parse_fields_shorthand("content:blocks(paragraph(body:textarea))").is_err());
+    }
+
+    #[test]
+    fn test_make_collection_with_nested_fields() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fields = parse_fields_shorthand(
+            "title:text:required,seo:group(meta_title:text,meta_desc:textarea),items:array(name:text:required,qty:number)"
+        ).unwrap();
+        make_collection(
+            tmp.path(),
+            "posts",
+            Some(&fields),
+            &CollectionOptions::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/posts.lua")).unwrap();
+        // Top-level fields
+        assert!(content.contains("crap.fields.text({"));
+        assert!(content.contains("name = \"title\""));
+        // Group with nested fields
+        assert!(content.contains("crap.fields.group({"));
+        assert!(content.contains("name = \"seo\""));
+        assert!(content.contains("name = \"meta_title\""));
+        assert!(content.contains("name = \"meta_desc\""));
+        // Array with nested fields
+        assert!(content.contains("crap.fields.array({"));
+        assert!(content.contains("name = \"items\""));
+        assert!(content.contains("name = \"name\""));
+        assert!(content.contains("name = \"qty\""));
+        // Nested fields block should have `fields = {` (not the placeholder stub)
+        // Count occurrences of "fields = {" — should be at least 3 (top-level, group, array)
+        let fields_count = content.matches("fields = {").count();
+        assert!(
+            fields_count >= 3,
+            "expected at least 3 'fields = {{' blocks, got {}",
+            fields_count
+        );
+    }
+
+    #[test]
+    fn test_make_collection_with_nested_blocks() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fields = parse_fields_shorthand(
+            "content:blocks(paragraph|Paragraph(body:textarea),hero|Hero(title:text,image:upload))",
+        )
+        .unwrap();
+        make_collection(
+            tmp.path(),
+            "pages",
+            Some(&fields),
+            &CollectionOptions::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/pages.lua")).unwrap();
+        assert!(content.contains("crap.fields.blocks({"));
+        assert!(content.contains("type = \"paragraph\""));
+        assert!(content.contains("label = \"Paragraph\""));
+        assert!(content.contains("name = \"body\""));
+        assert!(content.contains("type = \"hero\""));
+        assert!(content.contains("label = \"Hero\""));
+        assert!(content.contains("name = \"image\""));
+    }
+
+    #[test]
+    fn test_make_collection_with_nested_tabs() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let fields = parse_fields_shorthand(
+            "settings:tabs(General(name:text,email:email),Advanced(api_key:text))",
+        )
+        .unwrap();
+        make_collection(
+            tmp.path(),
+            "config",
+            Some(&fields),
+            &CollectionOptions::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/config.lua")).unwrap();
+        assert!(content.contains("crap.fields.tabs({"));
+        assert!(content.contains("label = \"General\""));
+        assert!(content.contains("name = \"name\""));
+        assert!(content.contains("name = \"email\""));
+        assert!(content.contains("label = \"Advanced\""));
+        assert!(content.contains("name = \"api_key\""));
+    }
+
+    #[test]
+    fn test_all_container_fields_omit_use_as_title() {
+        // When all fields are containers, there's no scalar field to use as title.
+        // use_as_title and list_searchable_fields should be omitted.
+        let fields = parse_fields_shorthand("items:array(label:text)").unwrap();
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_collection(
+            tmp.path(),
+            "things",
+            Some(&fields),
+            &CollectionOptions::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/things.lua")).unwrap();
+        assert!(
+            !content.contains("use_as_title"),
+            "no scalar field exists — use_as_title should be omitted"
+        );
+        assert!(
+            !content.contains("list_searchable_fields"),
+            "no scalar field exists — list_searchable_fields should be omitted"
+        );
+    }
+
+    #[test]
+    fn test_container_without_subfields_gets_default_stub() {
+        // Containers without (...) should still get default placeholder stubs
+        let fields =
+            parse_fields_shorthand("items:array,meta:group,layout:blocks,panels:tabs").unwrap();
+        assert!(fields[0].fields.is_empty()); // no subfields parsed
+        assert!(fields[1].fields.is_empty());
+        assert!(fields[2].blocks.is_empty());
+        assert!(fields[3].tabs.is_empty());
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        make_collection(
+            tmp.path(),
+            "test",
+            Some(&fields),
+            &CollectionOptions::default(),
+        )
+        .unwrap();
+
+        let content = fs::read_to_string(tmp.path().join("collections/test.lua")).unwrap();
+        // Should have default stubs
+        assert!(content.contains("fields = { crap.fields.text({ name = \"item\" }) }"));
+        assert!(content.contains("blocks = { { type = \"block_type\""));
+        assert!(content.contains("tabs = { { label = \"Tab 1\""));
     }
 }

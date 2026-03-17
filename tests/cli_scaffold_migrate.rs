@@ -1124,3 +1124,350 @@ fn templates_extract_via_binary() {
     );
     assert!(tmp.path().join("templates/layout/base.hbs").exists());
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 35. Nested Fields: Scaffold → Load → Schema Sync (E2E)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Helper: scaffold a fresh project, add a collection with given Lua, load config, sync schema.
+/// Returns (TempDir, DbPool, SharedRegistry).
+fn setup_with_collection(
+    slug: &str,
+    lua_content: &str,
+) -> (tempfile::TempDir, DbPool, crap_cms::core::SharedRegistry) {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
+
+    // Write the collection Lua file
+    std::fs::write(
+        config_dir.join(format!("collections/{}.lua", slug)),
+        lua_content,
+    )
+    .unwrap();
+
+    // Also write a users collection for auth (needed by most setups)
+    std::fs::write(
+        config_dir.join("collections/users.lua"),
+        r#"crap.collections.define("users", {
+    auth = true,
+    labels = { singular = "User", plural = "Users" },
+    timestamps = true,
+    admin = { use_as_title = "email" },
+    fields = {},
+})"#,
+    )
+    .unwrap();
+
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema");
+
+    (tmp, db_pool, registry)
+}
+
+#[test]
+fn nested_group_scaffold_to_schema_sync() {
+    // Scaffold a collection with a group field, load config, sync schema — no errors.
+    let fields = scaffold::parse_fields_shorthand(
+        "title:text:required,seo:group(meta_title:text,meta_desc:textarea)",
+    )
+    .unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
+    scaffold::make_collection(
+        &config_dir,
+        "articles",
+        Some(&fields),
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
+
+    // Verify Lua was generated correctly
+    let lua_content = std::fs::read_to_string(config_dir.join("collections/articles.lua")).unwrap();
+    assert!(lua_content.contains("crap.fields.group({"));
+    assert!(lua_content.contains("name = \"seo\""));
+    assert!(lua_content.contains("name = \"meta_title\""));
+    assert!(lua_content.contains("name = \"meta_desc\""));
+
+    // Load config, init Lua VM, create pool, sync schema — should succeed
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema with nested group");
+
+    // Verify collection was registered
+    let reg = registry.read().unwrap();
+    let def = reg
+        .get_collection("articles")
+        .expect("articles should exist in registry");
+    assert!(def.fields.iter().any(|f| f.name == "seo"));
+}
+
+#[test]
+fn nested_array_scaffold_to_schema_sync() {
+    // Scaffold a collection with an array field containing subfields
+    let fields = scaffold::parse_fields_shorthand(
+        "title:text:required,items:array(label:text:required,qty:number)",
+    )
+    .unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
+    scaffold::make_collection(
+        &config_dir,
+        "products",
+        Some(&fields),
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
+
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&db_pool, &registry, &cfg.locale).expect("sync schema with nested array");
+
+    // Verify structure
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("products").unwrap();
+    let array_field = def.fields.iter().find(|f| f.name == "items").unwrap();
+    assert_eq!(
+        array_field.field_type,
+        crap_cms::core::FieldType::Array,
+        "items should be an array"
+    );
+    assert!(
+        !array_field.fields.is_empty(),
+        "array should have subfields"
+    );
+}
+
+#[test]
+fn nested_fields_deep_scaffold_to_schema_sync() {
+    // Array containing a group — two levels of nesting
+    let fields = scaffold::parse_fields_shorthand(
+        "name:text:required,variants:array(color:text,dimensions:group(width:number,height:number))",
+    )
+    .unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
+    scaffold::make_collection(
+        &config_dir,
+        "products",
+        Some(&fields),
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
+
+    let lua_content = std::fs::read_to_string(config_dir.join("collections/products.lua")).unwrap();
+    // Verify nested structure in Lua
+    assert!(lua_content.contains("crap.fields.array({"));
+    assert!(lua_content.contains("name = \"variants\""));
+    assert!(lua_content.contains("crap.fields.group({"));
+    assert!(lua_content.contains("name = \"dimensions\""));
+    assert!(lua_content.contains("name = \"width\""));
+    assert!(lua_content.contains("name = \"height\""));
+
+    // Load and sync — verifies generated Lua is valid
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&db_pool, &registry, &cfg.locale)
+        .expect("sync schema with deeply nested fields");
+}
+
+#[test]
+fn container_field_as_first_field_uses_scalar_for_title() {
+    // When the first field is a container (array), use_as_title should pick the first scalar field
+    let fields =
+        scaffold::parse_fields_shorthand("items:array(label:text),name:text:required").unwrap();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    scaffold::make_collection(
+        tmp.path(),
+        "products",
+        Some(&fields),
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
+
+    let content = std::fs::read_to_string(tmp.path().join("collections/products.lua")).unwrap();
+    // "name" is the first scalar field, should be used for use_as_title
+    assert!(
+        content.contains("use_as_title = \"name\""),
+        "should pick scalar 'name' not container 'items' for use_as_title"
+    );
+    assert!(
+        content.contains("list_searchable_fields = { \"name\" }"),
+        "should pick scalar 'name' for list_searchable_fields"
+    );
+}
+
+#[test]
+fn fts_excludes_container_fields_from_searchable() {
+    // Manually write a collection Lua where list_searchable_fields includes an array field.
+    // Schema sync (including FTS) should NOT crash.
+    let lua = r#"crap.collections.define("test_fts", {
+    labels = { singular = "Test", plural = "Tests" },
+    timestamps = true,
+    admin = {
+        use_as_title = "arr",
+        list_searchable_fields = { "arr", "title" },
+    },
+    fields = {
+        crap.fields.array({
+            name = "arr",
+            fields = {
+                crap.fields.text({ name = "label" }),
+            },
+        }),
+        crap.fields.text({
+            name = "title",
+            required = true,
+        }),
+    },
+})"#;
+
+    let (_tmp, pool, registry) = setup_with_collection("test_fts", lua);
+
+    // If we get here, FTS sync didn't crash. Verify title is searchable.
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("test_fts").unwrap();
+
+    // Verify the FTS fields exclude the array field
+    let fts_fields = crap_cms::db::query::fts::get_fts_fields(def);
+    assert!(
+        !fts_fields.contains(&"arr".to_string()),
+        "array field 'arr' should be excluded from FTS fields"
+    );
+    assert!(
+        fts_fields.contains(&"title".to_string()),
+        "'title' should remain in FTS fields"
+    );
+
+    // Verify we can create a document (full roundtrip)
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+    let mut data = HashMap::new();
+    data.insert("title".to_string(), "Hello FTS".to_string());
+    query::create(&tx, "test_fts", def, &data, None).unwrap();
+    tx.commit().unwrap();
+}
+
+#[test]
+fn nested_fields_via_binary_e2e() {
+    // Use the binary to scaffold a collection with nested --fields, then load and sync.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("project");
+    scaffold::init(Some(config_dir.clone()), &scaffold::InitOptions::default()).unwrap();
+
+    let output = std::process::Command::new(crap_bin())
+        .args([
+            "make",
+            "collection",
+            config_dir.to_str().unwrap(),
+            "products",
+            "--fields",
+            "name:text:required,seo:group(meta_title:text,meta_desc:textarea),tags:array(label:text)",
+            "--no-input",
+        ])
+        .output()
+        .expect("failed to run binary");
+
+    assert!(
+        output.status.success(),
+        "make collection with nested fields should succeed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify generated Lua has nested structure
+    let content = std::fs::read_to_string(config_dir.join("collections/products.lua")).unwrap();
+    assert!(
+        content.contains("crap.fields.group({"),
+        "should have group field"
+    );
+    assert!(
+        content.contains("name = \"seo\""),
+        "group should be named seo"
+    );
+    assert!(
+        content.contains("name = \"meta_title\""),
+        "group should contain meta_title"
+    );
+    assert!(
+        content.contains("crap.fields.array({"),
+        "should have array field"
+    );
+    assert!(
+        content.contains("name = \"tags\""),
+        "array should be named tags"
+    );
+    assert!(
+        content.contains("name = \"label\""),
+        "array should contain label subfield"
+    );
+
+    // Load config, init Lua, sync schema — full e2e
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&db_pool, &registry, &cfg.locale)
+        .expect("sync schema from binary-generated nested fields");
+}
+
+#[test]
+fn nested_fields_with_locales_e2e() {
+    // Scaffold a project with locales enabled and nested localized fields
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_dir = tmp.path().join("config");
+    let opts = scaffold::InitOptions {
+        locales: vec!["en".to_string(), "de".to_string()],
+        default_locale: "en".to_string(),
+        ..scaffold::InitOptions::default()
+    };
+    scaffold::init(Some(config_dir.clone()), &opts).unwrap();
+
+    // Create a collection with a localized array
+    let fields = scaffold::parse_fields_shorthand(
+        "title:text:required:localized,items:array(label:text:required:localized,image:upload)",
+    )
+    .unwrap();
+    scaffold::make_collection(
+        &config_dir,
+        "pages",
+        Some(&fields),
+        &scaffold::CollectionOptions::default(),
+    )
+    .unwrap();
+
+    let lua_content = std::fs::read_to_string(config_dir.join("collections/pages.lua")).unwrap();
+    assert!(lua_content.contains("localized = true"));
+
+    // Load, init, sync — should handle localized + nested without errors
+    let cfg = CrapConfig::load(&config_dir).expect("load config");
+    let registry = hooks::init_lua(&config_dir, &cfg).expect("init lua");
+    let db_pool = pool::create_pool(&config_dir, &cfg).expect("create pool");
+    migrate::sync_all(&db_pool, &registry, &cfg.locale)
+        .expect("sync schema with localized nested fields");
+
+    // Verify FTS columns are properly expanded for localized text fields
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("pages").unwrap();
+    let fts_cols = crap_cms::db::query::fts::get_fts_columns(def, &cfg.locale);
+    // "title" is localized text → should expand to title__en, title__de
+    assert!(
+        fts_cols.contains(&"title__en".to_string()),
+        "FTS should have title__en column"
+    );
+    assert!(
+        fts_cols.contains(&"title__de".to_string()),
+        "FTS should have title__de column"
+    );
+    // "items" is an array → should NOT appear in FTS
+    assert!(
+        !fts_cols.iter().any(|c| c.starts_with("items")),
+        "array field 'items' should not appear in FTS columns"
+    );
+}
