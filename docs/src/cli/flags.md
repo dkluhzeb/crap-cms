@@ -574,6 +574,18 @@ crap-cms jobs status <CONFIG> [--id <ID>]
 
 Show recent job runs. If `--id` is given, shows details for that specific run. Otherwise lists recent runs across all jobs.
 
+#### `jobs cancel`
+
+```bash
+crap-cms jobs cancel <CONFIG> [--slug <SLUG>]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--slug`, `-s` | *(all)* | Only cancel pending jobs with this slug. Without it, cancels all pending jobs. |
+
+Deletes pending jobs from the queue. Useful for clearing stuck or unwanted jobs that keep retrying.
+
 #### `jobs purge`
 
 ```bash
@@ -599,6 +611,8 @@ crap-cms jobs list ./my-project
 crap-cms jobs trigger ./my-project cleanup_expired
 crap-cms jobs status ./my-project
 crap-cms jobs status ./my-project --id abc123
+crap-cms jobs cancel ./my-project
+crap-cms jobs cancel ./my-project -s process_inquiry
 crap-cms jobs purge ./my-project --older-than 30d
 crap-cms jobs healthcheck ./my-project
 ```

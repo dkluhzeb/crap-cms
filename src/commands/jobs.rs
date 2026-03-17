@@ -275,6 +275,18 @@ pub fn run(action: super::JobsAction) -> Result<()> {
             let (_cfg, _registry, pool) = init_stack(config)?;
             run_status(&pool, id, slug, limit)
         }
+        super::JobsAction::Cancel { config, slug } => {
+            let config_dir = config.canonicalize().unwrap_or(config);
+            let cfg = CrapConfig::load(&config_dir)?;
+            let pool = pool::create_pool(&config_dir, &cfg)?;
+            let conn = pool.get().context("Failed to get DB connection")?;
+            let deleted = query::jobs::cancel_pending_jobs(&conn, slug.as_deref())?;
+            match slug {
+                Some(s) => println!("Cancelled {} pending '{}' job(s)", deleted, s),
+                None => println!("Cancelled {} pending job(s)", deleted),
+            }
+            Ok(())
+        }
         super::JobsAction::Purge { config, older_than } => {
             let config_dir = config.canonicalize().unwrap_or(config);
             let cfg = CrapConfig::load(&config_dir)?;

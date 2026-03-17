@@ -2,7 +2,7 @@
 
 The `crap.toml` file configures the server, database, authentication, and other global settings. All sections and fields are optional — sensible defaults are used when omitted.
 
-If `crap.toml` does not exist in the config directory, all defaults apply.
+A `crap.toml` file must exist in the config directory — the server will refuse to start without one. It can be empty (all defaults apply), but the file itself is required.
 
 ## Top-Level Fields
 
@@ -138,6 +138,10 @@ from_name = "Crap CMS"  # Sender display name
 on_init = []             # Lua function refs to run at startup (with CRUD access)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
                          # Default: max(available_parallelism, 4), capped at 32
+max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
+max_memory = "50MB"          # Max Lua memory per VM (0 = unlimited)
+allow_private_networks = false  # Block HTTP requests to private/loopback IPs
+http_max_response_bytes = "10MB"  # Max HTTP response body size
 
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
@@ -269,6 +273,10 @@ When configured, email enables password reset ("Forgot password?" link on login)
 | `on_init` | string[] | `[]` | Lua function refs to execute at startup. These run synchronously with CRUD access — failure aborts startup. |
 | `max_depth` | integer | `3` | Maximum hook recursion depth. When Lua CRUD in hooks triggers more hooks, this caps the chain. `0` = never run hooks from Lua CRUD. |
 | `vm_pool_size` | integer | `max(cpus, 4)` capped at 32 | Number of Lua VMs in the pool for concurrent hook execution. Default is the number of available CPU cores with a floor of 4 and ceiling of 32. |
+| `max_instructions` | integer | `10000000` | Maximum Lua instructions per hook invocation. `0` = unlimited. |
+| `max_memory` | integer/string | `52428800` (50 MB) | Maximum Lua memory per VM in bytes. Accepts integer or filesize string (`"50MB"`, `"100MB"`). `0` = unlimited. |
+| `allow_private_networks` | boolean | `false` | Allow `crap.http.request` to reach private/loopback/link-local IPs. |
+| `http_max_response_bytes` | integer/string | `10485760` (10 MB) | Maximum HTTP response body size. Accepts integer or filesize string (`"10MB"`, `"1GB"`). |
 
 ### `[live]`
 
@@ -379,4 +387,8 @@ from_name = "My App"
 [hooks]
 on_init = ["hooks.seed.run"]
 vm_pool_size = 8
+max_instructions = 10000000
+max_memory = "50MB"
+allow_private_networks = false
+http_max_response_bytes = "10MB"
 ```

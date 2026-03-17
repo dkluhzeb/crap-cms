@@ -4,31 +4,97 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-blue)](https://ghcr.io/dkluhzeb/crap-cms)
 
-Headless CMS in Rust. Lua config (neovim-style) + gRPC API + HTMX admin UI.
+A headless CMS written in Rust. Define your schema in Lua, extend everything with hooks, query via gRPC, manage content through an HTMX admin UI. Single binary, SQLite, zero infrastructure.
 
-For usage documentation, see the [user manual](https://dkluhzeb.github.io/crap-cms/) (source in `docs/`).
+> **Alpha software.** While in `0.x`, breaking changes may appear without prior notice.
+
+## Try it
+
+```bash
+docker run -p 3000:3000 -p 50051:50051 ghcr.io/dkluhzeb/crap-cms:latest serve /example
+```
+
+Open [http://localhost:3000/admin](http://localhost:3000/admin) — login: `admin@crap.studio` / `admin123`
+
+Or download a [static binary](https://github.com/dkluhzeb/crap-cms/releases) (Linux x86_64, ARM64, Windows — no dependencies):
+
+```bash
+curl -L -o crap-cms \
+  https://github.com/dkluhzeb/crap-cms/releases/latest/download/crap-cms-linux-x86_64
+chmod +x crap-cms
+curl -L https://github.com/dkluhzeb/crap-cms/releases/latest/download/example.tar.gz | tar xz
+./crap-cms serve ./example
+```
+
+## Features
+
+- **Collections** with 14 field types (text, richtext, select, relationship, upload, blocks, array, group, ...)
+- **Globals** — single-document collections for site-wide settings
+- **Lua hooks** at three levels (field, collection, global) with full CRUD access inside transactions
+- **Access control** — collection-level and field-level, with filter constraints
+- **Authentication** — JWT sessions, password login, custom auth strategies, email verification, password reset
+- **Uploads** — file uploads with automatic image resizing and format conversion (WebP, AVIF)
+- **Relationships** — has-one and has-many with configurable population depth and caching
+- **Localization** — per-field opt-in with locale-suffixed columns and fallback
+- **Versions & Drafts** — document version history with draft/publish workflow
+- **Live updates** — real-time mutation events via SSE and gRPC streaming
+- **Background jobs** — cron scheduling, retries, queues, heartbeat monitoring
+- **Admin UI** — template overlay system, theme switching, Web Components, fully overridable
+- **gRPC API** — full CRUD with filtering, pagination, server reflection. [REST proxy](https://github.com/dkluhzeb/crap-rest) available
+- **MCP server** — Model Context Protocol integration for AI tooling
+- **CLI** — interactive scaffolding, blueprints, data export/import, backups
+
+For full documentation, see the [user manual](https://dkluhzeb.github.io/crap-cms/).
 
 ## Motivation
 
 I built several Rust/WebAssembly frontend projects and couldn't find a CMS that fit the stack. So I built one.
 
-The idea: a simple CMS written in Rust, extensible via a lightweight scripting language, with no complicated build steps or infrastructure requirements. It's also a playground for me to explore ideas and learn — which means things may change, break, or get rewritten.
+The idea: a simple CMS written in Rust, extensible via Lua, with no complicated build steps or infrastructure requirements. It's also a playground for me to explore ideas and learn — which means things may change, break, or get rewritten.
 
 Inspiration came from what I consider the best solutions out there:
 
-- **Lua scripting API** — modeled after Neovim and Awesome WM, where Lua gives users deep control without touching core code
-- **Configuration & hook system** — inspired by [Payload CMS](https://payloadcms.com), an excellent and highly recommended CMS for anyone needing a production-ready solution
-- **CLI tooling** — influenced by Laravel's comprehensive Artisan CLI
-- **SQLite + WAL + FTS** — sufficient for most of my use cases, and it bundles cleanly into a single binary with zero external dependencies. The database layer is abstracted behind a trait, so alternative relational backends could be added in the future if the need arises
-- **Pure JavaScript with JSDoc types** — no TypeScript, no bundler, no build step. Type safety through JSDoc annotations, checkable with `tsc --checkJs` without compiling anything
-- **HTMX + Web Components** — easy to theme (similar to WordPress child themes), no frontend build step. Web Components are a native browser standard — no framework updates, no outdated dependencies, no breaking changes
-- **gRPC API** — binary protocol with streaming support, ideal for service-to-service communication. And because I wanted it. A separate [REST proxy](https://github.com/dkluhzeb/crap-rest) is available for those who prefer plain JSON over HTTP
+- **Lua scripting** — modeled after Neovim and Awesome WM
+- **Hook system** — inspired by [Payload CMS](https://payloadcms.com), an excellent CMS for anyone needing a production-ready solution
+- **CLI tooling** — influenced by Laravel's Artisan
+- **SQLite + WAL + FTS** — single binary, zero external dependencies, database layer abstracted behind a trait
+- **HTMX + Web Components** — themeable like WordPress child themes, no frontend build step
+- **gRPC API** — binary protocol with streaming, plus a [REST proxy](https://github.com/dkluhzeb/crap-rest) for plain JSON over HTTP
 
-The project is functional but not yet production-ready — it still needs to prove itself.
+## Deployment
 
-**Warning:** While in alpha (`0.x`), breaking changes may appear without prior notice.
+### Docker
 
-## Tech Stack
+Production — mount your own config directory:
+
+```bash
+docker run -v /path/to/config:/config -p 3000:3000 -p 50051:50051 \
+  ghcr.io/dkluhzeb/crap-cms:latest
+```
+
+Images are Alpine-based (~30 MB) and published to `ghcr.io/dkluhzeb/crap-cms`.
+
+| Tag | Description |
+|-----|-------------|
+| `latest` | Most recent tagged release |
+| `X.Y.Z-alpha.N` | Tagged release |
+| `X.Y` | Latest patch in a minor series |
+| `nightly` | Latest main build (x86_64) |
+| `sha-<commit>` | Pinned to a specific commit |
+
+### Static Binaries
+
+Pre-built static binaries are attached to each [GitHub Release](https://github.com/dkluhzeb/crap-cms/releases):
+
+- `crap-cms-linux-x86_64` — Linux x86_64 (musl, fully static)
+- `crap-cms-linux-aarch64` — Linux ARM64 (musl, fully static)
+- `crap-cms-windows-x86_64.exe` — Windows x86_64
+
+No runtime dependencies required. An `example.tar.gz` with a sample project is included in each release.
+
+---
+
+## Development
 
 | Component    | Technology                            |
 |--------------|---------------------------------------|
@@ -39,7 +105,7 @@ The project is functional but not yet production-ready — it still needs to pro
 | Hooks        | Lua 5.4 via mlua                      |
 | IDs          | nanoid                                |
 
-## Project Structure
+### Project Structure
 
 ```
 src/
@@ -57,12 +123,12 @@ src/
 └── scaffold/         # init/make scaffolding
 ```
 
-## Development
+### Building
 
 ```bash
 git config core.hooksPath .githooks  # enable shared git hooks (fmt + clippy pre-commit)
 cargo build                          # compile
-cargo test                           # run tests (3600+)
+cargo test                           # run tests
 cargo tarpaulin --out html           # coverage report
 crap-cms serve ./example             # run with example config
 ```
@@ -94,63 +160,10 @@ Requires [ghz](https://github.com/bojand/ghz), grpcurl, protoc, jq, and a runnin
 
 Scenarios: `describe`, `count`, `find`, `find_where`, `find_by_id`, `find_deep`, `create`, `update`.
 
-### Documentation Book
+### Documentation
 
 ```bash
-cd docs && mdbook build            # build the user manual
 cd docs && mdbook serve            # local preview at localhost:3000
-```
-
-## Deployment
-
-### Docker
-
-```bash
-# Start the server — example project with demo data is pre-loaded
-docker run -p 3000:3000 -p 50051:50051 \
-  ghcr.io/dkluhzeb/crap-cms:nightly serve /example
-
-# Open http://localhost:3000/admin
-# Login: admin@crap.studio / admin123
-```
-
-Production — mount your own config:
-
-```bash
-docker run -v /path/to/config:/config -p 3000:3000 -p 50051:50051 \
-  ghcr.io/dkluhzeb/crap-cms:nightly
-```
-
-Images are Alpine-based (~30 MB) and published to `ghcr.io/dkluhzeb/crap-cms`. Tags:
-
-| Tag | Description |
-|-----|-------------|
-| `nightly` | Latest main build (x86_64) |
-| `sha-<commit>` | Pinned to a specific commit |
-| `X.Y.Z-alpha.N` | Tagged release |
-| `X.Y` | Latest patch in a minor series |
-| `latest` | Most recent tagged release |
-
-### Static Binaries
-
-Pre-built static binaries are attached to each [GitHub Release](https://github.com/dkluhzeb/crap-cms/releases):
-
-- `crap-cms-linux-x86_64` — Linux x86_64 (musl, fully static)
-- `crap-cms-linux-aarch64` — Linux ARM64 (musl, fully static)
-- `crap-cms-windows-x86_64.exe` — Windows x86_64
-
-Download and run directly — no runtime dependencies required. An `example.tar.gz` with a sample project is also included in each release.
-
-```bash
-curl -L -o crap-cms \
-  https://github.com/dkluhzeb/crap-cms/releases/latest/download/crap-cms-linux-x86_64
-chmod +x crap-cms
-
-# Download and extract the example project
-curl -L https://github.com/dkluhzeb/crap-cms/releases/latest/download/example.tar.gz \
-  | tar xz
-
-./crap-cms serve ./example
 ```
 
 ### CI/CD
@@ -159,7 +172,7 @@ curl -L https://github.com/dkluhzeb/crap-cms/releases/latest/download/example.ta
 |----------|---------|--------------|
 | **CI** | Every push & PR | fmt, clippy, tests |
 | **Nightly** | Push to main | x86_64 musl binary, Docker `nightly` tag, docs deploy |
-| **Release** | Tag `v*` | Multi-arch binaries, Docker semver tags, GitHub Release (pre-release), docs deploy |
+| **Release** | Tag `v*` | Multi-arch binaries, Docker semver tags, GitHub Release, docs deploy |
 
 ## License
 

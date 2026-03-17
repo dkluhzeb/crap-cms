@@ -440,6 +440,14 @@ pub enum JobsAction {
         #[arg(short, long, default_value = "20")]
         limit: i64,
     },
+    /// Cancel pending jobs (delete from queue)
+    Cancel {
+        /// Path to the config directory
+        config: PathBuf,
+        /// Only cancel jobs with this slug (default: all pending)
+        #[arg(short, long)]
+        slug: Option<String>,
+    },
     /// Clean up old completed/failed job runs
     Purge {
         /// Path to the config directory
