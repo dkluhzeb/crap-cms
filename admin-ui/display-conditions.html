@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0d4ad855.js";
+            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a8be9f9.js"></script>
@@ -192,7 +192,7 @@
 <p>The condition references a Lua function using the standard hook ref format (<code>hooks.&lt;collection&gt;.&lt;name&gt;</code>). The function receives the current form data and returns <strong>either</strong> a condition table (client-side) or a boolean (server-side).</p>
 <p>The <code>data</code> parameter is typed per-collection (<code>crap.data.Posts</code>, <code>crap.global_data.SiteSettings</code>) for IDE autocomplete. The type generator emits these types automatically.</p>
 <p>Use <code>crap-cms make hook</code> with <code>--type condition</code> to scaffold condition hooks:</p>
-<pre><code class="language-bash">crap-cms make hook ./config show_external_url \
+<pre><code class="language-bash">crap-cms -C ./config make hook show_external_url \
     -t condition -c posts -l table -F post_type
 </code></pre>
 <h2 id="condition-functions"><a class="header" href="#condition-functions">Condition Functions</a></h2>

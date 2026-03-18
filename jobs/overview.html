@@ -35,7 +35,7 @@
             const path_to_root = "../";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "../searchindex-0d4ad855.js";
+            window.path_to_searchindex_js = "../searchindex-c8cd5850.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="../toc-8a8be9f9.js"></script>
@@ -280,10 +280,10 @@ heartbeat_interval = 10   # seconds between heartbeat updates
 auto_purge = "7d"         # auto-delete completed jobs older than this
 </code></pre>
 <h2 id="cli-commands"><a class="header" href="#cli-commands">CLI Commands</a></h2>
-<pre><code class="language-bash">crap-cms jobs list &lt;config_dir&gt;                   # list defined jobs
-crap-cms jobs trigger &lt;config_dir&gt; &lt;slug&gt;         # manually queue a job
-crap-cms jobs status &lt;config_dir&gt; [--id &lt;id&gt;]     # show recent job runs
-crap-cms jobs purge &lt;config_dir&gt; [--older-than 7d] # clean up old runs
+<pre><code class="language-bash">crap-cms -C &lt;config_dir&gt; jobs list                   # list defined jobs
+crap-cms -C &lt;config_dir&gt; jobs trigger &lt;slug&gt;         # manually queue a job
+crap-cms -C &lt;config_dir&gt; jobs status [--id &lt;id&gt;]     # show recent job runs
+crap-cms -C &lt;config_dir&gt; jobs purge [--older-than 7d] # clean up old runs
 </code></pre>
 <h2 id="grpc-api"><a class="header" href="#grpc-api">gRPC API</a></h2>
 <p>Four RPCs for job management:</p>

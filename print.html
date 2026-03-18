@@ -36,7 +36,7 @@
             const path_to_root = "";
             const default_light_theme = "navy";
             const default_dark_theme = "navy";
-            window.path_to_searchindex_js = "searchindex-0d4ad855.js";
+            window.path_to_searchindex_js = "searchindex-c8cd5850.js";
         </script>
         <!-- Start loading toc.js asap -->
         <script src="toc-8a8be9f9.js"></script>
@@ -5238,10 +5238,10 @@ heartbeat_interval = 10   # seconds between heartbeat updates
 auto_purge = "7d"         # auto-delete completed jobs older than this
 </code></pre>
 <h2 id="cli-commands"><a class="header" href="#cli-commands">CLI Commands</a></h2>
-<pre><code class="language-bash">crap-cms jobs list &lt;config_dir&gt;                   # list defined jobs
-crap-cms jobs trigger &lt;config_dir&gt; &lt;slug&gt;         # manually queue a job
-crap-cms jobs status &lt;config_dir&gt; [--id &lt;id&gt;]     # show recent job runs
-crap-cms jobs purge &lt;config_dir&gt; [--older-than 7d] # clean up old runs
+<pre><code class="language-bash">crap-cms -C &lt;config_dir&gt; jobs list                   # list defined jobs
+crap-cms -C &lt;config_dir&gt; jobs trigger &lt;slug&gt;         # manually queue a job
+crap-cms -C &lt;config_dir&gt; jobs status [--id &lt;id&gt;]     # show recent job runs
+crap-cms -C &lt;config_dir&gt; jobs purge [--older-than 7d] # clean up old runs
 </code></pre>
 <h2 id="grpc-api-2"><a class="header" href="#grpc-api-2">gRPC API</a></h2>
 <p>Four RPCs for job management:</p>
@@ -5453,7 +5453,7 @@ crap.collections.define("users", {
 <ol start="2">
 <li>Bootstrap the first user:</li>
 </ol>
-<pre><code class="language-bash">crap-cms user create ./my-project -e admin@example.com
+<pre><code class="language-bash">crap-cms -C ./my-project user create -e admin@example.com
 </code></pre>
 <ol start="3">
 <li>(Optional) Set a JWT secret explicitly, or let it auto-generate and persist to <code>data/.jwt_secret</code>:</li>
@@ -6366,11 +6366,11 @@ end
 </ol>
 <p>This is useful for AVIF which is significantly slower to encode than WebP. The <code>queue</code> option is per-format — you can queue AVIF while keeping WebP synchronous.</p>
 <p>Use the <a href="#images--manage-image-processing-queue"><code>images</code> CLI command</a> to inspect and manage the queue:</p>
-<pre><code class="language-bash">crap-cms images stats ./my-project       # counts by status
-crap-cms images list ./my-project        # list recent entries
-crap-cms images list ./my-project -s failed  # show only failed
-crap-cms images retry ./my-project --all -y  # retry all failed
-crap-cms images purge ./my-project --older-than 7d  # clean up old entries
+<pre><code class="language-bash">crap-cms -C ./my-project images stats       # counts by status
+crap-cms -C ./my-project images list        # list recent entries
+crap-cms -C ./my-project images list -s failed  # show only failed
+crap-cms -C ./my-project images retry --all -y  # retry all failed
+crap-cms -C ./my-project images purge --older-than 7d  # clean up old entries
 </code></pre>
 <h2 id="processing-pipeline"><a class="header" href="#processing-pipeline">Processing Pipeline</a></h2>
 <p>For each uploaded image:</p>
@@ -10452,7 +10452,7 @@ end)
 <p>The condition references a Lua function using the standard hook ref format (<code>hooks.&lt;collection&gt;.&lt;name&gt;</code>). The function receives the current form data and returns <strong>either</strong> a condition table (client-side) or a boolean (server-side).</p>
 <p>The <code>data</code> parameter is typed per-collection (<code>crap.data.Posts</code>, <code>crap.global_data.SiteSettings</code>) for IDE autocomplete. The type generator emits these types automatically.</p>
 <p>Use <code>crap-cms make hook</code> with <code>--type condition</code> to scaffold condition hooks:</p>
-<pre><code class="language-bash">crap-cms make hook ./config show_external_url \
+<pre><code class="language-bash">crap-cms -C ./config make hook show_external_url \
     -t condition -c posts -l table -F post_type
 </code></pre>
 <h2 id="condition-functions"><a class="header" href="#condition-functions">Condition Functions</a></h2>
