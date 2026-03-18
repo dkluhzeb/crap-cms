@@ -79,8 +79,24 @@ pub(super) fn register_globals_update(
             };
 
             let data = lua_table_to_hashmap(&data_table)?;
-            let doc = query::update_global(conn, &slug, &def, &data, locale_ctx.as_ref())
+            let join_data = lua_table_to_json_map(lua, &data_table)?;
+            query::update_global(conn, &slug, &def, &data, locale_ctx.as_ref())
                 .map_err(|e| mlua::Error::RuntimeError(format!("update_global error: {}", e)))?;
+
+            let global_table = format!("_global_{}", slug);
+            query::save_join_table_data(
+                conn,
+                &global_table,
+                &def.fields,
+                "default",
+                &join_data,
+                locale_ctx.as_ref(),
+            )
+            .map_err(|e| mlua::Error::RuntimeError(format!("join data error: {}", e)))?;
+
+            // Re-fetch to hydrate join data in the returned document
+            let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())
+                .map_err(|e| mlua::Error::RuntimeError(format!("get_global error: {}", e)))?;
 
             document_to_lua_table(lua, &doc)
         },
