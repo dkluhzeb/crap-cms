@@ -123,10 +123,10 @@ auto_purge = "7d"         # auto-delete completed jobs older than this
 ## CLI Commands
 
 ```bash
-crap-cms jobs list <config_dir>                   # list defined jobs
-crap-cms jobs trigger <config_dir> <slug>         # manually queue a job
-crap-cms jobs status <config_dir> [--id <id>]     # show recent job runs
-crap-cms jobs purge <config_dir> [--older-than 7d] # clean up old runs
+crap-cms -C <config_dir> jobs list                   # list defined jobs
+crap-cms -C <config_dir> jobs trigger <slug>         # manually queue a job
+crap-cms -C <config_dir> jobs status [--id <id>]     # show recent job runs
+crap-cms -C <config_dir> jobs purge [--older-than 7d] # clean up old runs
 ```
 
 ## gRPC API

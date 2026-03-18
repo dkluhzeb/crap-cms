@@ -9,7 +9,7 @@
 #   oha       — pacman -S oha (Rust HTTP load tester)
 #   grpcurl   — already installed (gRPC testing)
 #   jq        — JSON parsing
-#   Running server: cargo run -- serve ./example
+#   Running server: cargo run -- -C ./example serve
 #
 # Usage:
 #   ./tests/loadtest.sh                         # defaults
@@ -132,7 +132,7 @@ if curl -sf -o /dev/null --max-time 3 "${ADMIN_URL}/admin/login"; then
     ok "Admin server responding at ${ADMIN_URL}"
 else
     fail "Admin server not responding at ${ADMIN_URL}"
-    echo "  Start it with: cargo run -- serve ./example"
+    echo "  Start it with: cargo run -- -C ./example serve"
     exit 1
 fi
 
@@ -140,7 +140,7 @@ if grpcurl -plaintext "$GRPC_ADDR" list &>/dev/null; then
     ok "gRPC server responding at ${GRPC_ADDR}"
 else
     fail "gRPC server not responding at ${GRPC_ADDR}"
-    echo "  Start it with: cargo run -- serve ./example"
+    echo "  Start it with: cargo run -- -C ./example serve"
     exit 1
 fi
 

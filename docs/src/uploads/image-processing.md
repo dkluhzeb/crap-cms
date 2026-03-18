@@ -73,11 +73,11 @@ This is useful for AVIF which is significantly slower to encode than WebP. The `
 Use the [`images` CLI command](../cli/flags.md#images--manage-image-processing-queue) to inspect and manage the queue:
 
 ```bash
-crap-cms images stats ./my-project       # counts by status
-crap-cms images list ./my-project        # list recent entries
-crap-cms images list ./my-project -s failed  # show only failed
-crap-cms images retry ./my-project --all -y  # retry all failed
-crap-cms images purge ./my-project --older-than 7d  # clean up old entries
+crap-cms -C ./my-project images stats       # counts by status
+crap-cms -C ./my-project images list        # list recent entries
+crap-cms -C ./my-project images list -s failed  # show only failed
+crap-cms -C ./my-project images retry --all -y  # retry all failed
+crap-cms -C ./my-project images purge --older-than 7d  # clean up old entries
 ```
 
 ## Processing Pipeline

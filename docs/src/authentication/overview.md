@@ -46,7 +46,7 @@ crap.collections.define("users", {
 2. Bootstrap the first user:
 
 ```bash
-crap-cms user create ./my-project -e admin@example.com
+crap-cms -C ./my-project user create -e admin@example.com
 ```
 
 3. (Optional) Set a JWT secret explicitly, or let it auto-generate and persist to `data/.jwt_secret`:

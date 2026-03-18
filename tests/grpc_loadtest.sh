@@ -14,7 +14,7 @@
 #   grpcurl   — gRPC testing (for auth/setup)
 #   protoc    — proto compiler (generates descriptor set for ghz)
 #   jq        — JSON parsing
-#   Running server: cargo run -- serve ./example
+#   Running server: cargo run -- -C ./example serve
 #
 # Usage:
 #   ./tests/grpc_loadtest.sh                           # defaults
@@ -158,7 +158,7 @@ if grpcurl -plaintext "$GRPC_ADDR" list &>/dev/null; then
     ok "gRPC server responding at ${GRPC_ADDR}"
 else
     fail "gRPC server not responding at ${GRPC_ADDR}"
-    echo "  Start it with: cargo run -- serve ./example"
+    echo "  Start it with: cargo run -- -C ./example serve"
     exit 1
 fi
 
@@ -173,7 +173,7 @@ LOGIN_RESP=$(grpcurl -plaintext -d "{
     \"password\": \"${PASSWORD}\"
 }" "$GRPC_ADDR" crap.ContentAPI/Login 2>&1) || {
     fail "gRPC Login failed. Create a user first:"
-    echo "  cargo run -- user create ./example -e ${EMAIL} -p ${PASSWORD} -f role=admin -f name='Admin'"
+    echo "  cargo run -- -C ./example user create -e ${EMAIL} -p ${PASSWORD} -f role=admin -f name='Admin'"
     echo "  Response: ${LOGIN_RESP}"
     exit 1
 }

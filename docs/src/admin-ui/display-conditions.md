@@ -23,7 +23,7 @@ The `data` parameter is typed per-collection (`crap.data.Posts`, `crap.global_da
 Use `crap-cms make hook` with `--type condition` to scaffold condition hooks:
 
 ```bash
-crap-cms make hook ./config show_external_url \
+crap-cms -C ./config make hook show_external_url \
     -t condition -c posts -l table -F post_type
 ```
 
