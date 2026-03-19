@@ -40,6 +40,11 @@ pub struct ServerConfig {
     /// Sliding window duration in seconds for gRPC rate limiting.
     #[serde(default = "default_grpc_rate_limit_window", with = "serde_duration")]
     pub grpc_rate_limit_window: u64,
+    /// Enable HTTP/2 cleartext (h2c) for the admin server.
+    /// Allows reverse proxies to speak HTTP/2 to the backend without TLS.
+    /// Browsers that don't support h2c fall back to HTTP/1.1 on the same port.
+    /// Default: false.
+    pub h2c: bool,
 }
 
 fn default_grpc_rate_limit_window() -> u64 {
@@ -56,6 +61,7 @@ impl Default for ServerConfig {
             grpc_reflection: true,
             grpc_rate_limit_requests: 0,
             grpc_rate_limit_window: 60,
+            h2c: false,
         }
     }
 }
@@ -147,6 +153,32 @@ mod tests {
         assert!(config.admin.dev_mode);
         assert!(config.admin.require_auth); // default
         assert!(config.admin.access.is_none()); // default
+    }
+
+    #[test]
+    fn server_config_h2c_defaults_to_false() {
+        let server = ServerConfig::default();
+        assert!(!server.h2c);
+    }
+
+    #[test]
+    fn server_config_h2c_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("crap.toml"), "[server]\nh2c = true\n").unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert!(config.server.h2c);
+    }
+
+    #[test]
+    fn server_config_h2c_omitted_uses_default() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 8080\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert!(!config.server.h2c);
     }
 
     #[test]

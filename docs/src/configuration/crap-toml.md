@@ -77,6 +77,7 @@ Fields that support this: `max_file_size` (global and per-collection).
 admin_port = 3000       # Admin UI port
 grpc_port = 50051       # gRPC API port
 host = "0.0.0.0"        # Bind address
+# h2c = false           # Enable HTTP/2 cleartext (for reverse proxies)
 # compression = "off"   # "off" (default), "gzip", "br", "all"
 # grpc_reflection = true         # Enable gRPC server reflection (default: true)
 # grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled)
@@ -182,6 +183,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `admin_port` | integer | `3000` | Port for the Axum admin UI |
 | `grpc_port` | integer | `50051` | Port for the Tonic gRPC API |
 | `host` | string | `"0.0.0.0"` | Bind address for both servers |
+| `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
 | `grpc_reflection` | boolean | `true` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disable in production to hide the API surface from unauthenticated probing. |
 | `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |

@@ -747,6 +747,8 @@ dependencies = [
  "form_urlencoded",
  "handlebars",
  "http-body-util",
+ "hyper",
+ "hyper-util",
  "image",
  "include_dir",
  "indicatif",

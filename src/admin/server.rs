@@ -1,6 +1,6 @@
 //! Axum router setup, auth middleware, and admin server startup.
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, future::Future, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use axum::{
@@ -15,9 +15,11 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::{MethodRouter, get, post},
 };
+use hyper_util::{rt::TokioIo, server::conn::auto::Builder as AutoBuilder};
 use serde_json::Value;
 use subtle::ConstantTimeEq;
 use tokio_util::sync::CancellationToken;
+use tower::Service;
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
 
 use crate::{
@@ -118,16 +120,28 @@ pub async fn start(
         shutdown: shutdown.clone(),
     };
 
+    let h2c_enabled = state.config.server.h2c;
     let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let shutdown_timeout = shutdown.clone();
-    let server = axum::serve(listener, app).with_graceful_shutdown(shutdown.cancelled_owned());
+
+    let server_future: std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send>> = if h2c_enabled {
+        tracing::info!("Admin server: h2c (HTTP/2 cleartext) enabled");
+        Box::pin(serve_h2c(listener, app, shutdown))
+    } else {
+        Box::pin(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown.cancelled_owned())
+                .await?;
+            Ok(())
+        })
+    };
 
     // Hard deadline: force-stop after 10s if graceful drain doesn't complete
     // (SSE streams and other long-lived connections may not close promptly)
     tokio::select! {
-        result = server => { result?; }
+        result = server_future => { result?; }
         _ = async {
             shutdown_timeout.cancelled().await;
             tokio::time::sleep(Duration::from_secs(10)).await;
@@ -136,6 +150,38 @@ pub async fn start(
         }
     }
 
+    Ok(())
+}
+
+/// Run the admin server with h2c (HTTP/2 cleartext) support.
+/// Uses hyper-util's auto::Builder which negotiates HTTP/1.1 vs HTTP/2
+/// on the same port. Reverse proxies can speak HTTP/2 to the backend
+/// without TLS; browsers fall back to HTTP/1.1 gracefully.
+#[cfg(not(tarpaulin_include))]
+async fn serve_h2c(
+    listener: tokio::net::TcpListener,
+    app: Router,
+    shutdown: CancellationToken,
+) -> Result<()> {
+    loop {
+        tokio::select! {
+            result = listener.accept() => {
+                let (socket, _addr) = result?;
+                let tower_service = app.clone();
+                tokio::spawn(async move {
+                    let hyper_service = hyper::service::service_fn(move |req| {
+                        tower_service.clone().call(req)
+                    });
+                    let io = TokioIo::new(socket);
+                    AutoBuilder::new(hyper_util::rt::TokioExecutor::new())
+                        .serve_connection_with_upgrades(io, hyper_service)
+                        .await
+                        .ok(); // Connection errors are expected (client disconnect)
+                });
+            }
+            _ = shutdown.cancelled() => break,
+        }
+    }
     Ok(())
 }
 
