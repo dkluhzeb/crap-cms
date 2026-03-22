@@ -3,11 +3,14 @@ use std::{fs, path::Path};
 use super::*;
 use crate::{
     config::{CrapConfig, McpConfig},
-    core::{CollectionDefinition, DocumentId, collection::GlobalDefinition, document::Document},
+    core::{
+        CollectionDefinition, DocumentId, Registry, collection::GlobalDefinition,
+        document::Document,
+    },
     db::{migrate, pool, query},
     hooks::lifecycle::HookRunner,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 fn make_registry() -> Registry {
     let mut reg = Registry::new();

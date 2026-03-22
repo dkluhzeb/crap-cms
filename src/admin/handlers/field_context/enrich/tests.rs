@@ -1,8 +1,13 @@
+use std::collections::HashMap;
+
 use super::super::builder::build_field_contexts;
 use super::*;
 use crate::{
     admin::handlers::field_context::MAX_FIELD_DEPTH,
-    core::field::{BlockDefinition, FieldDefinition, LocalizedString, SelectOption},
+    core::{
+        FieldType,
+        field::{BlockDefinition, FieldDefinition, LocalizedString, SelectOption},
+    },
 };
 
 fn make_field(name: &str, ft: FieldType) -> FieldDefinition {

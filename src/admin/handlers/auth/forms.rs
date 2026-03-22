@@ -1,0 +1,62 @@
+//! Form and query parameter structs for auth handlers.
+
+use serde::Deserialize;
+
+/// Form data for the login page.
+#[derive(Debug, Deserialize)]
+pub struct LoginForm {
+    /// The slug of the collection the user belongs to.
+    pub collection: String,
+    /// The user's email address.
+    pub email: String,
+    /// The user's password.
+    pub password: String,
+}
+
+/// Query parameters for the login page.
+#[derive(Debug, Deserialize, Default)]
+pub struct LoginPageQuery {
+    /// Optional success message to display (e.g. after logout or reset).
+    pub success: Option<String>,
+}
+
+/// Form data for the forgot password page.
+#[derive(Debug, Deserialize)]
+pub struct ForgotPasswordForm {
+    /// The slug of the collection the user belongs to.
+    pub collection: String,
+    /// The user's email address.
+    pub email: String,
+}
+
+/// Query parameters for the reset password page.
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordQuery {
+    /// The reset token sent via email.
+    pub token: String,
+}
+
+/// Form data for the reset password page.
+#[derive(Debug, Deserialize)]
+pub struct ResetPasswordForm {
+    /// The reset token from the URL.
+    pub token: String,
+    /// The new password.
+    pub password: String,
+    /// Confirmation of the new password.
+    pub password_confirm: String,
+}
+
+/// Query parameters for the email verification page.
+#[derive(Debug, Deserialize)]
+pub struct VerifyEmailQuery {
+    /// The verification token sent via email.
+    pub token: String,
+}
+
+/// Form data for saving the UI locale.
+#[derive(Debug, Deserialize)]
+pub struct LocaleForm {
+    /// The selected locale identifier.
+    pub locale: String,
+}
