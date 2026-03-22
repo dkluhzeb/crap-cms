@@ -130,6 +130,8 @@ pub(crate) fn coerce_json_value(field_type: &FieldType, val: &Value) -> DbValue 
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     // ── normalize_date_value tests ──────────────────────────────────────
@@ -295,7 +297,7 @@ mod tests {
 
     #[test]
     fn coerce_json_number_as_real_for_number_field() {
-        let val = serde_json::json!(42.5);
+        let val = json!(42.5);
         assert_eq!(
             coerce_json_value(&FieldType::Number, &val),
             DbValue::Real(42.5)
@@ -304,7 +306,7 @@ mod tests {
 
     #[test]
     fn coerce_json_integer_for_number_field() {
-        let val = serde_json::json!(42);
+        let val = json!(42);
         // Number field always yields Real
         assert_eq!(
             coerce_json_value(&FieldType::Number, &val),
@@ -314,7 +316,7 @@ mod tests {
 
     #[test]
     fn coerce_json_integer_for_non_number_field() {
-        let val = serde_json::json!(42);
+        let val = json!(42);
         // Non-number field: integer stays as Integer
         assert_eq!(
             coerce_json_value(&FieldType::Text, &val),
@@ -324,7 +326,7 @@ mod tests {
 
     #[test]
     fn coerce_json_float_for_non_number_field() {
-        let val = serde_json::json!(3.15);
+        let val = json!(3.15);
         // Non-number field, but value has no i64 representation: falls back to Real
         assert_eq!(
             coerce_json_value(&FieldType::Text, &val),
@@ -334,7 +336,7 @@ mod tests {
 
     #[test]
     fn coerce_json_string_delegates_to_coerce_value() {
-        let val = serde_json::json!("hello");
+        let val = json!("hello");
         assert_eq!(
             coerce_json_value(&FieldType::Text, &val),
             DbValue::Text("hello".into())
@@ -343,13 +345,13 @@ mod tests {
 
     #[test]
     fn coerce_json_string_empty_is_null() {
-        let val = serde_json::json!("");
+        let val = json!("");
         assert_eq!(coerce_json_value(&FieldType::Text, &val), DbValue::Null);
     }
 
     #[test]
     fn coerce_json_array_to_text() {
-        let val = serde_json::json!([1, 2, 3]);
+        let val = json!([1, 2, 3]);
         assert_eq!(
             coerce_json_value(&FieldType::Text, &val),
             DbValue::Text("[1,2,3]".into())
@@ -358,7 +360,7 @@ mod tests {
 
     #[test]
     fn coerce_json_object_to_text() {
-        let val = serde_json::json!({"key": "value"});
+        let val = json!({"key": "value"});
         assert_eq!(
             coerce_json_value(&FieldType::Text, &val),
             DbValue::Text(r#"{"key":"value"}"#.into())

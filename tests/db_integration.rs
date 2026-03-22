@@ -5,6 +5,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::{Auth, CollectionDefinition, GlobalDefinition, Labels};
 use crap_cms::core::field::{FieldDefinition, FieldType, LocalizedString};
 use crap_cms::db::{migrate, ops, pool, query};
+use serde_json::json;
 
 fn make_posts_def() -> CollectionDefinition {
     let mut def = CollectionDefinition::new("posts");
@@ -21,7 +22,7 @@ fn make_posts_def() -> CollectionDefinition {
     let status = FieldDefinition {
         name: "status".to_string(),
         field_type: FieldType::Select,
-        default_value: Some(serde_json::json!("draft")),
+        default_value: Some(json!("draft")),
         ..Default::default()
     };
     def.fields = vec![title, status];

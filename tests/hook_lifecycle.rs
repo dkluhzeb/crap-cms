@@ -9,6 +9,7 @@ use crap_cms::db::query::AccessResult;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{AfterReadCtx, FieldWriteCtx, HookRunner, ValidationCtx};
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -68,8 +69,8 @@ fn before_change_hook_modifies_data() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("  Test Title  "));
-    data.insert("body".to_string(), serde_json::json!("Content"));
+    data.insert("title".to_string(), json!("  Test Title  "));
+    data.insert("body".to_string(), json!("Content"));
 
     let ctx = crap_cms::hooks::lifecycle::HookContext {
         collection: "articles".to_string(),
@@ -112,7 +113,7 @@ fn before_validate_trims_title() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("  Spaces Around  "));
+    data.insert("title".to_string(), json!("  Spaces Around  "));
 
     let ctx = crap_cms::hooks::lifecycle::HookContext {
         collection: "articles".to_string(),
@@ -152,7 +153,7 @@ fn field_before_change_transforms_value() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Hello World"));
+    data.insert("title".to_string(), json!("Hello World"));
     // slug intentionally left empty — field hook should auto-generate from title
 
     let mut conn = pool.get().expect("DB connection");
@@ -183,7 +184,7 @@ fn registered_hook_fires_for_all_collections() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
 
     let ctx = crap_cms::hooks::lifecycle::HookContext {
         collection: "articles".to_string(),
@@ -247,8 +248,8 @@ fn run_before_write_full_lifecycle() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("  My Article  "));
-    data.insert("body".to_string(), serde_json::json!("Article body"));
+    data.insert("title".to_string(), json!("  My Article  "));
+    data.insert("body".to_string(), json!("Article body"));
 
     let ctx = crap_cms::hooks::lifecycle::HookContext {
         collection: "articles".to_string(),
@@ -450,7 +451,7 @@ fn check_access_with_user_context() {
 
     // User with admin role should be allowed
     let mut admin_fields = HashMap::new();
-    admin_fields.insert("role".to_string(), serde_json::json!("admin"));
+    admin_fields.insert("role".to_string(), json!("admin"));
     let admin_user = Document {
         id: "user-1".into(),
         fields: admin_fields,
@@ -474,7 +475,7 @@ fn check_access_with_user_context() {
 
     // User without admin role should be denied
     let mut regular_fields = HashMap::new();
-    regular_fields.insert("role".to_string(), serde_json::json!("editor"));
+    regular_fields.insert("role".to_string(), json!("editor"));
     let regular_user = Document {
         id: "user-2".into(),
         fields: regular_fields,

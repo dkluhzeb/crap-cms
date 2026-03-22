@@ -1,5 +1,6 @@
 //! Form parsing helpers: multipart, array fields, upload metadata.
 
+use anyhow::anyhow;
 use axum::extract::{FromRequest, Multipart};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap};
@@ -277,7 +278,7 @@ pub(crate) async fn parse_multipart_form(
 ) -> Result<(HashMap<String, String>, Option<UploadedFile>), anyhow::Error> {
     let mut multipart = Multipart::from_request(request, state)
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to parse multipart: {}", e))?;
+        .map_err(|e| anyhow!("Failed to parse multipart: {}", e))?;
 
     let mut form_data = HashMap::new();
     let mut file: Option<UploadedFile> = None;
@@ -285,7 +286,7 @@ pub(crate) async fn parse_multipart_form(
     while let Some(field) = multipart
         .next_field()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to read multipart field: {}", e))?
+        .map_err(|e| anyhow!("Failed to read multipart field: {}", e))?
     {
         let name = field.name().unwrap_or("").to_string();
         if name == "_file" && field.file_name().is_some() {
@@ -297,7 +298,7 @@ pub(crate) async fn parse_multipart_form(
             let data = field
                 .bytes()
                 .await
-                .map_err(|e| anyhow::anyhow!("Failed to read file data: {}", e))?;
+                .map_err(|e| anyhow!("Failed to read file data: {}", e))?;
             if !data.is_empty() {
                 file = Some(
                     UploadedFileBuilder::new(filename, content_type)

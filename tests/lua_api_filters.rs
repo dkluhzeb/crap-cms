@@ -5,6 +5,7 @@ use crap_cms::core::SharedRegistry;
 use crap_cms::db::DbPool;
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookRunner, ValidationCtx};
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -658,8 +659,8 @@ fn lua_validate_fields_with_custom_validator() {
     let tx = conn.transaction().unwrap();
 
     let mut data = std::collections::HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Valid Article"));
-    data.insert("word_count".to_string(), serde_json::json!("100"));
+    data.insert("title".to_string(), json!("Valid Article"));
+    data.insert("word_count".to_string(), json!("100"));
 
     let result = runner.validate_fields(
         &def.fields,
@@ -673,8 +674,8 @@ fn lua_validate_fields_with_custom_validator() {
 
     // Invalid: negative number should fail
     let mut bad_data = std::collections::HashMap::new();
-    bad_data.insert("title".to_string(), serde_json::json!("Invalid Article"));
-    bad_data.insert("word_count".to_string(), serde_json::json!("-5"));
+    bad_data.insert("title".to_string(), json!("Invalid Article"));
+    bad_data.insert("word_count".to_string(), json!("-5"));
 
     let result = runner.validate_fields(
         &def.fields,

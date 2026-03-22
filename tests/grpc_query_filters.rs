@@ -20,6 +20,7 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -39,7 +40,7 @@ fn make_posts_def() -> CollectionDefinition {
     let status = FieldDefinition {
         name: "status".to_string(),
         field_type: FieldType::Select,
-        default_value: Some(serde_json::json!("draft")),
+        default_value: Some(json!("draft")),
         ..Default::default()
     };
     def.fields = vec![title, status];

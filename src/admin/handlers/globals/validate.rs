@@ -8,6 +8,7 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
+use serde_json::json;
 use tokio::task;
 
 use crate::{
@@ -116,7 +117,7 @@ pub async fn validate_global(
 
 /// Quick error response for non-validation failures.
 fn validation_error_response_simple(msg: &str) -> Response {
-    Json(serde_json::json!({
+    Json(json!({
         "valid": false,
         "errors": { "_form": msg },
     }))

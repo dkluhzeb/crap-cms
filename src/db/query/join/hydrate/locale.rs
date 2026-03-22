@@ -45,6 +45,8 @@ pub(super) fn resolve_join_fallback_locale(
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
     use crate::{
         config::LocaleConfig,
@@ -351,7 +353,7 @@ mod tests {
         let locale_ctx = de_fallback_ctx();
         let mut doc = crate::core::Document::new("p1".to_string());
         doc.fields
-            .insert("config__label".to_string(), serde_json::json!("My Config"));
+            .insert("config__label".to_string(), json!("My Config"));
 
         hydrate_document(&conn, "posts", &fields, &mut doc, None, Some(&locale_ctx)).unwrap();
 

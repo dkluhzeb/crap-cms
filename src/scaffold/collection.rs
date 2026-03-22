@@ -1,6 +1,6 @@
 //! `make collection` command — generate collection Lua files.
 
-use anyhow::{Context as _, Result, bail};
+use anyhow::{Context as _, Result, anyhow, bail};
 use std::{fs, path::Path};
 
 /// Valid field types for collection definitions.
@@ -510,7 +510,7 @@ fn parse_block_entries(s: &str) -> Result<Vec<BlockStub>> {
         }
         // Format: type|label(fields)
         let pipe_pos = part.find('|').ok_or_else(|| {
-            anyhow::anyhow!(
+            anyhow!(
                 "Block entry '{}' missing '|' separator — expected 'type|label(fields)'",
                 part
             )

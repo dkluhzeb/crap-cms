@@ -13,6 +13,7 @@ use crap_cms::core::field::{FieldDefinition, FieldType};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{HookContext, HookEvent, HookRunner};
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -72,8 +73,8 @@ fn make_field(name: &str, field_type: FieldType) -> FieldDefinition {
 #[test]
 fn to_string_map_basic() {
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Hello"));
-    data.insert("count".to_string(), serde_json::json!(42));
+    data.insert("title".to_string(), json!("Hello"));
+    data.insert("count".to_string(), json!(42));
 
     let ctx = HookContext::builder("test", "create").data(data).build();
 
@@ -91,10 +92,10 @@ fn to_string_map_basic() {
 fn to_string_map_flattens_groups() {
     let mut data = HashMap::new();
     let mut seo = serde_json::Map::new();
-    seo.insert("meta_title".to_string(), serde_json::json!("SEO Title"));
-    seo.insert("meta_desc".to_string(), serde_json::json!("Description"));
+    seo.insert("meta_title".to_string(), json!("SEO Title"));
+    seo.insert("meta_desc".to_string(), json!("Description"));
     data.insert("seo".to_string(), serde_json::Value::Object(seo));
-    data.insert("title".to_string(), serde_json::json!("Normal Title"));
+    data.insert("title".to_string(), json!("Normal Title"));
 
     let ctx = HookContext::builder("test", "create").data(data).build();
 
@@ -122,7 +123,7 @@ fn to_string_map_flattens_groups() {
 fn to_string_map_group_as_string_falls_through() {
     // When group value is already a string (e.g. from form data), it should be kept as-is
     let mut data = HashMap::new();
-    data.insert("seo".to_string(), serde_json::json!("already-a-string"));
+    data.insert("seo".to_string(), json!("already-a-string"));
 
     let ctx = HookContext::builder("test", "create").data(data).build();
 
@@ -141,13 +142,13 @@ fn to_string_map_group_as_string_falls_through() {
 
 #[test]
 fn evaluate_condition_equals() {
-    let data = serde_json::json!({"status": "published"});
-    let condition = serde_json::json!({"field": "status", "equals": "published"});
+    let data = json!({"status": "published"});
+    let condition = json!({"field": "status", "equals": "published"});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
 
-    let condition = serde_json::json!({"field": "status", "equals": "draft"});
+    let condition = json!({"field": "status", "equals": "draft"});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
@@ -155,13 +156,13 @@ fn evaluate_condition_equals() {
 
 #[test]
 fn evaluate_condition_not_equals() {
-    let data = serde_json::json!({"status": "published"});
-    let condition = serde_json::json!({"field": "status", "not_equals": "draft"});
+    let data = json!({"status": "published"});
+    let condition = json!({"field": "status", "not_equals": "draft"});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
 
-    let condition = serde_json::json!({"field": "status", "not_equals": "published"});
+    let condition = json!({"field": "status", "not_equals": "published"});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
@@ -169,13 +170,13 @@ fn evaluate_condition_not_equals() {
 
 #[test]
 fn evaluate_condition_in() {
-    let data = serde_json::json!({"status": "published"});
-    let condition = serde_json::json!({"field": "status", "in": ["published", "draft"]});
+    let data = json!({"status": "published"});
+    let condition = json!({"field": "status", "in": ["published", "draft"]});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
 
-    let condition = serde_json::json!({"field": "status", "in": ["archived", "deleted"]});
+    let condition = json!({"field": "status", "in": ["archived", "deleted"]});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
@@ -183,13 +184,13 @@ fn evaluate_condition_in() {
 
 #[test]
 fn evaluate_condition_not_in() {
-    let data = serde_json::json!({"status": "published"});
-    let condition = serde_json::json!({"field": "status", "not_in": ["draft", "archived"]});
+    let data = json!({"status": "published"});
+    let condition = json!({"field": "status", "not_in": ["draft", "archived"]});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
 
-    let condition = serde_json::json!({"field": "status", "not_in": ["published", "draft"]});
+    let condition = json!({"field": "status", "not_in": ["published", "draft"]});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &condition, &data
     ));
@@ -197,29 +198,29 @@ fn evaluate_condition_not_in() {
 
 #[test]
 fn evaluate_condition_is_truthy() {
-    let data = serde_json::json!({"active": true, "name": "test", "empty": "", "flag": false, "nothing": null});
+    let data = json!({"active": true, "name": "test", "empty": "", "flag": false, "nothing": null});
 
-    let cond = serde_json::json!({"field": "active", "is_truthy": true});
+    let cond = json!({"field": "active", "is_truthy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
-    let cond = serde_json::json!({"field": "name", "is_truthy": true});
+    let cond = json!({"field": "name", "is_truthy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
-    let cond = serde_json::json!({"field": "empty", "is_truthy": true});
+    let cond = json!({"field": "empty", "is_truthy": true});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
-    let cond = serde_json::json!({"field": "flag", "is_truthy": true});
+    let cond = json!({"field": "flag", "is_truthy": true});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
-    let cond = serde_json::json!({"field": "nothing", "is_truthy": true});
+    let cond = json!({"field": "nothing", "is_truthy": true});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
@@ -227,19 +228,19 @@ fn evaluate_condition_is_truthy() {
 
 #[test]
 fn evaluate_condition_is_falsy() {
-    let data = serde_json::json!({"active": false, "name": ""});
+    let data = json!({"active": false, "name": ""});
 
-    let cond = serde_json::json!({"field": "active", "is_falsy": true});
+    let cond = json!({"field": "active", "is_falsy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
-    let cond = serde_json::json!({"field": "name", "is_falsy": true});
+    let cond = json!({"field": "name", "is_falsy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
-    let cond = serde_json::json!({"field": "missing", "is_falsy": true});
+    let cond = json!({"field": "missing", "is_falsy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
@@ -247,10 +248,10 @@ fn evaluate_condition_is_falsy() {
 
 #[test]
 fn evaluate_condition_array_means_and() {
-    let data = serde_json::json!({"status": "published", "role": "admin"});
+    let data = json!({"status": "published", "role": "admin"});
 
     // All conditions true => true
-    let conditions = serde_json::json!([
+    let conditions = json!([
         {"field": "status", "equals": "published"},
         {"field": "role", "equals": "admin"}
     ]);
@@ -260,7 +261,7 @@ fn evaluate_condition_array_means_and() {
     ));
 
     // One false => false
-    let conditions = serde_json::json!([
+    let conditions = json!([
         {"field": "status", "equals": "published"},
         {"field": "role", "equals": "editor"}
     ]);
@@ -272,8 +273,8 @@ fn evaluate_condition_array_means_and() {
 
 #[test]
 fn evaluate_condition_unknown_operator_shows() {
-    let data = serde_json::json!({"x": 1});
-    let cond = serde_json::json!({"field": "x", "unknown_op": "whatever"});
+    let data = json!({"x": 1});
+    let cond = json!({"field": "x", "unknown_op": "whatever"});
     // Unknown operator defaults to true (show field)
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
@@ -282,25 +283,25 @@ fn evaluate_condition_unknown_operator_shows() {
 
 #[test]
 fn evaluate_condition_non_object_non_array() {
-    let data = serde_json::json!({"x": 1});
+    let data = json!({"x": 1});
     // Non-object, non-array condition defaults to true
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &serde_json::json!("string"),
+        &json!("string"),
         &data
     ));
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &serde_json::json!(42),
+        &json!(42),
         &data
     ));
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
-        &serde_json::json!(true),
+        &json!(true),
         &data
     ));
 }
 
 #[test]
 fn evaluate_condition_is_truthy_with_numbers_arrays_objects() {
-    let data = serde_json::json!({
+    let data = json!({
         "count": 42,
         "items": [1, 2],
         "meta": {"key": "val"},
@@ -309,31 +310,31 @@ fn evaluate_condition_is_truthy_with_numbers_arrays_objects() {
     });
 
     // Numbers are truthy
-    let cond = serde_json::json!({"field": "count", "is_truthy": true});
+    let cond = json!({"field": "count", "is_truthy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
     // Non-empty arrays are truthy
-    let cond = serde_json::json!({"field": "items", "is_truthy": true});
+    let cond = json!({"field": "items", "is_truthy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
     // Non-empty objects are truthy
-    let cond = serde_json::json!({"field": "meta", "is_truthy": true});
+    let cond = json!({"field": "meta", "is_truthy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
     // Empty arrays are falsy
-    let cond = serde_json::json!({"field": "empty_arr", "is_truthy": true});
+    let cond = json!({"field": "empty_arr", "is_truthy": true});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 
     // Empty objects are falsy
-    let cond = serde_json::json!({"field": "empty_obj", "is_truthy": true});
+    let cond = json!({"field": "empty_obj", "is_truthy": true});
     assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
@@ -345,7 +346,7 @@ fn evaluate_condition_is_truthy_with_numbers_arrays_objects() {
 fn call_row_label_returns_label() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let row_data = serde_json::json!({"label": "My Row"});
+    let row_data = json!({"label": "My Row"});
     let result = runner.call_row_label("hooks.field_hooks.row_label", &row_data);
     assert_eq!(result, Some("Row: My Row".to_string()));
 }
@@ -354,7 +355,7 @@ fn call_row_label_returns_label() {
 fn call_row_label_returns_none_when_no_label() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let row_data = serde_json::json!({"other": "value"});
+    let row_data = json!({"other": "value"});
     let result = runner.call_row_label("hooks.field_hooks.row_label", &row_data);
     assert!(
         result.is_none(),
@@ -366,7 +367,7 @@ fn call_row_label_returns_none_when_no_label() {
 fn call_row_label_invalid_ref_returns_none() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let row_data = serde_json::json!({"label": "test"});
+    let row_data = json!({"label": "test"});
     let result = runner.call_row_label("hooks.nonexistent.function", &row_data);
     assert!(result.is_none(), "Invalid hook ref should return None");
 }
@@ -377,7 +378,7 @@ fn call_row_label_invalid_ref_returns_none() {
 fn call_display_condition_bool_true() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let data = serde_json::json!({"status": "published"});
+    let data = json!({"status": "published"});
     let result = runner.call_display_condition("hooks.field_hooks.show_if_published", &data);
     assert!(result.is_some());
     match result.unwrap() {
@@ -390,7 +391,7 @@ fn call_display_condition_bool_true() {
 fn call_display_condition_bool_false() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let data = serde_json::json!({"status": "draft"});
+    let data = json!({"status": "draft"});
     let result = runner.call_display_condition("hooks.field_hooks.show_if_published", &data);
     assert!(result.is_some());
     match result.unwrap() {
@@ -403,7 +404,7 @@ fn call_display_condition_bool_false() {
 fn call_display_condition_table() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let data = serde_json::json!({"status": "published"});
+    let data = json!({"status": "published"});
     let result = runner.call_display_condition("hooks.field_hooks.condition_table", &data);
     assert!(result.is_some());
     match result.unwrap() {
@@ -426,7 +427,7 @@ fn call_display_condition_table() {
 fn call_display_condition_table_not_visible() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let data = serde_json::json!({"status": "draft"});
+    let data = json!({"status": "draft"});
     let result = runner.call_display_condition("hooks.field_hooks.condition_table", &data);
     assert!(result.is_some());
     match result.unwrap() {
@@ -444,7 +445,7 @@ fn call_display_condition_table_not_visible() {
 fn call_display_condition_invalid_ref_returns_none() {
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let data = serde_json::json!({"status": "published"});
+    let data = json!({"status": "published"});
     let result = runner.call_display_condition("hooks.nonexistent.function", &data);
     assert!(result.is_none(), "Invalid hook ref should return None");
 }
@@ -457,7 +458,7 @@ fn run_before_render_no_hooks_returns_same() {
     // So this should return the context unchanged.
     let (_tmp, _pool, _registry, runner) = setup();
 
-    let context = serde_json::json!({"page": "home", "items": [1, 2, 3]});
+    let context = json!({"page": "home", "items": [1, 2, 3]});
     let result = runner.run_before_render(context.clone());
     assert_eq!(result, context);
 }
@@ -503,7 +504,7 @@ fn run_hooks_no_conn_fires_collection_and_registered() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -676,7 +677,7 @@ fn before_render_registered_hook_adds_marker() {
         .build()
         .expect("HookRunner::new");
 
-    let context = serde_json::json!({ "page": "edit" });
+    let context = json!({ "page": "edit" });
     let result = runner.run_before_render(context);
     assert_eq!(
         result.get("_render_marker").and_then(|v| v.as_str()),
@@ -715,7 +716,7 @@ fn before_render_hook_returning_nil_preserves_context() {
         .build()
         .expect("HookRunner::new");
 
-    let context = serde_json::json!({ "page": "list" });
+    let context = json!({ "page": "list" });
     let result = runner.run_before_render(context.clone());
     // nil return should keep context unchanged
     assert_eq!(result, context);
@@ -941,7 +942,7 @@ fn call_row_label_standalone_hook() {
         .build()
         .expect("HookRunner::new");
 
-    let row_data = serde_json::json!({ "title": "Hello" });
+    let row_data = json!({ "title": "Hello" });
     let label = runner.call_row_label("hooks.row_label.format", &row_data);
     assert_eq!(label, Some("Row: Hello".to_string()));
 }
@@ -979,14 +980,14 @@ fn call_display_condition_standalone_bool() {
         .build()
         .expect("HookRunner::new");
 
-    let form_data = serde_json::json!({ "status": "published" });
+    let form_data = json!({ "status": "published" });
     let result = runner.call_display_condition("hooks.conditions.show_if_published", &form_data);
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Bool(b)) => assert!(b),
         other => panic!("Expected Bool(true), got {:?}", other),
     }
 
-    let form_data_draft = serde_json::json!({ "status": "draft" });
+    let form_data_draft = json!({ "status": "draft" });
     let result =
         runner.call_display_condition("hooks.conditions.show_if_published", &form_data_draft);
     match result {
@@ -1028,7 +1029,7 @@ fn call_display_condition_standalone_table() {
         .build()
         .expect("HookRunner::new");
 
-    let form_data = serde_json::json!({ "status": "published" });
+    let form_data = json!({ "status": "published" });
     let result = runner.call_display_condition("hooks.conditions.condition_table", &form_data);
     match result {
         Some(crap_cms::hooks::lifecycle::DisplayConditionResult::Table { condition, visible }) => {

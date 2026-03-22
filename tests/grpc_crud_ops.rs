@@ -19,6 +19,7 @@ use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -181,7 +182,7 @@ fn make_posts_def() -> CollectionDefinition {
             .required(true)
             .build(),
         FieldDefinition::builder("status", FieldType::Select)
-            .default_value(serde_json::json!("draft"))
+            .default_value(json!("draft"))
             .build(),
     ];
     def

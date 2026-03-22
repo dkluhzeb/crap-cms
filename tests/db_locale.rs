@@ -5,6 +5,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::{CollectionDefinition, GlobalDefinition};
 use crap_cms::core::field::{BlockDefinition, FieldDefinition, FieldType, RelationshipConfig};
 use crap_cms::db::{DbConnection, migrate, ops, pool, query};
+use serde_json::json;
 
 fn create_test_pool() -> (tempfile::TempDir, crap_cms::db::DbPool) {
     let tmp = tempfile::tempdir().expect("Failed to create temp dir");
@@ -585,8 +586,8 @@ fn localized_block_rows_scoped_by_locale() {
     data.insert("slug_field".to_string(), "test".to_string());
     let doc = query::create(&tx, "l10n_articles", &def, &data, None).expect("Create");
 
-    let en_blocks = vec![serde_json::json!({"_block_type": "paragraph", "text": "Hello world"})];
-    let de_blocks = vec![serde_json::json!({"_block_type": "paragraph", "text": "Hallo Welt"})];
+    let en_blocks = vec![json!({"_block_type": "paragraph", "text": "Hello world"})];
+    let de_blocks = vec![json!({"_block_type": "paragraph", "text": "Hallo Welt"})];
 
     query::set_block_rows(
         &tx,
@@ -635,7 +636,7 @@ fn localized_block_rows_update_preserves_other_locale() {
         "l10n_articles",
         "content",
         &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "English"})],
+        &[json!({"_block_type": "paragraph", "text": "English"})],
         Some("en"),
     )
     .unwrap();
@@ -644,7 +645,7 @@ fn localized_block_rows_update_preserves_other_locale() {
         "l10n_articles",
         "content",
         &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "Deutsch"})],
+        &[json!({"_block_type": "paragraph", "text": "Deutsch"})],
         Some("de"),
     )
     .unwrap();
@@ -655,7 +656,7 @@ fn localized_block_rows_update_preserves_other_locale() {
         "l10n_articles",
         "content",
         &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "New English"})],
+        &[json!({"_block_type": "paragraph", "text": "New English"})],
         Some("en"),
     )
     .unwrap();
@@ -695,16 +696,16 @@ fn save_join_table_data_with_locale_scopes_writes() {
 
     // Save EN join data
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("tags".to_string(), serde_json::json!(["en-tag"]));
+    en_join.insert("tags".to_string(), json!(["en-tag"]));
     en_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "English content"}
         ]),
     );
     en_join.insert(
         "meta".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "kv", "key": "shared-meta"}
         ]),
     );
@@ -720,10 +721,10 @@ fn save_join_table_data_with_locale_scopes_writes() {
 
     // Save DE join data
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
-    de_join.insert("tags".to_string(), serde_json::json!(["de-tag"]));
+    de_join.insert("tags".to_string(), json!(["de-tag"]));
     de_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "German content"}
         ]),
     );
@@ -788,19 +789,16 @@ fn hydrate_document_with_locale_returns_correct_data() {
 
     // Write EN data
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert(
-        "tags".to_string(),
-        serde_json::json!(["en-tag-1", "en-tag-2"]),
-    );
+    en_join.insert("tags".to_string(), json!(["en-tag-1", "en-tag-2"]));
     en_join.insert(
         "links".to_string(),
-        serde_json::json!([
+        json!([
             {"url": "https://en.example.com", "label": "English"}
         ]),
     );
     en_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "Hello"}
         ]),
     );
@@ -816,16 +814,16 @@ fn hydrate_document_with_locale_returns_correct_data() {
 
     // Write DE data
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
-    de_join.insert("tags".to_string(), serde_json::json!(["de-tag-1"]));
+    de_join.insert("tags".to_string(), json!(["de-tag-1"]));
     de_join.insert(
         "links".to_string(),
-        serde_json::json!([
+        json!([
             {"url": "https://de.example.com", "label": "Deutsch"}
         ]),
     );
     de_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "Hallo"}
         ]),
     );
@@ -917,7 +915,7 @@ fn save_join_data_in_one_locale_does_not_clobber_other() {
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "English paragraph 1"},
             {"_block_type": "paragraph", "text": "English paragraph 2"},
         ]),
@@ -937,7 +935,7 @@ fn save_join_data_in_one_locale_does_not_clobber_other() {
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
     de_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "German paragraph"},
         ]),
     );
@@ -1014,7 +1012,7 @@ fn non_localized_join_field_ignores_locale_context() {
     let mut join: HashMap<String, serde_json::Value> = HashMap::new();
     join.insert(
         "meta".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "kv", "key": "version"},
         ]),
     );
@@ -1085,7 +1083,7 @@ fn hydrate_without_locale_returns_all_locale_rows() {
         "l10n_articles",
         "content",
         &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "EN"})],
+        &[json!({"_block_type": "paragraph", "text": "EN"})],
         Some("en"),
     )
     .unwrap();
@@ -1094,7 +1092,7 @@ fn hydrate_without_locale_returns_all_locale_rows() {
         "l10n_articles",
         "content",
         &doc.id,
-        &[serde_json::json!({"_block_type": "paragraph", "text": "DE"})],
+        &[json!({"_block_type": "paragraph", "text": "DE"})],
         Some("de"),
     )
     .unwrap();
@@ -1179,7 +1177,7 @@ fn join_fallback_has_many_falls_back_to_default_locale() {
 
     // Write EN tags only — no DE tags
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
-    en_join.insert("tags".to_string(), serde_json::json!(["tag-1", "tag-2"]));
+    en_join.insert("tags".to_string(), json!(["tag-1", "tag-2"]));
     query::save_join_table_data(
         &tx,
         "l10n_articles",
@@ -1251,7 +1249,7 @@ fn join_fallback_array_falls_back_to_default_locale() {
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert(
         "links".to_string(),
-        serde_json::json!([
+        json!([
             {"url": "https://en.example.com", "label": "English Link"}
         ]),
     );
@@ -1308,7 +1306,7 @@ fn join_fallback_blocks_falls_back_to_default_locale() {
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "English paragraph"}
         ]),
     );
@@ -1369,7 +1367,7 @@ fn join_fallback_does_not_trigger_when_locale_has_data() {
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "English"},
             {"_block_type": "paragraph", "text": "More English"},
         ]),
@@ -1387,7 +1385,7 @@ fn join_fallback_does_not_trigger_when_locale_has_data() {
     let mut de_join: HashMap<String, serde_json::Value> = HashMap::new();
     de_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "Deutsch"},
         ]),
     );
@@ -1450,11 +1448,11 @@ fn join_fallback_disabled_returns_empty() {
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "English only"}
         ]),
     );
-    en_join.insert("tags".to_string(), serde_json::json!(["en-tag"]));
+    en_join.insert("tags".to_string(), json!(["en-tag"]));
     query::save_join_table_data(
         &tx,
         "l10n_articles",
@@ -1512,7 +1510,7 @@ fn join_fallback_default_locale_no_fallback_needed() {
     let mut en_join: HashMap<String, serde_json::Value> = HashMap::new();
     en_join.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "paragraph", "text": "English"}
         ]),
     );

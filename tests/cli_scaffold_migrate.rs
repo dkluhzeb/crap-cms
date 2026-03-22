@@ -11,6 +11,7 @@ use crap_cms::db::{DbConnection, DbPool, DbValue, migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::scaffold;
 use crap_cms::typegen;
+use serde_json::json;
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -480,7 +481,7 @@ fn backup_snapshot() {
     assert!(std::fs::metadata(&backup_db_path).unwrap().len() > 0);
 
     // Write manifest
-    let manifest = serde_json::json!({
+    let manifest = json!({
         "timestamp": "2024-01-01T00:00:00+00:00",
         "db_size": std::fs::metadata(&backup_db_path).unwrap().len(),
         "include_uploads": false,
@@ -504,7 +505,7 @@ fn backup_manifest_valid() {
     let backup_dir = tmp.path().join("backup");
     std::fs::create_dir_all(&backup_dir).unwrap();
 
-    let manifest = serde_json::json!({
+    let manifest = json!({
         "timestamp": "2024-06-15T12:00:00+00:00",
         "db_size": 12345,
         "uploads_size": null,

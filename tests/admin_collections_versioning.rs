@@ -21,6 +21,7 @@ use crap_cms::core::field::*;
 use crap_cms::core::{JwtSecret, Registry};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -639,7 +640,7 @@ async fn evaluate_conditions_returns_json() {
     let user_id = create_test_user(&app, "cond@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "cond@test.com");
 
-    let body_json = serde_json::json!({
+    let body_json = json!({
         "form_data": {"title": "Test"},
         "conditions": {}
     });

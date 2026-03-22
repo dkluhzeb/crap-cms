@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde_json::json;
+
 use super::super::builder::build_field_contexts;
 use super::*;
 use crate::{
@@ -25,7 +27,7 @@ fn enriched_sub_field_nested_array_populates_rows() {
     ];
 
     // Simulate hydrated data: an array with 2 rows
-    let raw_value = serde_json::json!([
+    let raw_value = json!([
         {"url": "img1.jpg", "alt": "First"},
         {"url": "img2.jpg", "alt": "Second"},
     ]);
@@ -73,7 +75,7 @@ fn enriched_sub_field_nested_blocks_populates_rows() {
         bd
     }];
 
-    let raw_value = serde_json::json!([
+    let raw_value = json!([
         {"_block_type": "text", "body": "<p>Hello</p>"},
     ]);
 
@@ -109,7 +111,7 @@ fn enriched_sub_field_nested_group_populates_values() {
         make_field("published", FieldType::Checkbox),
     ];
 
-    let raw_value = serde_json::json!({
+    let raw_value = json!({
         "author": "Alice",
         "published": "1",
     });
@@ -159,7 +161,7 @@ fn enriched_sub_field_select_preserves_selected() {
         SelectOption::new(LocalizedString::Plain("Published".to_string()), "published"),
     ];
 
-    let raw_value = serde_json::json!("published");
+    let raw_value = json!("published");
 
     let ctx = build_enriched_sub_field_context(
         &select_field,
@@ -204,7 +206,7 @@ fn enriched_sub_field_with_error() {
     errors.insert("content[0][title]".to_string(), "Required".to_string());
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!("val")),
+        Some(&json!("val")),
         "content",
         0,
         &SubFieldOpts::builder(&errors).depth(1).build(),
@@ -220,7 +222,7 @@ fn enriched_sub_field_max_depth_returns_early() {
     arr.fields = vec![make_field("leaf", FieldType::Text)];
     let ctx = build_enriched_sub_field_context(
         &arr,
-        Some(&serde_json::json!([])),
+        Some(&json!([])),
         "parent",
         0,
         &SubFieldOpts::builder(&HashMap::new())
@@ -237,7 +239,7 @@ fn enriched_sub_field_max_depth_returns_early() {
 #[test]
 fn enriched_sub_field_date_day_only() {
     let sf = make_field("d", FieldType::Date);
-    let raw = serde_json::json!("2026-03-15T10:00:00Z");
+    let raw = json!("2026-03-15T10:00:00Z");
     let ctx = build_enriched_sub_field_context(
         &sf,
         Some(&raw),
@@ -253,7 +255,7 @@ fn enriched_sub_field_date_day_only() {
 fn enriched_sub_field_date_day_and_time() {
     let mut sf = make_field("d", FieldType::Date);
     sf.picker_appearance = Some("dayAndTime".to_string());
-    let raw = serde_json::json!("2026-03-15T10:30:00Z");
+    let raw = json!("2026-03-15T10:30:00Z");
     let ctx = build_enriched_sub_field_context(
         &sf,
         Some(&raw),
@@ -268,7 +270,7 @@ fn enriched_sub_field_date_day_and_time() {
 #[test]
 fn enriched_sub_field_date_short_value() {
     let sf = make_field("d", FieldType::Date);
-    let raw = serde_json::json!("short");
+    let raw = json!("short");
     let ctx = build_enriched_sub_field_context(
         &sf,
         Some(&raw),
@@ -288,7 +290,7 @@ fn enriched_sub_field_upload() {
     sf.relationship = Some(RelationshipConfig::new("media", false));
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!("img123")),
+        Some(&json!("img123")),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -306,7 +308,7 @@ fn enriched_sub_field_relationship() {
     sf.relationship = Some(RelationshipConfig::new("users", true));
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!("user1")),
+        Some(&json!("user1")),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -335,7 +337,7 @@ fn enriched_sub_field_number_to_string() {
     let sf = make_field("count", FieldType::Number);
     let ctx = build_enriched_sub_field_context(
         &sf,
-        Some(&serde_json::json!(42)),
+        Some(&json!(42)),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -368,7 +370,7 @@ fn enriched_sub_field_array_with_options() {
     arr.admin.labels_singular = Some(LocalizedString::Plain("Tag".to_string()));
     let ctx = build_enriched_sub_field_context(
         &arr,
-        Some(&serde_json::json!([])),
+        Some(&json!([])),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -395,7 +397,7 @@ fn enriched_sub_field_blocks_with_options() {
     blk.admin.label_field = Some("body".to_string());
     let ctx = build_enriched_sub_field_context(
         &blk,
-        Some(&serde_json::json!([])),
+        Some(&json!([])),
         "items",
         0,
         &SubFieldOpts::builder(&HashMap::new()).depth(1).build(),
@@ -414,7 +416,7 @@ fn enriched_sub_field_nested_array_row_errors() {
     let mut inner_array = make_field("items", FieldType::Array);
     inner_array.fields = vec![make_field("title", FieldType::Text)];
 
-    let raw_value = serde_json::json!([{"title": ""}]);
+    let raw_value = json!([{"title": ""}]);
     let mut errors = HashMap::new();
     errors.insert(
         "parent[0][items][0][title]".to_string(),
@@ -445,7 +447,7 @@ fn enriched_sub_field_nested_blocks_row_errors() {
         bd
     }];
 
-    let raw_value = serde_json::json!([{"_block_type": "text", "body": ""}]);
+    let raw_value = json!([{"_block_type": "text", "body": ""}]);
     let mut errors = HashMap::new();
     errors.insert(
         "parent[0][sections][0][body]".to_string(),
@@ -472,7 +474,7 @@ fn enriched_sub_field_group_collapsed() {
     let mut grp = make_field("meta", FieldType::Group);
     grp.fields = vec![make_field("author", FieldType::Text)];
     grp.admin.collapsed = true;
-    let raw = serde_json::json!({"author": "Alice"});
+    let raw = json!({"author": "Alice"});
     let ctx = build_enriched_sub_field_context(
         &grp,
         Some(&raw),
@@ -513,7 +515,7 @@ fn enriched_sub_field_nested_blocks_unknown_type() {
     }];
 
     // Row with unknown block type
-    let raw_value = serde_json::json!([{"_block_type": "unknown_type", "body": "content"}]);
+    let raw_value = json!([{"_block_type": "unknown_type", "body": "content"}]);
 
     let ctx = build_enriched_sub_field_context(
         &blk,
@@ -580,7 +582,7 @@ fn enrich_nested_fields_upload_gets_options() {
     upload_field.relationship = Some(RelationshipConfig::new("media", false));
 
     let field_defs = vec![upload_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "content[0][image]",
         "field_type": "upload",
         "value": "img1",
@@ -629,7 +631,7 @@ fn enrich_nested_fields_relationship_gets_options() {
     rel_field.relationship = Some(RelationshipConfig::new("users", false));
 
     let field_defs = vec![rel_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "items[0][author]",
         "field_type": "relationship",
         "value": "u1",
@@ -680,7 +682,7 @@ fn enrich_nested_fields_recurses_into_layout() {
         .build();
 
     let field_defs = vec![row_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "row1",
         "field_type": "row",
         "sub_fields": [{
@@ -749,7 +751,7 @@ fn enrich_nested_fields_blocks_template_gets_upload_options() {
 
     let field_defs = vec![blocks_field];
     // Simulate the block_definitions context (as built by build_single_field_context)
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "content",
         "field_type": "blocks",
         "block_definitions": [{
@@ -823,7 +825,7 @@ fn enrich_nested_fields_array_template_gets_upload_options() {
         .build();
 
     let field_defs = vec![array_field];
-    let mut sub_fields = vec![serde_json::json!({
+    let mut sub_fields = vec![json!({
         "name": "attachments",
         "field_type": "array",
         "sub_fields": [{
@@ -877,7 +879,7 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
     let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
     doc_fields.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "hero", "heading": "Welcome"},
         ]),
     );
@@ -962,7 +964,7 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
     let mut doc_fields: HashMap<String, serde_json::Value> = HashMap::new();
     doc_fields.insert(
         "items".to_string(),
-        serde_json::json!([
+        json!([
             {"label": "First"},
             {"label": "Second"},
         ]),
@@ -1085,7 +1087,7 @@ fn enriched_sub_field_tabs_in_array_transparent_names() {
     ];
 
     // Simulate hydrated data: flat JSON (as it comes from the join table)
-    let row_data = serde_json::json!([
+    let row_data = json!([
         {"id": "r1", "title": "Hello", "body": "World"}
     ]);
 
@@ -1145,7 +1147,7 @@ fn enriched_sub_field_row_in_array_transparent_names() {
             .build(),
     ];
 
-    let row_data = serde_json::json!([
+    let row_data = json!([
         {"id": "r1", "x": "10", "y": "20"}
     ]);
 
@@ -1214,7 +1216,7 @@ fn enriched_sub_field_row_inside_tabs_in_array_transparent_names() {
             .build(),
     ];
 
-    let row_data = serde_json::json!([
+    let row_data = json!([
         {"id": "r1", "first_name": "John", "last_name": "Doe", "email": "john@example.com", "job_title": "Dev"}
     ]);
 

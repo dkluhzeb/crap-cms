@@ -134,6 +134,8 @@ impl DbRow {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
 
     fn sample_row() -> DbRow {
@@ -221,7 +223,7 @@ mod tests {
     fn get_json_converts_values() {
         let row = sample_row();
         assert_eq!(row.get_json("name").unwrap(), Value::String("Alice".into()));
-        assert_eq!(row.get_json("age").unwrap(), serde_json::json!(30));
+        assert_eq!(row.get_json("age").unwrap(), json!(30));
         assert!(row.get_json("bio").unwrap().is_null());
     }
 
@@ -241,8 +243,8 @@ mod tests {
     #[test]
     fn dbvalue_to_json() {
         assert_eq!(DbValue::Null.to_json(), Value::Null);
-        assert_eq!(DbValue::Integer(42).to_json(), serde_json::json!(42));
-        assert_eq!(DbValue::Real(3.15).to_json(), serde_json::json!(3.15));
+        assert_eq!(DbValue::Integer(42).to_json(), json!(42));
+        assert_eq!(DbValue::Real(3.15).to_json(), json!(3.15));
         assert_eq!(
             DbValue::Text("hi".into()).to_json(),
             Value::String("hi".into())

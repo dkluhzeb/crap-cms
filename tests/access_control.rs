@@ -6,6 +6,7 @@ use crap_cms::core::Document;
 use crap_cms::db::{migrate, ops, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 fn setup() -> (
     tempfile::TempDir,
@@ -34,13 +35,10 @@ fn setup() -> (
 
 fn make_user_doc(id: &str, role: &str) -> Document {
     let mut doc = Document::new(id.to_string());
-    doc.fields.insert("role".into(), serde_json::json!(role));
-    doc.fields.insert(
-        "email".into(),
-        serde_json::json!(format!("{}@test.com", role)),
-    );
+    doc.fields.insert("role".into(), json!(role));
     doc.fields
-        .insert("name".into(), serde_json::json!(role.to_uppercase()));
+        .insert("email".into(), json!(format!("{}@test.com", role)));
+    doc.fields.insert("name".into(), json!(role.to_uppercase()));
     doc
 }
 

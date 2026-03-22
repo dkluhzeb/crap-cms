@@ -6,6 +6,7 @@ use crap_cms::core::Document;
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::HookRunner;
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/override_access")
@@ -36,11 +37,9 @@ fn setup() -> (
 
 fn make_user(id: &str, role: &str) -> Document {
     let mut doc = Document::new(id.to_string());
-    doc.fields.insert("role".into(), serde_json::json!(role));
-    doc.fields.insert(
-        "email".into(),
-        serde_json::json!(format!("{}@test.com", id)),
-    );
+    doc.fields.insert("role".into(), json!(role));
+    doc.fields
+        .insert("email".into(), json!(format!("{}@test.com", id)));
     doc
 }
 

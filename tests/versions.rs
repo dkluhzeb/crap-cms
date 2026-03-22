@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use prost_types::{Struct, Value, value::Kind};
+use serde_json::json;
 use tonic::Request;
 
 use crap_cms::api::content;
@@ -1106,7 +1107,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
     let mut join_data = HashMap::new();
     join_data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "text", "body": "Initial block"}
         ]),
     );
@@ -1126,7 +1127,7 @@ fn service_update_draft_preserves_join_data_in_snapshot() {
     let mut draft_join_data = HashMap::new();
     draft_join_data.insert(
         "content".to_string(),
-        serde_json::json!([
+        json!([
             {"_block_type": "text", "body": "Draft block 1"},
             {"_block_type": "text", "body": "Draft block 2"}
         ]),

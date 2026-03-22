@@ -10,6 +10,7 @@ use crap_cms::hooks;
 use crap_cms::hooks::lifecycle::{
     AfterReadCtx, FieldHookEvent, FieldWriteCtx, HookContext, HookEvent, HookRunner, ValidationCtx,
 };
+use serde_json::json;
 
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/hook_tests")
@@ -180,7 +181,7 @@ fn before_broadcast_no_hooks_passes_through() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Broadcast Test"));
+    data.insert("title".to_string(), json!("Broadcast Test"));
 
     let result = runner.run_before_broadcast(&def.hooks, "articles", "create", data);
     assert!(result.is_ok());
@@ -206,7 +207,7 @@ fn before_broadcast_transforms_data() {
     };
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Original"));
+    data.insert("title".to_string(), json!("Original"));
 
     let result = runner
         .run_before_broadcast(&hooks, "articles", "create", data)
@@ -253,7 +254,7 @@ fn validate_required_field_errors() {
 
     // Build data WITHOUT the required "title" field
     let mut data = HashMap::new();
-    data.insert("body".to_string(), serde_json::json!("Body without title"));
+    data.insert("body".to_string(), json!("Body without title"));
 
     let ctx = crap_cms::hooks::lifecycle::HookContext {
         collection: "articles".to_string(),
@@ -467,7 +468,7 @@ fn run_after_write_runs_field_after_change_hooks() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test Article"));
+    data.insert("title".to_string(), json!("Test Article"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -503,8 +504,8 @@ fn run_after_write_with_non_after_change_event() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
-    data.insert("id".to_string(), serde_json::json!("test-id"));
+    data.insert("title".to_string(), json!("Test"));
+    data.insert("id".to_string(), json!("test-id"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -536,7 +537,7 @@ fn run_field_hooks_without_conn() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("test title"));
+    data.insert("title".to_string(), json!("test title"));
 
     // run_field_hooks for AfterRead doesn't require CRUD access
     let result = runner.run_field_hooks(
@@ -565,7 +566,7 @@ fn hook_context_passes_locale_and_draft() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -600,13 +601,10 @@ fn hook_context_table_flows_through() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
 
     let mut context = HashMap::new();
-    context.insert(
-        "before_marker".to_string(),
-        serde_json::json!("set-by-test"),
-    );
+    context.insert("before_marker".to_string(), json!("set-by-test"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -642,7 +640,7 @@ fn field_before_validate_hook_trims_title() {
     drop(reg);
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("  spaced title  "));
+    data.insert("title".to_string(), json!("  spaced title  "));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -696,7 +694,7 @@ fn multiple_field_hooks_run_in_sequence() {
     // Test that both run in the right order when called separately
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("  hello  "));
+    data.insert("title".to_string(), json!("  hello  "));
 
     let mut conn = pool.get().unwrap();
     let tx = conn.transaction().unwrap();
@@ -739,7 +737,7 @@ fn run_before_write_with_user_context() {
     drop(reg);
 
     let mut user_fields = HashMap::new();
-    user_fields.insert("role".to_string(), serde_json::json!("admin"));
+    user_fields.insert("role".to_string(), json!("admin"));
     let user = Document {
         id: "user-1".into(),
         fields: user_fields,
@@ -748,8 +746,8 @@ fn run_before_write_with_user_context() {
     };
 
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Admin Article"));
-    data.insert("body".to_string(), serde_json::json!("Content"));
+    data.insert("title".to_string(), json!("Admin Article"));
+    data.insert("body".to_string(), json!("Content"));
 
     let ctx = HookContext {
         collection: "articles".to_string(),
@@ -835,7 +833,7 @@ fn registered_before_broadcast_suppresses_event() {
 
     let hooks = Hooks::default();
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
     let result = runner
         .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("run_before_broadcast");
@@ -876,7 +874,7 @@ fn registered_before_broadcast_transforms_data() {
 
     let hooks = Hooks::default();
     let mut data = HashMap::new();
-    data.insert("title".to_string(), serde_json::json!("Test"));
+    data.insert("title".to_string(), json!("Test"));
     let result = runner
         .run_before_broadcast(&hooks, "articles", "create", data)
         .expect("run_before_broadcast");
