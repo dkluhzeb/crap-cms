@@ -18,6 +18,7 @@ use axum::{
 use hyper_util::{rt::TokioIo, server::conn::auto::Builder as AutoBuilder};
 use serde_json::Value;
 use subtle::ConstantTimeEq;
+use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tower::Service;
 use tower_http::{compression::CompressionLayer, trace::TraceLayer};
@@ -34,8 +35,9 @@ use crate::{
     api::upload::upload_router,
     config::{CompressionMode, CrapConfig, LocaleConfig},
     core::{
-        AuthUser, JwtSecret, Registry,
+        AuthUser, JwtSecret, Registry, Slug,
         auth::{self, ClaimsBuilder},
+        collection::Auth as CollectionAuth,
         email::EmailRenderer,
         event::EventBus,
         rate_limit::LoginRateLimiter,
@@ -140,7 +142,7 @@ pub async fn start(
 
     // Hard deadline: force-stop after 10s if graceful drain doesn't complete
     // (SSE streams and other long-lived connections may not close promptly)
-    tokio::select! {
+    select! {
         result = server_future => { result?; }
         _ = async {
             shutdown_timeout.cancelled().await;
@@ -164,7 +166,7 @@ async fn serve_h2c(
     shutdown: CancellationToken,
 ) -> Result<()> {
     loop {
-        tokio::select! {
+        select! {
             result = listener.accept() => {
                 let (socket, _addr) = result?;
                 let tower_service = app.clone();
@@ -185,32 +187,35 @@ async fn serve_h2c(
     Ok(())
 }
 
-/// Build the full admin Axum router with all routes, middleware, and state.
-/// Separated from `start()` so integration tests can construct the router
-/// without binding to a TCP listener.
-// Excluded from coverage: requires full AdminState (HookRunner with Lua VM, DB pool,
-// Handlebars registry, etc). Tested indirectly through CLI integration tests.
+/// Build reusable method routers for collection and global endpoints.
 #[cfg(not(tarpaulin_include))]
-pub fn build_router(state: AdminState) -> Router {
-    let has_auth = state.has_auth;
-
-    // Build method routers explicitly to handle multiple methods on same path
-    let slug_methods: MethodRouter<AdminState> = MethodRouter::new()
+fn method_routers() -> (
+    MethodRouter<AdminState>,
+    MethodRouter<AdminState>,
+    MethodRouter<AdminState>,
+) {
+    let slug = MethodRouter::new()
         .get(collections::list_items)
         .post(collections::create_action);
-
-    let item_methods: MethodRouter<AdminState> = MethodRouter::new()
+    let item = MethodRouter::new()
         .get(collections::edit_form)
         .post(collections::update_action)
         .put(collections::update_action)
         .delete(collections::delete_action);
-
-    let globals_methods: MethodRouter<AdminState> = MethodRouter::new()
+    let globals = MethodRouter::new()
         .get(globals::edit_form)
         .post(globals::update_action);
+    (slug, item, globals)
+}
 
-    // Protected routes (everything behind /admin except login/logout)
-    let protected = Router::new()
+/// Assemble the protected admin routes (everything behind auth middleware).
+#[cfg(not(tarpaulin_include))]
+fn protected_routes(
+    slug_methods: MethodRouter<AdminState>,
+    item_methods: MethodRouter<AdminState>,
+    globals_methods: MethodRouter<AdminState>,
+) -> Router<AdminState> {
+    Router::new()
         .route("/", get(dashboard::index))
         .route("/admin", get(dashboard::index))
         .route("/admin/collections", get(collections::list_collections))
@@ -270,10 +275,21 @@ pub fn build_router(state: AdminState) -> Router {
             "/admin/api/session-refresh",
             post(auth_handlers::session_refresh),
         )
-        .route("/admin/api/locale", post(auth_handlers::save_locale));
+        .route("/admin/api/locale", post(auth_handlers::save_locale))
+}
+
+/// Build the full admin Axum router with all routes, middleware, and state.
+/// Separated from `start()` so integration tests can construct the router
+/// without binding to a TCP listener.
+// Excluded from coverage: requires full AdminState (HookRunner with Lua VM, DB pool,
+// Handlebars registry, etc). Tested indirectly through CLI integration tests.
+#[cfg(not(tarpaulin_include))]
+pub fn build_router(state: AdminState) -> Router {
+    let (slug_methods, item_methods, globals_methods) = method_routers();
+    let protected = protected_routes(slug_methods, item_methods, globals_methods);
 
     // Apply auth middleware if auth collections exist OR require_auth is set
-    let needs_auth_layer = has_auth || state.config.admin.require_auth;
+    let needs_auth_layer = state.has_auth || state.config.admin.require_auth;
     let protected = if needs_auth_layer {
         protected.layer(middleware::from_fn_with_state(
             state.clone(),
@@ -443,6 +459,59 @@ async fn html_cache_control(request: Request<Body>, next: Next) -> Response {
     response
 }
 
+/// Validate CSRF token on a mutating request. Checks the `X-CSRF-Token` header
+/// first, then falls back to the `_csrf` form field for URL-encoded bodies.
+/// Returns the (possibly re-assembled) request on success, or a 403 response.
+#[cfg(not(tarpaulin_include))]
+async fn validate_csrf_mutation(
+    request: Request<Body>,
+    cookie_value: &str,
+) -> Result<Request<Body>, Response> {
+    // Check X-CSRF-Token header first (set by HTMX / JS)
+    let header_token = request
+        .headers()
+        .get("X-CSRF-Token")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
+    if let Some(ref ht) = header_token
+        && ht == cookie_value
+    {
+        return Ok(request);
+    }
+
+    // Fall back: check _csrf in URL-encoded form body
+    let content_type = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    if content_type.starts_with("application/x-www-form-urlencoded") {
+        let (parts, body) = request.into_parts();
+        let bytes = body::to_bytes(body, 2 * 1024 * 1024).await.map_err(|_| {
+            (
+                StatusCode::FORBIDDEN,
+                "CSRF validation failed: body read error",
+            )
+                .into_response()
+        })?;
+
+        let form_token = form_urlencoded::parse(&bytes)
+            .find(|(k, _)| k == "_csrf")
+            .map(|(_, v)| v.to_string());
+
+        if let Some(ref ft) = form_token
+            && ft == cookie_value
+        {
+            return Ok(Request::from_parts(parts, Body::from(bytes)));
+        }
+    }
+
+    Err((StatusCode::FORBIDDEN, "CSRF validation failed").into_response())
+}
+
 /// CSRF middleware — double-submit cookie pattern.
 /// Sets `crap_csrf` cookie on GET responses (non-HttpOnly so JS can read it).
 /// Validates `X-CSRF-Token` header or `_csrf` form field on POST/PUT/DELETE.
@@ -493,59 +562,14 @@ async fn csrf_middleware(
             }
         };
 
-        // Check X-CSRF-Token header first (set by HTMX / JS)
-        let header_token = request
-            .headers()
-            .get("X-CSRF-Token")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string());
-
-        if let Some(ref ht) = header_token
-            && ht == cookie_value
-        {
-            // Header matches — proceed
-            let mut response = next.run(request).await;
-            ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
-            return response;
-        }
-
-        // Fall back: check _csrf in URL-encoded form body
-        let content_type = request
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-
-        if content_type.starts_with("application/x-www-form-urlencoded") {
-            let (parts, body) = request.into_parts();
-            let bytes = match body::to_bytes(body, 2 * 1024 * 1024).await {
-                Ok(b) => b,
-                Err(_) => {
-                    return (
-                        StatusCode::FORBIDDEN,
-                        "CSRF validation failed: body read error",
-                    )
-                        .into_response();
-                }
-            };
-
-            let form_token = form_urlencoded::parse(&bytes)
-                .find(|(k, _)| k == "_csrf")
-                .map(|(_, v)| v.to_string());
-
-            if let Some(ref ft) = form_token
-                && ft == cookie_value
-            {
-                // Form field matches — reconstruct request and proceed
-                let request = Request::from_parts(parts, Body::from(bytes));
+        match validate_csrf_mutation(request, cookie_value).await {
+            Ok(request) => {
                 let mut response = next.run(request).await;
                 ensure_csrf_cookie(&mut response, csrf_cookie.as_deref(), dev_mode);
                 return response;
             }
+            Err(response) => return response,
         }
-
-        return (StatusCode::FORBIDDEN, "CSRF validation failed").into_response();
     }
 
     // Non-mutating method — pass through and set cookie if needed
@@ -573,6 +597,106 @@ fn ensure_csrf_cookie(response: &mut Response, existing_cookie: Option<&str>, de
     }
 }
 
+/// Validate JWT from `crap_session` cookie and optionally load the full user document.
+#[cfg(not(tarpaulin_include))]
+fn validate_jwt_and_load_user(
+    state: &AdminState,
+    cookie_header: &str,
+) -> Option<(auth::Claims, Option<AuthUser>)> {
+    let token = extract_cookie(cookie_header, "crap_session")?;
+    let claims = auth::validate_token(token, state.jwt_secret.as_ref()).ok()?;
+    let auth_user = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale);
+    Some((claims, auth_user))
+}
+
+/// Evaluate custom auth strategies in a blocking context (Lua + DB access).
+/// Tries each strategy across all auth collections until one succeeds.
+#[cfg(not(tarpaulin_include))]
+fn try_strategy_auth(
+    auth_defs: &[(Slug, CollectionAuth)],
+    headers: &HashMap<String, String>,
+    pool: &DbPool,
+    hook_runner: &HookRunner,
+) -> Option<auth::Claims> {
+    let mut conn = pool.get().ok()?;
+    let tx = conn.transaction().ok()?;
+    let mut result = None;
+
+    for (slug, auth_config) in auth_defs {
+        if result.is_some() {
+            break;
+        }
+        for strategy in &auth_config.strategies {
+            match hook_runner.run_auth_strategy(&strategy.authenticate, slug, headers, &tx) {
+                Ok(Some(user)) => {
+                    let user_email = user
+                        .fields
+                        .get("email")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let expiry = auth_config.token_expiry;
+                    let claims = ClaimsBuilder::new(user.id.clone(), slug.clone())
+                        .email(user_email)
+                        .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+                        .build();
+                    result = Some(claims);
+                    break;
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        "Auth strategy '{}' error for {}: {}",
+                        strategy.name,
+                        slug,
+                        e
+                    );
+                    continue;
+                }
+            }
+        }
+    }
+
+    // Read-only access check — commit result is irrelevant, rollback on drop is safe
+    let _ = tx.commit();
+    result
+}
+
+/// Build a login redirect response (HTMX-aware: uses HX-Redirect instead of 302).
+#[cfg(not(tarpaulin_include))]
+fn login_redirect(request: &Request<Body>) -> Response {
+    let is_htmx = request.headers().get("HX-Request").is_some();
+
+    if is_htmx {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("HX-Redirect", "/admin/login")
+            .body(Body::empty())
+            .expect("static response builder")
+    } else {
+        Redirect::to("/admin/login").into_response()
+    }
+}
+
+/// Insert authenticated claims (and optionally user) into request extensions,
+/// checking the admin access gate first. Returns a gate-denied response if blocked.
+#[cfg(not(tarpaulin_include))]
+async fn apply_auth_to_request(
+    state: &AdminState,
+    request: &mut Request<Body>,
+    claims: auth::Claims,
+    auth_user: Option<AuthUser>,
+) -> Option<Response> {
+    if let Some(user) = auth_user {
+        if let Some(response) = check_admin_gate(state, &user).await {
+            return Some(response);
+        }
+        request.extensions_mut().insert(user);
+    }
+    request.extensions_mut().insert(claims);
+    None
+}
+
 /// Auth middleware — extracts JWT from `crap_session` cookie, validates it,
 /// and stores `Claims` in request extensions. If JWT is invalid/missing,
 /// tries custom auth strategies before redirecting to login.
@@ -593,10 +717,6 @@ async fn auth_middleware(
         return auth_required_response(&state);
     }
 
-    // If no auth collections and require_auth is false, this middleware
-    // wouldn't be applied (needs_auth_layer is false), so we're safe to
-    // proceed assuming auth collections exist from here.
-
     let cookie_header = request
         .headers()
         .get(header::COOKIE)
@@ -604,23 +724,11 @@ async fn auth_middleware(
         .unwrap_or("");
 
     // Fast path: valid JWT cookie
-    let token = extract_cookie(cookie_header, "crap_session");
-    if let Some(t) = token
-        && let Ok(claims) = auth::validate_token(t, state.jwt_secret.as_ref())
-    {
-        // Try to load full user document for access control
-        if let Some(auth_user) =
-            load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+    if let Some((claims, auth_user)) = validate_jwt_and_load_user(&state, cookie_header) {
+        if let Some(response) = apply_auth_to_request(&state, &mut request, claims, auth_user).await
         {
-            // Gate 2: Check admin.access Lua function
-            if let Some(response) = check_admin_gate(&state, &auth_user).await {
-                return response;
-            }
-            request.extensions_mut().insert(auth_user);
+            return response;
         }
-
-        request.extensions_mut().insert(claims);
-
         return next.run(request).await;
     }
 
@@ -640,7 +748,6 @@ async fn auth_middleware(
         .collect();
 
     if !auth_defs.is_empty() {
-        // Build headers map from request (lowercase keys)
         let headers: HashMap<String, String> = request
             .headers()
             .iter()
@@ -654,85 +761,25 @@ async fn auth_middleware(
 
         let pool = state.pool.clone();
         let hook_runner = state.hook_runner.clone();
-        let jwt_secret = state.jwt_secret.clone();
 
-        // Try strategies in a blocking task (Lua + DB access)
         let strategy_result = tokio::task::spawn_blocking(move || {
-            let mut conn = pool.get().ok()?;
-            let tx = conn.transaction().ok()?;
-            let mut result = None;
-            for (slug, auth_config) in &auth_defs {
-                if result.is_some() {
-                    break;
-                }
-                for strategy in &auth_config.strategies {
-                    match hook_runner.run_auth_strategy(&strategy.authenticate, slug, &headers, &tx)
-                    {
-                        Ok(Some(user)) => {
-                            let user_email = user
-                                .fields
-                                .get("email")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string();
-                            let expiry = auth_config.token_expiry;
-                            let claims = ClaimsBuilder::new(user.id.clone(), slug.clone())
-                                .email(user_email)
-                                .exp((chrono::Utc::now().timestamp() as u64) + expiry)
-                                .build();
-                            result = Some((claims, jwt_secret.clone()));
-                            break;
-                        }
-                        Ok(None) => continue,
-                        Err(e) => {
-                            tracing::warn!(
-                                "Auth strategy '{}' error for {}: {}",
-                                strategy.name,
-                                slug,
-                                e
-                            );
-                            continue;
-                        }
-                    }
-                }
-            }
-            // Read-only access check — commit result is irrelevant, rollback on drop is safe
-            let _ = tx.commit();
-            result
+            try_strategy_auth(&auth_defs, &headers, &pool, &hook_runner)
         })
         .await;
 
-        if let Ok(Some((claims, _secret))) = strategy_result {
-            if let Some(auth_user) =
-                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale)
+        if let Ok(Some(claims)) = strategy_result {
+            let auth_user =
+                load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale);
+            if let Some(response) =
+                apply_auth_to_request(&state, &mut request, claims, auth_user).await
             {
-                // Gate 2: Check admin.access Lua function
-                if let Some(response) = check_admin_gate(&state, &auth_user).await {
-                    return response;
-                }
-                request.extensions_mut().insert(auth_user);
+                return response;
             }
-
-            request.extensions_mut().insert(claims);
-
             return next.run(request).await;
         }
     }
 
-    // HTMX follows 302 redirects and swaps the response into the target,
-    // which breaks standalone pages like login. Use HX-Redirect to force a
-    // full page navigation instead.
-    let is_htmx = request.headers().get("HX-Request").is_some();
-
-    if is_htmx {
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("HX-Redirect", "/admin/login")
-            .body(Body::empty())
-            .expect("static response builder")
-    } else {
-        Redirect::to("/admin/login").into_response()
-    }
+    login_redirect(&request)
 }
 
 /// Gate 2: Check `admin.access` Lua function. Returns a 403 response if the user

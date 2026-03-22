@@ -11,6 +11,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
+use tokio::select;
 
 use crate::{
     config::JobsConfig,
@@ -74,7 +75,7 @@ pub async fn start(
     let mut purge_counter: u64 = 0;
 
     loop {
-        tokio::select! {
+        select! {
             _ = shutdown.cancelled() => {
                 tracing::info!("Scheduler shutting down");
                 break Ok(());

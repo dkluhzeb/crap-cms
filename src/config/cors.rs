@@ -1,6 +1,10 @@
 //! CORS (Cross-Origin Resource Sharing) configuration.
 
+use std::str::FromStr;
+
+use axum::http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
+use tower_http::cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer};
 
 use super::parsing::serde_duration;
 
@@ -53,9 +57,6 @@ impl CorsConfig {
         if self.allowed_origins.is_empty() {
             return None;
         }
-        use axum::http::{HeaderName, Method};
-        use std::str::FromStr;
-        use tower_http::cors::CorsLayer;
 
         let is_wildcard = self.allowed_origins.len() == 1 && self.allowed_origins[0] == "*";
 
@@ -68,20 +69,18 @@ impl CorsConfig {
         }
 
         let origin = if is_wildcard {
-            tower_http::cors::AllowOrigin::any()
+            AllowOrigin::any()
         } else {
-            tower_http::cors::AllowOrigin::list(
-                self.allowed_origins.iter().filter_map(|o| o.parse().ok()),
-            )
+            AllowOrigin::list(self.allowed_origins.iter().filter_map(|o| o.parse().ok()))
         };
 
-        let methods = tower_http::cors::AllowMethods::list(
+        let methods = AllowMethods::list(
             self.allowed_methods
                 .iter()
                 .filter_map(|m| Method::from_str(m).ok()),
         );
 
-        let headers = tower_http::cors::AllowHeaders::list(
+        let headers = AllowHeaders::list(
             self.allowed_headers
                 .iter()
                 .filter_map(|h| HeaderName::from_str(h).ok()),

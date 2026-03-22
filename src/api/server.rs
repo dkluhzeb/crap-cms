@@ -3,6 +3,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use tokio::select;
 use tonic::transport::Server;
 
 use crate::{
@@ -88,7 +89,7 @@ pub async fn start(
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             interval.tick().await; // skip first immediate tick
             loop {
-                tokio::select! {
+                select! {
                     _ = interval.tick() => cache.clear(),
                     _ = cache_shutdown.cancelled() => break,
                 }

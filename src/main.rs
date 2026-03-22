@@ -6,6 +6,7 @@
 
 use anyhow::{Context as _, Result, bail};
 use clap::{Parser, Subcommand};
+use dialoguer::Select;
 use std::path::PathBuf;
 
 use crap_cms::{
@@ -256,7 +257,6 @@ async fn run(cli: Cli) -> Result<()> {
                 let name = match name {
                     Some(n) => n,
                     None => {
-                        use dialoguer::Select;
                         let names = crap_cms::scaffold::list_blueprint_names()?;
 
                         if names.is_empty() {
@@ -279,7 +279,6 @@ async fn run(cli: Cli) -> Result<()> {
                 let name = match name {
                     Some(n) => n,
                     None => {
-                        use dialoguer::Select;
                         let names = crap_cms::scaffold::list_blueprint_names()?;
 
                         if names.is_empty() {

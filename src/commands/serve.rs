@@ -6,6 +6,9 @@ use std::{
     path::{Path, PathBuf},
     process,
 };
+#[cfg(unix)]
+use tokio::signal::unix::{SignalKind, signal};
+use tokio::{select, try_join};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
@@ -159,10 +162,9 @@ fn spawn_shutdown_signal(shutdown: CancellationToken) {
         // First signal: graceful shutdown
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm =
                 signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
-            tokio::select! {
+            select! {
                 _ = tokio::signal::ctrl_c() => {
                     info!("Received SIGINT, shutting down gracefully...");
                 }
@@ -183,10 +185,9 @@ fn spawn_shutdown_signal(shutdown: CancellationToken) {
         // Second signal: force exit
         #[cfg(unix)]
         {
-            use tokio::signal::unix::{SignalKind, signal};
             let mut sigterm =
                 signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
-            tokio::select! {
+            select! {
                 _ = tokio::signal::ctrl_c() => {
                     warn!("Received second SIGINT, forcing exit");
                 }
@@ -430,7 +431,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         }
     };
 
-    tokio::try_join!(admin_handle, grpc_handle, scheduler_handle).map_err(|e| {
+    try_join!(admin_handle, grpc_handle, scheduler_handle).map_err(|e| {
         error!("Server error: {}", e);
         e
     })?;

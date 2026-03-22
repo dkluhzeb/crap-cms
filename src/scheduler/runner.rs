@@ -214,6 +214,9 @@ pub(crate) fn normalize_cron(expr: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use r2d2::Pool;
+    use r2d2_sqlite::SqliteConnectionManager;
+
     use super::*;
     use crate::core::{Registry, job::JobStatus};
 
@@ -428,9 +431,6 @@ mod tests {
     // ── check_cron_schedules (unit-level with in-memory DB + pool) ──────
 
     fn make_test_pool() -> DbPool {
-        use r2d2::Pool;
-        use r2d2_sqlite::SqliteConnectionManager;
-
         let manager = SqliteConnectionManager::memory().with_flags(
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
