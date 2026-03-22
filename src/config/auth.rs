@@ -10,8 +10,8 @@ use crate::core::JwtSecret;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct AuthConfig {
-    /// JWT secret. If empty, a random secret is generated at startup (tokens
-    /// won't survive restarts).
+    /// JWT secret. If empty, a random secret is generated on first startup and
+    /// persisted to `data/.jwt_secret`. Set explicitly for multi-instance deployments.
     pub secret: JwtSecret,
     /// Default token expiry in seconds (can be overridden per-collection).
     /// Accepts integer seconds or human-readable string ("2h", "7200").
@@ -33,6 +33,9 @@ pub struct AuthConfig {
     /// Accepts integer seconds or human-readable string ("15m", "900").
     #[serde(with = "serde_duration")]
     pub forgot_password_window_seconds: u64,
+    /// Max failed login attempts per IP before lockout. Default: 20.
+    /// Higher than per-email to tolerate shared IPs (offices, NAT).
+    pub max_ip_login_attempts: u32,
     /// Password strength requirements.
     #[serde(default)]
     pub password_policy: PasswordPolicy,
@@ -44,6 +47,7 @@ impl Default for AuthConfig {
             secret: JwtSecret::new(""),
             token_expiry: 7200,
             max_login_attempts: 5,
+            max_ip_login_attempts: 20,
             login_lockout_seconds: 300,
             reset_token_expiry: 3600,
             max_forgot_password_attempts: 3,
@@ -120,6 +124,7 @@ mod tests {
         let auth = AuthConfig::default();
         assert!(auth.secret.is_empty());
         assert_eq!(auth.token_expiry, 7200);
+        assert_eq!(auth.max_ip_login_attempts, 20);
         assert_eq!(auth.reset_token_expiry, 3600);
     }
 

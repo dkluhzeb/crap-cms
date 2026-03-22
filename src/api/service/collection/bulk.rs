@@ -11,6 +11,7 @@ use crate::{
             convert::{prost_struct_to_hashmap, prost_struct_to_json_map},
         },
     },
+    core::upload,
     db::{AccessResult, DbConnection, FindQuery, LocaleContext, query},
 };
 
@@ -30,15 +31,27 @@ impl ContentService {
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
 
-        let join_data = req
+        let mut join_data = req
             .data
             .as_ref()
             .map(prost_struct_to_json_map)
             .unwrap_or_default();
-        let data = req
+        let mut data = req
             .data
             .map(|s| prost_struct_to_hashmap(&s))
             .unwrap_or_default();
+
+        // Reject password updates in bulk operations — use single-document Update instead
+        if def.is_auth_collection() && data.contains_key("password") {
+            return Err(Status::invalid_argument(
+                "Password updates are not supported in UpdateMany. Use Update for individual documents.",
+            ));
+        }
+        // Defense in depth: strip password from join_data even though it shouldn't be there
+        if def.is_auth_collection() {
+            data.remove("password");
+            join_data.remove("password");
+        }
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
@@ -175,6 +188,7 @@ impl ContentService {
         let db_kind = self.db_kind.clone();
         let collection = req.collection.clone();
         let req_where = req.r#where.clone();
+        let config_dir = self.config_dir.clone();
         let def_owned = def;
         let deleted = tokio::task::spawn_blocking(move || -> Result<i64, Status> {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
@@ -246,6 +260,14 @@ impl ContentService {
             tx.commit()
                 .context("Commit transaction")
                 .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+
+            // Clean up upload files for deleted documents
+            if def_owned.is_upload_collection() {
+                for doc in &docs {
+                    upload::delete_upload_files(&config_dir, &doc.fields);
+                }
+            }
+
             Ok(count)
         })
         .await

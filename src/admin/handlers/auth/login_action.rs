@@ -1,11 +1,13 @@
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Form, State},
-    http::header,
+    extract::{ConnectInfo, Form, State},
+    http::{HeaderMap, header},
     response::{IntoResponse, Redirect, Response},
 };
 use tokio::task;
 
-use super::{LoginForm, login_error, session_cookies};
+use super::{LoginForm, client_ip, login_error, session_cookies};
 use crate::{
     admin::AdminState,
     core::{
@@ -18,10 +20,14 @@ use crate::{
 /// POST /admin/login — verify credentials, set cookie, redirect.
 pub async fn login_action(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Form(form): Form<LoginForm>,
 ) -> Response {
-    // Check rate limit before doing any work
-    if state.login_limiter.is_blocked(&form.email) {
+    let ip = client_ip(&headers, &addr);
+
+    // Check rate limits before doing any work (both email and IP)
+    if state.login_limiter.is_blocked(&form.email) || state.ip_login_limiter.is_blocked(&ip) {
         return login_error(&state, "error_too_many_attempts", &form.email);
     }
 
@@ -81,10 +87,12 @@ pub async fn login_action(
         Ok(Ok(Some(Ok(user)))) => user,
         Ok(Ok(Some(Err(msg)))) => {
             state.login_limiter.record_failure(&form.email);
+            state.ip_login_limiter.record_failure(&ip);
             return login_error(&state, &msg, &form.email);
         }
         Ok(Ok(None)) => {
             state.login_limiter.record_failure(&form.email);
+            state.ip_login_limiter.record_failure(&ip);
             return login_error(&state, "error_invalid_credentials", &form.email);
         }
         Ok(Err(e)) => {
@@ -97,7 +105,8 @@ pub async fn login_action(
         }
     };
 
-    // Successful login — clear any rate limit state
+    // Successful login — clear email rate limit (don't clear IP: legitimate users
+    // from the same IP shouldn't reset an attacker's count)
     state.login_limiter.clear(&form.email);
 
     // Get email from user document
@@ -142,4 +151,54 @@ pub async fn login_action(
     }
 
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::core::rate_limit::LoginRateLimiter;
+
+    #[test]
+    fn ip_limiter_blocks_after_threshold() {
+        let limiter = LoginRateLimiter::new(3, 60);
+        let ip = "1.2.3.4";
+        limiter.record_failure(ip);
+        limiter.record_failure(ip);
+        assert!(!limiter.is_blocked(ip));
+        limiter.record_failure(ip);
+        assert!(limiter.is_blocked(ip));
+    }
+
+    #[test]
+    fn ip_and_email_limiters_independent() {
+        let email_limiter = LoginRateLimiter::new(2, 60);
+        let ip_limiter = LoginRateLimiter::new(3, 60);
+
+        // Block email limiter
+        email_limiter.record_failure("a@b.com");
+        email_limiter.record_failure("a@b.com");
+        assert!(email_limiter.is_blocked("a@b.com"));
+
+        // IP limiter should not be blocked
+        assert!(!ip_limiter.is_blocked("1.2.3.4"));
+
+        // Block IP limiter
+        ip_limiter.record_failure("1.2.3.4");
+        ip_limiter.record_failure("1.2.3.4");
+        ip_limiter.record_failure("1.2.3.4");
+        assert!(ip_limiter.is_blocked("1.2.3.4"));
+
+        // Different IP should not be blocked
+        assert!(!ip_limiter.is_blocked("5.6.7.8"));
+    }
+
+    #[test]
+    fn ip_limiter_window_expiry() {
+        let limiter = LoginRateLimiter::new(2, 0);
+        limiter.record_failure("1.2.3.4");
+        limiter.record_failure("1.2.3.4");
+        std::thread::sleep(Duration::from_millis(10));
+        assert!(!limiter.is_blocked("1.2.3.4"));
+    }
 }

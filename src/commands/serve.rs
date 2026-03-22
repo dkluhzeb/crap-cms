@@ -334,6 +334,17 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     // Log auth collection info and validate upload limits
     log_startup_info(&registry, &cfg)?;
 
+    // Security warnings for common misconfigurations
+    if cfg.mcp.enabled && cfg.mcp.http && cfg.mcp.api_key.is_empty() {
+        warn!(
+            "MCP HTTP endpoint enabled without an API key — \
+             all collections are accessible without authentication"
+        );
+    }
+    if cfg.server.grpc_rate_limit_requests == 0 {
+        warn!("gRPC API rate limiting is disabled (grpc_rate_limit_requests = 0)");
+    }
+
     // Snapshot the registry for hot-path consumers (admin UI + gRPC).
     // HookRunner + scheduler keep the SharedRegistry (which is only read at runtime anyway).
     let registry_snapshot = Registry::snapshot(&registry);

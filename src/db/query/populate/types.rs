@@ -5,6 +5,11 @@ use dashmap::DashMap;
 use crate::core::{CollectionDefinition, Document, Registry};
 use crate::db::{DbConnection, LocaleContext};
 
+/// Soft cap on the number of entries in the populate cache. Once exceeded,
+/// new insertions are skipped until the periodic or write-triggered cache clear.
+/// Prevents unbounded memory growth during read-heavy workloads.
+pub const MAX_POPULATE_CACHE_SIZE: usize = 10_000;
+
 /// Shared cache for populated documents. Key is (collection_slug, document_id).
 /// Uses DashMap for concurrent cross-request sharing with interior mutability.
 pub type PopulateCache = DashMap<(String, String), Document>;
@@ -70,5 +75,47 @@ impl<'a> PopulateOpts<'a> {
     pub fn locale_ctx(mut self, ctx: &'a LocaleContext) -> Self {
         self.locale_ctx = Some(ctx);
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    use serde_json::json;
+
+    use crate::core::DocumentId;
+
+    fn make_doc(id: &str) -> Document {
+        Document {
+            id: DocumentId::new(id),
+            fields: HashMap::from([("title".to_string(), json!("test"))]),
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    #[test]
+    fn cache_cap_is_respected() {
+        // Use a tiny cap for testing — verify the constant exists and the pattern works
+        let cache = PopulateCache::new();
+        let cap = 5;
+
+        for i in 0..cap + 3 {
+            if cache.len() < cap {
+                cache.insert(
+                    ("col".to_string(), format!("d{}", i)),
+                    make_doc(&format!("d{}", i)),
+                );
+            }
+        }
+
+        assert_eq!(cache.len(), cap);
+    }
+
+    #[test]
+    fn max_populate_cache_size_is_reasonable() {
+        assert_eq!(MAX_POPULATE_CACHE_SIZE, 10_000);
     }
 }

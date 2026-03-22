@@ -1,10 +1,6 @@
 //! Job execution, cron scheduling, stale recovery, and cron normalization.
 
-use std::{
-    cmp::max,
-    str::FromStr,
-    time::{Duration, Instant},
-};
+use std::{cmp::max, str::FromStr, time::Instant};
 
 use anyhow::{Context as _, Result, anyhow};
 
@@ -24,7 +20,6 @@ pub fn execute_job(
     job_def: &JobDefinition,
     job_run: &JobRun,
 ) -> Result<()> {
-    let timeout = Duration::from_secs(job_def.timeout);
     let start = Instant::now();
 
     tracing::info!(
@@ -68,11 +63,7 @@ pub fn execute_job(
         Err(e) => {
             // Transaction rolls back on drop
             drop(tx);
-            let error_msg = if start.elapsed() >= timeout {
-                format!("timeout after {}s", job_def.timeout)
-            } else {
-                format!("{}", e)
-            };
+            let error_msg = e.to_string();
             let should_retry = job_run.attempt < job_run.max_attempts;
             let c = pool
                 .get()

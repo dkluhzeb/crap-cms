@@ -150,54 +150,54 @@ pub async fn start(
 /// Process pending image format conversions from the queue.
 #[cfg(not(tarpaulin_include))]
 async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
-    let conn = pool
+    let mut conn = pool
         .get()
         .context("Image queue: failed to get DB connection")?;
-    let entries = image_query::claim_pending_images(&conn, batch_size)?;
+    let entries = {
+        let tx = conn
+            .transaction()
+            .context("Image queue: failed to begin claim transaction")?;
+        let entries = image_query::claim_pending_images(&tx, batch_size)?;
+        tx.commit()
+            .context("Image queue: failed to commit claim transaction")?;
+        entries
+    };
     drop(conn);
 
     for entry in entries {
-        let pool_inner = pool.clone();
         let entry_id = entry.id.clone();
 
         // Process in a blocking task (image encoding is CPU-bound)
+        let source = entry.source_path.clone();
+        let target = entry.target_path.clone();
+        let format = entry.format.clone();
+        let quality = entry.quality;
         let result = tokio::task::spawn_blocking(move || {
-            let pool = pool_inner;
-            upload::process_image_entry(
-                &entry.source_path,
-                &entry.target_path,
-                &entry.format,
-                entry.quality,
-            )?;
-
-            // Update the document's format URL column
-            let conn = pool
-                .get()
-                .context("Image queue: failed to get DB connection")?;
-            conn.execute(
-                &format!(
-                    "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
-                    entry.collection,
-                    entry.url_column,
-                    conn.placeholder(1),
-                    conn.placeholder(2)
-                ),
-                &[
-                    crate::db::DbValue::Text(entry.url_value.clone()),
-                    crate::db::DbValue::Text(entry.document_id.clone()),
-                ],
-            )
-            .context("Image queue: failed to update document")?;
-
-            Ok::<(), anyhow::Error>(())
+            upload::process_image_entry(&source, &target, &format, quality)
         })
         .await;
 
+        // Both DB operations (document URL update + queue completion) use the same
+        // connection so they succeed or fail together.
         let conn = pool
             .get()
             .context("Image queue: failed to get DB connection")?;
         match result {
             Ok(Ok(())) => {
+                conn.execute(
+                    &format!(
+                        "UPDATE \"{}\" SET \"{}\" = {} WHERE id = {}",
+                        entry.collection,
+                        entry.url_column,
+                        conn.placeholder(1),
+                        conn.placeholder(2)
+                    ),
+                    &[
+                        crate::db::DbValue::Text(entry.url_value.clone()),
+                        crate::db::DbValue::Text(entry.document_id.clone()),
+                    ],
+                )
+                .context("Image queue: failed to update document")?;
                 image_query::complete_image_entry(&conn, &entry_id)?;
                 tracing::debug!("Image conversion completed: {}", entry_id);
             }
@@ -282,29 +282,55 @@ async fn poll_and_execute(
         let pool = pool.clone();
         let hook_runner = hook_runner.clone();
         let running_jobs = running_jobs.clone();
+        let timeout_secs = job_def.timeout;
+        let should_retry = job_run.attempt < job_run.max_attempts;
+        let pool_timeout = pool.clone();
         let job_id = job_run.id.clone();
-
-        // Execute the job in a blocking task (same pattern as hook execution).
-        // Wrapped in tokio::spawn to catch panics from spawn_blocking.
-        let slug_log = job_run.slug.clone();
         let id_log = job_run.id.clone();
+        let slug_log = job_run.slug.clone();
+
+        // Execute the job in a blocking task with enforced timeout.
+        // On timeout the blocking thread keeps running (can't cancel sync Rust)
+        // but the scheduler immediately marks the job as failed and moves on.
         tokio::spawn(async move {
-            match tokio::task::spawn_blocking(move || {
-                let result = execute_job(&pool, &hook_runner, &job_def, &job_run);
+            let timeout_dur = tokio::time::Duration::from_secs(timeout_secs);
+            let result = tokio::time::timeout(
+                timeout_dur,
+                tokio::task::spawn_blocking(move || {
+                    execute_job(&pool, &hook_runner, &job_def, &job_run)
+                }),
+            )
+            .await;
 
-                // Remove from running tracking
-                if let Ok(mut guard) = running_jobs.lock() {
-                    guard.retain(|id| id != &job_id);
-                }
+            // Always clean up running_jobs tracking
+            if let Ok(mut guard) = running_jobs.lock() {
+                guard.retain(|id| id != &job_id);
+            }
 
-                if let Err(e) = result {
-                    tracing::error!("Job {} ({}) execution error: {}", job_id, job_run.slug, e);
+            match result {
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => {
+                    tracing::error!("Job {} ({}) execution error: {}", id_log, slug_log, e);
                 }
-            })
-            .await
-            {
-                Ok(()) => {}
-                Err(e) => tracing::error!("Job {} ({}) panicked: {}", id_log, slug_log, e),
+                Ok(Err(e)) => {
+                    tracing::error!("Job {} ({}) panicked: {}", id_log, slug_log, e);
+                }
+                Err(_) => {
+                    tracing::error!(
+                        "Job {} ({}) timed out after {}s",
+                        id_log,
+                        slug_log,
+                        timeout_secs
+                    );
+                    if let Ok(c) = pool_timeout.get() {
+                        let _ = job_query::fail_job(
+                            &c,
+                            &id_log,
+                            &format!("timeout after {}s", timeout_secs),
+                            should_retry,
+                        );
+                    }
+                }
             }
         });
     }

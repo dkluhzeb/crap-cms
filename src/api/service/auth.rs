@@ -25,10 +25,16 @@ impl ContentService {
         &self,
         request: Request<content::LoginRequest>,
     ) -> Result<Response<content::LoginResponse>, Status> {
+        let ip = request
+            .remote_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default();
         let req = request.into_inner();
 
         // Check rate limit before doing any work
-        if self.login_limiter.is_blocked(&req.email) {
+        if self.login_limiter.is_blocked(&req.email)
+            || (!ip.is_empty() && self.ip_login_limiter.is_blocked(&ip))
+        {
             return Err(Status::resource_exhausted(
                 "Too many login attempts. Please try again later.",
             ));
@@ -89,6 +95,9 @@ impl ContentService {
             Some(u) => u,
             None => {
                 self.login_limiter.record_failure(&req.email);
+                if !ip.is_empty() {
+                    self.ip_login_limiter.record_failure(&ip);
+                }
 
                 return Err(Status::unauthenticated("Invalid email or password"));
             }
@@ -222,15 +231,24 @@ impl ContentService {
         &self,
         request: Request<content::ForgotPasswordRequest>,
     ) -> Result<Response<content::ForgotPasswordResponse>, Status> {
+        let ip = request
+            .remote_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default();
         let req = request.into_inner();
 
-        // Rate limit: prevent email flooding (always count, always return success)
-        if self.forgot_password_limiter.is_blocked(&req.email) {
+        // Rate limit: prevent email/IP flooding (always count, always return success)
+        if self.forgot_password_limiter.is_blocked(&req.email)
+            || (!ip.is_empty() && self.ip_forgot_password_limiter.is_blocked(&ip))
+        {
             return Ok(Response::new(content::ForgotPasswordResponse {
                 success: true,
             }));
         }
         self.forgot_password_limiter.record_failure(&req.email);
+        if !ip.is_empty() {
+            self.ip_forgot_password_limiter.record_failure(&ip);
+        }
 
         let def = self.get_collection_def(&req.collection)?;
 

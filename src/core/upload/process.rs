@@ -15,9 +15,11 @@ use crate::core::upload::{
     QueuedConversionBuilder, SizeResultBuilder, UploadedFile,
 };
 
-/// RAII guard that deletes written files if the upload process fails.
-/// Call `commit()` on success to prevent cleanup.
-struct CleanupGuard {
+/// RAII guard that deletes written files if not committed.
+/// Returned from [`process_upload`] so callers can commit only after
+/// their DB transaction succeeds — preventing orphaned files on rollback.
+#[derive(Debug)]
+pub struct CleanupGuard {
     files: Vec<PathBuf>,
     committed: bool,
 }
@@ -34,7 +36,9 @@ impl CleanupGuard {
         self.files.push(path);
     }
 
-    fn commit(&mut self) {
+    /// Mark the guard as committed — files will NOT be cleaned up on drop.
+    /// Call this after the database transaction has been committed successfully.
+    pub fn commit(&mut self) {
         self.committed = true;
     }
 }
@@ -51,6 +55,10 @@ impl Drop for CleanupGuard {
 
 /// Process an uploaded file: validate, save to disk, generate image sizes + format variants.
 ///
+/// Returns both the processed upload metadata and a [`CleanupGuard`].
+/// The caller **must** call `guard.commit()` after their DB transaction succeeds.
+/// If dropped without committing, the guard removes all written files.
+///
 /// Takes `UploadedFile` by value so this function can be moved into `spawn_blocking`.
 pub fn process_upload(
     file: UploadedFile,
@@ -58,7 +66,7 @@ pub fn process_upload(
     config_dir: &Path,
     collection_slug: &str,
     global_max_file_size: u64,
-) -> Result<ProcessedUpload> {
+) -> Result<(ProcessedUpload, CleanupGuard)> {
     // Validate MIME type against allowlist
     if !validate_mime_type(&file.content_type, &upload_config.mime_types) {
         bail!("File type '{}' is not allowed", file.content_type);
@@ -214,7 +222,6 @@ pub fn process_upload(
     }
 
     let created_files = guard.files.clone();
-    guard.commit();
     let mut builder = ProcessedUploadBuilder::new(unique_filename, url)
         .mime_type(file.content_type.clone())
         .filesize(filesize)
@@ -228,7 +235,7 @@ pub fn process_upload(
     if let Some(h) = height {
         builder = builder.height(h);
     }
-    Ok(builder.build())
+    Ok((builder.build(), guard))
 }
 
 #[cfg(test)]
@@ -387,7 +394,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "docs", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "docs", 50 * 1024 * 1024)
             .expect("should succeed for non-image");
         assert!(result.url.starts_with("/uploads/docs/"));
         assert!(result.url.ends_with("document.pdf"));
@@ -412,7 +419,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed for image");
         assert_eq!(result.mime_type, "image/png");
         assert_eq!(result.width, Some(50));
@@ -441,7 +448,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         assert_eq!(result.width, Some(200));
         assert_eq!(result.height, Some(200));
@@ -478,7 +485,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
@@ -511,7 +518,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let small = &result.sizes["small"];
         assert!(
@@ -544,7 +551,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let icon = &result.sizes["icon"];
         assert!(icon.formats.contains_key("webp"));
@@ -562,7 +569,7 @@ mod tests {
             enabled: true,
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed even without extension");
         // The filename should have the nanoid prefix and sanitized name
         assert!(result.filename.contains("noext"));
@@ -589,7 +596,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
         let thumb = &result.sizes["thumb"];
         assert!(
@@ -621,7 +628,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let result = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
+        let (result, _guard) = process_upload(file, &config, tmp.path(), "media", 50 * 1024 * 1024)
             .expect("should succeed");
 
         // Sizes should be created but format variants should NOT exist on disk
@@ -651,6 +658,30 @@ mod tests {
             assert!(!q.url_value.is_empty());
             assert!(!q.url_column.is_empty());
         }
+    }
+
+    #[test]
+    fn process_upload_guard_cleans_up_on_drop() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = UploadedFileBuilder::new("test.txt", "application/octet-stream")
+            .data(b"test content".to_vec())
+            .build();
+        let config = CollectionUpload {
+            enabled: true,
+            ..Default::default()
+        };
+        let (processed, guard) =
+            process_upload(file, &config, tmp.path(), "test", 50 * 1024 * 1024)
+                .expect("should succeed");
+
+        let file_path = tmp.path().join("uploads/test").join(&processed.filename);
+        assert!(file_path.exists(), "File should exist after upload");
+
+        drop(guard);
+        assert!(
+            !file_path.exists(),
+            "File should be cleaned up when guard drops without commit"
+        );
     }
 
     #[test]

@@ -49,10 +49,14 @@ pub struct AdminState {
     pub email_renderer: Arc<EmailRenderer>,
     /// The event bus for asynchronous event handling, if enabled.
     pub event_bus: Option<EventBus>,
-    /// The rate limiter for login attempts.
+    /// The rate limiter for login attempts (per-email).
     pub login_limiter: Arc<LoginRateLimiter>,
-    /// The rate limiter for password reset requests.
+    /// The rate limiter for login attempts (per-IP).
+    pub ip_login_limiter: Arc<LoginRateLimiter>,
+    /// The rate limiter for password reset requests (per-email).
     pub forgot_password_limiter: Arc<LoginRateLimiter>,
+    /// The rate limiter for password reset requests (per-IP).
+    pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     /// Whether authentication is enabled for the admin UI.
     pub has_auth: bool,
     /// The translations for the admin UI.

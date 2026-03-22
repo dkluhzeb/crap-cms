@@ -15,7 +15,7 @@ Add an `[mcp]` section to `crap.toml`:
 enabled = true              # Enable MCP server (default: false)
 http = false                # Enable HTTP transport on /mcp (default: false)
 config_tools = false        # Enable config generation tools (default: false)
-api_key = ""                # API key for HTTP transport auth (empty = no auth)
+api_key = ""                # API key for HTTP auth (strongly recommended when http = true)
 include_collections = []    # Whitelist (empty = all)
 exclude_collections = []    # Blacklist (takes precedence over include)
 ```
@@ -158,7 +158,9 @@ functions are not applied. This is by design: MCP is a machine-to-machine API su
 
 - **stdio:** Access is controlled by who can run the process.
 - **HTTP:** Access is controlled by the `api_key` setting. **Always set an API key
-  in production.** Without one, the `/mcp` endpoint is unauthenticated.
+  when `http = true`.** Without one, the `/mcp` endpoint is completely unauthenticated —
+  anyone who can reach the admin port gets full CRUD access to all collections.
+  A startup warning is logged when HTTP is enabled without an API key.
 
 To restrict which collections are visible, use `include_collections` / `exclude_collections`.
 

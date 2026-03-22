@@ -8,8 +8,8 @@ use crate::{
     core::{Document, upload},
     db::query::{
         populate::{
-            PopulateContext, PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref,
-            populate_relationships_batch_cached,
+            MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+            parse_poly_ref, populate_relationships_batch_cached,
         },
         read::find_by_ids,
     },
@@ -169,7 +169,9 @@ pub(super) fn batch_fetch_with_cache(
                     )?;
                 }
                 for d in fetched {
-                    ctx.cache.insert((col.clone(), d.id.to_string()), d.clone());
+                    if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                        ctx.cache.insert((col.clone(), d.id.to_string()), d.clone());
+                    }
                     doc_map.insert(d.id.to_string(), d);
                 }
             }

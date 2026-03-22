@@ -17,6 +17,7 @@ use crap_cms::core::Registry;
 use crap_cms::core::collection::*;
 use crap_cms::core::email::EmailRenderer;
 use crap_cms::core::field::*;
+use crap_cms::core::upload::CollectionUpload;
 use crap_cms::db::{migrate, pool};
 use crap_cms::hooks::lifecycle::HookRunner;
 use serde_json::json;
@@ -155,9 +156,15 @@ fn setup_service_inner(
         .login_limiter(std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
         ))
+        .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 300,
+        )))
         .forgot_password_limiter(std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
-        ));
+        ))
+        .ip_forgot_password_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+            20, 900,
+        )));
 
     let service = ContentService::new(deps.build());
 
@@ -800,4 +807,155 @@ async fn grpc_update_many_with_nested_array() {
             "variant color should be updated to blue"
         );
     }
+}
+
+// ── UpdateMany Rejects Password ─────────────────────────────────────────
+
+fn make_auth_users_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("users");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("User".to_string())),
+        plural: Some(LocalizedString::Plain("Users".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("email", FieldType::Email)
+            .required(true)
+            .unique(true)
+            .build(),
+        FieldDefinition::builder("name", FieldType::Text).build(),
+    ];
+    def.auth = Some(Auth {
+        enabled: true,
+        ..Default::default()
+    });
+    def
+}
+
+#[tokio::test]
+async fn update_many_rejects_password_field() {
+    let ts = setup_service(vec![make_auth_users_def()], vec![]);
+
+    // Create a user (password is handled by single-doc Create)
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "users".to_string(),
+            data: Some(make_struct(&[
+                ("email", "test@example.com"),
+                ("name", "Test User"),
+                ("password", "securepassword123"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // UpdateMany with password field should be rejected
+    let result = ts
+        .service
+        .update_many(Request::new(content::UpdateManyRequest {
+            collection: "users".to_string(),
+            r#where: None,
+            data: Some(make_struct(&[
+                ("name", "Updated Name"),
+                ("password", "newpassword456"),
+            ])),
+            ..Default::default()
+        }))
+        .await;
+
+    assert!(result.is_err(), "UpdateMany with password should fail");
+    let err = result.unwrap_err();
+    assert_eq!(
+        err.code(),
+        tonic::Code::InvalidArgument,
+        "should return INVALID_ARGUMENT"
+    );
+    assert!(
+        err.message().contains("Password updates are not supported"),
+        "error message should explain the restriction, got: {}",
+        err.message()
+    );
+}
+
+// ── DeleteMany Cleans Up Upload Files ───────────────────────────────────
+
+fn make_media_upload_def() -> CollectionDefinition {
+    let mut def = CollectionDefinition::new("media");
+    def.labels = Labels {
+        singular: Some(LocalizedString::Plain("Media".to_string())),
+        plural: Some(LocalizedString::Plain("Media".to_string())),
+    };
+    def.timestamps = true;
+    def.fields = vec![
+        FieldDefinition::builder("filename", FieldType::Text)
+            .required(true)
+            .build(),
+        FieldDefinition::builder("url", FieldType::Text).build(),
+    ];
+    def.upload = Some(CollectionUpload::new());
+    def
+}
+
+#[tokio::test]
+async fn delete_many_cleans_up_upload_files() {
+    let ts = setup_service(vec![make_media_upload_def()], vec![]);
+
+    // Create upload directory and fake files
+    let uploads_dir = ts._tmp.path().join("uploads/media");
+    std::fs::create_dir_all(&uploads_dir).unwrap();
+
+    let file1 = uploads_dir.join("file1.png");
+    let file2 = uploads_dir.join("file2.png");
+    std::fs::write(&file1, b"fake image 1").unwrap();
+    std::fs::write(&file2, b"fake image 2").unwrap();
+
+    // Create two documents with url fields pointing to the files
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "media".to_string(),
+            data: Some(make_struct(&[
+                ("filename", "file1.png"),
+                ("url", "/uploads/media/file1.png"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    ts.service
+        .create(Request::new(content::CreateRequest {
+            collection: "media".to_string(),
+            data: Some(make_struct(&[
+                ("filename", "file2.png"),
+                ("url", "/uploads/media/file2.png"),
+            ])),
+            locale: None,
+            draft: None,
+        }))
+        .await
+        .unwrap();
+
+    // Verify files exist before delete
+    assert!(file1.exists(), "file1 should exist before DeleteMany");
+    assert!(file2.exists(), "file2 should exist before DeleteMany");
+
+    // DeleteMany all media documents
+    let resp = ts
+        .service
+        .delete_many(Request::new(content::DeleteManyRequest {
+            collection: "media".to_string(),
+            r#where: None,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(resp.deleted, 2, "should delete both documents");
+
+    // Verify files are cleaned up
+    assert!(!file1.exists(), "file1 should be deleted after DeleteMany");
+    assert!(!file2.exists(), "file2 should be deleted after DeleteMany");
 }

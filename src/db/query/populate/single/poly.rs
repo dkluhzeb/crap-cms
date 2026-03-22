@@ -6,7 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_cached;
 use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref,
+    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+    parse_poly_ref,
 };
 use crate::{
     core::{Document, upload},
@@ -153,7 +154,9 @@ pub(super) fn populate_poly_has_one(
                     },
                     ctx.cache,
                 )?;
-                ctx.cache.insert(poly_cache_key, rd.clone());
+                if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                    ctx.cache.insert(poly_cache_key, rd.clone());
+                }
                 doc.fields
                     .insert(field_name.to_string(), document_to_json(&rd, &col));
             }

@@ -41,9 +41,11 @@ pub struct ContentService {
     pub(in crate::api::service) locale_config: LocaleConfig,
     pub(in crate::api::service) config_dir: PathBuf,
     pub(in crate::api::service) login_limiter: Arc<LoginRateLimiter>,
+    pub(in crate::api::service) ip_login_limiter: Arc<LoginRateLimiter>,
     pub(in crate::api::service) reset_token_expiry: u64,
     pub(in crate::api::service) password_policy: PasswordPolicy,
     pub(in crate::api::service) forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub(in crate::api::service) ip_forgot_password_limiter: Arc<LoginRateLimiter>,
     /// Shared cross-request cache for populated relationship documents.
     /// None when disabled (default). Cleared on any write operation.
     pub(in crate::api::service) populate_cache: Option<Arc<query::PopulateCache>>,
@@ -87,9 +89,11 @@ impl ContentService {
             locale_config: deps.config.locale,
             config_dir: deps.config_dir,
             login_limiter: deps.login_limiter,
+            ip_login_limiter: deps.ip_login_limiter,
             reset_token_expiry,
             password_policy: deps.config.auth.password_policy,
             forgot_password_limiter: deps.forgot_password_limiter,
+            ip_forgot_password_limiter: deps.ip_forgot_password_limiter,
             populate_cache,
             default_limit,
             max_limit,

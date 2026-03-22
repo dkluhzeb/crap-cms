@@ -904,6 +904,8 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
     let email_renderer =
         std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let ip_login_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(20, 300));
     let translations =
         std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     let state = crate::admin::AdminState {
@@ -917,8 +919,12 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         email_renderer,
         event_bus: None,
         login_limiter,
+        ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(20, 900),
         ),
         has_auth: false,
         translations,
@@ -989,6 +995,8 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
     let email_renderer =
         std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let ip_login_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(20, 300));
     let translations =
         std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     let state = crate::admin::AdminState {
@@ -1002,8 +1010,12 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         email_renderer,
         event_bus: None,
         login_limiter,
+        ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(20, 900),
         ),
         has_auth: false,
         translations,
@@ -1049,6 +1061,8 @@ fn make_test_state() -> crate::admin::AdminState {
     let email_renderer =
         std::sync::Arc::new(crate::core::email::EmailRenderer::new(tmp.path()).unwrap());
     let login_limiter = std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(5, 300));
+    let ip_login_limiter =
+        std::sync::Arc::new(crate::core::rate_limit::LoginRateLimiter::new(20, 300));
     let translations =
         std::sync::Arc::new(crate::admin::translations::Translations::load(tmp.path()));
     crate::admin::AdminState {
@@ -1062,8 +1076,12 @@ fn make_test_state() -> crate::admin::AdminState {
         email_renderer,
         event_bus: None,
         login_limiter,
+        ip_login_limiter,
         forgot_password_limiter: std::sync::Arc::new(
             crate::core::rate_limit::LoginRateLimiter::new(3, 900),
+        ),
+        ip_forgot_password_limiter: std::sync::Arc::new(
+            crate::core::rate_limit::LoginRateLimiter::new(20, 900),
         ),
         has_auth: false,
         translations,

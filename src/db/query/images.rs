@@ -2,7 +2,23 @@
 
 use anyhow::{Context as _, Result};
 
-use crate::db::{DbConnection, DbValue};
+use crate::db::{DbConnection, DbRow, DbValue};
+
+/// Extract a text value from a row by column index, returning empty string on mismatch/missing.
+fn get_text(row: &DbRow, idx: usize) -> String {
+    match row.get_value(idx) {
+        Some(DbValue::Text(s)) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// Extract an optional text value from a row by column index.
+fn get_opt_text(row: &DbRow, idx: usize) -> Option<String> {
+    match row.get_value(idx) {
+        Some(DbValue::Text(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
 
 /// A pending image format conversion entry.
 #[derive(Debug, Clone)]
@@ -100,87 +116,15 @@ pub fn claim_pending_images(conn: &dyn DbConnection, limit: usize) -> Result<Vec
             _ => 0,
         };
         entries.push(ImageQueueEntry {
-            id: row
-                .get_value(0)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
-            collection: row
-                .get_value(1)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
-            document_id: row
-                .get_value(2)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
-            source_path: row
-                .get_value(3)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
-            target_path: row
-                .get_value(4)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
-            format: row
-                .get_value(5)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
+            id: get_text(row, 0),
+            collection: get_text(row, 1),
+            document_id: get_text(row, 2),
+            source_path: get_text(row, 3),
+            target_path: get_text(row, 4),
+            format: get_text(row, 5),
             quality,
-            url_column: row
-                .get_value(7)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
-            url_value: row
-                .get_value(8)
-                .and_then(|v| {
-                    if let DbValue::Text(s) = v {
-                        Some(s.clone())
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default(),
+            url_column: get_text(row, 7),
+            url_value: get_text(row, 8),
         });
     }
 
@@ -287,30 +231,16 @@ pub fn list_image_entries(
 
     let rows = conn.query_all(&sql, &params)?;
     let entries = rows
-        .into_iter()
-        .map(|row| {
-            let get_text = |idx: usize| -> String {
-                match row.get_value(idx) {
-                    Some(DbValue::Text(s)) => s.clone(),
-                    _ => String::new(),
-                }
-            };
-            let get_opt_text = |idx: usize| -> Option<String> {
-                match row.get_value(idx) {
-                    Some(DbValue::Text(s)) => Some(s.clone()),
-                    _ => None,
-                }
-            };
-            ImageQueueListEntry {
-                id: get_text(0),
-                collection: get_text(1),
-                document_id: get_text(2),
-                format: get_text(3),
-                status: get_text(4),
-                error: get_opt_text(5),
-                created_at: get_opt_text(6),
-                completed_at: get_opt_text(7),
-            }
+        .iter()
+        .map(|row| ImageQueueListEntry {
+            id: get_text(row, 0),
+            collection: get_text(row, 1),
+            document_id: get_text(row, 2),
+            format: get_text(row, 3),
+            status: get_text(row, 4),
+            error: get_opt_text(row, 5),
+            created_at: get_opt_text(row, 6),
+            completed_at: get_opt_text(row, 7),
         })
         .collect();
 
@@ -437,6 +367,22 @@ mod tests {
         // Should not be claimable again (now processing)
         let again = claim_pending_images(&conn, 10).unwrap();
         assert!(again.is_empty());
+    }
+
+    #[test]
+    fn claim_twice_no_overlap() {
+        let (_dir, conn) = setup_db();
+        insert_image_queue_entry(&conn, &entry("m", "d1", "/a", "/b", "webp", 80, "c", "u"))
+            .unwrap();
+        insert_image_queue_entry(&conn, &entry("m", "d2", "/c", "/d", "avif", 60, "c", "u"))
+            .unwrap();
+
+        let first = claim_pending_images(&conn, 10).unwrap();
+        let second = claim_pending_images(&conn, 10).unwrap();
+
+        // All entries should be claimed by first call, none by second
+        assert_eq!(first.len(), 2);
+        assert!(second.is_empty(), "second claim should get no entries");
     }
 
     #[test]

@@ -147,7 +147,8 @@ pub struct McpConfig {
     pub http: bool,
     /// Enable config generation tools that can write files to disk (default: false).
     pub config_tools: bool,
-    /// API key for HTTP transport auth (empty = no auth).
+    /// API key for HTTP transport auth. **Strongly recommended** when `http = true`.
+    /// Empty = no auth (all MCP operations are unauthenticated).
     pub api_key: String,
     /// Whitelist of collection slugs to expose (empty = all).
     pub include_collections: Vec<String>,

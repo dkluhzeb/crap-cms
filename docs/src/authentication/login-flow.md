@@ -31,15 +31,23 @@ If custom strategies are configured, the middleware checks them before redirecti
 
 ### Rate Limiting
 
-Login endpoints enforce per-email rate limiting. After `max_login_attempts` (default: 5) failed attempts within the lockout window, further login attempts for that email are temporarily blocked for `login_lockout_seconds` (default: 300). Configure in `crap.toml`:
+Login and forgot-password endpoints enforce dual rate limiting — per-email and per-IP:
+
+- **Per-email**: After `max_login_attempts` (default: 5) failed attempts, further login attempts for that email are blocked for `login_lockout_seconds` (default: 300s).
+- **Per-IP**: After `max_ip_login_attempts` (default: 20) failed attempts from the same IP, all login attempts from that IP are blocked. The higher threshold tolerates shared IPs (offices, NAT).
+
+Forgot-password requests are similarly limited per-email (`max_forgot_password_attempts`) and per-IP (`max_ip_login_attempts` with `forgot_password_window_seconds`).
 
 ```toml
 [auth]
-max_login_attempts = 5
-login_lockout_seconds = 300
+max_login_attempts = 5          # per-email threshold
+max_ip_login_attempts = 20      # per-IP threshold (login + forgot-password)
+login_lockout_seconds = "5m"    # lockout window for login
+max_forgot_password_attempts = 3
+forgot_password_window_seconds = "15m"
 ```
 
-Rate limiting applies to both the admin UI login and the gRPC `Login` RPC.
+Rate limiting applies to the admin UI login, admin forgot-password, and the gRPC `Login` and `ForgotPassword` RPCs. Behind a reverse proxy, the admin UI reads the client IP from `X-Forwarded-For`.
 
 ### CSRF Protection
 

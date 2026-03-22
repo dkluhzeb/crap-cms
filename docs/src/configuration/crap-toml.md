@@ -80,7 +80,7 @@ host = "0.0.0.0"        # Bind address
 # h2c = false           # Enable HTTP/2 cleartext (for reverse proxies)
 # compression = "off"   # "off" (default), "gzip", "br", "all"
 # grpc_reflection = true         # Enable gRPC server reflection (default: true)
-# grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled)
+# grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled, recommended: 100)
 # grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
 
 [database]
@@ -97,7 +97,8 @@ require_auth = true      # Block admin when no auth collection exists (default: 
 [auth]
 secret = ""              # JWT signing key. Empty = auto-generated and persisted to data/.jwt_secret
 token_expiry = "2h"      # Default token expiry (accepts integer seconds or "2h", "30m", etc.)
-max_login_attempts = 5   # Failed attempts before temporary lockout
+max_login_attempts = 5   # Failed attempts per email before temporary lockout
+max_ip_login_attempts = 20  # Failed attempts per IP before lockout (higher for shared IPs)
 login_lockout_seconds = "5m"  # Lockout duration after max attempts
 reset_token_expiry = "1h"    # Password reset token expiry
 max_forgot_password_attempts = 3   # Forgot-password requests per email before rate limiting
@@ -186,7 +187,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
 | `grpc_reflection` | boolean | `true` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disable in production to hide the API surface from unauthenticated probing. |
-| `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
+| `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). **Recommended to enable in production** (e.g., `100`). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
 | `grpc_rate_limit_window` | integer/string | `60` (`"1m"`) | Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (`"1m"`, `"30s"`). |
 
 ### `[database]`
@@ -212,11 +213,12 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 |-------|------|---------|-------------|
 | `secret` | string | `""` (empty) | JWT signing secret. If empty, a random secret is auto-generated and **persisted to `data/.jwt_secret`** so tokens survive restarts. Set explicitly if you prefer to manage the secret yourself. |
 | `token_expiry` | integer/string | `7200` (`"2h"`) | Default JWT token lifetime. Accepts seconds (integer) or human-readable (`"2h"`, `"30m"`). Can be overridden per auth collection. |
-| `max_login_attempts` | integer | `5` | Maximum failed login attempts before temporary lockout. Tracked per email address. |
-| `login_lockout_seconds` | integer/string | `300` (`"5m"`) | Duration of lockout after `max_login_attempts` is reached. Accepts seconds or human-readable. |
+| `max_login_attempts` | integer | `5` | Maximum failed login attempts per email before temporary lockout. |
+| `max_ip_login_attempts` | integer | `20` | Maximum failed login attempts per IP before temporary lockout. Higher than per-email to tolerate shared IPs (offices, NAT). Also used as the per-IP threshold for forgot-password requests. |
+| `login_lockout_seconds` | integer/string | `300` (`"5m"`) | Duration of lockout after `max_login_attempts` or `max_ip_login_attempts` is reached. Accepts seconds or human-readable. |
 | `reset_token_expiry` | integer/string | `3600` (`"1h"`) | Password reset token expiry. The "Forgot password" email link expires after this duration. Accepts seconds or human-readable. |
 | `max_forgot_password_attempts` | integer | `3` | Maximum forgot-password requests per email address before rate limiting. Further requests silently return success without sending email. |
-| `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Accepts seconds or human-readable. |
+| `forgot_password_window_seconds` | integer/string | `900` (`"15m"`) | Rate limit window for forgot-password requests. Also used as the per-IP window for forgot-password rate limiting. Accepts seconds or human-readable. |
 
 ### `[auth.password_policy]`
 
@@ -337,7 +339,7 @@ When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC AP
 | `enabled` | boolean | `false` | Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports. |
 | `http` | boolean | `false` | Mount `POST /mcp` on the admin server for HTTP-based MCP access. |
 | `config_tools` | boolean | `false` | Enable config generation tools (`read_config_file`, `write_config_file`, `list_config_files`). Opt-in because they allow filesystem writes. |
-| `api_key` | string | `""` (empty) | API key for HTTP transport. When set, requests must include `Authorization: Bearer <key>`. Empty = no auth. |
+| `api_key` | string | `""` (empty) | API key for HTTP transport. When set, requests must include `Authorization: Bearer <key>`. Empty = no auth. **Strongly recommended** when `http = true` — without it, all MCP operations (full CRUD on all collections) are unauthenticated. |
 | `include_collections` | string[] | `[]` (empty) | Only expose these collections via MCP. Empty = all collections. |
 | `exclude_collections` | string[] | `[]` (empty) | Hide these collections from MCP. Takes precedence over `include_collections`. |
 

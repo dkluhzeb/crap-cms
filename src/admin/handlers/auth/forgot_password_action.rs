@@ -1,5 +1,8 @@
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Form, State},
+    extract::{ConnectInfo, Form, State},
+    http::HeaderMap,
     response::Html,
 };
 use chrono::Utc;
@@ -7,22 +10,28 @@ use nanoid::nanoid;
 use serde_json::json;
 use tokio::task;
 
-use super::{ForgotPasswordForm, get_auth_collections, render_forgot_success};
+use super::{ForgotPasswordForm, client_ip, get_auth_collections, render_forgot_success};
 use crate::{admin::AdminState, core::email, db::query};
 
 /// POST /admin/forgot-password — look up user, generate token, send email.
 /// Always shows success (don't leak whether email exists).
 pub async fn forgot_password_action(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Form(form): Form<ForgotPasswordForm>,
 ) -> Html<String> {
     let auth_collections = get_auth_collections(&state);
+    let ip = client_ip(&headers, &addr);
 
-    // Rate limit: prevent email flooding (always count, always return success)
-    if state.forgot_password_limiter.is_blocked(&form.email) {
+    // Rate limit: prevent email/IP flooding (always count, always return success)
+    if state.forgot_password_limiter.is_blocked(&form.email)
+        || state.ip_forgot_password_limiter.is_blocked(&ip)
+    {
         return render_forgot_success(&state, &auth_collections);
     }
     state.forgot_password_limiter.record_failure(&form.email);
+    state.ip_forgot_password_limiter.record_failure(&ip);
 
     // Try to find user and send reset email in background
     let def = state.registry.get_collection(&form.collection).cloned();

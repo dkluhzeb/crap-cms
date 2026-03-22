@@ -41,7 +41,7 @@ pub use forms::{
     ResetPasswordQuery, VerifyEmailQuery,
 };
 pub(super) use helpers::{
-    all_disable_local, get_auth_collections, login_error, render_forgot_success,
+    all_disable_local, client_ip, get_auth_collections, login_error, render_forgot_success,
     show_forgot_password,
 };
 pub(super) use session::{clear_session_cookies, session_cookies};

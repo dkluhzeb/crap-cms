@@ -53,8 +53,16 @@ pub async fn start(
         params.config.auth.max_login_attempts,
         params.config.auth.login_lockout_seconds,
     ));
+    let ip_login_limiter = Arc::new(LoginRateLimiter::new(
+        params.config.auth.max_ip_login_attempts,
+        params.config.auth.login_lockout_seconds,
+    ));
     let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
         params.config.auth.max_forgot_password_attempts,
+        params.config.auth.forgot_password_window_seconds,
+    ));
+    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(
+        params.config.auth.max_ip_login_attempts,
         params.config.auth.forgot_password_window_seconds,
     ));
 
@@ -75,7 +83,9 @@ pub async fn start(
             .email_renderer(email_renderer)
             .event_bus(params.event_bus)
             .login_limiter(login_limiter)
+            .ip_login_limiter(ip_login_limiter)
             .forgot_password_limiter(forgot_password_limiter)
+            .ip_forgot_password_limiter(ip_forgot_password_limiter)
             .build(),
     );
 

@@ -26,7 +26,7 @@ pub use image_size_builder::ImageSizeBuilder;
 pub use metadata::{
     assemble_sizes_object, delete_upload_files, enqueue_conversions, inject_upload_metadata,
 };
-pub use process::process_upload;
+pub use process::{CleanupGuard, process_upload};
 pub use processed_upload::ProcessedUpload;
 pub use processed_upload_builder::ProcessedUploadBuilder;
 pub use queued_conversion::QueuedConversion;

@@ -5,7 +5,9 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_cached;
-use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
+use crate::db::query::populate::{
+    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+};
 use crate::{
     core::{CollectionDefinition, Document, upload},
     db::query::read::{find_by_id, find_by_ids},
@@ -78,7 +80,9 @@ pub(super) fn populate_nonpoly_has_many(
                         },
                         ctx.cache,
                     )?;
-                    ctx.cache.insert(hm_cache_key, related_doc.clone());
+                    if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                        ctx.cache.insert(hm_cache_key, related_doc.clone());
+                    }
                     populated.push(document_to_json(&related_doc, rel_collection));
                 }
                 None => {
@@ -141,7 +145,9 @@ pub(super) fn populate_nonpoly_has_one(
             },
             ctx.cache,
         )?;
-        ctx.cache.insert(ho_cache_key, related_doc.clone());
+        if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+            ctx.cache.insert(ho_cache_key, related_doc.clone());
+        }
         doc.fields.insert(
             field_name.to_string(),
             document_to_json(&related_doc, rel_collection),

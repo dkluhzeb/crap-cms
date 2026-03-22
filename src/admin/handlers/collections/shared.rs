@@ -22,8 +22,8 @@ use crate::{
         event::{EventOperation, EventTarget},
         field::FieldDefinition,
         upload::{
-            UploadedFile, delete_upload_files, enqueue_conversions, inject_upload_metadata,
-            process_upload,
+            CleanupGuard, UploadedFile, delete_upload_files, enqueue_conversions,
+            inject_upload_metadata, process_upload,
         },
         validate::ValidationError,
     },
@@ -38,15 +38,8 @@ use axum::{
     response::{IntoResponse, Redirect, Response},
 };
 use serde_json::{Map, Value, json};
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::collections::HashMap;
 use tokio::task;
-
-/// Delete a list of files, ignoring errors (best-effort orphan cleanup).
-pub(super) fn cleanup_created_files(files: &[PathBuf]) {
-    for path in files {
-        let _ = fs::remove_file(path);
-    }
-}
 
 /// Render the upload error page (create form with toast).
 pub(super) fn render_upload_error(
@@ -206,7 +199,7 @@ pub(super) async fn do_update(
     // For upload collections, if a new file was uploaded, process it and delete old files
     let mut old_doc_fields: Option<HashMap<String, Value>> = None;
     let mut queued_conversions = Vec::new();
-    let mut created_files: Vec<PathBuf> = Vec::new();
+    let mut upload_guard: Option<CleanupGuard> = None;
 
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
@@ -228,9 +221,9 @@ pub(super) async fn do_update(
         .await;
 
         match upload_result {
-            Ok(Ok(processed)) => {
+            Ok(Ok((processed, guard))) => {
                 queued_conversions = processed.queued_conversions.clone();
-                created_files = processed.created_files.clone();
+                upload_guard = Some(guard);
                 inject_upload_metadata(&mut form_data, &processed);
             }
             Ok(Err(e)) => {
@@ -360,6 +353,10 @@ pub(super) async fn do_update(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            if let Some(mut g) = upload_guard {
+                g.commit();
+            }
+
             // If a new file was uploaded and old files exist, clean up old files
             if let Some(old_fields) = old_doc_fields {
                 delete_upload_files(&state.config_dir, &old_fields);
@@ -446,13 +443,11 @@ pub(super) async fn do_update(
 
                 html_with_toast(state, "collections/edit", &data, toast_msg).into_response()
             } else {
-                cleanup_created_files(&created_files);
                 tracing::error!("Update error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/{}", slug, id))
             }
         }
         Err(e) => {
-            cleanup_created_files(&created_files);
             tracing::error!("Update task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/{}", slug, id))
         }

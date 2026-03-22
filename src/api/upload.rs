@@ -5,7 +5,7 @@
 //! - `PATCH  /api/upload/{slug}/{id}`  — replace file on existing document
 //! - `DELETE /api/upload/{slug}/{id}`  — delete upload document + files
 
-use std::{collections::HashMap, fs, path::PathBuf};
+use std::collections::HashMap;
 
 use axum::{
     Router,
@@ -200,7 +200,7 @@ async fn create_upload(
     let config_dir = state.config_dir.clone();
     let slug_for_upload = slug.clone();
     let global_max = state.config.upload.max_file_size;
-    let processed = match tokio::task::spawn_blocking(move || {
+    let (processed, mut guard) = match tokio::task::spawn_blocking(move || {
         upload::process_upload(
             file,
             &upload_config,
@@ -222,7 +222,6 @@ async fn create_upload(
     };
 
     let queued_conversions = processed.queued_conversions.clone();
-    let created_files = processed.created_files.clone();
 
     inject_upload_metadata(&mut form_data, &processed);
 
@@ -282,6 +281,8 @@ async fn create_upload(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            guard.commit();
+
             // Enqueue deferred image conversions if any
             if !queued_conversions.is_empty()
                 && let Ok(conn) = state.pool.get()
@@ -309,17 +310,11 @@ async fn create_upload(
             let body = json!({ "document": doc });
             json_ok(StatusCode::CREATED, &body)
         }
-        Ok(Err(e)) => {
-            cleanup_files(&created_files);
-            json_error(StatusCode::BAD_REQUEST, &e.to_string())
-        }
-        Err(e) => {
-            cleanup_files(&created_files);
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Task error: {}", e),
-            )
-        }
+        Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Task error: {}", e),
+        ),
     }
 }
 
@@ -413,7 +408,7 @@ async fn update_upload(
 
     // Process upload if a new file was provided — runs on blocking thread
     let mut queued_conversions = Vec::new();
-    let mut created_files: Vec<PathBuf> = Vec::new();
+    let mut upload_guard: Option<upload::CleanupGuard> = None;
 
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
@@ -426,9 +421,9 @@ async fn update_upload(
         })
         .await
         {
-            Ok(Ok(processed)) => {
+            Ok(Ok((processed, guard))) => {
                 queued_conversions = processed.queued_conversions.clone();
-                created_files = processed.created_files.clone();
+                upload_guard = Some(guard);
                 inject_upload_metadata(&mut form_data, &processed);
             }
             Ok(Err(e)) => return json_error(StatusCode::BAD_REQUEST, &e.to_string()),
@@ -496,6 +491,10 @@ async fn update_upload(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            if let Some(mut g) = upload_guard {
+                g.commit();
+            }
+
             // Clean up old files on success
             if let Some(old_fields) = old_doc_fields {
                 upload::delete_upload_files(&state.config_dir, &old_fields);
@@ -528,26 +527,11 @@ async fn update_upload(
 
             json_ok(StatusCode::OK, &body)
         }
-        Ok(Err(e)) => {
-            cleanup_files(&created_files);
-
-            json_error(StatusCode::BAD_REQUEST, &e.to_string())
-        }
-        Err(e) => {
-            cleanup_files(&created_files);
-
-            json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("Task error: {}", e),
-            )
-        }
-    }
-}
-
-/// Delete a list of files, ignoring errors (best-effort orphan cleanup).
-fn cleanup_files(files: &[PathBuf]) {
-    for path in files {
-        let _ = fs::remove_file(path);
+        Ok(Err(e)) => json_error(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("Task error: {}", e),
+        ),
     }
 }
 

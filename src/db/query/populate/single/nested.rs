@@ -11,7 +11,8 @@ use crate::core::{
     upload,
 };
 use crate::db::query::populate::{
-    PopulateContext, PopulateCtx, PopulateOpts, document_to_json, parse_poly_ref,
+    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+    parse_poly_ref,
 };
 use crate::db::query::read::find_by_id;
 
@@ -253,7 +254,9 @@ fn populate_has_one_in_map(
             },
             pctx.cache,
         )?;
-        pctx.cache.insert(cache_key, related_doc.clone());
+        if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+            pctx.cache.insert(cache_key, related_doc.clone());
+        }
         map.insert(
             name.to_string(),
             document_to_json(&related_doc, rel_collection),
@@ -314,7 +317,9 @@ fn populate_has_many_in_map(
                 },
                 pctx.cache,
             )?;
-            pctx.cache.insert(cache_key, related_doc.clone());
+            if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                pctx.cache.insert(cache_key, related_doc.clone());
+            }
             populated.push(document_to_json(&related_doc, rel_collection));
         } else {
             populated.push(Value::String(id.clone()));
@@ -377,7 +382,9 @@ fn populate_poly_has_one_in_map(
             },
             pctx.cache,
         )?;
-        pctx.cache.insert(cache_key, rd.clone());
+        if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+            pctx.cache.insert(cache_key, rd.clone());
+        }
         map.insert(name.to_string(), document_to_json(&rd, &col));
     }
     Ok(())
@@ -448,7 +455,9 @@ fn populate_poly_has_many_in_map(
                 },
                 pctx.cache,
             )?;
-            pctx.cache.insert(cache_key, rd.clone());
+            if pctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                pctx.cache.insert(cache_key, rd.clone());
+            }
             populated.push(document_to_json(&rd, &col));
         } else {
             populated.push(Value::String(item.clone()));

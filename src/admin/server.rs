@@ -100,8 +100,16 @@ pub async fn start(
         config.auth.max_login_attempts,
         config.auth.login_lockout_seconds,
     ));
+    let ip_login_limiter = Arc::new(LoginRateLimiter::new(
+        config.auth.max_ip_login_attempts,
+        config.auth.login_lockout_seconds,
+    ));
     let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
         config.auth.max_forgot_password_attempts,
+        config.auth.forgot_password_window_seconds,
+    ));
+    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(
+        config.auth.max_ip_login_attempts,
         config.auth.forgot_password_window_seconds,
     ));
 
@@ -116,7 +124,9 @@ pub async fn start(
         email_renderer,
         event_bus,
         login_limiter,
+        ip_login_limiter,
         forgot_password_limiter,
+        ip_forgot_password_limiter,
         has_auth,
         translations,
         shutdown: shutdown.clone(),
@@ -168,10 +178,14 @@ async fn serve_h2c(
     loop {
         select! {
             result = listener.accept() => {
-                let (socket, _addr) = result?;
+                let (socket, addr) = result?;
                 let tower_service = app.clone();
                 tokio::spawn(async move {
-                    let hyper_service = hyper::service::service_fn(move |req| {
+                    let hyper_service = hyper::service::service_fn(move |mut req| {
+                        // Insert ConnectInfo so extractors can read the client address
+                        // (axum::serve does this automatically; h2c needs it manually)
+                        req.extensions_mut()
+                            .insert(axum::extract::ConnectInfo(addr));
                         tower_service.clone().call(req)
                     });
                     let io = TokioIo::new(socket);

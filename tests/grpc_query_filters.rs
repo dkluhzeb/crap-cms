@@ -123,8 +123,14 @@ fn setup_service(
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -555,8 +561,14 @@ return M
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -675,8 +687,14 @@ return M
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -776,8 +794,14 @@ return M
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -888,8 +912,14 @@ return M
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );
@@ -993,8 +1023,14 @@ return M
             .login_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(5, 300),
             ))
+            .ip_login_limiter(Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
+                20, 300,
+            )))
             .forgot_password_limiter(std::sync::Arc::new(
                 crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
+            ))
+            .ip_forgot_password_limiter(Arc::new(
+                crap_cms::core::rate_limit::LoginRateLimiter::new(20, 900),
             ))
             .build(),
     );

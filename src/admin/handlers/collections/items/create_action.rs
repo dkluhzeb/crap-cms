@@ -16,9 +16,7 @@ use crate::{
                 forms::{
                     extract_join_data_from_form, parse_multipart_form, transform_select_has_many,
                 },
-                shared::{
-                    cleanup_created_files, collect_upload_hidden_fields, render_upload_error,
-                },
+                shared::{collect_upload_hidden_fields, render_upload_error},
             },
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
@@ -87,7 +85,7 @@ pub async fn create_action(
 
     // Process upload if file present — runs on blocking thread
     let mut queued_conversions = Vec::new();
-    let mut created_files: Vec<std::path::PathBuf> = Vec::new();
+    let mut upload_guard: Option<upload::CleanupGuard> = None;
     if let Some(f) = file
         && let Some(upload_config) = def.upload.clone()
     {
@@ -100,9 +98,9 @@ pub async fn create_action(
         .await;
 
         match upload_result {
-            Ok(Ok(processed)) => {
+            Ok(Ok((processed, guard))) => {
                 queued_conversions = processed.queued_conversions.clone();
-                created_files = processed.created_files.clone();
+                upload_guard = Some(guard);
 
                 upload::inject_upload_metadata(&mut form_data, &processed);
             }
@@ -186,6 +184,10 @@ pub async fn create_action(
 
     match result {
         Ok(Ok((doc, _req_context))) => {
+            if let Some(mut g) = upload_guard {
+                g.commit();
+            }
+
             // Enqueue deferred image conversions if any
             if !queued_conversions.is_empty()
                 && let Ok(conn) = state.pool.get()
@@ -282,13 +284,11 @@ pub async fn create_action(
 
                 html_with_toast(&state, "collections/edit", &data, toast_msg)
             } else {
-                cleanup_created_files(&created_files);
                 tracing::error!("Create error: {}", e);
                 redirect_response(&format!("/admin/collections/{}/create", slug))
             }
         }
         Err(e) => {
-            cleanup_created_files(&created_files);
             tracing::error!("Create task error: {}", e);
             redirect_response(&format!("/admin/collections/{}/create", slug))
         }
