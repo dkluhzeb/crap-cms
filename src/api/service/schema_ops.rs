@@ -26,6 +26,7 @@ use crate::{
 
 use super::{
     ContentService,
+    collection::helpers::strip_denied_proto_fields,
     convert::{
         document_to_proto, field_def_to_proto, json_to_prost_value, prost_struct_to_hashmap,
         prost_struct_to_json_map,
@@ -106,11 +107,7 @@ impl ContentService {
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
             let _ = tx.commit();
-            if let Some(ref mut s) = proto_doc.fields {
-                for name in &denied {
-                    s.fields.remove(name);
-                }
-            }
+            strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok(proto_doc)
         })
@@ -220,11 +217,7 @@ impl ContentService {
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
             let _ = tx.commit();
-            if let Some(ref mut s) = proto_doc.fields {
-                for name in &denied {
-                    s.fields.remove(name);
-                }
-            }
+            strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))
         })

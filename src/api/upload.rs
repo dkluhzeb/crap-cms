@@ -33,13 +33,19 @@ use crate::{
 };
 
 /// Build the upload API router with all routes.
-#[cfg(not(tarpaulin_include))]
 pub fn upload_router(state: AdminState) -> Router<AdminState> {
     Router::new()
         .route("/upload/{slug}", post(create_upload))
         .route("/upload/{slug}/{id}", patch(update_upload))
         .route("/upload/{slug}/{id}", delete(delete_upload))
         .with_state(state)
+}
+
+/// Extract Bearer token string from an Authorization header value.
+///
+/// Returns `Some(token)` for a valid `Bearer <token>` header, `None` otherwise.
+fn extract_bearer_token(auth_header: &str) -> Option<&str> {
+    auth_header.strip_prefix("Bearer ")
 }
 
 /// Extract an authenticated user from the `Authorization: Bearer <jwt>` header.
@@ -63,7 +69,7 @@ fn extract_bearer_user(
         },
         None => return Ok(None),
     };
-    let token = match auth_header.strip_prefix("Bearer ") {
+    let token = match extract_bearer_token(auth_header) {
         Some(t) => t,
         None => return Ok(None),
     };
@@ -83,7 +89,6 @@ fn extract_bearer_user(
 }
 
 /// Return a JSON error response.
-#[cfg(not(tarpaulin_include))]
 fn json_error(status: StatusCode, message: &str) -> Response {
     let body = json!({ "error": message });
     (
@@ -95,7 +100,6 @@ fn json_error(status: StatusCode, message: &str) -> Response {
 }
 
 /// Return a JSON success response with the given status and body.
-#[cfg(not(tarpaulin_include))]
 fn json_ok(status: StatusCode, body: &Value) -> Response {
     (
         status,
@@ -670,5 +674,82 @@ async fn delete_upload(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Task error: {}", e),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use axum::body::to_bytes;
+
+    // ── json_error tests ──────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn json_error_returns_correct_status() {
+        let resp = json_error(StatusCode::BAD_REQUEST, "something broke");
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn json_error_body_contains_message() {
+        let resp = json_error(StatusCode::NOT_FOUND, "not here");
+        let body = to_bytes(resp.into_body(), 1024).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["error"], "not here");
+    }
+
+    #[tokio::test]
+    async fn json_error_content_type() {
+        let resp = json_error(StatusCode::INTERNAL_SERVER_ERROR, "oops");
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/json"
+        );
+    }
+
+    // ── json_ok tests ─────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn json_ok_returns_correct_status() {
+        let body = json!({ "success": true });
+        let resp = json_ok(StatusCode::CREATED, &body);
+        assert_eq!(resp.status(), StatusCode::CREATED);
+    }
+
+    #[tokio::test]
+    async fn json_ok_body_matches() {
+        let body_val = json!({ "document": { "id": "abc" } });
+        let resp = json_ok(StatusCode::OK, &body_val);
+        let body = to_bytes(resp.into_body(), 4096).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["document"]["id"], "abc");
+    }
+
+    // ── extract_bearer_token tests ────────────────────────────────────
+
+    #[test]
+    fn bearer_token_valid() {
+        assert_eq!(extract_bearer_token("Bearer abc123"), Some("abc123"));
+    }
+
+    #[test]
+    fn bearer_token_wrong_prefix() {
+        assert_eq!(extract_bearer_token("Basic abc123"), None);
+    }
+
+    #[test]
+    fn bearer_token_empty_value() {
+        assert_eq!(extract_bearer_token("Bearer "), Some(""));
+    }
+
+    #[test]
+    fn bearer_token_lowercase() {
+        assert_eq!(extract_bearer_token("bearer abc123"), None);
+    }
+
+    #[test]
+    fn bearer_token_no_space() {
+        assert_eq!(extract_bearer_token("Bearerabc123"), None);
     }
 }

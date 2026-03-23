@@ -865,3 +865,6 @@ fn should_include_with_exclude_list() {
     assert!(should_include("posts", &config));
     assert!(!should_include("users", &config));
 }
+
+// NOTE: resolve_sort and build_find_result tests have been moved to
+// db::query::pagination_result::tests (unified PaginationResult builder).

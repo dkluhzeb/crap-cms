@@ -13,6 +13,7 @@ use crate::{
         auth::{AuthUser, Claims},
         collection::{CollectionDefinition, GlobalDefinition},
     },
+    db::query::PaginationResult,
 };
 
 use crate::admin::context::{Breadcrumb, PageType, build_collection_context, build_global_context};
@@ -185,9 +186,9 @@ impl ContextBuilder {
         self
     }
 
-    /// Set the items list (for collection list pages).
-    pub fn items(mut self, items: Vec<Value>) -> Self {
-        self.data.insert("items".into(), Value::Array(items));
+    /// Set the document list (for collection list pages).
+    pub fn docs(mut self, docs: Vec<Value>) -> Self {
+        self.data.insert("docs".into(), Value::Array(docs));
         self
     }
 
@@ -197,41 +198,31 @@ impl ContextBuilder {
         self
     }
 
-    /// Set pagination data.
-    pub fn pagination(
+    /// Set pagination data from a unified [`PaginationResult`].
+    ///
+    /// Always sets the `pagination` object so templates can access metadata
+    /// (total, per_page, page) even on single-page results. Navigation links
+    /// are only meaningful when `has_prev` or `has_next` is true.
+    pub fn with_pagination(
         mut self,
-        page: i64,
-        per_page: i64,
-        total: i64,
+        pr: &PaginationResult,
         prev_url: String,
         next_url: String,
     ) -> Self {
-        let total_pages = ((total as f64) / (per_page as f64)).ceil() as i64;
-        self.data.insert(
-            "pagination".into(),
-            json!({
-                "page": page,
-                "per_page": per_page,
-                "total": total,
-                "total_pages": total_pages,
-                "has_prev": page > 1,
-                "has_next": page < total_pages,
-                "prev_url": prev_url,
-                "next_url": next_url,
-            }),
-        );
-        // Backward compat: top-level pagination vars for templates
-        self.data
-            .insert("has_pagination".into(), json!(total_pages > 1));
-        self.data.insert("page".into(), json!(page));
-        self.data.insert("per_page".into(), json!(per_page));
-        self.data.insert("total".into(), json!(total));
-        self.data.insert("total_pages".into(), json!(total_pages));
-        self.data.insert("has_prev".into(), json!(page > 1));
-        self.data
-            .insert("has_next".into(), json!(page < total_pages));
-        self.data.insert("prev_url".into(), Value::String(prev_url));
-        self.data.insert("next_url".into(), Value::String(next_url));
+        let mut pg = json!({
+            "per_page": pr.limit,
+            "total": pr.total_docs,
+            "has_prev": pr.has_prev_page,
+            "has_next": pr.has_next_page,
+            "prev_url": prev_url,
+            "next_url": next_url,
+        });
+        if let Some(page) = pr.page {
+            pg["page"] = json!(page);
+            pg["total_pages"] = json!(pr.total_pages.unwrap_or(0));
+        }
+
+        self.data.insert("pagination".into(), pg);
         self
     }
 
@@ -348,6 +339,7 @@ mod tests {
             document::DocumentBuilder,
             field::{FieldAdmin, FieldDefinition, FieldType, LocalizedString},
         },
+        db::query::PaginationResult,
     };
 
     // --- ContextBuilder: editor_locale ---
@@ -438,10 +430,10 @@ mod tests {
     fn context_builder_items_sets_array() {
         let data = Map::new();
         let builder = ContextBuilder { data };
-        let builder = builder.items(vec![json!({"id": "1"}), json!({"id": "2"})]);
+        let builder = builder.docs(vec![json!({"id": "1"}), json!({"id": "2"})]);
         let result = builder.build();
-        let items = result["items"].as_array().unwrap();
-        assert_eq!(items.len(), 2);
+        let docs = result["docs"].as_array().unwrap();
+        assert_eq!(docs.len(), 2);
     }
 
     // --- ContextBuilder: fields ---
@@ -468,32 +460,102 @@ mod tests {
         assert_eq!(result["document"]["id"], "abc123");
     }
 
-    // --- ContextBuilder: pagination ---
+    // --- ContextBuilder: with_pagination (page mode) ---
 
     #[test]
-    fn context_builder_pagination_computes_total_pages() {
+    fn context_builder_page_pagination_computes_total_pages() {
+        let docs: Vec<crate::core::Document> = Vec::new();
+        let pr = PaginationResult::builder(&docs, 25, 10).page(2, 10);
         let data = Map::new();
         let builder = ContextBuilder { data };
-        let builder = builder.pagination(2, 10, 25, "/prev".to_string(), "/next".to_string());
-        let result = builder.build();
+        let result = builder
+            .with_pagination(&pr, "/prev".to_string(), "/next".to_string())
+            .build();
+
         assert_eq!(result["pagination"]["page"], 2);
         assert_eq!(result["pagination"]["per_page"], 10);
         assert_eq!(result["pagination"]["total"], 25);
         assert_eq!(result["pagination"]["total_pages"], 3);
         assert_eq!(result["pagination"]["has_prev"], true);
         assert_eq!(result["pagination"]["has_next"], true);
-        assert_eq!(result["has_pagination"], true);
+        assert_eq!(result["pagination"]["prev_url"], "/prev");
+        assert_eq!(result["pagination"]["next_url"], "/next");
     }
 
     #[test]
-    fn context_builder_pagination_first_page_no_prev() {
+    fn context_builder_page_pagination_single_page() {
+        let docs: Vec<crate::core::Document> = Vec::new();
+        let pr = PaginationResult::builder(&docs, 5, 10).page(1, 0);
         let data = Map::new();
         let builder = ContextBuilder { data };
-        let builder = builder.pagination(1, 10, 5, "/prev".to_string(), "/next".to_string());
-        let result = builder.build();
+        let result = builder
+            .with_pagination(&pr, String::new(), String::new())
+            .build();
+        assert_eq!(result["pagination"]["page"], 1);
+        assert_eq!(result["pagination"]["total_pages"], 1);
+        assert_eq!(result["pagination"]["total"], 5);
+        assert_eq!(result["pagination"]["per_page"], 10);
         assert_eq!(result["pagination"]["has_prev"], false);
         assert_eq!(result["pagination"]["has_next"], false);
-        assert_eq!(result["has_pagination"], false);
+    }
+
+    #[test]
+    fn context_builder_page_pagination_does_not_stomp_page_metadata() {
+        let docs: Vec<crate::core::Document> = Vec::new();
+        let pr = PaginationResult::builder(&docs, 25, 10).page(2, 10);
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let result = builder
+            .page(PageType::CollectionItems, "Posts")
+            .with_pagination(&pr, String::new(), String::new())
+            .build();
+
+        // page metadata preserved (not stomped by pagination page number)
+        assert_eq!(result["page"]["title"], "Posts");
+        assert_eq!(result["page"]["type"], "collection_items");
+        // pagination page number lives under pagination.*
+        assert_eq!(result["pagination"]["page"], 2);
+    }
+
+    // --- ContextBuilder: with_pagination (cursor mode) ---
+
+    #[test]
+    fn context_builder_cursor_pagination_has_both() {
+        let docs: Vec<crate::core::Document> = (0..20)
+            .map(|i| crate::core::Document::new(format!("d{}", i)))
+            .collect();
+        let pr = PaginationResult::builder(&docs, 100, 20).cursor(None, false, true, true);
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let result = builder
+            .with_pagination(&pr, "/prev-cursor".to_string(), "/next-cursor".to_string())
+            .build();
+
+        assert_eq!(result["pagination"]["per_page"], 20);
+        assert_eq!(result["pagination"]["total"], 100);
+        assert_eq!(result["pagination"]["has_prev"], true);
+        assert_eq!(result["pagination"]["has_next"], true);
+        assert_eq!(result["pagination"]["prev_url"], "/prev-cursor");
+        assert_eq!(result["pagination"]["next_url"], "/next-cursor");
+
+        // Cursor mode: no page/total_pages
+        assert!(result["pagination"].get("page").is_none());
+        assert!(result["pagination"].get("total_pages").is_none());
+    }
+
+    #[test]
+    fn context_builder_cursor_pagination_no_navigation() {
+        let docs: Vec<crate::core::Document> = Vec::new();
+        let pr = PaginationResult::builder(&docs, 5, 20).cursor(None, false, false, false);
+        let data = Map::new();
+        let builder = ContextBuilder { data };
+        let result = builder
+            .with_pagination(&pr, String::new(), String::new())
+            .build();
+        assert_eq!(result["pagination"]["total"], 5);
+        assert_eq!(result["pagination"]["per_page"], 20);
+        assert_eq!(result["pagination"]["has_prev"], false);
+        assert_eq!(result["pagination"]["has_next"], false);
     }
 
     // --- ContextBuilder: page ---

@@ -1,17 +1,19 @@
-{{#if has_pagination}}
+{{#if pagination}}
 <nav class="pagination">
-  {{#if has_prev}}
-  <a class="button button--ghost" href="{{prev_url}}"
-    hx-get="{{prev_url}}" hx-target="body" hx-push-url="true">
+  {{#if pagination.has_prev}}
+  <a class="button button--ghost" href="{{pagination.prev_url}}"
+    hx-get="{{pagination.prev_url}}" hx-target="body" hx-push-url="true">
     {{t "previous"}}
   </a>
   {{/if}}
 
-  <span class="pagination__info">{{t "page_of" page=page total=total_pages}}</span>
+  {{#if pagination.page}}
+  <span class="pagination__info">{{t "page_of" page=pagination.page total=pagination.total_pages}}</span>
+  {{/if}}
 
-  {{#if has_next}}
-  <a class="button button--ghost" href="{{next_url}}"
-    hx-get="{{next_url}}" hx-target="body" hx-push-url="true">
+  {{#if pagination.has_next}}
+  <a class="button button--ghost" href="{{pagination.next_url}}"
+    hx-get="{{pagination.next_url}}" hx-target="body" hx-push-url="true">
     {{t "next"}}
   </a>
   {{/if}}

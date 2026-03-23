@@ -473,6 +473,129 @@ async fn grpc_unpublish_via_update() {
     );
 }
 
+// ── Pagination ────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn grpc_find_pagination_page_based() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    // Create 5 posts
+    for i in 0..5 {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", &format!("Post {}", i))])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    // Page 1 of 3 (limit=2)
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            limit: Some(2),
+            page: Some(1),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let pg = resp.pagination.as_ref().unwrap();
+    assert_eq!(pg.total_docs, 5);
+    assert_eq!(pg.limit, 2);
+    assert_eq!(pg.total_pages, Some(3));
+    assert_eq!(pg.page, Some(1));
+    assert_eq!(pg.page_start, Some(1));
+    assert!(!pg.has_prev_page);
+    assert!(pg.has_next_page);
+    assert_eq!(pg.prev_page, None);
+    assert_eq!(pg.next_page, Some(2));
+    assert_eq!(resp.documents.len(), 2);
+
+    // Page 2 of 3
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            limit: Some(2),
+            page: Some(2),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let pg = resp.pagination.as_ref().unwrap();
+    assert_eq!(pg.page, Some(2));
+    assert_eq!(pg.page_start, Some(3));
+    assert!(pg.has_prev_page);
+    assert!(pg.has_next_page);
+    assert_eq!(pg.prev_page, Some(1));
+    assert_eq!(pg.next_page, Some(3));
+    assert_eq!(resp.documents.len(), 2);
+
+    // Page 3 of 3 (last page, only 1 doc)
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            limit: Some(2),
+            page: Some(3),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let pg = resp.pagination.as_ref().unwrap();
+    assert_eq!(pg.page, Some(3));
+    assert!(pg.has_prev_page);
+    assert!(!pg.has_next_page);
+    assert_eq!(pg.prev_page, Some(2));
+    assert_eq!(pg.next_page, None);
+    assert_eq!(resp.documents.len(), 1);
+}
+
+#[tokio::test]
+async fn grpc_find_pagination_single_page() {
+    let ts = setup_service(vec![make_posts_def()], vec![]);
+
+    for i in 0..3 {
+        ts.service
+            .create(Request::new(content::CreateRequest {
+                collection: "posts".to_string(),
+                data: Some(make_struct(&[("title", &format!("Post {}", i))])),
+                locale: None,
+                draft: None,
+            }))
+            .await
+            .unwrap();
+    }
+
+    let resp = ts
+        .service
+        .find(Request::new(content::FindRequest {
+            collection: "posts".to_string(),
+            limit: Some(10),
+            page: Some(1),
+            ..Default::default()
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    let pg = resp.pagination.as_ref().unwrap();
+    assert_eq!(pg.total_docs, 3);
+    assert_eq!(pg.total_pages, Some(1));
+    assert_eq!(pg.page, Some(1));
+    assert!(!pg.has_prev_page);
+    assert!(!pg.has_next_page);
+    assert_eq!(pg.prev_page, None);
+    assert_eq!(pg.next_page, None);
+    assert_eq!(resp.documents.len(), 3);
+}
+
 // ── Validation Error Messages ───────────────────────────────────────────
 
 #[tokio::test]

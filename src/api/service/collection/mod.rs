@@ -1,6 +1,5 @@
 mod bulk;
 mod filter_builder;
-mod helpers;
-mod pagination_builder;
+pub(in crate::api::service) mod helpers;
 mod read;
 mod write;

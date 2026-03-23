@@ -258,8 +258,10 @@ pub fn collection_input_schema(def: &CollectionDefinition, op: CrudOp) -> Value 
                         "description": "Filter conditions. Keys are field names, values are filter objects (e.g. {\"equals\": \"value\"}, {\"contains\": \"text\"}, {\"greater_than\": 5})"
                     },
                     "order_by": { "type": "string", "description": "Sort field (prefix with - for descending)" },
-                    "limit": { "type": "integer" },
-                    "offset": { "type": "integer" },
+                    "limit": { "type": "integer", "description": "Max results per page" },
+                    "page": { "type": "integer", "description": "Page number (1-indexed, page mode only)" },
+                    "after_cursor": { "type": "string", "description": "Forward cursor (cursor mode only, mutually exclusive with page and before_cursor)" },
+                    "before_cursor": { "type": "string", "description": "Backward cursor (cursor mode only, mutually exclusive with page and after_cursor)" },
                     "depth": { "type": "integer", "description": "Relationship population depth" },
                     "search": { "type": "string", "description": "Full-text search query" }
                 }
@@ -414,6 +416,9 @@ mod tests {
         let s = collection_input_schema(&def, CrudOp::Find);
         assert!(s["properties"]["where"].is_object());
         assert!(s["properties"]["limit"].is_object());
+        assert!(s["properties"]["page"].is_object());
+        assert!(s["properties"]["after_cursor"].is_object());
+        assert!(s["properties"]["before_cursor"].is_object());
     }
 
     #[test]

@@ -17,7 +17,8 @@ use crate::{
 };
 
 use super::{
-    filter_builder::FilterBuilder, helpers::map_db_error, pagination_builder::PaginationBuilder,
+    filter_builder::FilterBuilder,
+    helpers::{map_db_error, strip_denied_proto_fields},
 };
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
@@ -40,58 +41,20 @@ impl ContentService {
             Some(req.select.clone())
         };
 
-        // Clamp limit to configured bounds
-        let clamped_limit =
-            query::apply_pagination_limits(req.limit, self.default_limit, self.max_limit);
-
-        // Convert page → internal offset (default page=1)
-        let page = req.page.unwrap_or(1).max(1);
-        let internal_offset = (page - 1) * clamped_limit;
-
-        // Cursor decoding and validation
-        let (after_cursor, before_cursor) = if self.cursor_enabled {
-            let ac = if let Some(ref s) = req.after_cursor {
-                if req.page.is_some() {
-                    return Err(Status::invalid_argument(
-                        "Cannot use both after_cursor and page — they are mutually exclusive",
-                    ));
-                }
-                Some(
-                    query::cursor::CursorData::decode(s)
-                        .map_err(|e| Status::invalid_argument(format!("Invalid cursor: {}", e)))?,
-                )
-            } else {
-                None
-            };
-            let bc = if let Some(ref s) = req.before_cursor {
-                if req.page.is_some() {
-                    return Err(Status::invalid_argument(
-                        "Cannot use both before_cursor and page — they are mutually exclusive",
-                    ));
-                }
-                if ac.is_some() {
-                    return Err(Status::invalid_argument(
-                        "Cannot use both after_cursor and before_cursor — they are mutually exclusive",
-                    ));
-                }
-                Some(
-                    query::cursor::CursorData::decode(s)
-                        .map_err(|e| Status::invalid_argument(format!("Invalid cursor: {}", e)))?,
-                )
-            } else {
-                None
-            };
-            (ac, bc)
-        } else {
-            (None, None)
-        };
-
-        let has_cursor = after_cursor.is_some() || before_cursor.is_some();
+        let pagination = self
+            .pagination_ctx
+            .validate(
+                req.limit,
+                req.page,
+                req.after_cursor.as_deref(),
+                req.before_cursor.as_deref(),
+            )
+            .map_err(Status::invalid_argument)?;
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
         let depth = req.depth.unwrap_or(0).max(0).min(self.max_depth);
-        let cursor_enabled = self.cursor_enabled;
+        let cursor_enabled = self.pagination_ctx.cursor_enabled;
         let has_timestamps = def.timestamps;
 
         let pool = self.pool.clone();
@@ -110,173 +73,172 @@ impl ContentService {
         let order_by = req.order_by.clone();
         let search = req.search.clone();
         let def_owned = def;
-        let (proto_docs, pagination) = tokio::task::spawn_blocking(move || -> Result<_, Status> {
-            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
+        let (proto_docs, pagination_info) =
+            tokio::task::spawn_blocking(move || -> Result<_, Status> {
+                let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
 
-            // Auth + access (all on blocking thread)
-            let auth_user =
-                ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
-            let access_result = ContentService::check_access_blocking(
-                def_owned.access.read.as_deref(),
-                &auth_user,
-                None,
-                None,
-                &runner,
-                &mut conn,
-            )?;
+                // Auth + access (all on blocking thread)
+                let auth_user =
+                    ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                let access_result = ContentService::check_access_blocking(
+                    def_owned.access.read.as_deref(),
+                    &auth_user,
+                    None,
+                    None,
+                    &runner,
+                    &mut conn,
+                )?;
 
-            if matches!(access_result, AccessResult::Denied) {
-                return Err(Status::permission_denied("Read access denied"));
-            }
+                if matches!(access_result, AccessResult::Denied) {
+                    return Err(Status::permission_denied("Read access denied"));
+                }
 
-            let filters = FilterBuilder::new(&def_owned.fields, &access_result)
-                .where_json(req_where.as_deref())
-                .draft_filter(has_drafts, !draft.unwrap_or(false))
-                .build()?;
+                let filters = FilterBuilder::new(&def_owned.fields, &access_result)
+                    .where_json(req_where.as_deref())
+                    .draft_filter(has_drafts, !draft.unwrap_or(false))
+                    .build()?;
 
-            let mut find_query = FindQuery::new();
-            find_query.filters = filters.clone();
-            find_query.order_by = order_by.clone();
-            find_query.limit = Some(clamped_limit);
-            find_query.offset = if has_cursor {
-                None
-            } else {
-                Some(internal_offset)
-            };
-            find_query.select = select.clone();
-            find_query.after_cursor = after_cursor.clone();
-            find_query.before_cursor = before_cursor.clone();
-            find_query.search = search;
+                let mut find_query = FindQuery::new();
+                find_query.filters = filters.clone();
+                find_query.order_by = order_by.clone();
+                find_query.limit = Some(pagination.limit);
+                find_query.offset = if pagination.has_cursor() {
+                    None
+                } else {
+                    Some(pagination.offset)
+                };
+                find_query.select = select.clone();
+                find_query.after_cursor = pagination.after_cursor.clone();
+                find_query.before_cursor = pagination.before_cursor.clone();
+                find_query.search = search;
 
-            query::validate_query_fields(&def_owned, &find_query, locale_ctx.as_ref())
-                .map_err(|e| Status::invalid_argument(e.to_string()))?;
+                query::validate_query_fields(&def_owned, &find_query, locale_ctx.as_ref())
+                    .map_err(|e| Status::invalid_argument(e.to_string()))?;
 
-            runner
-                .fire_before_read(&hooks, &collection, "find", HashMap::new())
-                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+                runner
+                    .fire_before_read(&hooks, &collection, "find", HashMap::new())
+                    .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
 
-            let mut docs = query::find(
-                &conn,
-                &collection,
-                &def_owned,
-                &find_query,
-                locale_ctx.as_ref(),
-            )
-            .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-
-            let total = query::count_with_search(
-                &conn,
-                &collection,
-                &def_owned,
-                &filters,
-                locale_ctx.as_ref(),
-                find_query.search.as_deref(),
-            )
-            .map_err(|e| map_db_error(e, "Count error", &db_kind))?;
-
-            // Hydrate join table data (has-many relationships and arrays)
-            let select_slice = select.as_deref();
-            for doc in &mut docs {
-                query::hydrate_document(
+                let mut docs = query::find(
                     &conn,
                     &collection,
-                    &def_owned.fields,
-                    doc,
-                    select_slice,
+                    &def_owned,
+                    &find_query,
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-            }
 
-            // Assemble sizes for upload collections
-            if let Some(ref upload_config) = def_owned.upload
-                && upload_config.enabled
-            {
-                for doc in &mut docs {
-                    upload::assemble_sizes_object(doc, upload_config);
-                }
-            }
-
-            let ar_ctx = AfterReadCtx {
-                hooks: &hooks,
-                fields: &fields,
-                collection: &collection,
-                operation: "find",
-                user: None,
-                ui_locale: None,
-            };
-            let mut docs = runner.apply_after_read_many(&ar_ctx, docs);
-
-            // Populate relationships if depth > 0 (batch for efficiency)
-            if depth > 0 {
-                let local_cache;
-                let cache_ref = match &pop_cache {
-                    Some(shared) => &**shared,
-                    None => {
-                        local_cache = query::PopulateCache::new();
-                        &local_cache
-                    }
-                };
-                let pop_ctx =
-                    query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
-                let mut pop_opts = query::PopulateOpts::new(depth);
-                if let Some(s) = select_slice {
-                    pop_opts = pop_opts.select(s);
-                }
-                if let Some(ref lc) = locale_ctx {
-                    pop_opts = pop_opts.locale_ctx(lc);
-                }
-                query::populate_relationships_batch_cached(
-                    &pop_ctx, &mut docs, &pop_opts, cache_ref,
+                let total = query::count_with_search(
+                    &conn,
+                    &collection,
+                    &def_owned,
+                    &filters,
+                    locale_ctx.as_ref(),
+                    find_query.search.as_deref(),
                 )
-                .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
-            }
+                .map_err(|e| map_db_error(e, "Count error", &db_kind))?;
 
-            // Proto conversion
-            let mut proto_docs: Vec<_> = docs
-                .iter()
-                .map(|doc| document_to_proto(doc, &collection))
-                .collect();
+                // Hydrate join table data (has-many relationships and arrays)
+                let select_slice = select.as_deref();
+                for doc in &mut docs {
+                    query::hydrate_document(
+                        &conn,
+                        &collection,
+                        &def_owned.fields,
+                        doc,
+                        select_slice,
+                        locale_ctx.as_ref(),
+                    )
+                    .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+                }
 
-            // Strip field-level read-denied fields (using existing conn)
-            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
-            let tx = conn.transaction().map_err(|e| {
-                tracing::error!("Field access check tx error: {}", e);
-                Status::internal("Internal error")
-            })?;
-            let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
-            let _ = tx.commit();
-            for doc in &mut proto_docs {
-                if let Some(ref mut s) = doc.fields {
-                    for name in &denied {
-                        s.fields.remove(name);
+                // Assemble sizes for upload collections
+                if let Some(ref upload_config) = def_owned.upload
+                    && upload_config.enabled
+                {
+                    for doc in &mut docs {
+                        upload::assemble_sizes_object(doc, upload_config);
                     }
                 }
-            }
 
-            // Build pagination
-            let pagination = if cursor_enabled {
-                PaginationBuilder::new(&docs, total, clamped_limit)
-                    .cursor_mode(order_by.as_deref(), has_timestamps)
-                    .cursor_state(before_cursor.is_some(), has_cursor)
-                    .build()
-            } else {
-                PaginationBuilder::new(&docs, total, clamped_limit)
-                    .page(page, internal_offset)
-                    .build()
-            };
+                let ar_ctx = AfterReadCtx {
+                    hooks: &hooks,
+                    fields: &fields,
+                    collection: &collection,
+                    operation: "find",
+                    user: None,
+                    ui_locale: None,
+                };
+                let mut docs = runner.apply_after_read_many(&ar_ctx, docs);
 
-            Ok((proto_docs, pagination))
-        })
-        .await
-        .map_err(|e| {
-            tracing::error!("Task error: {}", e);
-            Status::internal("Internal error")
-        })??;
+                // Populate relationships if depth > 0 (batch for efficiency)
+                if depth > 0 {
+                    let local_cache;
+                    let cache_ref = match &pop_cache {
+                        Some(shared) => &**shared,
+                        None => {
+                            local_cache = query::PopulateCache::new();
+                            &local_cache
+                        }
+                    };
+                    let pop_ctx =
+                        query::PopulateContext::new(&conn, &registry, &collection, &def_owned);
+                    let mut pop_opts = query::PopulateOpts::new(depth);
+                    if let Some(s) = select_slice {
+                        pop_opts = pop_opts.select(s);
+                    }
+                    if let Some(ref lc) = locale_ctx {
+                        pop_opts = pop_opts.locale_ctx(lc);
+                    }
+                    query::populate_relationships_batch_cached(
+                        &pop_ctx, &mut docs, &pop_opts, cache_ref,
+                    )
+                    .map_err(|e| map_db_error(e, "Query error", &db_kind))?;
+                }
+
+                // Proto conversion
+                let mut proto_docs: Vec<_> = docs
+                    .iter()
+                    .map(|doc| document_to_proto(doc, &collection))
+                    .collect();
+
+                // Strip field-level read-denied fields (using existing conn)
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                let tx = conn.transaction().map_err(|e| {
+                    tracing::error!("Field access check tx error: {}", e);
+                    Status::internal("Internal error")
+                })?;
+                let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
+                let _ = tx.commit();
+                for doc in &mut proto_docs {
+                    strip_denied_proto_fields(doc, &denied);
+                }
+
+                // Build pagination
+                let pr = if cursor_enabled {
+                    query::PaginationResult::builder(&docs, total, pagination.limit).cursor(
+                        order_by.as_deref(),
+                        has_timestamps,
+                        pagination.before_cursor.is_some(),
+                        pagination.has_cursor(),
+                    )
+                } else {
+                    query::PaginationResult::builder(&docs, total, pagination.limit)
+                        .page(pagination.page, pagination.offset)
+                };
+                let pagination_info = pagination_result_to_proto(&pr);
+
+                Ok((proto_docs, pagination_info))
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("Task error: {}", e);
+                Status::internal("Internal error")
+            })??;
 
         Ok(Response::new(content::FindResponse {
             documents: proto_docs,
-            pagination: Some(pagination),
+            pagination: Some(pagination_info),
         }))
     }
 
@@ -430,11 +392,7 @@ impl ContentService {
                     })?;
                     let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
                     let _ = tx.commit();
-                    if let Some(ref mut s) = proto_doc.fields {
-                        for name in &denied {
-                            s.fields.remove(name);
-                        }
-                    }
+                    strip_denied_proto_fields(&mut proto_doc, &denied);
 
                     Ok(Some(proto_doc))
                 }
@@ -520,5 +478,22 @@ impl ContentService {
         })??;
 
         Ok(Response::new(content::CountResponse { count }))
+    }
+}
+
+/// Convert a [`query::PaginationResult`] to a gRPC `PaginationInfo` message.
+fn pagination_result_to_proto(pr: &query::PaginationResult) -> content::PaginationInfo {
+    content::PaginationInfo {
+        total_docs: pr.total_docs,
+        limit: pr.limit,
+        total_pages: pr.total_pages,
+        page: pr.page,
+        page_start: pr.page_start,
+        has_prev_page: pr.has_prev_page,
+        has_next_page: pr.has_next_page,
+        prev_page: pr.prev_page,
+        next_page: pr.next_page,
+        start_cursor: pr.start_cursor.clone(),
+        end_cursor: pr.end_cursor.clone(),
     }
 }

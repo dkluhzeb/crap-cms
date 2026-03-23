@@ -18,7 +18,7 @@ use crate::{
         rate_limit::LoginRateLimiter,
     },
     db::{
-        AccessResult, BoxedConnection, DbPool,
+        AccessResult, BoxedConnection, DbConnection, DbPool,
         query::{self},
     },
     hooks::HookRunner,
@@ -49,59 +49,13 @@ pub struct ContentService {
     /// Shared cross-request cache for populated relationship documents.
     /// None when disabled (default). Cleared on any write operation.
     pub(in crate::api::service) populate_cache: Option<Arc<query::PopulateCache>>,
-    pub(in crate::api::service) default_limit: i64,
-    pub(in crate::api::service) max_limit: i64,
-    pub(in crate::api::service) cursor_enabled: bool,
+    pub(in crate::api::service) pagination_ctx: query::PaginationCtx,
     /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
     pub(in crate::api::service) db_kind: String,
 }
 
-/// Untestable as unit: helper methods require full pool + registry + hook_runner.
-/// Covered by integration tests in tests/ directory.
-#[cfg(not(tarpaulin_include))]
+/// Pure helper methods — testable without I/O dependencies.
 impl ContentService {
-    /// Create a new gRPC content service with all dependencies.
-    pub fn new(deps: ContentServiceDeps) -> Self {
-        let populate_cache = if deps.config.depth.populate_cache {
-            Some(Arc::new(query::PopulateCache::new()))
-        } else {
-            None
-        };
-        let default_depth = deps.config.depth.default_depth;
-        let max_depth = deps.config.depth.max_depth;
-        let default_limit = deps.config.pagination.default_limit;
-        let max_limit = deps.config.pagination.max_limit;
-        let cursor_enabled = deps.config.pagination.is_cursor();
-        let reset_token_expiry = deps.config.auth.reset_token_expiry;
-        let db_kind = deps.pool.kind().to_string();
-
-        Self {
-            pool: deps.pool,
-            registry: deps.registry,
-            hook_runner: deps.hook_runner,
-            jwt_secret: deps.jwt_secret,
-            default_depth,
-            max_depth,
-            email_config: deps.config.email,
-            email_renderer: deps.email_renderer,
-            server_config: deps.config.server,
-            event_bus: deps.event_bus,
-            locale_config: deps.config.locale,
-            config_dir: deps.config_dir,
-            login_limiter: deps.login_limiter,
-            ip_login_limiter: deps.ip_login_limiter,
-            reset_token_expiry,
-            password_policy: deps.config.auth.password_policy,
-            forgot_password_limiter: deps.forgot_password_limiter,
-            ip_forgot_password_limiter: deps.ip_forgot_password_limiter,
-            populate_cache,
-            default_limit,
-            max_limit,
-            cursor_enabled,
-            db_kind,
-        }
-    }
-
     /// Get a clone of the shared populate cache handle (for periodic clearing).
     pub fn populate_cache_handle(&self) -> Option<Arc<query::PopulateCache>> {
         self.populate_cache.clone()
@@ -136,6 +90,62 @@ impl ContentService {
             .map(|s| s.to_string())
     }
 
+    /// Extract an EventUser from the gRPC AuthUser (for SSE event attribution).
+    pub(in crate::api::service) fn event_user_from(
+        auth_user: &Option<AuthUser>,
+    ) -> Option<EventUser> {
+        auth_user
+            .as_ref()
+            .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
+    }
+}
+
+/// I/O-bound methods: constructor, DB-backed auth resolution, access checks.
+/// Covered by integration tests in tests/ directory.
+#[cfg(not(tarpaulin_include))]
+impl ContentService {
+    /// Create a new gRPC content service with all dependencies.
+    pub fn new(deps: ContentServiceDeps) -> Self {
+        let populate_cache = if deps.config.depth.populate_cache {
+            Some(Arc::new(query::PopulateCache::new()))
+        } else {
+            None
+        };
+        let default_depth = deps.config.depth.default_depth;
+        let max_depth = deps.config.depth.max_depth;
+        let pagination_ctx = query::PaginationCtx::new(
+            deps.config.pagination.default_limit,
+            deps.config.pagination.max_limit,
+            deps.config.pagination.is_cursor(),
+        );
+        let reset_token_expiry = deps.config.auth.reset_token_expiry;
+        let db_kind = deps.pool.kind().to_string();
+
+        Self {
+            pool: deps.pool,
+            registry: deps.registry,
+            hook_runner: deps.hook_runner,
+            jwt_secret: deps.jwt_secret,
+            default_depth,
+            max_depth,
+            email_config: deps.config.email,
+            email_renderer: deps.email_renderer,
+            server_config: deps.config.server,
+            event_bus: deps.event_bus,
+            locale_config: deps.config.locale,
+            config_dir: deps.config_dir,
+            login_limiter: deps.login_limiter,
+            ip_login_limiter: deps.ip_login_limiter,
+            reset_token_expiry,
+            password_policy: deps.config.auth.password_policy,
+            forgot_password_limiter: deps.forgot_password_limiter,
+            ip_forgot_password_limiter: deps.ip_forgot_password_limiter,
+            populate_cache,
+            pagination_ctx,
+            db_kind,
+        }
+    }
+
     /// Resolve an auth user from a token using an existing connection.
     ///
     /// Returns `Ok(None)` when no token is present (anonymous), `Ok(Some(user))`
@@ -146,7 +156,7 @@ impl ContentService {
         token: Option<String>,
         jwt_secret: &JwtSecret,
         registry: &Registry,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Result<Option<AuthUser>, Status> {
         let token = match token {
             Some(t) => t,
@@ -192,15 +202,6 @@ impl ContentService {
             Status::internal("Internal error")
         })?;
         Ok(result)
-    }
-
-    /// Extract an EventUser from the gRPC AuthUser (for SSE event attribution).
-    pub(in crate::api::service) fn event_user_from(
-        auth_user: &Option<AuthUser>,
-    ) -> Option<EventUser> {
-        auth_user
-            .as_ref()
-            .map(|au| EventUser::new(au.claims.sub.clone(), au.claims.email.clone()))
     }
 }
 
@@ -378,5 +379,72 @@ impl ContentApi for ContentService {
         request: Request<content::ListJobRunsRequest>,
     ) -> Result<Response<content::ListJobRunsResponse>, Status> {
         self.list_job_runs_impl(request).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::core::{Document, DocumentId, Slug, auth::ClaimsBuilder};
+
+    // ── extract_token tests ───────────────────────────────────────────
+
+    #[test]
+    fn extract_token_valid_bearer() {
+        let mut meta = MetadataMap::new();
+        meta.insert("authorization", "Bearer abc123".parse().unwrap());
+        assert_eq!(
+            ContentService::extract_token(&meta),
+            Some("abc123".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_token_missing_header() {
+        let meta = MetadataMap::new();
+        assert_eq!(ContentService::extract_token(&meta), None);
+    }
+
+    #[test]
+    fn extract_token_wrong_prefix() {
+        let mut meta = MetadataMap::new();
+        meta.insert("authorization", "Basic abc123".parse().unwrap());
+        assert_eq!(ContentService::extract_token(&meta), None);
+    }
+
+    #[test]
+    fn extract_token_empty_value() {
+        let mut meta = MetadataMap::new();
+        meta.insert("authorization", "Bearer ".parse().unwrap());
+        assert_eq!(ContentService::extract_token(&meta), Some(String::new()));
+    }
+
+    #[test]
+    fn extract_token_bearer_case_sensitive() {
+        let mut meta = MetadataMap::new();
+        meta.insert("authorization", "bearer abc123".parse().unwrap());
+        // "bearer" (lowercase) should not match "Bearer " prefix
+        assert_eq!(ContentService::extract_token(&meta), None);
+    }
+
+    // ── event_user_from tests ─────────────────────────────────────────
+
+    #[test]
+    fn event_user_from_none() {
+        assert!(ContentService::event_user_from(&None).is_none());
+    }
+
+    #[test]
+    fn event_user_from_some() {
+        let claims = ClaimsBuilder::new(DocumentId::new("user-123"), Slug::new("users"))
+            .email("test@example.com")
+            .exp(9999999999)
+            .build();
+        let doc = Document::builder(DocumentId::new("user-123")).build();
+        let auth_user = Some(AuthUser::new(claims, doc));
+        let event_user = ContentService::event_user_from(&auth_user).unwrap();
+        assert_eq!(event_user.id, "user-123");
+        assert_eq!(event_user.email, "test@example.com");
     }
 }

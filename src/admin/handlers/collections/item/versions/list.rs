@@ -7,7 +7,10 @@ use crate::{
             redirect_response, render_or_error, server_error, version_to_json,
         },
     },
-    core::auth::{AuthUser, Claims},
+    core::{
+        Document,
+        auth::{AuthUser, Claims},
+    },
     db::{
         ops, query,
         query::{AccessResult, LocaleContext},
@@ -114,10 +117,9 @@ pub async fn list_versions_page(
             "restore_url_prefix",
             json!(format!("/admin/collections/{}/{}", slug, id)),
         )
-        .pagination(
-            page,
-            per_page,
-            total,
+        .with_pagination(
+            &query::PaginationResult::builder(&[] as &[Document], total, per_page)
+                .page(page, offset),
             format!(
                 "/admin/collections/{}/{}/versions?page={}",
                 slug,

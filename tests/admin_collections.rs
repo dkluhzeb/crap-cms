@@ -702,7 +702,7 @@ async fn update_nonexistent_document() {
 // ── Pagination on collection list ────────────────────────────────────────
 
 #[tokio::test]
-async fn collection_list_with_pagination() {
+async fn collection_list_pagination_multi_page_shows_nav() {
     let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
     let user_id = create_test_user(&app, "page@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "page@test.com");
@@ -719,8 +719,10 @@ async fn collection_list_with_pagination() {
         tx.commit().unwrap();
     }
 
+    // Page 1 of 3 → has "Next", no "Previous", shows "Page 1 of 3"
     let resp = app
         .router
+        .clone()
         .oneshot(
             Request::get("/admin/collections/posts?page=1&per_page=2")
                 .header("cookie", &cookie)
@@ -730,6 +732,95 @@ async fn collection_list_with_pagination() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(body.contains("Page 1 of 3"), "should show page info");
+    assert!(body.contains("Next"), "page 1 should have Next link");
+    assert!(
+        !body.contains("Previous"),
+        "page 1 should not have Previous link"
+    );
+
+    // Page 2 of 3 → has both "Previous" and "Next"
+    let resp = app
+        .router
+        .clone()
+        .oneshot(
+            Request::get("/admin/collections/posts?page=2&per_page=2")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(body.contains("Page 2 of 3"), "should show page info");
+    assert!(body.contains("Next"), "page 2 should have Next link");
+    assert!(
+        body.contains("Previous"),
+        "page 2 should have Previous link"
+    );
+
+    // Page 3 of 3 → has "Previous", no "Next"
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin/collections/posts?page=3&per_page=2")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(body.contains("Page 3 of 3"), "should show page info");
+    assert!(
+        !body.contains("Next"),
+        "last page should not have Next link"
+    );
+    assert!(
+        body.contains("Previous"),
+        "last page should have Previous link"
+    );
+}
+
+#[tokio::test]
+async fn collection_list_pagination_single_page_no_nav() {
+    let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
+    let user_id = create_test_user(&app, "single@test.com", "pass123");
+    let cookie = make_auth_cookie(&app, &user_id, "single@test.com");
+
+    let def = {
+        let reg = app.registry.read().unwrap();
+        reg.get_collection("posts").unwrap().clone()
+    };
+    for i in 0..3 {
+        let mut conn = app.pool.get().unwrap();
+        let tx = conn.transaction().unwrap();
+        let data = std::collections::HashMap::from([("title".to_string(), format!("Post {}", i))]);
+        query::create(&tx, "posts", &def, &data, None).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let resp = app
+        .router
+        .oneshot(
+            Request::get("/admin/collections/posts?page=1&per_page=10")
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    // 3 docs fit in 1 page of 10 → no navigation links
+    assert!(
+        !body.contains("Previous"),
+        "single page should not have Previous"
+    );
+    assert!(!body.contains("Next"), "single page should not have Next");
 }
 
 // ── Localized collection regression tests ─────────────────────────────
@@ -1011,7 +1102,7 @@ async fn collection_create_with_draft() {
 // ── Collections: Search, Filter, Sort, Pagination ─────────────────────────
 
 #[tokio::test]
-async fn list_items_with_pagination() {
+async fn list_items_with_pagination_renders_docs() {
     let app = setup_app(vec![make_posts_def(), make_users_def()], vec![]);
     let user_id = create_test_user(&app, "page@test.com", "pass123");
     let cookie = make_auth_cookie(&app, &user_id, "page@test.com");
@@ -1040,6 +1131,13 @@ async fn list_items_with_pagination() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_string(resp.into_body()).await;
+    assert!(body.contains("Page 2 of 3"), "should show page 2 of 3");
+    assert!(
+        body.contains("Previous"),
+        "middle page should have Previous"
+    );
+    assert!(body.contains("Next"), "middle page should have Next");
 }
 
 #[tokio::test]
@@ -1078,7 +1176,8 @@ async fn list_items_with_search_and_pagination() {
             "title".to_string(),
             format!("Searchable Item {}", i),
         )]);
-        query::create(&tx, "posts", &def, &data, None).unwrap();
+        let doc = query::create(&tx, "posts", &def, &data, None).unwrap();
+        query::fts::fts_upsert(&tx, "posts", &doc, Some(&def)).unwrap();
         tx.commit().unwrap();
     }
 
@@ -1094,9 +1193,12 @@ async fn list_items_with_search_and_pagination() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_string(resp.into_body()).await;
+    // 5 results, per_page=3 → 2 pages with pagination and Next link
+    assert!(body.contains("Page 1 of 2"), "should show page info");
+    assert!(body.contains("Next"), "should have Next link");
     assert!(
-        body.contains("Searchable"),
-        "Search results should contain matching items"
+        !body.contains("Previous"),
+        "page 1 should not have Previous link"
     );
 }
 

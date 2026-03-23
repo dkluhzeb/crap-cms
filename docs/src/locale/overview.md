@@ -250,7 +250,7 @@ Translation strings support `{{variable}}` placeholders:
 }
 ```
 
-Templates pass values as hash parameters: `{{t "page_of" page=page total=total_pages}}`.
+Templates pass values as hash parameters: `{{t "page_of" page=pagination.page total=pagination.total_pages}}`.
 
 ### Available Keys
 

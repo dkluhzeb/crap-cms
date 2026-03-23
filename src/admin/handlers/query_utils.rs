@@ -120,6 +120,9 @@ pub(crate) fn is_column_eligible(field_type: &FieldType) -> bool {
 }
 
 /// Build a list URL preserving all query params (pagination, search, sort, filters).
+///
+/// For page-based pagination, includes `page=N`. For cursor-based pagination,
+/// pass `page=0` and provide a cursor string instead.
 pub(crate) fn build_list_url(
     base: &str,
     page: i64,
@@ -127,6 +130,19 @@ pub(crate) fn build_list_url(
     search: Option<&str>,
     sort: Option<&str>,
     raw_where: &str,
+) -> String {
+    build_list_url_with_cursor(base, page, per_page, search, sort, raw_where, None)
+}
+
+/// Build a list URL with optional cursor parameter for cursor-based pagination.
+pub(crate) fn build_list_url_with_cursor(
+    base: &str,
+    page: i64,
+    per_page: Option<i64>,
+    search: Option<&str>,
+    sort: Option<&str>,
+    raw_where: &str,
+    cursor: Option<(&str, &str)>,
 ) -> String {
     let mut url = format!("{}?page={}", base, page);
 
@@ -140,6 +156,10 @@ pub(crate) fn build_list_url(
 
     if let Some(s) = sort {
         url.push_str(&format!("&sort={}", url_encode(s)));
+    }
+
+    if let Some((param, value)) = cursor {
+        url.push_str(&format!("&{}={}", param, url_encode(value)));
     }
 
     // Preserve where params from original query string
@@ -336,6 +356,30 @@ mod tests {
         );
         assert!(url.contains("where[title][equals]=foo"));
         assert!(!url.contains("page=1&page=1")); // should not duplicate page
+    }
+
+    #[test]
+    fn build_list_url_with_cursor_param() {
+        let url = build_list_url_with_cursor(
+            "/admin/collections/posts",
+            1,
+            None,
+            None,
+            Some("title"),
+            "",
+            Some(("after_cursor", "abc123")),
+        );
+        assert!(url.contains("after_cursor=abc123"));
+        assert!(url.contains("sort=title"));
+        assert!(url.contains("page=1"));
+    }
+
+    #[test]
+    fn build_list_url_with_cursor_none() {
+        let url =
+            build_list_url_with_cursor("/admin/collections/posts", 2, None, None, None, "", None);
+        assert_eq!(url, "/admin/collections/posts?page=2");
+        assert!(!url.contains("cursor"));
     }
 
     // --- is_column_eligible tests ---

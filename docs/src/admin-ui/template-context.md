@@ -15,7 +15,7 @@ Every admin page receives a structured context object built by the `ContextBuild
 | `document` | object | edit pages | Current document with raw data |
 | `fields` | array | edit/create/global edit | Processed field contexts for main content area |
 | `sidebar_fields` | array | edit/create/global edit | Field contexts for sidebar panel (fields with `admin.position = "sidebar"`) |
-| `items` | array | collection items | Document list with enriched data |
+| `docs` | array | collection items | Document list with enriched data |
 | `editing` | boolean | edit/create | `true` when editing, `false` when creating |
 | `pagination` | object | items, versions | Pagination state |
 | `versions` | array | edit (versioned) | Recent version entries |
@@ -254,15 +254,15 @@ Additional keys beyond `collection`:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `items` | array | Document list |
+| `docs` | array | Document list |
 | `search` | string/null | Current search query |
 | `pagination` | object | Pagination state |
 | `has_drafts` | boolean | Shorthand for `collection.has_drafts` |
 
-### `items`
+### `docs`
 
 ```handlebars
-{{#each items}}
+{{#each docs}}
   <tr>
     <td>{{this.title_value}}</td>
     <td>{{this.status}}</td>
@@ -275,7 +275,7 @@ Additional keys beyond `collection`:
 {{/each}}
 ```
 
-Each item:
+Each doc:
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -823,7 +823,7 @@ A complete example overriding the items list to add a custom column:
     </tr>
   </thead>
   <tbody>
-    {{#each items}}
+    {{#each docs}}
       <tr>
         <td>
           <a href="/admin/collections/{{../collection.slug}}/{{this.id}}">

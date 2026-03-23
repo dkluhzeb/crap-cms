@@ -7,10 +7,10 @@ use std::collections::HashSet;
 
 use crate::{
     config::{LocaleConfig, PaginationConfig},
-    core::{Document, SharedRegistry, upload},
+    core::{SharedRegistry, upload},
     db::{
         AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext, ops,
-        query::{self, filter::normalize_filter_fields},
+        query::{self, PaginationResult, filter::normalize_filter_fields},
     },
     hooks::lifecycle::{
         HookContext, HookEvent, UiLocaleContext, UserContext,
@@ -22,99 +22,35 @@ use crate::{
 
 use super::get_tx_conn;
 
-use super::find_pagination_input_builder::FindPaginationInputBuilder;
-
-/// Input for building the find result pagination table.
-pub(super) struct FindPaginationInput<'a> {
-    pub(super) find_query: &'a FindQuery,
-    pub(super) docs: &'a [Document],
-    pub(super) total: i64,
-    pub(super) pg_cursor: bool,
-    pub(super) pg_default: i64,
-    pub(super) lua_page: Option<i64>,
-    pub(super) has_timestamps: bool,
-}
-
-impl<'a> FindPaginationInput<'a> {
-    fn builder(
-        find_query: &'a FindQuery,
-        docs: &'a [Document],
-        total: i64,
-    ) -> FindPaginationInputBuilder<'a> {
-        FindPaginationInputBuilder::new(find_query, docs, total)
+/// Convert a [`PaginationResult`] into an mlua table.
+fn pagination_result_to_lua_table(lua: &Lua, pr: &PaginationResult) -> mlua::Result<mlua::Table> {
+    let t = lua.create_table()?;
+    t.set("totalDocs", pr.total_docs)?;
+    t.set("limit", pr.limit)?;
+    t.set("hasNextPage", pr.has_next_page)?;
+    t.set("hasPrevPage", pr.has_prev_page)?;
+    if let Some(v) = pr.total_pages {
+        t.set("totalPages", v)?;
     }
-}
-
-/// Build cursor-vs-offset pagination Lua table for find results.
-fn build_find_pagination(lua: &Lua, input: &FindPaginationInput) -> mlua::Result<mlua::Table> {
-    let find_query = input.find_query;
-    let docs = input.docs;
-    let total = input.total;
-    let limit = find_query.limit.unwrap_or(input.pg_default);
-    let offset: i64 = find_query.offset.unwrap_or(0);
-    let page: i64 = input
-        .lua_page
-        .unwrap_or_else(|| if limit > 0 { offset / limit + 1 } else { 1 })
-        .max(1);
-
-    let pagination = lua.create_table()?;
-    pagination.set("totalDocs", total)?;
-    pagination.set("limit", limit)?;
-
-    if input.pg_cursor {
-        let (sort_col, sort_dir) = if let Some(ref order) = find_query.order_by {
-            if let Some(stripped) = order.strip_prefix('-') {
-                (stripped.to_string(), "DESC")
-            } else {
-                (order.clone(), "ASC")
-            }
-        } else if input.has_timestamps {
-            ("created_at".to_string(), "DESC")
-        } else {
-            ("id".to_string(), "ASC")
-        };
-
-        let (start_cursor, end_cursor) = query::cursor::build_cursors(docs, &sort_col, sort_dir);
-        let using_before = find_query.before_cursor.is_some();
-        let has_cursor = find_query.after_cursor.is_some() || using_before;
-        let at_limit = docs.len() as i64 >= limit && !docs.is_empty();
-        let (has_next, has_prev) = if using_before {
-            (true, at_limit)
-        } else {
-            (at_limit, has_cursor)
-        };
-
-        pagination.set("hasNextPage", has_next)?;
-        pagination.set("hasPrevPage", has_prev)?;
-
-        if let Some(sc) = start_cursor {
-            pagination.set("startCursor", sc)?;
-        }
-        if let Some(ec) = end_cursor {
-            pagination.set("endCursor", ec)?;
-        }
-    } else {
-        let total_pages = if limit > 0 {
-            (total + limit - 1) / limit
-        } else {
-            0
-        };
-
-        pagination.set("totalPages", total_pages)?;
-        pagination.set("page", page)?;
-        pagination.set("pageStart", offset + 1)?;
-        pagination.set("hasNextPage", page < total_pages)?;
-        pagination.set("hasPrevPage", page > 1)?;
-
-        if page > 1 {
-            pagination.set("prevPage", page - 1)?;
-        }
-        if page < total_pages {
-            pagination.set("nextPage", page + 1)?;
-        }
+    if let Some(v) = pr.page {
+        t.set("page", v)?;
     }
-
-    Ok(pagination)
+    if let Some(v) = pr.page_start {
+        t.set("pageStart", v)?;
+    }
+    if let Some(v) = pr.prev_page {
+        t.set("prevPage", v)?;
+    }
+    if let Some(v) = pr.next_page {
+        t.set("nextPage", v)?;
+    }
+    if let Some(ref v) = pr.start_cursor {
+        t.set("startCursor", v.clone())?;
+    }
+    if let Some(ref v) = pr.end_cursor {
+        t.set("endCursor", v.clone())?;
+    }
+    Ok(t)
 }
 
 /// Register `crap.collections.find(collection, query?)`.
@@ -327,15 +263,22 @@ pub(super) fn register_find(
                 .map(|doc| apply_after_read_inner(lua, &ar_ctx, doc))
                 .collect();
 
-            let pagination = build_find_pagination(
-                lua,
-                &FindPaginationInput::builder(&find_query, &docs, total)
-                    .pg_cursor(pg_cursor)
-                    .pg_default(pg_default)
-                    .lua_page(lua_page)
-                    .has_timestamps(def.timestamps)
-                    .build(),
-            )?;
+            let limit = find_query.limit.unwrap_or(pg_default);
+            let pr = if pg_cursor {
+                query::PaginationResult::builder(&docs, total, limit).cursor(
+                    find_query.order_by.as_deref(),
+                    def.timestamps,
+                    find_query.before_cursor.is_some(),
+                    find_query.after_cursor.is_some() || find_query.before_cursor.is_some(),
+                )
+            } else {
+                let offset = find_query.offset.unwrap_or(0);
+                let page = lua_page
+                    .unwrap_or_else(|| if limit > 0 { offset / limit + 1 } else { 1 })
+                    .max(1);
+                query::PaginationResult::builder(&docs, total, limit).page(page, offset)
+            };
+            let pagination = pagination_result_to_lua_table(lua, &pr)?;
 
             let result = find_result_to_lua(lua, &docs, pagination)?;
             Ok(result)

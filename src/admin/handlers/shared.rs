@@ -33,8 +33,8 @@ pub(super) use crate::admin::handlers::field_context::{
 
 // Re-export query utilities from the dedicated module.
 pub(crate) use super::query_utils::{
-    build_list_url, extract_where_params, is_column_eligible, parse_where_params, url_decode,
-    validate_sort,
+    build_list_url, build_list_url_with_cursor, extract_where_params, is_column_eligible,
+    parse_where_params, url_decode, validate_sort,
 };
 
 /// Query parameters for paginated collection list views.
@@ -48,6 +48,10 @@ pub struct PaginationParams {
     pub search: Option<String>,
     /// Sort string (e.g. "title" or "-title").
     pub sort: Option<String>,
+    /// Forward cursor for cursor-based pagination.
+    pub after_cursor: Option<String>,
+    /// Backward cursor for cursor-based pagination.
+    pub before_cursor: Option<String>,
 }
 
 /// Extract the editor locale from the `crap_editor_locale` cookie.

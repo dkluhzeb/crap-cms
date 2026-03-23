@@ -142,12 +142,19 @@ pub(super) fn exec_find(
     let conn = pool.get().context("DB connection")?;
 
     let limit = args.get("limit").and_then(|v| v.as_i64());
-    let limit = query::apply_pagination_limits(
-        limit,
+    let page = args.get("page").and_then(|v| v.as_i64());
+    let after_cursor = args.get("after_cursor").and_then(|v| v.as_str());
+    let before_cursor = args.get("before_cursor").and_then(|v| v.as_str());
+
+    let pg_ctx = query::PaginationCtx::new(
         config.pagination.default_limit,
         config.pagination.max_limit,
+        config.pagination.is_cursor(),
     );
-    let offset = args.get("offset").and_then(|v| v.as_i64());
+    let pagination = pg_ctx
+        .validate(limit, page, after_cursor, before_cursor)
+        .map_err(|e| anyhow::anyhow!(e))?;
+
     let order_by = args
         .get("order_by")
         .and_then(|v| v.as_str())
@@ -162,9 +169,15 @@ pub(super) fn exec_find(
 
     let mut fq = FindQuery::new();
     fq.filters = filters;
-    fq.order_by = order_by;
-    fq.limit = Some(limit);
-    fq.offset = offset;
+    fq.order_by = order_by.clone();
+    fq.limit = Some(pagination.limit);
+    fq.offset = if pagination.has_cursor() {
+        None
+    } else {
+        Some(pagination.offset)
+    };
+    fq.after_cursor = pagination.after_cursor.clone();
+    fq.before_cursor = pagination.before_cursor.clone();
     fq.search = search;
     let mut docs = query::find(&conn, slug, def, &fq, None)?;
     let total = query::count(&conn, slug, def, &fq.filters, None)?;
@@ -175,11 +188,21 @@ pub(super) fn exec_find(
         query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)?;
     }
 
+    let pr = if config.pagination.is_cursor() {
+        query::PaginationResult::builder(&docs, total, pagination.limit).cursor(
+            order_by.as_deref(),
+            def.timestamps,
+            pagination.before_cursor.is_some(),
+            pagination.has_cursor(),
+        )
+    } else {
+        query::PaginationResult::builder(&docs, total, pagination.limit)
+            .page(pagination.page, pagination.offset)
+    };
+    let doc_values: Vec<Value> = docs.iter().map(doc_to_json).collect();
     let result = json!({
-        "docs": docs.iter().map(doc_to_json).collect::<Vec<_>>(),
-        "totalDocs": total,
-        "limit": limit,
-        "offset": offset.unwrap_or(0),
+        "docs": doc_values,
+        "pagination": serde_json::to_value(&pr)?,
     });
     Ok(serde_json::to_string_pretty(&result)?)
 }

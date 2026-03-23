@@ -185,9 +185,36 @@ The `find_*` tools accept these parameters:
 |-----------|------|-------------|
 | `where` | object | Filter conditions (same syntax as gRPC/Lua API) |
 | `order_by` | string | Sort field (prefix with `-` for descending, e.g., `"-created_at"`) |
-| `limit` | integer | Max results to return |
-| `offset` | integer | Skip N results (pagination) |
+| `limit` | integer | Max results per page |
+| `page` | integer | Page number, 1-indexed (page mode only) |
+| `after_cursor` | string | Forward cursor (cursor mode only, mutually exclusive with `page` and `before_cursor`) |
+| `before_cursor` | string | Backward cursor (cursor mode only, mutually exclusive with `page` and `after_cursor`) |
+| `depth` | integer | Relationship population depth |
 | `search` | string | Full-text search query |
+
+### Response Format
+
+`find_*` tools return a JSON object with `docs` and `pagination`:
+
+```json
+{
+  "docs": [
+    { "id": "abc123", "title": "Hello World", "created_at": "2026-01-15T09:00:00Z" }
+  ],
+  "pagination": {
+    "totalDocs": 25,
+    "limit": 10,
+    "hasNextPage": true,
+    "hasPrevPage": false,
+    "totalPages": 3,
+    "page": 1,
+    "pageStart": 1,
+    "nextPage": 2
+  }
+}
+```
+
+In cursor mode, `page`/`totalPages`/`pageStart`/`nextPage`/`prevPage` are replaced by `startCursor`/`endCursor`.
 
 ### Where clause example
 

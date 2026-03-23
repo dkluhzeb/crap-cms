@@ -18,9 +18,10 @@ use crate::{
                 resolve_columns,
             },
             shared::{
-                PaginationParams, build_list_url, check_access_or_forbid,
-                compute_denied_read_fields, extract_editor_locale, extract_where_params, forbidden,
-                not_found, parse_where_params, render_or_error, server_error, validate_sort,
+                PaginationParams, build_list_url, build_list_url_with_cursor,
+                check_access_or_forbid, compute_denied_read_fields, extract_editor_locale,
+                extract_where_params, forbidden, not_found, parse_where_params, render_or_error,
+                server_error, validate_sort,
             },
         },
     },
@@ -61,13 +62,26 @@ pub async fn list_items(
     }
 
     let raw_query = uri.query().unwrap_or("");
-    let page = params.page.unwrap_or(1).max(1);
-    let per_page = params
-        .per_page
-        .unwrap_or(state.config.pagination.default_limit)
-        .min(state.config.pagination.max_limit);
-    let offset = (page - 1) * per_page;
+    let cursor_enabled = state.config.pagination.is_cursor();
     let search = params.search.filter(|s| !s.trim().is_empty());
+
+    let pg_ctx = query::PaginationCtx::new(
+        state.config.pagination.default_limit,
+        state.config.pagination.max_limit,
+        cursor_enabled,
+    );
+    let pagination = match pg_ctx.validate(
+        params.per_page,
+        params.page,
+        params.after_cursor.as_deref(),
+        params.before_cursor.as_deref(),
+    ) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Invalid pagination params: {}", e);
+            return server_error(&state, "Invalid pagination parameters");
+        }
+    };
 
     // Parse sort and where params
     let sort = params.sort.as_deref().and_then(|s| validate_sort(s, &def));
@@ -89,9 +103,15 @@ pub async fn list_items(
 
     let mut find_query = FindQuery::new();
     find_query.filters = filters.clone();
-    find_query.order_by = order_by;
-    find_query.limit = Some(per_page);
-    find_query.offset = Some(offset);
+    find_query.order_by = order_by.clone();
+    find_query.limit = Some(pagination.limit);
+    find_query.offset = if pagination.has_cursor() {
+        None
+    } else {
+        Some(pagination.offset)
+    };
+    find_query.after_cursor = pagination.after_cursor.clone();
+    find_query.before_cursor = pagination.before_cursor.clone();
     find_query.search = search.clone();
 
     let editor_locale = extract_editor_locale(&headers, &state.config.locale);
@@ -255,33 +275,89 @@ pub async fn list_items(
         .map(|doc| build_item_row(doc, &table_columns, &def))
         .collect();
 
-    // Build pagination URLs preserving sort + where params
-    let prev_url = build_list_url(
-        &base_url,
-        page - 1,
-        None,
-        search.as_deref(),
-        sort.as_deref(),
-        &where_params,
-    );
-    let next_url = build_list_url(
-        &base_url,
-        page + 1,
-        None,
-        search.as_deref(),
-        sort.as_deref(),
-        &where_params,
-    );
-
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
-    let data = ContextBuilder::new(&state, claims_ref)
+    // Build pagination URLs and context based on mode
+    let ctx = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionItems, def.display_name())
         .collection_def(&def)
-        .items(items)
-        .pagination(page, per_page, total, prev_url, next_url)
+        .docs(items);
+
+    let pr = if cursor_enabled {
+        query::PaginationResult::builder(&documents, total, pagination.limit).cursor(
+            order_by.as_deref(),
+            def.timestamps,
+            pagination.before_cursor.is_some(),
+            pagination.has_cursor(),
+        )
+    } else {
+        query::PaginationResult::builder(&documents, total, pagination.limit)
+            .page(pagination.page, pagination.offset)
+    };
+
+    let (prev_url, next_url) = if cursor_enabled {
+        let prev = if pr.has_prev_page {
+            pr.start_cursor
+                .as_deref()
+                .map(|sc| {
+                    build_list_url_with_cursor(
+                        &base_url,
+                        1,
+                        None,
+                        search.as_deref(),
+                        sort.as_deref(),
+                        &where_params,
+                        Some(("before_cursor", sc)),
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let next = if pr.has_next_page {
+            pr.end_cursor
+                .as_deref()
+                .map(|ec| {
+                    build_list_url_with_cursor(
+                        &base_url,
+                        1,
+                        None,
+                        search.as_deref(),
+                        sort.as_deref(),
+                        &where_params,
+                        Some(("after_cursor", ec)),
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        (prev, next)
+    } else {
+        let prev = build_list_url(
+            &base_url,
+            pagination.page - 1,
+            None,
+            search.as_deref(),
+            sort.as_deref(),
+            &where_params,
+        );
+        let next = build_list_url(
+            &base_url,
+            pagination.page + 1,
+            None,
+            search.as_deref(),
+            sort.as_deref(),
+            &where_params,
+        );
+        (prev, next)
+    };
+
+    let ctx = ctx.with_pagination(&pr, prev_url, next_url);
+
+    let data = ctx
         .set("has_drafts", json!(def.has_drafts()))
         .set("search", json!(search))
         .set("sort", json!(sort))

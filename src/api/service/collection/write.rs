@@ -17,7 +17,7 @@ use crate::{
     service::{self, WriteInput},
 };
 
-use super::helpers::map_db_error;
+use super::helpers::{extract_auth_password, map_db_error, strip_denied_proto_fields};
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.
@@ -45,19 +45,12 @@ impl ContentService {
             .map(|s| prost_struct_to_hashmap(&s))
             .unwrap_or_default();
 
-        // Extract password for auth collections
-        let password = if def.is_auth_collection() {
-            data.remove("password")
-        } else {
-            None
-        };
-
-        // Validate password against policy
-        if let Some(ref pw) = password
-            && let Err(e) = self.password_policy.validate(pw)
-        {
-            return Err(Status::invalid_argument(e.to_string()));
-        }
+        let password = extract_auth_password(
+            &mut data,
+            def.is_auth_collection(),
+            &self.password_policy,
+            false,
+        )?;
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
@@ -139,11 +132,7 @@ impl ContentService {
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
             let _ = tx.commit();
-            if let Some(ref mut s) = proto_doc.fields {
-                for name in &denied {
-                    s.fields.remove(name);
-                }
-            }
+            strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))
         })
@@ -250,19 +239,12 @@ impl ContentService {
             .map(|s| prost_struct_to_hashmap(&s))
             .unwrap_or_default();
 
-        let password = if def.is_auth_collection() {
-            data.remove("password")
-        } else {
-            None
-        };
-
-        // Validate password against policy (only if non-empty)
-        if let Some(ref pw) = password
-            && !pw.is_empty()
-            && let Err(e) = self.password_policy.validate(pw)
-        {
-            return Err(Status::invalid_argument(e.to_string()));
-        }
+        let password = extract_auth_password(
+            &mut data,
+            def.is_auth_collection(),
+            &self.password_policy,
+            true,
+        )?;
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
@@ -316,11 +298,7 @@ impl ContentService {
                     })?;
                     let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
                     let _ = tx.commit();
-                    if let Some(ref mut s) = proto_doc.fields {
-                        for name in &denied {
-                            s.fields.remove(name);
-                        }
-                    }
+                    strip_denied_proto_fields(&mut proto_doc, &denied);
 
                     Ok((proto_doc, auth_user))
                 })
@@ -435,11 +413,7 @@ impl ContentService {
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
             let _ = tx.commit();
-            if let Some(ref mut s) = proto_doc.fields {
-                for name in &denied {
-                    s.fields.remove(name);
-                }
-            }
+            strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))
         })
