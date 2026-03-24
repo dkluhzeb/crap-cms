@@ -8,8 +8,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Content-Security-Policy header** — configurable `[admin.csp]` section with
+  per-directive source lists (`script_src`, `style_src`, `font_src`, etc.).
+  Enabled by default with permissive defaults that cover the built-in admin UI.
+  Theme developers can extend the lists to allow external CDNs, fonts, and
+  analytics scripts. Set `enabled = false` to disable entirely.
+
+- **SSE connection limiting** — `max_sse_connections` in `[live]` (default:
+  1000). Returns `503 Service Unavailable` when the limit is reached. `0` =
+  unlimited.
+
+- **gRPC Subscribe connection limiting** — `max_subscribe_connections` in
+  `[live]` (default: 1000). Returns `UNAVAILABLE` when the limit is reached.
+  `0` = unlimited.
+
+- **Admin HTTP request timeout** — `request_timeout` in `[server]` (optional,
+  none by default). Returns `408 Request Timeout` when exceeded. SSE streams
+  are exempt. Accepts seconds or human-readable (`"30s"`, `"5m"`).
+
+- **gRPC request timeout** — `grpc_timeout` in `[server]` (optional, none by
+  default). Returns `DEADLINE_EXCEEDED` when exceeded. Accepts seconds or
+  human-readable.
+
+- **Configurable gRPC message size** — `grpc_max_message_size` in `[server]`
+  (default: `"16MB"`). Replaces Tonic's 4MB default, which can be exceeded by
+  large `Find` responses with deep relationship population. Accepts bytes or
+  human-readable (`"16MB"`, `"32MB"`).
+
 - **IP rate limiting** on auth endpoints (login, forgot-password). Configurable
-  per-IP limits with automatic cooldown.
+  per-IP limits with automatic cooldown (`max_ip_login_attempts` in `[auth]`).
 
 - **Reset password rate limiting** — per-IP rate limiting on the reset-password
   endpoint (admin and gRPC) to prevent brute-forcing reset tokens.
@@ -19,12 +46,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   running behind a reverse proxy so per-IP rate limiting uses the real client IP.
 
 - **H2C support** (HTTP/2 cleartext) for deployment behind reverse proxies.
-  New `[server]` config options.
+  New `[server] h2c` config option.
 
 - **Populate cache cap** (`MAX_POPULATE_CACHE_SIZE = 10,000`) prevents unbounded
   memory growth during read-heavy workloads.
 
+- **Hooks on bulk operations** — `before_change`/`after_change` hooks now fire
+  per-document for `UpdateMany`, and `before_delete`/`after_delete` for
+  `DeleteMany`. Version snapshots are also created per-document. Opt out with
+  `hooks = false` in the request.
+
+- **Startup config validation** — validates port > 0, admin_port != grpc_port,
+  and warns on questionable settings (e.g., SMTP configured but `public_url`
+  missing).
+
+- **Security headers** on all admin responses: `X-Frame-Options: DENY`,
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
+  `Permissions-Policy` (camera, microphone, geolocation disabled).
+
 ### Changed
+
+- **Scaffold `dev_mode`** defaults to `false` (was `true`). New projects start
+  secure by default.
 
 - **Admin templates**: Pagination variables now live exclusively under the
   `pagination` object (e.g. `pagination.prev_url` instead of `prev_url`).
@@ -50,6 +93,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **Content-Security-Policy** (NEW): Admin UI now sends a CSP header by default
+  with restrictive `default-src`, `frame-ancestors 'none'`, `form-action 'self'`,
+  and `base-uri 'self'`. Inline scripts/styles are allowed via `'unsafe-inline'`
+  (required for theme bootstrap, CSRF injection, and Shadow DOM components).
+
 - **X-Forwarded-For bypass** (HIGH): `client_ip()` no longer trusts XFF by
   default. Without `trust_proxy = true`, the TCP socket address is used,
   preventing attackers from spoofing IPs to bypass per-IP rate limits.
@@ -57,6 +105,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Shared rate limiters** (MEDIUM): Admin and gRPC servers now share the same
   `LoginRateLimiter` instances, preventing attackers from doubling their attempt
   budget by targeting both servers.
+
+- **Migration concurrency** — `sync_all` now uses `transaction_immediate()` to
+  serialize concurrent DDL operations via SQLite's write lock + `busy_timeout`,
+  preventing schema corruption from concurrent startups.
+
+- **Version uniqueness constraint** — UNIQUE index on `(_parent, _version)` in
+  versions tables prevents duplicate version numbers from race conditions.
 
 ### Fixed
 
