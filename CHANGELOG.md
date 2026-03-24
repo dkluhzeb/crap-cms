@@ -11,6 +11,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **IP rate limiting** on auth endpoints (login, forgot-password). Configurable
   per-IP limits with automatic cooldown.
 
+- **Reset password rate limiting** — per-IP rate limiting on the reset-password
+  endpoint (admin and gRPC) to prevent brute-forcing reset tokens.
+
+- **`trust_proxy` config** (`[server]`) — controls whether `X-Forwarded-For` is
+  trusted for client IP extraction. Default: `false` (XFF ignored). Enable when
+  running behind a reverse proxy so per-IP rate limiting uses the real client IP.
+
 - **H2C support** (HTTP/2 cleartext) for deployment behind reverse proxies.
   New `[server]` config options.
 
@@ -40,6 +47,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Upload cleanup guard**: `process_upload` now returns an RAII `CleanupGuard`
   that the caller must `.commit()` after their DB transaction succeeds. Prevents
   orphaned files when the DB write fails after files are already on disk.
+
+### Security
+
+- **X-Forwarded-For bypass** (HIGH): `client_ip()` no longer trusts XFF by
+  default. Without `trust_proxy = true`, the TCP socket address is used,
+  preventing attackers from spoofing IPs to bypass per-IP rate limits.
+
+- **Shared rate limiters** (MEDIUM): Admin and gRPC servers now share the same
+  `LoginRateLimiter` instances, preventing attackers from doubling their attempt
+  budget by targeting both servers.
 
 ### Fixed
 

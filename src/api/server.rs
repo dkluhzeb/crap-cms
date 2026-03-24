@@ -29,6 +29,10 @@ pub struct GrpcStartParams {
     pub config: CrapConfig,
     pub config_dir: PathBuf,
     pub event_bus: Option<EventBus>,
+    pub login_limiter: Arc<LoginRateLimiter>,
+    pub ip_login_limiter: Arc<LoginRateLimiter>,
+    pub forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
 }
 
 impl GrpcStartParams {
@@ -49,22 +53,6 @@ pub async fn start(
     let addr = addr.parse()?;
 
     let email_renderer = Arc::new(EmailRenderer::new(&params.config_dir)?);
-    let login_limiter = Arc::new(LoginRateLimiter::new(
-        params.config.auth.max_login_attempts,
-        params.config.auth.login_lockout_seconds,
-    ));
-    let ip_login_limiter = Arc::new(LoginRateLimiter::new(
-        params.config.auth.max_ip_login_attempts,
-        params.config.auth.login_lockout_seconds,
-    ));
-    let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
-        params.config.auth.max_forgot_password_attempts,
-        params.config.auth.forgot_password_window_seconds,
-    ));
-    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(
-        params.config.auth.max_ip_login_attempts,
-        params.config.auth.forgot_password_window_seconds,
-    ));
 
     let populate_cache_max_age = params.config.depth.populate_cache_max_age_secs;
     let grpc_rate_requests = params.config.server.grpc_rate_limit_requests;
@@ -82,10 +70,10 @@ pub async fn start(
             .config_dir(params.config_dir)
             .email_renderer(email_renderer)
             .event_bus(params.event_bus)
-            .login_limiter(login_limiter)
-            .ip_login_limiter(ip_login_limiter)
-            .forgot_password_limiter(forgot_password_limiter)
-            .ip_forgot_password_limiter(ip_forgot_password_limiter)
+            .login_limiter(params.login_limiter)
+            .ip_login_limiter(params.ip_login_limiter)
+            .forgot_password_limiter(params.forgot_password_limiter)
+            .ip_forgot_password_limiter(params.ip_forgot_password_limiter)
             .build(),
     );
 

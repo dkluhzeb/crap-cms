@@ -796,6 +796,10 @@ async fn reset_password_expired_token() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(format!(
                     "collection=users&token={}&password=newpass123&password_confirm=newpass123",
                     expired_token
@@ -867,6 +871,10 @@ async fn reset_password_valid_flow() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(format!(
                     "token={}&password=newpass456&password_confirm=newpass456",
                     valid_token
@@ -902,6 +910,10 @@ async fn reset_password_mismatch() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(
                     "token=sometoken&password=newpass123&password_confirm=different456",
                 ))
@@ -933,6 +945,10 @@ async fn reset_password_mismatched_passwords() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(
                     "token=sometoken&password=newpass123&password_confirm=different456",
                 ))
@@ -966,6 +982,10 @@ async fn reset_password_too_short() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(
                     "token=sometoken&password=ab&password_confirm=ab",
                 ))
@@ -998,6 +1018,10 @@ async fn reset_password_action_invalid_token() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(
                     "token=totally-fake-token&password=newpass123&password_confirm=newpass123",
                 ))
@@ -1029,6 +1053,10 @@ async fn reset_password_invalid_token() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
+                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    0,
+                ))))
                 .body(Body::from(
                     "token=totally-invalid-token&password=newpass123&password_confirm=newpass123",
                 ))

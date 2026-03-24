@@ -22,7 +22,7 @@ pub async fn forgot_password_action(
     Form(form): Form<ForgotPasswordForm>,
 ) -> Html<String> {
     let auth_collections = get_auth_collections(&state);
-    let ip = client_ip(&headers, &addr);
+    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
 
     // Rate limit: prevent email/IP flooding (always count, always return success)
     if state.forgot_password_limiter.is_blocked(&form.email)

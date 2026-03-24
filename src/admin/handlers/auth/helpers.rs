@@ -16,9 +16,16 @@ use crate::{
     core::email,
 };
 
-/// Extract client IP: prefer X-Forwarded-For (reverse proxy), fall back to ConnectInfo.
-pub(in crate::admin::handlers) fn client_ip(headers: &HeaderMap, addr: &SocketAddr) -> String {
-    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
+/// Extract client IP from the request.
+/// When `trust_proxy` is true, uses the first entry in X-Forwarded-For (for reverse proxy setups).
+/// When false, uses the TCP socket address — XFF is ignored to prevent spoofing.
+pub(in crate::admin::handlers) fn client_ip(
+    headers: &HeaderMap,
+    addr: &SocketAddr,
+    trust_proxy: bool,
+) -> String {
+    if trust_proxy
+        && let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok())
         && let Some(first) = xff.split(',').next().map(str::trim)
         && !first.is_empty()
     {
@@ -132,18 +139,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn client_ip_prefers_xff() {
+    fn client_ip_trust_proxy_reads_xff() {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "10.0.0.1, 192.168.1.1".parse().unwrap());
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-        assert_eq!(client_ip(&headers, &addr), "10.0.0.1");
+        assert_eq!(client_ip(&headers, &addr, true), "10.0.0.1");
+    }
+
+    #[test]
+    fn client_ip_no_trust_proxy_ignores_xff() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "10.0.0.1, 192.168.1.1".parse().unwrap());
+        let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        assert_eq!(client_ip(&headers, &addr, false), "127.0.0.1");
     }
 
     #[test]
     fn client_ip_falls_back_to_addr() {
         let headers = HeaderMap::new();
         let addr: SocketAddr = "192.168.1.5:5678".parse().unwrap();
-        assert_eq!(client_ip(&headers, &addr), "192.168.1.5");
+        assert_eq!(client_ip(&headers, &addr, true), "192.168.1.5");
     }
 
     #[test]
@@ -151,6 +166,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "".parse().unwrap());
         let addr: SocketAddr = "10.0.0.2:80".parse().unwrap();
-        assert_eq!(client_ip(&headers, &addr), "10.0.0.2");
+        assert_eq!(client_ip(&headers, &addr, true), "10.0.0.2");
     }
 }

@@ -40,7 +40,6 @@ use crate::{
         collection::Auth as CollectionAuth,
         email::EmailRenderer,
         event::EventBus,
-        rate_limit::LoginRateLimiter,
     },
     db::{DbConnection, DbPool, query},
     hooks::HookRunner,
@@ -49,6 +48,8 @@ use crate::{
         protocol::{INTERNAL_ERROR, JsonRpcError, JsonRpcRequest, JsonRpcResponse, PARSE_ERROR},
     },
 };
+
+use crate::core::rate_limit::LoginRateLimiter;
 
 /// Parameters for starting the admin HTTP server.
 pub struct AdminStartParams {
@@ -59,6 +60,10 @@ pub struct AdminStartParams {
     pub hook_runner: HookRunner,
     pub jwt_secret: JwtSecret,
     pub event_bus: Option<EventBus>,
+    pub login_limiter: Arc<LoginRateLimiter>,
+    pub ip_login_limiter: Arc<LoginRateLimiter>,
+    pub forgot_password_limiter: Arc<LoginRateLimiter>,
+    pub ip_forgot_password_limiter: Arc<LoginRateLimiter>,
 }
 
 impl AdminStartParams {
@@ -84,6 +89,10 @@ pub async fn start(
         hook_runner,
         jwt_secret,
         event_bus,
+        login_limiter,
+        ip_login_limiter,
+        forgot_password_limiter,
+        ip_forgot_password_limiter,
     } = params;
     let translations = Arc::new(Translations::load(&config_dir));
     let handlebars =
@@ -95,23 +104,6 @@ pub async fn start(
         .collections
         .values()
         .any(|d| d.is_auth_collection());
-
-    let login_limiter = Arc::new(LoginRateLimiter::new(
-        config.auth.max_login_attempts,
-        config.auth.login_lockout_seconds,
-    ));
-    let ip_login_limiter = Arc::new(LoginRateLimiter::new(
-        config.auth.max_ip_login_attempts,
-        config.auth.login_lockout_seconds,
-    ));
-    let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
-        config.auth.max_forgot_password_attempts,
-        config.auth.forgot_password_window_seconds,
-    ));
-    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(
-        config.auth.max_ip_login_attempts,
-        config.auth.forgot_password_window_seconds,
-    ));
 
     let state = AdminState {
         config,

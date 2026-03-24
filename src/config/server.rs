@@ -45,6 +45,11 @@ pub struct ServerConfig {
     /// Browsers that don't support h2c fall back to HTTP/1.1 on the same port.
     /// Default: false.
     pub h2c: bool,
+    /// Trust X-Forwarded-For header for client IP extraction (admin HTTP server only).
+    /// Enable when running behind a reverse proxy (nginx, Caddy, etc.).
+    /// When false (default), the TCP socket address is used — XFF is ignored.
+    /// Does not affect gRPC, which always uses the TCP peer address.
+    pub trust_proxy: bool,
 }
 
 fn default_grpc_rate_limit_window() -> u64 {
@@ -62,6 +67,7 @@ impl Default for ServerConfig {
             grpc_rate_limit_requests: 0,
             grpc_rate_limit_window: 60,
             h2c: false,
+            trust_proxy: false,
         }
     }
 }
@@ -179,6 +185,36 @@ mod tests {
         .unwrap();
         let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
         assert!(!config.server.h2c);
+    }
+
+    #[test]
+    fn server_config_trust_proxy_defaults_to_false() {
+        let server = ServerConfig::default();
+        assert!(!server.trust_proxy);
+    }
+
+    #[test]
+    fn server_config_trust_proxy_from_toml() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\ntrust_proxy = true\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert!(config.server.trust_proxy);
+    }
+
+    #[test]
+    fn server_config_trust_proxy_omitted_uses_default() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("crap.toml"),
+            "[server]\nadmin_port = 8080\n",
+        )
+        .unwrap();
+        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        assert!(!config.server.trust_proxy);
     }
 
     #[test]

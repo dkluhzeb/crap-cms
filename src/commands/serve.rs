@@ -19,10 +19,15 @@ pub enum ServeMode {
     Api,
 }
 
+use std::sync::Arc;
+
 use crate::{
     admin, api,
     config::{AuthConfig, CrapConfig},
-    core::{Registry, SharedRegistry, event::EventBus, upload::format_filesize},
+    core::{
+        Registry, SharedRegistry, event::EventBus, rate_limit::LoginRateLimiter,
+        upload::format_filesize,
+    },
     db::{DbConnection, migrate, pool},
     hooks,
     hooks::HookRunner,
@@ -344,6 +349,12 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     if cfg.server.grpc_rate_limit_requests == 0 {
         warn!("gRPC API rate limiting is disabled (grpc_rate_limit_requests = 0)");
     }
+    if cfg.server.h2c && !cfg.server.trust_proxy {
+        warn!(
+            "h2c enabled but trust_proxy is false — \
+             per-IP rate limiting will use the proxy's IP, not the client's"
+        );
+    }
 
     // Snapshot the registry for hot-path consumers (admin UI + gRPC).
     // HookRunner + scheduler keep the SharedRegistry (which is only read at runtime anyway).
@@ -385,6 +396,27 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
         info!("Background job scheduler disabled");
     }
 
+    // Create shared rate limiters — both admin and gRPC servers share the same
+    // instances so an attacker can't double their attempt budget across servers.
+    let login_limiter = Arc::new(LoginRateLimiter::new(
+        cfg.auth.max_login_attempts,
+        cfg.auth.login_lockout_seconds,
+    ));
+    let ip_login_limiter = Arc::new(LoginRateLimiter::new(
+        cfg.auth.max_ip_login_attempts,
+        cfg.auth.login_lockout_seconds,
+    ));
+    let forgot_password_limiter = Arc::new(LoginRateLimiter::new(
+        cfg.auth.max_forgot_password_attempts,
+        cfg.auth.forgot_password_window_seconds,
+    ));
+    // Uses max_ip_login_attempts intentionally — shared per-IP budget for login
+    // and forgot-password (same threat model: brute-force from a single IP).
+    let ip_forgot_password_limiter = Arc::new(LoginRateLimiter::new(
+        cfg.auth.max_ip_login_attempts,
+        cfg.auth.forgot_password_window_seconds,
+    ));
+
     let admin_handle = async {
         if run_admin {
             admin::server::start(
@@ -397,6 +429,10 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .hook_runner(hook_runner.clone())
                     .jwt_secret(jwt_secret.clone())
                     .event_bus(event_bus.clone())
+                    .login_limiter(login_limiter.clone())
+                    .ip_login_limiter(ip_login_limiter.clone())
+                    .forgot_password_limiter(forgot_password_limiter.clone())
+                    .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
                     .build(),
                 shutdown.clone(),
             )
@@ -418,6 +454,10 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                     .config(cfg.clone())
                     .config_dir(config_dir.clone())
                     .event_bus(event_bus.clone())
+                    .login_limiter(login_limiter.clone())
+                    .ip_login_limiter(ip_login_limiter.clone())
+                    .forgot_password_limiter(forgot_password_limiter.clone())
+                    .ip_forgot_password_limiter(ip_forgot_password_limiter.clone())
                     .build(),
                 shutdown.clone(),
             )

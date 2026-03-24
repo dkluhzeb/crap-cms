@@ -15,7 +15,7 @@ pub mod slug;
 pub mod upload;
 pub mod validate;
 
-pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret};
+pub use auth::{AuthUser, Claims, HashedPassword, JwtSecret, ResetTokenError};
 pub use collection::CollectionDefinition;
 pub use document::Document;
 pub use document_id::DocumentId;

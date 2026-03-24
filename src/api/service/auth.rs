@@ -1,6 +1,6 @@
 //! Auth RPCs: login, me, forgot_password, reset_password, verify_email.
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use serde_json::json;
 use tonic::{Request, Response, Status};
 
@@ -8,7 +8,7 @@ use crate::{
     api::content,
     core::{
         Slug,
-        auth::{self, ClaimsBuilder},
+        auth::{self, ClaimsBuilder, ResetTokenError},
         email,
     },
     db::query,
@@ -348,7 +348,19 @@ impl ContentService {
         &self,
         request: Request<content::ResetPasswordRequest>,
     ) -> Result<Response<content::ResetPasswordResponse>, Status> {
+        let ip = request
+            .remote_addr()
+            .map(|a| a.ip().to_string())
+            .unwrap_or_default();
         let req = request.into_inner();
+
+        // Rate limit by IP — prevents brute-forcing reset tokens
+        if !ip.is_empty() && self.ip_login_limiter.is_blocked(&ip) {
+            return Err(Status::resource_exhausted(
+                "Too many attempts, try again later",
+            ));
+        }
+
         let def = self.get_collection_def(&req.collection)?;
 
         if !def.is_auth_collection() {
@@ -368,15 +380,15 @@ impl ContentService {
         let password = req.new_password.clone();
         let def_owned = def;
 
-        tokio::task::spawn_blocking(move || {
+        let result: Result<(), anyhow::Error> = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
             let (user, exp) = query::find_by_reset_token(&conn, &slug, &def_owned, &token)?
-                .ok_or_else(|| anyhow!("Invalid reset token"))?;
+                .ok_or(ResetTokenError::NotFound)?;
 
             if chrono::Utc::now().timestamp() >= exp {
                 query::clear_reset_token(&conn, &slug, &user.id)?;
 
-                return Err(anyhow!("Reset token has expired"));
+                return Err(ResetTokenError::Expired.into());
             }
 
             query::update_password(&conn, &slug, &user.id, &password)?;
@@ -387,21 +399,27 @@ impl ContentService {
         .map_err(|e| {
             tracing::error!("Reset password task error: {}", e);
             Status::internal("Internal error")
-        })?
-        .map_err(|e| {
-            let msg = e.to_string();
-
-            if msg.contains("Invalid reset token") || msg.contains("expired") {
-                Status::invalid_argument(msg)
-            } else {
-                tracing::error!("Reset password error: {}", e);
-                Status::internal("Internal error")
-            }
         })?;
 
-        Ok(Response::new(content::ResetPasswordResponse {
-            success: true,
-        }))
+        match result {
+            Ok(()) => Ok(Response::new(content::ResetPasswordResponse {
+                success: true,
+            })),
+            Err(e) => {
+                // Record failure on invalid/expired token — not on success
+                if !ip.is_empty() {
+                    self.ip_login_limiter.record_failure(&ip);
+                }
+
+                match e.downcast_ref::<ResetTokenError>() {
+                    Some(_) => Err(Status::invalid_argument(e.to_string())),
+                    None => {
+                        tracing::error!("Reset password error: {}", e);
+                        Err(Status::internal("Internal error"))
+                    }
+                }
+            }
+        }
     }
 
     /// Verify an email address using a verification token.

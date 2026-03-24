@@ -1,58 +1,66 @@
-use anyhow::anyhow;
+use std::net::SocketAddr;
+
 use axum::{
-    extract::{Form, State},
+    extract::{ConnectInfo, Form, State},
+    http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
 use serde_json::json;
 use tokio::task;
 
-use super::ResetPasswordForm;
+use super::{ResetPasswordForm, client_ip};
 use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
     },
+    core::auth::ResetTokenError,
     db::query,
 };
+
+/// Render a reset password error page with the given error key and optional token.
+fn render_reset_error(state: &AdminState, token: Option<&str>, error: &str) -> Response {
+    let mut builder = ContextBuilder::auth(state)
+        .page(PageType::AuthReset, "Reset Password")
+        .set("error", json!(error));
+
+    if let Some(t) = token {
+        builder = builder.set("token", json!(t));
+    }
+
+    let data = builder.build();
+
+    match state.render("auth/reset_password", &data) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            tracing::error!("Template render error: {}", e);
+            Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
+                .into_response()
+        }
+    }
+}
 
 /// POST /admin/reset-password — validate token, update password, redirect to login.
 pub async fn reset_password_action(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Form(form): Form<ResetPasswordForm>,
 ) -> Response {
-    if form.password != form.password_confirm {
-        let data = ContextBuilder::auth(&state)
-            .page(PageType::AuthReset, "Reset Password")
-            .set("token", json!(form.token))
-            .set("error", json!("error_passwords_no_match"))
-            .build();
+    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
 
-        return match state.render("auth/reset_password", &data) {
-            Ok(html) => Html(html),
-            Err(e) => {
-                tracing::error!("Template render error: {}", e);
-                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-            }
-        }
-        .into_response();
+    // Rate limit by IP — prevents brute-forcing reset tokens
+    if state.ip_login_limiter.is_blocked(&ip) {
+        return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
+    }
+
+    if form.password != form.password_confirm {
+        return render_reset_error(&state, Some(&form.token), "error_passwords_no_match");
     }
 
     if let Err(e) = state.config.auth.password_policy.validate(&form.password) {
-        let data = ContextBuilder::auth(&state)
-            .page(PageType::AuthReset, "Reset Password")
-            .set("token", json!(form.token))
-            .set("error", json!(e.to_string()))
-            .build();
-
-        return match state.render("auth/reset_password", &data) {
-            Ok(html) => Html(html),
-            Err(e) => {
-                tracing::error!("Template render error: {}", e);
-                Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-            }
-        }
-        .into_response();
+        return render_reset_error(&state, Some(&form.token), &e.to_string());
     }
 
     let pool = state.pool.clone();
@@ -72,7 +80,7 @@ pub async fn reset_password_action(
             if let Some((user, exp)) = query::find_by_reset_token(&conn, &def.slug, def, &token)? {
                 if Utc::now().timestamp() >= exp {
                     query::clear_reset_token(&conn, &def.slug, &user.id)?;
-                    return Err(anyhow!("expired"));
+                    return Err(ResetTokenError::Expired.into());
                 }
 
                 // Update password and clear token
@@ -83,47 +91,25 @@ pub async fn reset_password_action(
             }
         }
 
-        Err(anyhow!("invalid_token"))
+        Err(anyhow::Error::from(ResetTokenError::NotFound))
     })
     .await;
 
     match result {
         Ok(Ok(())) => Redirect::to("/admin/login?success=success_password_reset").into_response(),
         Ok(Err(e)) => {
-            let msg = if e.to_string().contains("expired") {
-                "error_reset_link_expired"
-            } else {
-                "error_reset_link_invalid"
-            };
-            let data = ContextBuilder::auth(&state)
-                .page(PageType::AuthReset, "Reset Password")
-                .set("error", json!(msg))
-                .build();
+            // Record failure on invalid/expired token — not on success
+            state.ip_login_limiter.record_failure(&ip);
 
-            match state.render("auth/reset_password", &data) {
-                Ok(html) => Html(html),
-                Err(e) => {
-                    tracing::error!("Template render error: {}", e);
-                    Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-                }
-            }
-            .into_response()
+            let msg = match e.downcast_ref::<ResetTokenError>() {
+                Some(ResetTokenError::Expired) => "error_reset_link_expired",
+                _ => "error_reset_link_invalid",
+            };
+            render_reset_error(&state, None, msg)
         }
         Err(e) => {
             tracing::error!("Reset password task error: {}", e);
-            let data = ContextBuilder::auth(&state)
-                .page(PageType::AuthReset, "Reset Password")
-                .set("error", json!("error_internal"))
-                .build();
-
-            match state.render("auth/reset_password", &data) {
-                Ok(html) => Html(html),
-                Err(e) => {
-                    tracing::error!("Template render error: {}", e);
-                    Html("<h1>Something went wrong</h1><p>Please try again.</p>".to_string())
-                }
-            }
-            .into_response()
+            render_reset_error(&state, None, "error_internal")
         }
     }
 }
