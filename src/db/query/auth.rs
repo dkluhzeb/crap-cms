@@ -229,6 +229,23 @@ pub fn find_by_verification_token(
     }
 }
 
+/// Clear the verification token for a user (after expiry). Does NOT change `_verified` status.
+pub fn clear_verification_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
+    let sql = format!(
+        "UPDATE {} SET _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+    conn.execute(&sql, &[DbValue::Text(user_id.to_string())])
+        .with_context(|| {
+            format!(
+                "Failed to clear verification token for {} in {}",
+                user_id, slug
+            )
+        })?;
+    Ok(())
+}
+
 /// Mark a user as verified (set _verified = 1, clear token and expiry).
 pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
@@ -655,6 +672,32 @@ mod tests {
         // Unverify — should not re-create a token
         mark_unverified(&conn, "users", "user1").unwrap();
         assert!(!is_verified(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
+    fn clear_verification_token_removes_token_but_not_verified_status() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        let def = auth_def();
+
+        // Set a verification token
+        set_verification_token(&conn, "users", "user1", "verify-clear", 9999999999).unwrap();
+        let found = find_by_verification_token(&conn, "users", &def, "verify-clear").unwrap();
+        assert!(found.is_some(), "Token should exist before clearing");
+
+        // Clear the token
+        clear_verification_token(&conn, "users", "user1").unwrap();
+        let found = find_by_verification_token(&conn, "users", &def, "verify-clear").unwrap();
+        assert!(
+            found.is_none(),
+            "Token should be gone after clear_verification_token"
+        );
+
+        // User should still NOT be verified (clear_verification_token doesn't change _verified)
+        assert!(
+            !is_verified(&conn, "users", "user1").unwrap(),
+            "clear_verification_token should not mark user as verified"
+        );
     }
 
     #[test]

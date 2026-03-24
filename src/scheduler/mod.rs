@@ -17,8 +17,8 @@ use crate::{
     config::JobsConfig,
     core::{SharedRegistry, upload},
     db::{
-        DbConnection, DbPool,
-        query::{images as image_query, jobs as job_query},
+        DbConnection, DbPool, DbValue,
+        query::{self, images as image_query, jobs as job_query},
     },
     hooks::HookRunner,
 };
@@ -167,6 +167,24 @@ async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
     for entry in entries {
         let entry_id = entry.id.clone();
 
+        // Validate SQL identifiers from the queue entry before interpolation
+        if !query::is_valid_identifier(&entry.collection) {
+            tracing::warn!(
+                "Image queue: skipping entry {} — invalid collection identifier '{}'",
+                entry_id,
+                entry.collection
+            );
+            continue;
+        }
+        if !query::is_valid_identifier(&entry.url_column) {
+            tracing::warn!(
+                "Image queue: skipping entry {} — invalid url_column identifier '{}'",
+                entry_id,
+                entry.url_column
+            );
+            continue;
+        }
+
         // Process in a blocking task (image encoding is CPU-bound)
         let source = entry.source_path.clone();
         let target = entry.target_path.clone();
@@ -193,8 +211,8 @@ async fn process_image_queue(pool: &DbPool, batch_size: usize) -> Result<()> {
                         conn.placeholder(2)
                     ),
                     &[
-                        crate::db::DbValue::Text(entry.url_value.clone()),
-                        crate::db::DbValue::Text(entry.document_id.clone()),
+                        DbValue::Text(entry.url_value.clone()),
+                        DbValue::Text(entry.document_id.clone()),
                     ],
                 )
                 .context("Image queue: failed to update document")?;

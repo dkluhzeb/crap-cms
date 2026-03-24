@@ -3,7 +3,7 @@
 use std::{fs, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
-use mlua::Lua;
+use mlua::{Lua, StdLib};
 
 use crate::{
     config::CrapConfig,
@@ -89,7 +89,8 @@ fn create_lua_vm(
     config: &CrapConfig,
     vm_index: usize,
 ) -> Result<Lua> {
-    let lua = Lua::new();
+    let lua = Lua::new_with(StdLib::ALL_SAFE, mlua::LuaOptions::default())?;
+    hooks::sandbox_lua(&lua)?;
     if config.hooks.max_memory > 0 {
         lua.set_memory_limit(config.hooks.max_memory as usize)?;
     }

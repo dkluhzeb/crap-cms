@@ -268,11 +268,21 @@ async fn serve_with_headers(
         cache_control.parse().expect("valid cache-control"),
     );
 
-    // SVGs get attachment + CSP sandbox to prevent stored XSS
+    // SVGs get attachment + CSP sandbox to prevent stored XSS.
+    // Non-image files include the original filename for proper download naming.
     let disposition = if mime.starts_with("image/") && mime != "image/svg+xml" {
-        "inline"
+        "inline".to_string()
     } else {
-        "attachment"
+        // Extract original filename: strip nanoid prefix (format: "nanoid_originalname.ext")
+        let original = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.find('_').map(|pos| &n[pos + 1..]))
+            .filter(|n| !n.is_empty());
+        match original {
+            Some(name) => format!("attachment; filename=\"{}\"", name.replace('"', "_")),
+            None => "attachment".to_string(),
+        }
     };
 
     response.headers_mut().insert(

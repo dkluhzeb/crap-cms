@@ -629,6 +629,7 @@ async fn delete_many_basic() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            hooks: None,
         }))
         .await
         .unwrap()
@@ -671,6 +672,7 @@ async fn delete_many_with_where_partial() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            hooks: None,
         }))
         .await
         .unwrap()
@@ -688,6 +690,7 @@ async fn delete_many_no_matches() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "nonexistent"}"#.to_string()),
+            hooks: None,
         }))
         .await
         .unwrap()

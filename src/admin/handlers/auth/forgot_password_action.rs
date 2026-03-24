@@ -24,14 +24,12 @@ pub async fn forgot_password_action(
     let auth_collections = get_auth_collections(&state);
     let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
 
-    // Rate limit: prevent email/IP flooding (always count, always return success)
+    // Rate limit: prevent email/IP flooding (check only — don't record yet)
     if state.forgot_password_limiter.is_blocked(&form.email)
         || state.ip_forgot_password_limiter.is_blocked(&ip)
     {
         return render_forgot_success(&state, &auth_collections);
     }
-    state.forgot_password_limiter.record_failure(&form.email);
-    state.ip_forgot_password_limiter.record_failure(&ip);
 
     // Try to find user and send reset email in background
     let def = state.registry.get_collection(&form.collection).cloned();
@@ -39,15 +37,20 @@ pub async fn forgot_password_action(
     if let Some(def) = def
         && def.is_auth_collection()
         && def.auth.as_ref().is_some_and(|a| a.forgot_password)
+        && !def.auth.as_ref().is_some_and(|a| a.disable_local)
     {
         let pool = state.pool.clone();
         let slug = form.collection.clone();
         let user_email = form.email.clone();
         let def_owned = def;
         let email_config = state.config.email.clone();
+        let public_url = state.config.server.public_url.clone();
         let admin_port = state.config.server.admin_port;
         let host = state.config.server.host.clone();
         let reset_expiry = state.config.auth.reset_token_expiry;
+        let forgot_limiter = state.forgot_password_limiter.clone();
+        let ip_forgot_limiter = state.ip_forgot_password_limiter.clone();
+        let ip_owned = ip;
 
         // Load email renderer (we do this on the main thread since it's cheap)
         let email_renderer = state.email_renderer.clone();
@@ -70,6 +73,16 @@ pub async fn forgot_password_action(
                 }
             };
 
+            // Only record rate limit when a user was actually found —
+            // prevents attackers from exhausting the rate limit with non-existent emails.
+            //
+            // Trade-off: recording happens inside the background task, so concurrent
+            // requests arriving before this point can bypass the rate limit window.
+            // This is acceptable — moving recording before the lookup would leak
+            // whether an email exists (rate-limited vs. not).
+            forgot_limiter.record_failure(&user_email);
+            ip_forgot_limiter.record_failure(&ip_owned);
+
             // Generate reset token (nanoid)
             let token = nanoid!();
             let exp = Utc::now().timestamp() + reset_expiry as i64;
@@ -80,11 +93,13 @@ pub async fn forgot_password_action(
             }
 
             // Send reset email
-            let base_url = if host == "0.0.0.0" {
-                format!("http://localhost:{}", admin_port)
-            } else {
-                format!("http://{}:{}", host, admin_port)
-            };
+            let base_url = public_url.unwrap_or_else(|| {
+                if host == "0.0.0.0" {
+                    format!("http://localhost:{}", admin_port)
+                } else {
+                    format!("http://{}:{}", host, admin_port)
+                }
+            });
             let reset_url = format!("{}/admin/reset-password?token={}", base_url, token);
 
             let html = match email_renderer.render(

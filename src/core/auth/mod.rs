@@ -106,6 +106,9 @@ pub fn create_token(claims: &Claims, secret: &str) -> Result<String> {
 pub fn validate_token(token: &str, secret: &str) -> Result<Claims> {
     let key = jsonwebtoken::DecodingKey::from_secret(secret.as_bytes());
     let mut validation = jsonwebtoken::Validation::default();
+    // Clear required_spec_claims to avoid rejecting tokens that lack optional claims
+    // (e.g., `aud`, `iss`). We only enforce `exp` via validate_exp. This is safe because
+    // serde deserialization still populates all Claims fields from the token payload.
     validation.required_spec_claims.clear();
     validation.validate_exp = true;
     let data =

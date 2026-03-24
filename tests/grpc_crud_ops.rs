@@ -1071,6 +1071,7 @@ async fn delete_many_cleans_up_upload_files() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "media".to_string(),
             r#where: None,
+            hooks: None,
         }))
         .await
         .unwrap()

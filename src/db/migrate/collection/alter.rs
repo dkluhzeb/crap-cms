@@ -1,14 +1,16 @@
 //! ALTER TABLE operations for existing collection tables.
 
 use anyhow::{Context as _, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     config::LocaleConfig,
     core::{CollectionDefinition, FieldType},
     db::{
         DbConnection,
-        migrate::helpers::{collect_column_specs, get_table_columns, sanitize_locale},
+        migrate::helpers::{
+            collect_column_specs, get_table_column_types, get_table_columns, sanitize_locale,
+        },
     },
 };
 
@@ -18,6 +20,8 @@ struct AlterCtx<'a> {
     slug: &'a str,
     def: &'a CollectionDefinition,
     existing: &'a HashSet<String>,
+    /// Column name -> DB type (from PRAGMA table_info) for type mismatch detection.
+    column_types: &'a HashMap<String, String>,
 }
 
 impl<'a> AlterCtx<'a> {
@@ -27,6 +31,7 @@ impl<'a> AlterCtx<'a> {
             slug,
             def: None,
             existing: None,
+            column_types: None,
         }
     }
 }
@@ -37,6 +42,7 @@ struct AlterCtxBuilder<'a> {
     slug: &'a str,
     def: Option<&'a CollectionDefinition>,
     existing: Option<&'a HashSet<String>>,
+    column_types: Option<&'a HashMap<String, String>>,
 }
 
 impl<'a> AlterCtxBuilder<'a> {
@@ -50,25 +56,51 @@ impl<'a> AlterCtxBuilder<'a> {
         self
     }
 
+    fn column_types(mut self, v: &'a HashMap<String, String>) -> Self {
+        self.column_types = Some(v);
+        self
+    }
+
     fn build(self) -> AlterCtx<'a> {
         AlterCtx {
             conn: self.conn,
             slug: self.slug,
             def: self.def.expect("AlterCtx requires def"),
             existing: self.existing.expect("AlterCtx requires existing"),
+            column_types: self.column_types.expect("AlterCtx requires column_types"),
         }
+    }
+}
+
+/// Warn if an existing column's DB type differs from the expected type.
+fn warn_type_mismatch(ctx: &AlterCtx, col_name: &str, expected_type: &str) {
+    if let Some(db_type) = ctx.column_types.get(col_name)
+        && !db_type.eq_ignore_ascii_case(expected_type)
+    {
+        tracing::warn!(
+            "Column '{}' in table '{}' has type '{}' but definition expects '{}' \
+             (not auto-migrated — manual migration required)",
+            col_name,
+            ctx.slug,
+            db_type,
+            expected_type
+        );
     }
 }
 
 /// Add missing user-defined field columns (including localized variants).
 fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()> {
     for spec in &collect_column_specs(&ctx.def.fields, locale_config) {
+        let expected_type = ctx.conn.column_type_for(&spec.field.field_type);
+
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
 
-                if !ctx.existing.contains(&col_name) {
-                    let mut col_def = ctx.conn.column_type_for(&spec.field.field_type).to_string();
+                if ctx.existing.contains(&col_name) {
+                    warn_type_mismatch(ctx, &col_name, expected_type);
+                } else {
+                    let mut col_def = expected_type.to_string();
                     super::create::append_default_value(
                         &mut col_def,
                         &spec.field.default_value,
@@ -84,8 +116,10 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                     })?;
                 }
             }
-        } else if !ctx.existing.contains(&spec.col_name) {
-            let mut col_def = ctx.conn.column_type_for(&spec.field.field_type).to_string();
+        } else if ctx.existing.contains(&spec.col_name) {
+            warn_type_mismatch(ctx, &spec.col_name, expected_type);
+        } else {
+            let mut col_def = expected_type.to_string();
             super::create::append_default_value(
                 &mut col_def,
                 &spec.field.default_value,
@@ -269,9 +303,11 @@ pub(super) fn alter_collection_table(
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let existing = get_table_columns(conn, slug)?;
+    let column_types = get_table_column_types(conn, slug)?;
     let ctx = AlterCtx::builder(conn, slug)
         .def(def)
         .existing(&existing)
+        .column_types(&column_types)
         .build();
 
     add_field_columns(&ctx, locale_config)?;

@@ -1,6 +1,7 @@
 //! Bulk collection RPC handlers: UpdateMany, DeleteMany.
 
 use anyhow::Context as _;
+use serde_json::Value;
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -13,6 +14,8 @@ use crate::{
     },
     core::upload,
     db::{AccessResult, DbConnection, FindQuery, LocaleContext, query},
+    hooks::{HookContext, HookEvent},
+    service::{self, versions},
 };
 
 use super::{filter_builder::FilterBuilder, helpers::map_db_error};
@@ -21,7 +24,7 @@ use super::{filter_builder::FilterBuilder, helpers::map_db_error};
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.
 #[cfg(not(tarpaulin_include))]
 impl ContentService {
-    /// Bulk update matching documents (all-or-nothing access check, no per-document hooks).
+    /// Bulk update matching documents. Runs per-document lifecycle hooks by default.
     pub(in crate::api::service) async fn update_many_impl(
         &self,
         request: Request<content::UpdateManyRequest>,
@@ -55,6 +58,7 @@ impl ContentService {
 
         let locale_ctx =
             LocaleContext::from_locale_string(req.locale.as_deref(), &self.locale_config);
+        let run_hooks = req.hooks.unwrap_or(true);
 
         let pool = self.pool.clone();
         let hook_runner = self.hook_runner.clone();
@@ -126,8 +130,25 @@ impl ContentService {
                 }
             }
 
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let mut count = 0i64;
             for doc in &docs {
+                if run_hooks {
+                    let hook_data = service::build_hook_data(&data, &join_data);
+                    let hook_ctx = HookContext::builder(&collection, "update")
+                        .data(hook_data)
+                        .user(user_doc)
+                        .build();
+                    hook_runner
+                        .run_hooks_with_conn(
+                            &def_owned.hooks,
+                            HookEvent::BeforeChange,
+                            hook_ctx,
+                            &tx,
+                        )
+                        .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
+                }
+
                 let updated = query::update(
                     &tx,
                     &collection,
@@ -150,6 +171,35 @@ impl ContentService {
                     query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))
                         .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
                 }
+
+                if def_owned.has_versions() {
+                    let vs_ctx = versions::VersionSnapshotCtx::builder(&collection, &updated.id)
+                        .fields(&def_owned.fields)
+                        .versions(def_owned.versions.as_ref())
+                        .has_drafts(def_owned.has_drafts())
+                        .build();
+                    versions::create_version_snapshot(&tx, &vs_ctx, "published", &updated)
+                        .map_err(|e| map_db_error(e, "UpdateMany version error", &db_kind))?;
+                }
+
+                if run_hooks {
+                    let mut after_data = updated.fields.clone();
+                    after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
+                    let after_ctx = HookContext::builder(&collection, "update")
+                        .data(after_data)
+                        .user(user_doc)
+                        .build();
+                    hook_runner
+                        .run_after_write(
+                            &def_owned.hooks,
+                            &def_owned.fields,
+                            HookEvent::AfterChange,
+                            after_ctx,
+                            &tx,
+                        )
+                        .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
+                }
+
                 count += 1;
             }
 
@@ -171,7 +221,7 @@ impl ContentService {
         Ok(Response::new(content::UpdateManyResponse { modified }))
     }
 
-    /// Bulk delete matching documents (all-or-nothing access check, no per-document hooks).
+    /// Bulk delete matching documents. Runs per-document lifecycle hooks by default.
     pub(in crate::api::service) async fn delete_many_impl(
         &self,
         request: Request<content::DeleteManyRequest>,
@@ -180,6 +230,7 @@ impl ContentService {
         let token = Self::extract_token(&metadata);
         let req = request.into_inner();
         let def = self.get_collection_def(&req.collection)?;
+        let run_hooks = req.hooks.unwrap_or(true);
 
         let pool = self.pool.clone();
         let hook_runner = self.hook_runner.clone();
@@ -246,27 +297,60 @@ impl ContentService {
                 }
             }
 
+            let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let mut count = 0i64;
             for doc in &docs {
+                if run_hooks {
+                    let hook_ctx = HookContext::builder(&collection, "delete")
+                        .data([("id".to_string(), Value::String(doc.id.to_string()))].into())
+                        .user(user_doc)
+                        .build();
+                    hook_runner
+                        .run_hooks_with_conn(
+                            &def_owned.hooks,
+                            HookEvent::BeforeDelete,
+                            hook_ctx,
+                            &tx,
+                        )
+                        .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
+                }
+
                 query::delete(&tx, &collection, &doc.id)
                     .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
                 if tx.supports_fts() {
                     query::fts::fts_delete(&tx, &collection, &doc.id)
                         .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
                 }
+
+                if run_hooks {
+                    let after_ctx = HookContext::builder(&collection, "delete")
+                        .data([("id".to_string(), Value::String(doc.id.to_string()))].into())
+                        .user(user_doc)
+                        .build();
+                    hook_runner
+                        .run_hooks_with_conn(
+                            &def_owned.hooks,
+                            HookEvent::AfterDelete,
+                            after_ctx,
+                            &tx,
+                        )
+                        .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
+                }
+
                 count += 1;
             }
 
-            tx.commit()
-                .context("Commit transaction")
-                .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
-
-            // Clean up upload files for deleted documents
+            // Clean up upload files before commit — failures are logged but don't
+            // abort the transaction (files are non-critical relative to data).
             if def_owned.is_upload_collection() {
                 for doc in &docs {
                     upload::delete_upload_files(&config_dir, &doc.fields);
                 }
             }
+
+            tx.commit()
+                .context("Commit transaction")
+                .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
             Ok(count)
         })

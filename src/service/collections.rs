@@ -245,7 +245,10 @@ pub fn delete_document(
     let final_ctx =
         runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx)?;
 
-    query::delete(&tx, slug, id)?;
+    let deleted = query::delete(&tx, slug, id)?;
+    if !deleted {
+        anyhow::bail!("Document '{}' not found in '{}'", id, slug);
+    }
 
     if tx.supports_fts() {
         query::fts::fts_delete(&tx, slug, id)?;

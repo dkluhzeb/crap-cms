@@ -1,10 +1,13 @@
 //! `serve` command — start admin UI and gRPC servers.
 
 use anyhow::{Context as _, Result, anyhow, bail};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     env, fs,
     path::{Path, PathBuf},
     process,
+    sync::Arc,
 };
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
@@ -18,8 +21,6 @@ pub enum ServeMode {
     Admin,
     Api,
 }
-
-use std::sync::Arc;
 
 use crate::{
     admin, api,
@@ -149,6 +150,15 @@ fn resolve_jwt_secret(auth_cfg: &AuthConfig, config_dir: &Path) -> String {
                 e
             );
         } else {
+            // Restrict file permissions to owner-only on Unix
+            #[cfg(unix)]
+            if let Err(e) = fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600)) {
+                warn!(
+                    "Failed to set permissions on JWT secret file {}: {}",
+                    secret_path.display(),
+                    e
+                );
+            }
             warn!(
                 "Generated and persisted JWT secret to {}",
                 secret_path.display()

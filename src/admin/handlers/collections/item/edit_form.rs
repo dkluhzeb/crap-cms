@@ -77,6 +77,8 @@ pub async fn edit_form(
         None
     };
     let has_drafts = def.has_drafts();
+    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
+    let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
     let read_result = task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "find_by_id", HashMap::new())?;
@@ -105,8 +107,8 @@ pub async fn edit_form(
             fields: &fields,
             collection: &slug_owned,
             operation: "find_by_id",
-            user: None,
-            ui_locale: None,
+            user: user_doc.as_ref(),
+            ui_locale: user_ui_locale.as_deref(),
         };
         let doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));
 

@@ -768,10 +768,12 @@ async fn login_blocked_when_unverified() {
         }))
         .await
         .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    // Unified error: locked/unverified accounts return the same generic error
+    // as wrong-password to prevent attackers from confirming password correctness.
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
     assert!(
-        err.message().to_lowercase().contains("verif"),
-        "Error should mention verification, got: {}",
+        err.message().to_lowercase().contains("invalid"),
+        "Should return generic 'Invalid email or password', got: {}",
         err.message()
     );
 }
@@ -1022,6 +1024,12 @@ async fn login_locked_account() {
         .await
         .unwrap_err();
 
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
-    assert!(err.message().to_lowercase().contains("locked"));
+    // Unified error: locked accounts return the same generic error as wrong-password
+    // to prevent attackers from confirming password correctness.
+    assert_eq!(err.code(), tonic::Code::Unauthenticated);
+    assert!(
+        err.message().to_lowercase().contains("invalid"),
+        "Should return generic 'Invalid email or password', got: {}",
+        err.message()
+    );
 }

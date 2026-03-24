@@ -1,6 +1,6 @@
 # Lifecycle Events
 
-Eight lifecycle events fire during CRUD operations.
+Nine lifecycle events fire during CRUD operations and admin page rendering.
 
 ## Event Reference
 
@@ -14,6 +14,7 @@ Eight lifecycle events fire during CRUD operations.
 | `before_delete` | delete | No | Yes | Can abort the delete. CRUD access for cascading deletes. |
 | `after_delete` | delete | No | Yes | Runs inside the transaction. Cleanup, cascading deletes. Errors roll back the entire operation. |
 | `before_broadcast` | create, update, delete | Yes (data) | No | Can suppress or transform live update events. See [Live Updates](../live-updates/hooks.md). |
+| `before_render` | admin page render | Yes (context) | No | Runs before rendering admin pages. Receives the full template context and can modify it. Global-only (no collection-level refs). Useful for injecting global template data. |
 
 ## Document ID in Hook Context
 

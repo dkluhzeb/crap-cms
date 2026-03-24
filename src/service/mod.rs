@@ -12,7 +12,7 @@ mod persist;
 mod persist_options_builder;
 mod types;
 mod version_snapshot_ctx_builder;
-mod versions;
+pub(crate) mod versions;
 mod write_input_builder;
 
 pub(crate) use after_change_input_builder::AfterChangeInputBuilder;

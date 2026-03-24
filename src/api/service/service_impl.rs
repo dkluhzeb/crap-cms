@@ -87,6 +87,7 @@ impl ContentService {
             .get("authorization")
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.strip_prefix("Bearer "))
+            .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
     }
 
@@ -417,7 +418,7 @@ mod tests {
     fn extract_token_empty_value() {
         let mut meta = MetadataMap::new();
         meta.insert("authorization", "Bearer ".parse().unwrap());
-        assert_eq!(ContentService::extract_token(&meta), Some(String::new()));
+        assert_eq!(ContentService::extract_token(&meta), None);
     }
 
     #[test]

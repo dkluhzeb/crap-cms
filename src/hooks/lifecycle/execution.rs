@@ -12,8 +12,8 @@ use crate::{
     hooks::{
         api,
         lifecycle::{
-            DisplayConditionResult, FieldHookEvent, HookEvent, context::HookContext,
-            evaluate_condition_table,
+            DisplayConditionResult, FieldHookEvent, HookEvent, UiLocaleContext, UserContext,
+            context::HookContext, evaluate_condition_table,
         },
     },
 };
@@ -455,6 +455,19 @@ pub(crate) fn call_field_hook_ref(
         data_table.set(k.as_str(), api::json_to_lua(lua, v)?)?;
     }
     ctx_table.set("data", data_table)?;
+
+    // Inject user and ui_locale from TxContext if available
+    if let Some(user_ctx) = lua.app_data_ref::<UserContext>()
+        && let Some(ref user) = user_ctx.0
+    {
+        let user_table = crate::hooks::lifecycle::converters::document_to_lua_table(lua, user)?;
+        ctx_table.set("user", user_table)?;
+    }
+    if let Some(locale_ctx) = lua.app_data_ref::<UiLocaleContext>()
+        && let Some(ref locale) = locale_ctx.0
+    {
+        ctx_table.set("ui_locale", locale.as_str())?;
+    }
 
     // Call: new_value = hook(value, context)
     let result: Value = func.call((lua_value, ctx_table))?;

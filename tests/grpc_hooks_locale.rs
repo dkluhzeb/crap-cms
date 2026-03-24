@@ -810,6 +810,7 @@ async fn update_many_with_filter() {
             data: Some(make_struct(&[("status", "published")])),
             locale: None,
             draft: None,
+            hooks: None,
         }))
         .await
         .unwrap()
@@ -859,6 +860,7 @@ async fn delete_many_with_where() {
         .delete_many(Request::new(content::DeleteManyRequest {
             collection: "posts".to_string(),
             r#where: Some(r#"{"status": "draft"}"#.to_string()),
+            hooks: None,
         }))
         .await
         .unwrap()

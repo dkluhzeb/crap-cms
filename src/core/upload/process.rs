@@ -1,10 +1,12 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Cursor,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context as _, Result, bail};
+use image::ImageReader;
 
 use super::{
     resize::{resize_image, save_avif, save_webp},
@@ -134,6 +136,19 @@ pub fn process_upload(
     let mut queued_conversions = Vec::new();
 
     if is_image {
+        // Check image dimensions before full decode to prevent decompression bombs
+        {
+            let reader = ImageReader::new(Cursor::new(&file.data))
+                .with_guessed_format()
+                .context("Failed to detect image format")?;
+            if let Ok((w, h)) = reader.into_dimensions() {
+                const MAX_PIXELS: u64 = 100_000_000; // 100 megapixels
+                if (w as u64) * (h as u64) > MAX_PIXELS {
+                    bail!("Image too large: {}x{} exceeds pixel limit", w, h);
+                }
+            }
+        }
+
         // Load image for processing
         let img = image::load_from_memory(&file.data).with_context(|| "Failed to decode image")?;
 
@@ -247,9 +262,10 @@ mod tests {
         FormatOptions, FormatQuality, ImageFit, ImageSizeBuilder, UploadedFileBuilder,
     };
 
+    use image::{ImageBuffer, ImageEncoder, Rgba};
+
     /// Create a small test PNG image in memory.
     fn create_test_png(width: u32, height: u32) -> Vec<u8> {
-        use image::{ImageBuffer, ImageEncoder, Rgba};
         let img: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(width, height, |x, y| {
             Rgba([(x % 256) as u8, (y % 256) as u8, 128, 255])
         });

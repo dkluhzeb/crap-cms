@@ -18,6 +18,9 @@ Collection-level hooks receive a context table and must return a (potentially mo
     },
     draft = true,               -- Whether this is a draft save (versioned collections only)
     hook_depth = 0,             -- Current recursion depth (0 = top-level, 1+ = from Lua CRUD in hooks)
+    context = {                 -- Request-scoped shared table (persists across all hooks in the same request)
+        -- Hooks can read and write arbitrary keys here to share data
+    },
     user = {                    -- Authenticated user document (nil if unauthenticated)
         id = "user_123",
         email = "admin@example.com",
@@ -179,3 +182,32 @@ function M.audit_hook(ctx)
     return ctx
 end
 ```
+
+## Context (Request-Scoped Shared Table)
+
+The `context` field is a request-scoped table that persists across all hooks in the same request. It allows hooks to share data with each other without relying on module-level state.
+
+Each hook in the chain receives the same `context` table, and any modifications made by one hook are visible to all subsequent hooks in the same request. The table starts empty at the beginning of each request.
+
+This is useful for:
+- Passing computed values from `before_validate` to `before_change` without recomputing
+- Sharing request metadata between hooks
+- Accumulating data across multiple hooks for use in `after_change`
+
+```lua
+-- In before_validate hook: compute and share a value
+function M.before_validate(ctx)
+    ctx.context.original_title = ctx.data.title
+    return ctx
+end
+
+-- In after_change hook: use the shared value
+function M.after_change(ctx)
+    if ctx.context.original_title ~= ctx.data.title then
+        crap.log.info("Title changed from: " .. (ctx.context.original_title or "nil"))
+    end
+    return ctx
+end
+```
+
+> **Note:** The `context` table is not the same as module-level variables. Module-level variables persist across requests on the same VM (see [Hooks Overview](overview.md#state--module-caching)), while `context` is scoped to a single request and automatically cleaned up.

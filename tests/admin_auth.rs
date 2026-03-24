@@ -2,24 +2,27 @@
 //!
 //! Covers: login/logout, auth middleware, email verification, forgot/reset password.
 
-use std::sync::Arc;
+use std::{net::SocketAddr, sync::Arc};
 
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::{
+    body::Body,
+    extract::ConnectInfo,
+    http::{Request, StatusCode},
+};
 use http_body_util::BodyExt;
+use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
-use crap_cms::admin::AdminState;
-use crap_cms::admin::server::build_router;
-use crap_cms::admin::templates;
-use crap_cms::config::CrapConfig;
-use crap_cms::core::auth;
-use crap_cms::core::collection::*;
-use crap_cms::core::email::EmailRenderer;
-use crap_cms::core::field::*;
-use crap_cms::core::{JwtSecret, Registry};
 use crap_cms::db::{migrate, pool, query};
 use crap_cms::hooks::lifecycle::HookRunner;
+use crap_cms::{
+    admin::{AdminState, server::build_router, templates},
+    config::CrapConfig,
+    core::{
+        JwtSecret, Registry, auth, collection::*, email::EmailRenderer, field::*,
+        rate_limit::LoginRateLimiter,
+    },
+};
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -126,12 +129,8 @@ fn setup_app_with_config(
         jwt_secret: "test-jwt-secret".into(),
         email_renderer,
         event_bus: None,
-        login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
-            5, 300,
-        )),
-        ip_login_limiter: std::sync::Arc::new(crap_cms::core::rate_limit::LoginRateLimiter::new(
-            20, 300,
-        )),
+        login_limiter: Arc::new(LoginRateLimiter::new(5, 300)),
+        ip_login_limiter: Arc::new(LoginRateLimiter::new(20, 300)),
         forgot_password_limiter: std::sync::Arc::new(
             crap_cms::core::rate_limit::LoginRateLimiter::new(3, 900),
         ),
@@ -140,7 +139,7 @@ fn setup_app_with_config(
         ),
         has_auth,
         translations,
-        shutdown: tokio_util::sync::CancellationToken::new(),
+        shutdown: CancellationToken::new(),
     };
 
     let router = build_router(state);
@@ -248,10 +247,7 @@ async fn login_action_invalid_credentials() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "collection=users&email=user@test.com&password=wrong",
                 ))
@@ -279,10 +275,7 @@ async fn login_action_valid_credentials() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "collection=users&email=valid@test.com&password=correct123",
                 ))
@@ -414,10 +407,7 @@ async fn login_locked_account() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "collection=users&email=locked@test.com&password=secret123",
                 ))
@@ -460,10 +450,7 @@ async fn login_wrong_password_shows_error() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "collection=users&email=wrongpw@test.com&password=wrongpassword",
                 ))
@@ -500,10 +487,7 @@ async fn login_nonexistent_email() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "collection=users&email=nope@test.com&password=secret123",
                 ))
@@ -531,10 +515,7 @@ async fn login_invalid_collection() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "collection=nonexistent&email=a@b.com&password=x",
                 ))
@@ -560,6 +541,7 @@ async fn verify_email_invalid_token() {
         .router
         .oneshot(
             Request::get("/admin/verify-email?token=badtoken&collection=users")
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -599,10 +581,7 @@ async fn login_unverified_email() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "collection=vusers&email=unverified@test.com&password=secret123",
                 ))
@@ -655,6 +634,7 @@ async fn verify_email_with_valid_token() {
         .router
         .oneshot(
             Request::get(format!("/admin/verify-email?token={}", token))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -704,10 +684,7 @@ async fn forgot_password_action() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from("collection=users&email=nonexistent@test.com"))
                 .unwrap(),
         )
@@ -734,10 +711,7 @@ async fn forgot_password_action_existing_email() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from("collection=users&email=exists@test.com"))
                 .unwrap(),
         )
@@ -796,10 +770,7 @@ async fn reset_password_expired_token() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(format!(
                     "collection=users&token={}&password=newpass123&password_confirm=newpass123",
                     expired_token
@@ -871,10 +842,7 @@ async fn reset_password_valid_flow() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(format!(
                     "token={}&password=newpass456&password_confirm=newpass456",
                     valid_token
@@ -910,10 +878,7 @@ async fn reset_password_mismatch() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "token=sometoken&password=newpass123&password_confirm=different456",
                 ))
@@ -945,10 +910,7 @@ async fn reset_password_mismatched_passwords() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "token=sometoken&password=newpass123&password_confirm=different456",
                 ))
@@ -982,10 +944,7 @@ async fn reset_password_too_short() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "token=sometoken&password=ab&password_confirm=ab",
                 ))
@@ -1018,10 +977,7 @@ async fn reset_password_action_invalid_token() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "token=totally-fake-token&password=newpass123&password_confirm=newpass123",
                 ))
@@ -1053,10 +1009,7 @@ async fn reset_password_invalid_token() {
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("Cookie", csrf_cookie())
                 .header("X-CSRF-Token", TEST_CSRF)
-                .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
-                    [127, 0, 0, 1],
-                    0,
-                ))))
+                .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))))
                 .body(Body::from(
                     "token=totally-invalid-token&password=newpass123&password_confirm=newpass123",
                 ))

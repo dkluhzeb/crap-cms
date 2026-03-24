@@ -1,7 +1,7 @@
 //! Shared helpers for migration: table introspection, join tables, versions tables.
 
 use anyhow::{Context as _, Result};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::{
     config::LocaleConfig,
@@ -15,6 +15,14 @@ pub fn table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
 
 pub fn get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
     conn.get_table_columns(table)
+}
+
+/// Get a mapping of column name -> column type for a table.
+pub fn get_table_column_types(
+    conn: &dyn DbConnection,
+    table: &str,
+) -> Result<HashMap<String, String>> {
+    conn.get_table_column_types(table)
 }
 
 pub use crate::db::query::sanitize_locale;

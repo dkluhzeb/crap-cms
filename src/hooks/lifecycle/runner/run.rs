@@ -15,7 +15,7 @@ use crate::{
                 call_hook_ref, call_registered_hooks, get_hook_refs, has_field_hooks_for_event,
                 run_field_hooks_inner,
             },
-            types::{FieldHookEvent, TxContext, UiLocaleContext, UserContext},
+            types::{FieldHookEvent, TxContextGuard},
         },
     },
 };
@@ -90,28 +90,19 @@ impl HookRunner {
         // Inject the connection pointer so CRUD functions can use it.
         // Safety: conn is valid for the duration of this method, and we hold
         // the Lua mutex so no concurrent access is possible.
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(context.user.clone()));
-        lua.set_app_data(UiLocaleContext(context.ui_locale.clone()));
+        // Guard cleans up TxContext, UserContext, and UiLocaleContext on drop.
+        let _guard =
+            TxContextGuard::set(&lua, conn, context.user.clone(), context.ui_locale.clone());
 
-        let result = (|| -> Result<HookContext> {
-            for hook_ref in hook_refs {
-                tracing::debug!("Running hook (tx): {} for {}", hook_ref, context.collection);
-                context = call_hook_ref(&lua, hook_ref, context)?;
-            }
+        for hook_ref in hook_refs {
+            tracing::debug!("Running hook (tx): {} for {}", hook_ref, context.collection);
+            context = call_hook_ref(&lua, hook_ref, context)?;
+        }
 
-            // Run global registered hooks (with CRUD access via TxContext)
-            context = call_registered_hooks(&lua, &event, context)?;
+        // Run global registered hooks (with CRUD access via TxContext)
+        context = call_registered_hooks(&lua, &event, context)?;
 
-            Ok(context)
-        })();
-
-        // Always clean up the connection pointer, even on error.
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        lua.remove_app_data::<UiLocaleContext>();
-
-        result
+        Ok(context)
     }
 
     /// Run arbitrary hook refs with an active database connection injected.
@@ -127,24 +118,16 @@ impl HookRunner {
 
         let lua = self.pool.acquire()?;
 
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
-        lua.set_app_data(UiLocaleContext(None));
+        // Guard cleans up TxContext, UserContext, and UiLocaleContext on drop.
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
 
-        let result = (|| -> Result<()> {
-            for hook_ref in refs {
-                tracing::debug!("Running system hook: {}", hook_ref);
-                let ctx = HookContext::builder("", "init").build();
-                call_hook_ref(&lua, hook_ref, ctx)?;
-            }
-            Ok(())
-        })();
+        for hook_ref in refs {
+            tracing::debug!("Running system hook: {}", hook_ref);
+            let ctx = HookContext::builder("", "init").build();
+            call_hook_ref(&lua, hook_ref, ctx)?;
+        }
 
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        lua.remove_app_data::<UiLocaleContext>();
-
-        result
+        Ok(())
     }
 
     /// Run field-level hooks for a given event, mutating field values in-place.
@@ -188,17 +171,14 @@ impl HookRunner {
         let lua = self.pool.acquire()?;
 
         // Inject the connection pointer so CRUD functions can use it.
-        lua.set_app_data(TxContext::new(wctx.conn));
-        lua.set_app_data(UserContext(wctx.user.cloned()));
-        lua.set_app_data(UiLocaleContext(wctx.ui_locale.map(|s| s.to_string())));
+        // Guard cleans up TxContext, UserContext, and UiLocaleContext on drop.
+        let _guard = TxContextGuard::set(
+            &lua,
+            wctx.conn,
+            wctx.user.cloned(),
+            wctx.ui_locale.map(|s| s.to_string()),
+        );
 
-        let result = run_field_hooks_inner(&lua, fields, &event, data, collection, operation);
-
-        // Always clean up, even on error.
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        lua.remove_app_data::<UiLocaleContext>();
-
-        result
+        run_field_hooks_inner(&lua, fields, &event, data, collection, operation)
     }
 }

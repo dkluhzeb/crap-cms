@@ -308,7 +308,7 @@ Update multiple documents matching a query. Returns `{ modified = N }`.
 
 **All-or-nothing semantics:** finds all matching documents, checks update access for each (if `overrideAccess = false`), and only proceeds if all pass. If any document fails access, an error is returned and nothing is modified.
 
-Does **not** fire per-document hooks (before_change, after_change, etc.).
+Fires per-document lifecycle hooks (`before_change`, `after_change`) by default. Set `hooks = false` in opts to skip for performance on large batch operations.
 
 **Only available inside hooks with transaction context.**
 
@@ -319,6 +319,13 @@ local result = crap.collections.update_many("posts", {
     status = "published",
 })
 print(result.modified)  -- number of updated documents
+
+-- Skip hooks for performance
+local result = crap.collections.update_many("posts", {
+    where = { status = "draft" },
+}, {
+    status = "published",
+}, { hooks = false })
 ```
 
 ### Query Parameters
@@ -329,18 +336,19 @@ print(result.modified)  -- number of updated documents
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `overrideAccess` | boolean | `true` | Skip access control checks. |
 | `draft` | boolean | `false` | Include draft documents. |
+| `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_change` and `after_change` hooks. |
 
 ### Data
 
 The `data` table contains fields to update on all matched documents (partial update).
 
-## crap.collections.delete_many(collection, query)
+## crap.collections.delete_many(collection, query, opts?)
 
 Delete multiple documents matching a query. Returns `{ deleted = N }`.
 
 **All-or-nothing semantics:** finds all matching documents, checks delete access for each (if `overrideAccess = false`), and only proceeds if all pass.
 
-Does **not** fire per-document hooks (before_delete, after_delete, etc.).
+Fires per-document lifecycle hooks (`before_delete`, `after_delete`) by default. Set `hooks = false` in opts to skip for performance on large batch operations.
 
 **Only available inside hooks with transaction context.**
 
@@ -353,8 +361,12 @@ print(result.deleted)  -- number of deleted documents
 -- With access control enforcement
 local result = crap.collections.delete_many("posts", {
     where = { status = "archived" },
-    overrideAccess = false,
-})
+}, { overrideAccess = false })
+
+-- Skip hooks for performance
+local result = crap.collections.delete_many("posts", {
+    where = { status = "archived" },
+}, { hooks = false })
 ```
 
 ### Query Parameters
@@ -363,3 +375,4 @@ local result = crap.collections.delete_many("posts", {
 |-------|------|---------|-------------|
 | `where` | table | `{}` | Field filters to match documents. |
 | `overrideAccess` | boolean | `true` | Skip access control checks. |
+| `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_delete` and `after_delete` hooks. |

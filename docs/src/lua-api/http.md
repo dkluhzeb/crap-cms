@@ -49,3 +49,13 @@ local resp = crap.http.request({
 - Uses [ureq](https://docs.rs/ureq) (blocking HTTP client). Since Lua hooks run inside `spawn_blocking`, blocking I/O is correct and won't stall the async runtime.
 - Non-2xx responses are **not** errors — they return normally with the status code. Only transport-level failures (DNS, timeout, connection refused) throw Lua errors.
 - Available in both init.lua and hooks.
+
+## Security
+
+### Private network blocking
+
+When `hooks.allow_private_networks` is `false` (the default), `crap.http.request` resolves the URL hostname and rejects requests targeting loopback, private (RFC 1918), link-local, and unspecified IP addresses. This prevents SSRF attacks against internal services. Set `allow_private_networks = true` in `crap.toml` only if your hooks need to reach internal services.
+
+### DNS rebinding limitation
+
+The private network check resolves the hostname **before** the HTTP request is made, but the underlying HTTP client (ureq) performs its own DNS resolution when connecting. A malicious DNS server could return a public IP during the validation check and then a private IP during the actual connection (DNS rebinding). This is a known limitation — if this is a concern in your environment, use `allow_private_networks = false` (the default) and additionally restrict outbound network access at the firewall/network level.

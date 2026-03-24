@@ -35,6 +35,8 @@ The SSE connection:
 
 Same as gRPC Subscribe: read access is checked at connection time per collection/global. Events for inaccessible collections are filtered out.
 
+> **Note:** Access control is **snapshotted at subscribe time**. If a user's permissions change after they subscribe to the SSE stream (e.g., their role is updated or access rules are modified), they will continue receiving events based on the original permissions until the SSE connection is closed. To force a re-evaluation, the client must reconnect.
+
 ## Custom Integration
 
 If you override the admin templates, the SSE listener is in `static/components/live-events.js`. You can customize or replace it by placing your own `static/components/live-events.js` in your config dir's `static/` folder.

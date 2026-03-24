@@ -1,6 +1,9 @@
 //! SQLite implementation of `DbConnection`.
 
-use std::{collections::HashSet, ops::Deref};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Deref,
+};
 
 use anyhow::{Context as _, Result};
 use r2d2::PooledConnection;
@@ -30,6 +33,20 @@ fn sqlite_get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<Hash
         .into_iter()
         .filter_map(|r| r.get_string("name").ok())
         .collect())
+}
+
+fn sqlite_get_table_column_types(
+    conn: &dyn DbConnection,
+    table: &str,
+) -> Result<HashMap<String, String>> {
+    let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
+    let mut map = HashMap::new();
+    for row in rows {
+        if let (Ok(name), Ok(col_type)) = (row.get_string("name"), row.get_string("type")) {
+            map.insert(name, col_type);
+        }
+    }
+    Ok(map)
 }
 
 fn sqlite_index_names(conn: &dyn DbConnection, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -271,6 +288,10 @@ impl DbConnection for SqliteConnection {
         sqlite_get_table_columns(self, table)
     }
 
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
+    }
+
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
         sqlite_index_names(self, table, prefix)
     }
@@ -455,6 +476,10 @@ impl DbConnection for SqliteTransaction<'_> {
         sqlite_get_table_columns(self, table)
     }
 
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
+    }
+
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
         sqlite_index_names(self, table, prefix)
     }
@@ -618,6 +643,10 @@ impl DbConnection for rusqlite::Transaction<'_> {
         sqlite_get_table_columns(self, table)
     }
 
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
+    }
+
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
         sqlite_index_names(self, table, prefix)
     }
@@ -774,6 +803,10 @@ impl DbConnection for rusqlite::Connection {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         sqlite_get_table_columns(self, table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
@@ -980,6 +1013,10 @@ impl super::connection::DbConnection for InMemoryConn {
 
     fn get_table_columns(&self, table: &str) -> anyhow::Result<HashSet<String>> {
         sqlite_get_table_columns(self, table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> anyhow::Result<HashMap<String, String>> {
+        sqlite_get_table_column_types(self, table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> anyhow::Result<Vec<String>> {

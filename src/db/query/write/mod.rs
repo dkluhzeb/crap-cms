@@ -10,12 +10,13 @@ use anyhow::{Context as _, Result};
 
 use crate::db::{DbConnection, DbValue};
 
-/// Delete a document by ID.
-pub fn delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
+/// Delete a document by ID. Returns `true` if a row was deleted, `false` if not found.
+pub fn delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!("DELETE FROM {} WHERE id = {}", slug, conn.placeholder(1));
-    conn.execute(&sql, &[DbValue::Text(id.to_string())])
+    let affected = conn
+        .execute(&sql, &[DbValue::Text(id.to_string())])
         .with_context(|| format!("Failed to delete document {} from '{}'", id, slug))?;
-    Ok(())
+    Ok(affected > 0)
 }
 
 #[cfg(test)]
@@ -65,7 +66,8 @@ mod tests {
         let doc = create(&conn, "posts", &def, &data, None).unwrap();
         let id = doc.id.clone();
 
-        delete(&conn, "posts", &id).unwrap();
+        let deleted = delete(&conn, "posts", &id).unwrap();
+        assert!(deleted, "delete should return true when a row is deleted");
 
         let row = conn
             .query_one(
@@ -77,10 +79,12 @@ mod tests {
     }
 
     #[test]
-    fn delete_nonexistent() {
+    fn delete_nonexistent_returns_false() {
         let (_dir, conn) = setup_db();
-        // Deleting a non-existent ID should not error (0 rows affected)
-        let result = delete(&conn, "posts", "does-not-exist");
-        assert!(result.is_ok(), "Deleting non-existent ID should not error");
+        let deleted = delete(&conn, "posts", "does-not-exist").unwrap();
+        assert!(
+            !deleted,
+            "delete should return false for non-existent document"
+        );
     }
 }

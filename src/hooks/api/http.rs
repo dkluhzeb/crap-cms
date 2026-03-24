@@ -1,5 +1,7 @@
 //! `crap.http` namespace — outbound HTTP via ureq (blocking, safe in spawn_blocking context).
 
+use std::net::ToSocketAddrs;
+
 use anyhow::Result;
 use mlua::{Lua, Table};
 
@@ -129,7 +131,6 @@ fn validate_url(url_str: &str) -> std::result::Result<(), String> {
         .ok_or_else(|| "URL has no host".to_string())?;
 
     // Resolve hostname and check all addresses
-    use std::net::ToSocketAddrs;
     let port = parsed.port_or_known_default().unwrap_or(80);
     let addrs = format!("{host}:{port}")
         .to_socket_addrs()
@@ -195,7 +196,7 @@ mod tests {
 
     #[test]
     fn validate_url_allows_public() {
-        // example.com resolves to 93.184.215.14 (public)
-        assert!(validate_url("https://example.com").is_ok());
+        // Use a known public IP directly to avoid DNS resolution failures in sandboxed environments
+        assert!(validate_url("https://93.184.215.14").is_ok());
     }
 }

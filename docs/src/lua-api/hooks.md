@@ -32,6 +32,7 @@ end)
 | `before_delete` | Before delete |
 | `after_delete` | After delete (runs in transaction, has CRUD access) |
 | `before_broadcast` | Before live event broadcast (can suppress or transform) |
+| `before_render` | Before rendering admin pages (receives full template context, can modify it; global-only, no CRUD access) |
 
 ## crap.hooks.remove(event, fn)
 

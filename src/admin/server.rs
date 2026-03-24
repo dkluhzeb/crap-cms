@@ -1,6 +1,8 @@
 //! Axum router setup, auth middleware, and admin server startup.
 
-use std::{collections::HashMap, future::Future, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::HashMap, future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration,
+};
 
 use anyhow::Result;
 use axum::{
@@ -40,6 +42,7 @@ use crate::{
         collection::Auth as CollectionAuth,
         email::EmailRenderer,
         event::EventBus,
+        rate_limit::LoginRateLimiter,
     },
     db::{DbConnection, DbPool, query},
     hooks::HookRunner,
@@ -48,8 +51,6 @@ use crate::{
         protocol::{INTERNAL_ERROR, JsonRpcError, JsonRpcRequest, JsonRpcResponse, PARSE_ERROR},
     },
 };
-
-use crate::core::rate_limit::LoginRateLimiter;
 
 /// Parameters for starting the admin HTTP server.
 pub struct AdminStartParams {
@@ -130,7 +131,7 @@ pub async fn start(
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let shutdown_timeout = shutdown.clone();
 
-    let server_future: std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send>> = if h2c_enabled {
+    let server_future: Pin<Box<dyn Future<Output = Result<()>> + Send>> = if h2c_enabled {
         tracing::info!("Admin server: h2c (HTTP/2 cleartext) enabled");
         Box::pin(serve_h2c(listener, app, shutdown))
     } else {
@@ -481,7 +482,7 @@ async fn validate_csrf_mutation(
         .map(|s| s.to_string());
 
     if let Some(ref ht) = header_token
-        && ht == cookie_value
+        && bool::from(ht.as_bytes().ct_eq(cookie_value.as_bytes()))
     {
         return Ok(request);
     }
@@ -509,7 +510,7 @@ async fn validate_csrf_mutation(
             .map(|(_, v)| v.to_string());
 
         if let Some(ref ft) = form_token
-            && ft == cookie_value
+            && bool::from(ft.as_bytes().ct_eq(cookie_value.as_bytes()))
         {
             return Ok(Request::from_parts(parts, Body::from(bytes)));
         }

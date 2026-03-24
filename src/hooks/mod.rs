@@ -6,7 +6,7 @@ pub mod lifecycle;
 pub use lifecycle::{HookContext, HookEvent, HookRunner, ValidationCtx};
 
 use anyhow::{Context as _, Result};
-use mlua::Lua;
+use mlua::{Lua, StdLib};
 use std::path::Path;
 
 use crate::{config::CrapConfig, core::SharedRegistry};
@@ -14,7 +14,8 @@ use crate::{config::CrapConfig, core::SharedRegistry};
 /// Initialize the Lua VM, register the crap API, load collections/globals,
 /// and run init.lua. Returns a populated SharedRegistry.
 pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry> {
-    let lua = Lua::new();
+    let lua = Lua::new_with(StdLib::ALL_SAFE, mlua::LuaOptions::default())?;
+    sandbox_lua(&lua)?;
     lua.set_app_data(api::VmLabel("init".to_string()));
     let registry = crate::core::Registry::shared();
 
@@ -84,6 +85,30 @@ fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     lua.load(&code)
         .exec()
         .context("Failed to set package paths")?;
+    Ok(())
+}
+
+/// Apply sandbox restrictions to a Lua VM.
+/// Re-adds the `os` library with only safe functions (time, date, clock, difftime)
+/// and removes dangerous globals (loadfile, dofile).
+pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
+    // ALL_SAFE excludes `os`, `io`, `ffi`, and `debug`.
+    // Re-add os with only safe functions.
+    lua.load_std_libs(StdLib::OS)?;
+    let os: mlua::Table = lua.globals().get("os")?;
+    os.set("execute", mlua::Value::Nil)?;
+    os.set("remove", mlua::Value::Nil)?;
+    os.set("rename", mlua::Value::Nil)?;
+    os.set("exit", mlua::Value::Nil)?;
+    os.set("tmpname", mlua::Value::Nil)?;
+    os.set("getenv", mlua::Value::Nil)?;
+    os.set("setlocale", mlua::Value::Nil)?;
+    // Keeps: os.time, os.date, os.clock, os.difftime
+
+    // Remove remaining dangerous globals
+    lua.globals().set("loadfile", mlua::Value::Nil)?;
+    lua.globals().set("dofile", mlua::Value::Nil)?;
+
     Ok(())
 }
 

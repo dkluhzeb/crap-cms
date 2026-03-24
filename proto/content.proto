@@ -231,7 +231,8 @@ service ContentAPI {
 
   // UpdateMany bulk-updates all documents matching the where filter.
   // All matching documents are updated in a single transaction (all-or-nothing).
-  // Does NOT fire per-document hooks — use individual Update calls if hooks are needed.
+  // Fires per-document before_change / after_change hooks by default.
+  // Set hooks=false to skip hooks for performance on large batch operations.
   //
   // Access is checked twice: read access to find matching docs, then update
   // access per document (all must pass, or the whole operation is denied).
@@ -247,7 +248,8 @@ service ContentAPI {
 
   // DeleteMany bulk-deletes all documents matching the where filter.
   // All deletions run in a single transaction (all-or-nothing).
-  // Does NOT fire per-document delete hooks or remove uploaded files.
+  // Fires per-document before_delete / after_delete hooks by default.
+  // Set hooks=false to skip hooks for performance on large batch operations.
   //
   // Access is checked twice: read access to find matching docs, then delete
   // access per document (all must pass, or the whole operation is denied).
@@ -742,7 +744,6 @@ message CountResponse {
 }
 
 // UpdateManyRequest bulk-updates all documents matching a filter.
-// No per-document write hooks are fired; this is a direct SQL update.
 message UpdateManyRequest {
   // The collection slug.
   string collection = 1;
@@ -759,6 +760,10 @@ message UpdateManyRequest {
 
   // When true, saves changes as drafts. Defaults to false.
   optional bool draft = 5;
+
+  // Run per-document lifecycle hooks (before_change, after_change).
+  // Default: true (hooks run). Set to false to skip for performance.
+  optional bool hooks = 6;
 }
 
 // UpdateManyResponse reports the number of documents modified.
@@ -768,7 +773,6 @@ message UpdateManyResponse {
 }
 
 // DeleteManyRequest bulk-deletes all documents matching a filter.
-// No per-document delete hooks are fired; uploaded files are NOT removed.
 message DeleteManyRequest {
   // The collection slug.
   string collection = 1;
@@ -776,6 +780,10 @@ message DeleteManyRequest {
   // Optional JSON filter clause. Same syntax as FindRequest.where.
   // When omitted, all documents in the collection are deleted.
   optional string where = 2;
+
+  // Run per-document lifecycle hooks (before_delete, after_delete).
+  // Default: true (hooks run). Set to false to skip for performance.
+  optional bool hooks = 3;
 }
 
 // DeleteManyResponse reports the number of documents deleted.

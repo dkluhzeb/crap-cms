@@ -68,30 +68,36 @@ pub async fn reset_password_action(
     let token = form.token.clone();
     let password = form.password.clone();
 
-    let result = task::spawn_blocking(move || {
-        let conn = pool.get()?;
+    let result = task::spawn_blocking(move || -> anyhow::Result<()> {
+        let mut conn = pool.get()?;
+        let tx = conn.transaction()?;
 
         // Search all auth collections for the token
         for def in registry.collections.values() {
             if !def.is_auth_collection() {
                 continue;
             }
+            if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+                continue;
+            }
 
-            if let Some((user, exp)) = query::find_by_reset_token(&conn, &def.slug, def, &token)? {
+            if let Some((user, exp)) = query::find_by_reset_token(&tx, &def.slug, def, &token)? {
                 if Utc::now().timestamp() >= exp {
-                    query::clear_reset_token(&conn, &def.slug, &user.id)?;
+                    query::clear_reset_token(&tx, &def.slug, &user.id)?;
+                    tx.commit()?;
                     return Err(ResetTokenError::Expired.into());
                 }
 
                 // Update password and clear token
-                query::update_password(&conn, &def.slug, &user.id, &password)?;
-                query::clear_reset_token(&conn, &def.slug, &user.id)?;
+                query::update_password(&tx, &def.slug, &user.id, &password)?;
+                query::clear_reset_token(&tx, &def.slug, &user.id)?;
+                tx.commit()?;
 
                 return Ok(());
             }
         }
 
-        Err(anyhow::Error::from(ResetTokenError::NotFound))
+        Err(ResetTokenError::NotFound.into())
     })
     .await;
 

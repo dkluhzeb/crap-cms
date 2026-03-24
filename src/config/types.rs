@@ -117,6 +117,16 @@ impl CrapConfig {
             );
         }
 
+        // Fatal: port 0 is not a valid listen port
+        if self.server.admin_port == 0 || self.server.grpc_port == 0 {
+            bail!("Server ports must be > 0");
+        }
+
+        // Fatal: ports must be distinct
+        if self.server.admin_port == self.server.grpc_port {
+            bail!("admin_port and grpc_port must be different");
+        }
+
         // Warning: max_depth = 0 means no population will ever work
         if self.depth.max_depth == 0 {
             tracing::warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
@@ -321,6 +331,39 @@ dev_mode = false
     fn validate_max_depth_zero_warns_but_passes() {
         let mut config = CrapConfig::default();
         config.depth.max_depth = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_admin_port_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.server.admin_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("ports must be > 0"));
+    }
+
+    #[test]
+    fn validate_grpc_port_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("ports must be > 0"));
+    }
+
+    #[test]
+    fn validate_same_ports_errors() {
+        let mut config = CrapConfig::default();
+        config.server.admin_port = 5000;
+        config.server.grpc_port = 5000;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("must be different"));
+    }
+
+    #[test]
+    fn validate_distinct_nonzero_ports_passes() {
+        let mut config = CrapConfig::default();
+        config.server.admin_port = 3000;
+        config.server.grpc_port = 50051;
         assert!(config.validate().is_ok());
     }
 

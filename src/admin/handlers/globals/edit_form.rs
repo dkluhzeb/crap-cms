@@ -56,6 +56,8 @@ pub async fn edit_form(
     let fields = def.fields.clone();
     let slug_owned = slug.clone();
     let def_owned = def.clone();
+    let user_doc = auth_user.as_ref().map(|Extension(au)| au.user_doc.clone());
+    let user_ui_locale = auth_user.as_ref().map(|Extension(au)| au.ui_locale.clone());
 
     let read_result = task::spawn_blocking(move || {
         runner.fire_before_read(&hooks, &slug_owned, "get_global", HashMap::new())?;
@@ -65,8 +67,8 @@ pub async fn edit_form(
             fields: &fields,
             collection: &slug_owned,
             operation: "get_global",
-            user: None,
-            ui_locale: None,
+            user: user_doc.as_ref(),
+            ui_locale: user_ui_locale.as_deref(),
         };
         let doc = runner.apply_after_read(&ar_ctx, doc);
         Ok::<_, anyhow::Error>(doc)

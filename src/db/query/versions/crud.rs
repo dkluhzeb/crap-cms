@@ -133,16 +133,35 @@ pub fn list_versions(
     offset: Option<i64>,
 ) -> Result<Vec<VersionSnapshot>> {
     let table = format!("_versions_{}", slug);
-    let limit_clause = limit.map(|l| format!(" LIMIT {}", l)).unwrap_or_default();
-    let offset_clause = offset.map(|o| format!(" OFFSET {}", o)).unwrap_or_default();
     let p1 = conn.placeholder(1);
+    let mut params: Vec<DbValue> = vec![DbValue::Text(parent_id.to_string())];
+    let mut idx = 2;
+
+    let limit_clause = match limit {
+        Some(l) => {
+            let p = conn.placeholder(idx);
+            params.push(DbValue::Integer(l));
+            idx += 1;
+            format!(" LIMIT {p}")
+        }
+        None => String::new(),
+    };
+    let offset_clause = match offset {
+        Some(o) => {
+            let p = conn.placeholder(idx);
+            params.push(DbValue::Integer(o));
+            format!(" OFFSET {p}")
+        }
+        None => String::new(),
+    };
+
     let sql = format!(
         "SELECT id, _parent, _version, _status, _latest, snapshot, created_at, updated_at \
              FROM {} WHERE _parent = {p1} ORDER BY _version DESC{}{}",
         table, limit_clause, offset_clause
     );
 
-    let rows = conn.query_all(&sql, &[DbValue::Text(parent_id.to_string())])?;
+    let rows = conn.query_all(&sql, &params)?;
     let mut versions = Vec::new();
     for row in rows {
         let snapshot_str = row.get_string("snapshot")?;

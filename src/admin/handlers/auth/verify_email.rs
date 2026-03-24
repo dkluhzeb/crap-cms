@@ -1,19 +1,30 @@
+use std::net::SocketAddr;
+
 use anyhow::Error;
 use axum::{
-    extract::{Query, State},
+    extract::{ConnectInfo, Query, State},
+    http::HeaderMap,
     response::{IntoResponse, Redirect},
 };
 use chrono::Utc;
 use tokio::task;
 
-use super::VerifyEmailQuery;
+use super::{VerifyEmailQuery, client_ip};
 use crate::{admin::AdminState, db::query};
 
 /// GET /admin/verify-email?token=xxx — validate token, mark verified, redirect.
 pub async fn verify_email(
     State(state): State<AdminState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Query(query): Query<VerifyEmailQuery>,
 ) -> impl IntoResponse {
+    // Rate limit by IP to prevent brute-forcing verification tokens
+    let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
+    if state.ip_login_limiter.is_blocked(&ip) {
+        return Redirect::to("/admin/login");
+    }
+
     let pool = state.pool.clone();
     let registry = state.registry.clone();
     let token = query.token;
@@ -34,7 +45,8 @@ pub async fn verify_email(
                 query::find_by_verification_token(&conn, &def.slug, def, &token)?
             {
                 if Utc::now().timestamp() >= exp {
-                    // Token expired — don't verify
+                    // Clean up expired token
+                    let _ = query::clear_verification_token(&conn, &def.slug, &user.id);
                     return Ok(false);
                 }
 
@@ -50,6 +62,10 @@ pub async fn verify_email(
 
     match result {
         Ok(Ok(true)) => Redirect::to("/admin/login?success=success_email_verified"),
-        _ => Redirect::to("/admin/login"),
+        _ => {
+            // Record failure for invalid/expired tokens to throttle brute-force attempts
+            state.ip_login_limiter.record_failure(&ip);
+            Redirect::to("/admin/login")
+        }
     }
 }

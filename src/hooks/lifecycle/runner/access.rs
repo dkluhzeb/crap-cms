@@ -14,7 +14,7 @@ use crate::{
         lifecycle::{
             access::{
                 check_access_with_lua, check_field_read_access_with_lua,
-                check_field_write_access_with_lua,
+                check_field_write_access_with_lua, has_any_field_access,
             },
             execution::resolve_hook_function,
             types::{TxContext, UserContext},
@@ -123,8 +123,8 @@ impl HookRunner {
         user: Option<&Document>,
         conn: &dyn crate::db::DbConnection,
     ) -> Vec<String> {
-        // Skip VM acquisition if no fields have read access functions
-        if fields.iter().all(|f| f.access.read.is_none()) {
+        // Skip VM acquisition if no fields have read access functions (recursive check)
+        if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
             return Vec::new();
         }
         let lua = match self.pool.acquire() {
@@ -150,14 +150,13 @@ impl HookRunner {
         operation: &str,
         conn: &dyn crate::db::DbConnection,
     ) -> Vec<String> {
-        // Skip VM acquisition if no fields have write access functions for this operation
-        let has_write_access = fields.iter().any(|f| match operation {
-            "create" => f.access.create.is_some(),
-            "update" => f.access.update.is_some(),
-            _ => false,
-        });
-
-        if !has_write_access {
+        // Skip VM acquisition if no fields have write access functions (recursive check)
+        let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
+            "create" => |f| f.access.create.as_deref(),
+            "update" => |f| f.access.update.as_deref(),
+            _ => return Vec::new(),
+        };
+        if !has_any_field_access(fields, extractor) {
             return Vec::new();
         }
         let lua = match self.pool.acquire() {

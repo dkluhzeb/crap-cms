@@ -1,5 +1,7 @@
 //! Builder for `crate::core::auth::Claims`.
 
+use chrono::Utc;
+
 use crate::core::{Claims, DocumentId, Slug};
 
 /// Builder for [`Claims`].
@@ -47,6 +49,7 @@ impl ClaimsBuilder {
             collection: self.collection,
             email: self.email.expect("ClaimsBuilder: email is required"),
             exp: self.exp.expect("ClaimsBuilder: exp is required"),
+            iat: Some(Utc::now().timestamp() as u64),
         }
     }
 }
@@ -57,14 +60,21 @@ mod tests {
 
     #[test]
     fn builds_claims_with_all_fields() {
+        let before = Utc::now().timestamp() as u64;
         let claims = ClaimsBuilder::new("user-id", "users")
             .email("user@example.com")
             .exp(9999999999)
             .build();
+        let after = Utc::now().timestamp() as u64;
         assert_eq!(claims.sub, "user-id");
         assert_eq!(claims.collection, "users");
         assert_eq!(claims.email, "user@example.com");
         assert_eq!(claims.exp, 9999999999);
+        let iat = claims.iat.expect("iat should be set");
+        assert!(
+            iat >= before && iat <= after,
+            "iat should be current timestamp"
+        );
     }
 
     #[test]

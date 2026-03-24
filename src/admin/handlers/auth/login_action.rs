@@ -131,6 +131,10 @@ pub async fn login_action(
         return login_error(&state, "error_invalid_collection", &form.email);
     };
 
+    if def.auth.as_ref().is_some_and(|a| a.disable_local) {
+        return login_error(&state, "error_invalid_collection", &form.email);
+    }
+
     let verify_email = def.auth.as_ref().is_some_and(|a| a.verify_email);
 
     let result = verify_credentials(

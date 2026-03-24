@@ -50,6 +50,9 @@ pub struct ServerConfig {
     /// When false (default), the TCP socket address is used — XFF is ignored.
     /// Does not affect gRPC, which always uses the TCP peer address.
     pub trust_proxy: bool,
+    /// Public-facing base URL (e.g. "https://cms.example.com"). Used for password reset
+    /// emails and other external links. When not set, falls back to http://{host}:{admin_port}.
+    pub public_url: Option<String>,
 }
 
 fn default_grpc_rate_limit_window() -> u64 {
@@ -68,6 +71,7 @@ impl Default for ServerConfig {
             grpc_rate_limit_window: 60,
             h2c: false,
             trust_proxy: false,
+            public_url: None,
         }
     }
 }
@@ -78,7 +82,7 @@ impl Default for ServerConfig {
 pub struct DatabaseConfig {
     /// Path to the SQLite database file.
     pub path: String,
-    /// Maximum number of connections in the pool. Default: 16.
+    /// Maximum number of connections in the pool. Default: 32.
     pub pool_max_size: u32,
     /// SQLite busy timeout in milliseconds. Default: 30000 (30s).
     /// Accepts integer milliseconds or human-readable string ("30s", "1m").
@@ -127,6 +131,10 @@ impl Default for AdminConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
+    use crate::config::CrapConfig;
+
     use super::*;
 
     #[test]
@@ -140,12 +148,12 @@ mod tests {
     #[test]
     fn admin_config_from_toml() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[admin]\ndev_mode = true\nrequire_auth = false\naccess = \"access.admin_panel\"\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.admin.dev_mode);
         assert!(!config.admin.require_auth);
         assert_eq!(config.admin.access, Some("access.admin_panel".to_string()));
@@ -154,8 +162,8 @@ mod tests {
     #[test]
     fn admin_config_partial_toml_uses_defaults() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join("crap.toml"), "[admin]\ndev_mode = true\n").unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        fs::write(tmp.path().join("crap.toml"), "[admin]\ndev_mode = true\n").unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.admin.dev_mode);
         assert!(config.admin.require_auth); // default
         assert!(config.admin.access.is_none()); // default
@@ -170,20 +178,20 @@ mod tests {
     #[test]
     fn server_config_h2c_from_toml() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(tmp.path().join("crap.toml"), "[server]\nh2c = true\n").unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        fs::write(tmp.path().join("crap.toml"), "[server]\nh2c = true\n").unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.server.h2c);
     }
 
     #[test]
     fn server_config_h2c_omitted_uses_default() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[server]\nadmin_port = 8080\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(!config.server.h2c);
     }
 
@@ -196,36 +204,36 @@ mod tests {
     #[test]
     fn server_config_trust_proxy_from_toml() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[server]\ntrust_proxy = true\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.server.trust_proxy);
     }
 
     #[test]
     fn server_config_trust_proxy_omitted_uses_default() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[server]\nadmin_port = 8080\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(!config.server.trust_proxy);
     }
 
     #[test]
     fn database_config_from_toml() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        std::fs::write(
+        fs::write(
             tmp.path().join("crap.toml"),
             "[database]\npool_max_size = 32\nbusy_timeout = 60000\n",
         )
         .unwrap();
-        let config = crate::config::CrapConfig::load(tmp.path()).unwrap();
+        let config = CrapConfig::load(tmp.path()).unwrap();
         assert_eq!(config.database.pool_max_size, 32);
         assert_eq!(config.database.busy_timeout, 60000);
     }

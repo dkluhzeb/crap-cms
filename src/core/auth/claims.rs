@@ -12,6 +12,10 @@ pub struct Claims {
     pub email: String,
     /// Expiration time (Unix timestamp).
     pub exp: u64,
+    /// Issued-at time (Unix timestamp). Optional for backward compatibility with
+    /// tokens issued before this field was added.
+    #[serde(default)]
+    pub iat: Option<u64>,
 }
 
 impl Claims {

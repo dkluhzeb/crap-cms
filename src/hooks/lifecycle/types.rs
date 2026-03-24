@@ -152,6 +152,35 @@ impl Drop for HookDepthGuard<'_> {
     }
 }
 
+/// RAII guard that removes TxContext, UserContext, and UiLocaleContext from Lua app_data on drop.
+/// Prevents leaks when hooks return errors via `?`.
+pub(crate) struct TxContextGuard<'a> {
+    lua: &'a Lua,
+}
+
+impl<'a> TxContextGuard<'a> {
+    /// Set TxContext, UserContext, and UiLocaleContext, returning a guard that cleans up on drop.
+    pub(crate) fn set(
+        lua: &'a Lua,
+        conn: &dyn crate::db::DbConnection,
+        user: Option<Document>,
+        ui_locale: Option<String>,
+    ) -> Self {
+        lua.set_app_data(TxContext::new(conn));
+        lua.set_app_data(UserContext(user));
+        lua.set_app_data(UiLocaleContext(ui_locale));
+        Self { lua }
+    }
+}
+
+impl Drop for TxContextGuard<'_> {
+    fn drop(&mut self) {
+        self.lua.remove_app_data::<TxContext>();
+        self.lua.remove_app_data::<UserContext>();
+        self.lua.remove_app_data::<UiLocaleContext>();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

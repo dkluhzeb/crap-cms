@@ -37,7 +37,7 @@ local encrypted = crap.crypto.encrypt("sensitive data")
 local original = crap.crypto.decrypt(encrypted)  -- "sensitive data"
 ```
 
-> **Note:** The encryption key is derived from `auth.secret` in `crap.toml`. If the secret changes, previously encrypted values cannot be decrypted.
+> **Note:** The encryption key is derived from `auth.secret` in `crap.toml` — the same secret used for JWT signing. Rotating the JWT secret will invalidate all previously encrypted data. If you rotate secrets, you must re-encrypt any data that was encrypted with the old secret.
 
 ## crap.crypto.random_bytes(n)
 

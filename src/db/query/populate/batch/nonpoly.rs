@@ -5,7 +5,9 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
 use super::populate_relationships_batch_cached;
-use crate::db::query::populate::{PopulateContext, PopulateCtx, PopulateOpts, document_to_json};
+use crate::db::query::populate::{
+    MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
+};
 use crate::{
     core::{CollectionDefinition, Document, upload},
     db::query::read::find_by_ids,
@@ -149,8 +151,10 @@ pub(super) fn batch_fetch_single_collection(
             )?;
         }
         for d in fetched {
-            ctx.cache
-                .insert((collection.to_string(), d.id.to_string()), d.clone());
+            if ctx.cache.len() < MAX_POPULATE_CACHE_SIZE {
+                ctx.cache
+                    .insert((collection.to_string(), d.id.to_string()), d.clone());
+            }
             doc_map.insert(d.id.to_string(), d);
         }
     }

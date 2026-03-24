@@ -1,6 +1,6 @@
 //! Database connection trait — object-safe abstraction over backend-specific connections.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
 
@@ -50,6 +50,9 @@ pub trait DbConnection {
 
     /// Get the set of column names for a table.
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>>;
+
+    /// Get a mapping of column name to column type for a table.
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>>;
 
     /// Get index names for a table matching a name prefix.
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>>;
@@ -234,6 +237,10 @@ impl DbConnection for BoxedConnection {
         self.inner.get_table_columns(table)
     }
 
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        self.inner.get_table_column_types(table)
+    }
+
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {
         self.inner.index_names(table, prefix)
     }
@@ -350,6 +357,10 @@ impl DbConnection for BoxedTransaction<'_> {
 
     fn get_table_columns(&self, table: &str) -> Result<HashSet<String>> {
         self.inner.get_table_columns(table)
+    }
+
+    fn get_table_column_types(&self, table: &str) -> Result<HashMap<String, String>> {
+        self.inner.get_table_column_types(table)
     }
 
     fn index_names(&self, table: &str, prefix: &str) -> Result<Vec<String>> {

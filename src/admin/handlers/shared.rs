@@ -22,7 +22,7 @@ use crate::{
         event::EventUser, field, validate::ValidationError,
     },
     db::{AccessResult, DbPool, LocaleContext, query},
-    hooks::HookRunner,
+    hooks::{HookRunner, lifecycle::access::has_any_field_access},
 };
 
 // Re-export field context functions from the dedicated module.
@@ -106,9 +106,13 @@ pub(crate) fn check_access_or_forbid(
     id: Option<&str>,
     data: Option<&HashMap<String, Value>>,
 ) -> Result<AccessResult, Box<Response>> {
-    // No access function configured = always allowed (skip pool.get + VM acquire)
+    // No access function configured — check default-deny policy
     if access_ref.is_none() {
-        return Ok(AccessResult::Allowed);
+        return if state.config.access.default_deny {
+            Ok(AccessResult::Denied)
+        } else {
+            Ok(AccessResult::Allowed)
+        };
     }
 
     let user_doc = get_user_doc(auth_user);
@@ -289,7 +293,7 @@ pub(crate) fn compute_denied_read_fields(
     auth_user: &Option<Extension<AuthUser>>,
     fields: &[FieldDefinition],
 ) -> Result<Vec<String>, Box<Response>> {
-    if !fields.iter().any(|f| f.access.read.is_some()) {
+    if !has_any_field_access(fields, |f| f.access.read.as_deref()) {
         return Ok(Vec::new());
     }
 
@@ -324,12 +328,12 @@ pub(crate) fn strip_write_denied_string_fields(
     operation: &str,
     form_data: &mut HashMap<String, String>,
 ) -> Result<(), Box<Response>> {
-    let has_access = fields.iter().any(|f| match operation {
-        "create" => f.access.create.is_some(),
-        "update" => f.access.update.is_some(),
-        _ => false,
-    });
-    if !has_access {
+    let extractor: fn(&FieldDefinition) -> Option<&str> = match operation {
+        "create" => |f| f.access.create.as_deref(),
+        "update" => |f| f.access.update.as_deref(),
+        _ => return Ok(()),
+    };
+    if !has_any_field_access(fields, extractor) {
         return Ok(());
     }
 

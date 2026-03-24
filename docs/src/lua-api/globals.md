@@ -47,27 +47,62 @@ end
 
 See [Plugins](../plugins/overview.md) for patterns using these functions.
 
-## crap.globals.get(slug)
+## crap.globals.get(slug, opts?)
 
 Get a global's current value. Returns a document table.
 
 **Only available inside hooks with transaction context.**
 
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `slug` | string | Global slug |
+| `opts` | table (optional) | Options table |
+
+### Options
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `locale` | string | Locale code (e.g., `"en"`, `"de"`). Fetches locale-specific field values. If omitted, returns the default locale data. |
+
 ```lua
 local settings = crap.globals.get("site_settings")
 print(settings.site_name)  -- "My Site"
 print(settings.id)         -- always "default"
+
+-- Fetch German locale data
+local settings_de = crap.globals.get("site_settings", { locale = "de" })
 ```
 
-## crap.globals.update(slug, data)
+## crap.globals.update(slug, data, opts?)
 
 Update a global's value. Returns the updated document.
 
 **Only available inside hooks with transaction context.**
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `slug` | string | Global slug |
+| `data` | table | Fields to update |
+| `opts` | table (optional) | Options table |
+
+### Options
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `locale` | string | Locale code (e.g., `"en"`, `"de"`). Updates locale-specific field values. If omitted, updates the default locale data. |
 
 ```lua
 local settings = crap.globals.update("site_settings", {
     site_name = "New Site Name",
     tagline = "A new beginning",
 })
+
+-- Update German locale data
+crap.globals.update("site_settings", {
+    site_name = "Neuer Seitenname",
+}, { locale = "de" })
 ```
