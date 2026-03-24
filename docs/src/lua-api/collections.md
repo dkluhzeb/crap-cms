@@ -97,7 +97,7 @@ end
 | `after_cursor` | string | `nil` | Forward cursor from a previous `result.pagination.endCursor`. Fetches the page after the cursor position. Mutually exclusive with `page`/`offset`/`before_cursor`. Only effective when `[pagination] mode = "cursor"` in `crap.toml`. |
 | `before_cursor` | string | `nil` | Backward cursor from a previous `result.pagination.startCursor`. Fetches the page before the cursor position. Mutually exclusive with `page`/`offset`/`after_cursor`. Only effective when `[pagination] mode = "cursor"` in `crap.toml`. |
 | `depth` | integer | `0` | Population depth for relationship fields. |
-| `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`, `created_at`, `updated_at`. |
+| `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. When specified, `created_at` and `updated_at` are only included if explicitly listed. |
 | `draft` | boolean | `false` | Include draft documents. Only affects versioned collections with `drafts = true`. |
 | `locale` | string | `nil` | Locale code for localized fields (e.g., `"en"`, `"de"`). |
 | `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level and field-level access for the current user. |
@@ -328,17 +328,22 @@ local result = crap.collections.update_many("posts", {
 }, { hooks = false })
 ```
 
-### Query Parameters
+### Query Parameters (2nd argument)
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `where` | table | `{}` | Field filters to match documents. |
+
+### Options (4th argument)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `overrideAccess` | boolean | `true` | Skip access control checks. |
 | `draft` | boolean | `false` | Include draft documents. |
 | `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_change` and `after_change` hooks. |
 
-### Data
+### Data (3rd argument)
 
 The `data` table contains fields to update on all matched documents (partial update).
 
@@ -369,10 +374,17 @@ local result = crap.collections.delete_many("posts", {
 }, { hooks = false })
 ```
 
-### Query Parameters
+### Query Parameters (2nd argument)
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `where` | table | `{}` | Field filters to match documents. |
+
+### Options (3rd argument)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
 | `overrideAccess` | boolean | `true` | Skip access control checks. |
 | `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_delete` and `after_delete` hooks. |
+| `locale` | string | `nil` | Locale code for localized fields. |
+| `draft` | boolean | `false` | Include draft documents. |

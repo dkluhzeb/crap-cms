@@ -65,6 +65,10 @@ Auth collections get a hidden `_password_hash` TEXT column during schema migrati
 - Is **never** shown in admin forms
 - Is only accessed by dedicated auth functions (`update_password`, `get_password_hash`)
 
+## Password Policy
+
+All password-setting paths (create, update, reset, CLI) enforce the password policy configured in `[auth.password_policy]` in `crap.toml`. Defaults: min 8 characters, max 128 characters. See [crap.toml reference](../configuration/crap-toml.md#authpassword_policy) for all options.
+
 ## Password in Create/Update
 
 When creating or updating a user, the `password` field (if present in the data) is:
@@ -87,3 +91,4 @@ Tokens contain:
 | `collection` | Auth collection slug (e.g., "users") |
 | `email` | User email |
 | `exp` | Expiration timestamp (Unix) |
+| `iat` | Issued-at timestamp (Unix) |

@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldType},
+    core::CollectionDefinition,
     db::{
         DbConnection,
         migrate::helpers::{
@@ -220,64 +220,16 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
 }
 
 /// Build the set of expected column names from field definitions (for orphan detection).
+/// Delegates to `collect_column_specs` so arbitrary nesting of Group, Row, Collapsible,
+/// and Tabs is handled identically to schema creation/alteration.
 fn collect_expected_column_names(
     def: &CollectionDefinition,
     locale_config: &LocaleConfig,
 ) -> HashSet<String> {
-    let mut field_names = HashSet::new();
-
-    for f in &def.fields {
-        if f.field_type == FieldType::Group {
-            for sub in &f.fields {
-                let base = format!("{}__{}", f.name, sub.name);
-                let is_localized = (f.localized || sub.localized) && locale_config.is_enabled();
-
-                if is_localized {
-                    for locale in &locale_config.locales {
-                        field_names.insert(format!("{}__{}", base, locale));
-                    }
-                } else {
-                    field_names.insert(base);
-                }
-            }
-        } else if f.field_type == FieldType::Row || f.field_type == FieldType::Collapsible {
-            for sub in &f.fields {
-                let is_localized = sub.localized && locale_config.is_enabled();
-
-                if is_localized {
-                    for locale in &locale_config.locales {
-                        field_names.insert(format!("{}__{}", sub.name, locale));
-                    }
-                } else {
-                    field_names.insert(sub.name.clone());
-                }
-            }
-        } else if f.field_type == FieldType::Tabs {
-            for tab in &f.tabs {
-                for sub in &tab.fields {
-                    let is_localized = sub.localized && locale_config.is_enabled();
-
-                    if is_localized {
-                        for locale in &locale_config.locales {
-                            field_names.insert(format!("{}__{}", sub.name, locale));
-                        }
-                    } else {
-                        field_names.insert(sub.name.clone());
-                    }
-                }
-            }
-        } else if f.has_parent_column() {
-            if f.localized && locale_config.is_enabled() {
-                for locale in &locale_config.locales {
-                    field_names.insert(format!("{}__{}", f.name, locale));
-                }
-            } else {
-                field_names.insert(f.name.clone());
-            }
-        }
-    }
-
-    field_names
+    collect_column_specs(&def.fields, locale_config)
+        .into_iter()
+        .map(|spec| spec.col_name)
+        .collect()
 }
 
 /// System columns that are always valid (not flagged as orphans).
@@ -577,6 +529,52 @@ mod tests {
         assert!(
             cols.contains("seo__og_desc"),
             "ALTER should add Group columns inside Tabs"
+        );
+    }
+
+    #[test]
+    fn orphan_detection_handles_deeply_nested_groups() {
+        let fields = vec![FieldDefinition {
+            name: "outer".into(),
+            field_type: FieldType::Group,
+            fields: vec![FieldDefinition {
+                name: "inner".into(),
+                field_type: FieldType::Group,
+                fields: vec![text_field("deep")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let def = simple_collection("posts", fields);
+        let names = collect_expected_column_names(&def, &no_locale());
+        assert!(
+            names.contains("outer__inner__deep"),
+            "deeply nested Group sub-field should be tracked: {names:?}"
+        );
+    }
+
+    #[test]
+    fn orphan_detection_handles_group_inside_collapsible() {
+        let fields = vec![FieldDefinition {
+            name: "wrapper".into(),
+            field_type: FieldType::Collapsible,
+            fields: vec![FieldDefinition {
+                name: "seo".into(),
+                field_type: FieldType::Group,
+                fields: vec![text_field("title"), text_field("description")],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+        let def = simple_collection("posts", fields);
+        let names = collect_expected_column_names(&def, &no_locale());
+        assert!(
+            names.contains("seo__title"),
+            "Group inside Collapsible should be tracked: {names:?}"
+        );
+        assert!(
+            names.contains("seo__description"),
+            "Group inside Collapsible should be tracked: {names:?}"
         );
     }
 }

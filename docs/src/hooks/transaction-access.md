@@ -71,7 +71,7 @@ local M = {}
 
 function M.run(ctx)
     local result = crap.collections.find("posts")
-    if result.total == 0 then
+    if result.pagination.totalDocs == 0 then
         crap.collections.create("posts", {
             title = "Welcome",
             slug = "welcome",

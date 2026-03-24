@@ -11,15 +11,25 @@ service ContentAPI {
   rpc Create (CreateRequest) returns (CreateResponse);
   rpc Update (UpdateRequest) returns (UpdateResponse);
   rpc Delete (DeleteRequest) returns (DeleteResponse);
+  rpc Count (CountRequest) returns (CountResponse);
+  rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
+  rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
   rpc GetGlobal (GetGlobalRequest) returns (GetGlobalResponse);
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
   rpc Me (MeRequest) returns (MeResponse);
-  rpc Count (CountRequest) returns (CountResponse);
-  rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
-  rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
+  rpc ForgotPassword (ForgotPasswordRequest) returns (ForgotPasswordResponse);
+  rpc ResetPassword (ResetPasswordRequest) returns (ResetPasswordResponse);
+  rpc VerifyEmail (VerifyEmailRequest) returns (VerifyEmailResponse);
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
+  rpc Subscribe (SubscribeRequest) returns (stream MutationEvent);
+  rpc ListVersions (ListVersionsRequest) returns (ListVersionsResponse);
+  rpc RestoreVersion (RestoreVersionRequest) returns (RestoreVersionResponse);
+  rpc ListJobs (ListJobsRequest) returns (ListJobsResponse);
+  rpc TriggerJob (TriggerJobRequest) returns (TriggerJobResponse);
+  rpc GetJobRun (GetJobRunRequest) returns (GetJobRunResponse);
+  rpc ListJobRuns (ListJobRunsRequest) returns (ListJobRunsResponse);
 }
 ```
 

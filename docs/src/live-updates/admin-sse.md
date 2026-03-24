@@ -17,10 +17,10 @@ Events are sent with event type `mutation`:
 ```
 event: mutation
 id: 42
-data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123"}
+data: {"sequence":42,"timestamp":"2024-01-15T10:30:00Z","target":"collection","operation":"create","collection":"posts","document_id":"abc123","edited_by":"user_456"}
 ```
 
-The `data` payload is JSON with the same fields as the gRPC `MutationEvent` (excluding the full document `data` for efficiency — admin SSE only sends metadata).
+The `data` payload is JSON with the same fields as the gRPC `MutationEvent` (excluding the full document `data` for efficiency), plus an `edited_by` field containing the user ID of the authenticated user who made the change (or `null` for unauthenticated operations).
 
 ## Admin UI Integration
 

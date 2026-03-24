@@ -48,10 +48,10 @@ _versions_articles (
     _parent TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
     _version INTEGER NOT NULL,
     _status TEXT NOT NULL,        -- "published" or "draft"
-    _latest INTEGER NOT NULL,     -- 1 for the most recent version
-    snapshot TEXT NOT NULL,        -- full JSON snapshot
-    created_at TEXT,
-    updated_at TEXT
+    _latest INTEGER NOT NULL DEFAULT 0,  -- 1 for the most recent version
+    snapshot TEXT NOT NULL,               -- full JSON snapshot
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
 )
 ```
 

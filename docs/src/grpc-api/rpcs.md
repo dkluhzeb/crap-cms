@@ -307,7 +307,7 @@ grpcurl -plaintext -d '{
 
 ## Me
 
-Get the current authenticated user from a token.
+Get the current authenticated user from a token. The token is read from the `authorization` metadata header first; if absent, falls back to the `token` field in the request body.
 
 ```protobuf
 message MeRequest {

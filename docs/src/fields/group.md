@@ -28,7 +28,11 @@ crap.fields.group({
 
 ## Sub-Fields
 
-Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.) but do not support nested groups, arrays, or relationships.
+Sub-fields support the same properties as regular fields (name, type, required, default_value, admin, etc.), including nested groups, arrays, blocks, and relationships.
+
+- **Nested groups** use stacked prefixes: `outer__inner__field`.
+- **Arrays/Blocks inside groups** create prefixed join tables: `{collection}_{group}__{field}`.
+- **Relationships inside groups** create prefixed junction tables (for has-many) or prefixed columns (for has-one).
 
 ## API Representation
 

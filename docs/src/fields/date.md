@@ -50,9 +50,23 @@ This normalization ensures consistent storage and correct behavior when filterin
 
 Renders as the appropriate HTML5 input type based on `picker_appearance`. For `dayOnly` and `dayAndTime`, the stored ISO string is automatically converted to the format the HTML input expects (`YYYY-MM-DD` and `YYYY-MM-DDTHH:MM` respectively).
 
+## Date Constraints
+
+Use `min_date` and `max_date` to restrict the allowed range. Values are validated server-side and set as HTML `min`/`max` attributes on the input.
+
+```lua
+crap.fields.date({
+    name = "event_date",
+    min_date = "2026-01-01",
+    max_date = "2026-12-31",
+})
+```
+
+Both values use ISO 8601 format. Dates outside the range produce a validation error.
+
 ## Validation
 
-Non-empty date values are validated against recognized date/datetime/time/month formats. Invalid formats produce a validation error.
+Non-empty date values are validated against recognized date/datetime/time/month formats. Invalid formats produce a validation error. If `min_date` or `max_date` are set, the value is also checked against those bounds.
 
 ## Notes
 

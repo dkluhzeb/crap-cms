@@ -47,7 +47,7 @@ login_lockout_seconds = "5m"
 auto_purge = "7d"
 ```
 
-Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`.
+Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`.
 
 ## File Size Values
 
@@ -65,7 +65,7 @@ max_file_size = "100KB"
 max_file_size = "1GB"
 ```
 
-Fields that support this: `max_file_size` (global and per-collection).
+Fields that support this: `max_file_size` (global and per-collection), `max_memory`, `http_max_response_bytes`.
 
 ## Full Reference
 
@@ -140,6 +140,7 @@ from_name = "Crap CMS"  # Sender display name
 
 [hooks]
 on_init = []             # Lua function refs to run at startup (with CRUD access)
+# max_depth = 3          # Max hook recursion depth (0 = no hooks from Lua CRUD)
 vm_pool_size = 8         # Number of Lua VMs for concurrent hook execution
                          # Default: max(available_parallelism, 4), capped at 32
 max_instructions = 10000000  # Max Lua instructions per hook (0 = unlimited)
@@ -175,6 +176,14 @@ allowed_headers = ["Content-Type", "Authorization"]
 exposed_headers = []     # Response headers exposed to the browser
 max_age_seconds = "1h"   # How long browsers cache preflight results
 allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] origins
+
+[mcp]
+# enabled = false         # Enable MCP server
+# http = false            # Mount POST /mcp on admin server
+# config_tools = false    # Enable config read/write tools
+# api_key = ""            # API key for HTTP transport
+# include_collections = [] # Only expose these collections
+# exclude_collections = [] # Hide these collections
 ```
 
 ## Section Details
@@ -312,7 +321,7 @@ See [Live Updates](../live-updates/overview.md) for full documentation.
 | `poll_interval` | integer/string | `1` (`"1s"`) | How often to poll for pending jobs. Accepts seconds or human-readable. |
 | `cron_interval` | integer/string | `60` (`"1m"`) | How often to evaluate cron schedules. Accepts seconds or human-readable. |
 | `heartbeat_interval` | integer/string | `10` (`"10s"`) | How often running jobs update their heartbeat. Used to detect stale jobs. Accepts seconds or human-readable. |
-| `auto_purge` | integer/string | `"7d"` | Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (`"7d"`, `"24h"`, `"30m"`, `"3600"`). Absent = 7 days default. |
+| `auto_purge` | integer/string | `"7d"` | Auto-purge completed/failed runs older than this duration. Accepts seconds or human-readable (`"7d"`, `"24h"`, `"30m"`, `"3600"`). Set to `""` (empty string) to disable auto-purge. Absent = 7 days default. |
 | `image_queue_batch_size` | integer | `10` | Number of pending image format conversions to claim per scheduler poll cycle. Increase for higher throughput on capable hardware. |
 
 ### `[access]`

@@ -213,9 +213,18 @@ fn collect_field_access_denied(
         if let Some(ref_str) = extractor(field) {
             match check_access_with_lua(lua, Some(ref_str), user, None, None) {
                 Ok(AccessResult::Allowed) | Ok(AccessResult::Constrained(_)) => {}
-                _ => {
+                Ok(AccessResult::Denied) => {
                     denied.push(full_name.clone());
                     continue; // Parent denied → skip sub-fields
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Field access function '{}' error (treating as denied): {}",
+                        ref_str,
+                        e
+                    );
+                    denied.push(full_name.clone());
+                    continue;
                 }
             }
         }

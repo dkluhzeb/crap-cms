@@ -45,6 +45,16 @@ Each field type has a partial in `templates/fields/`:
 - `fields/json.hbs`
 - `fields/relationship.hbs`
 - `fields/array.hbs`
+- `fields/blocks.hbs`
+- `fields/password.hbs`
+- `fields/radio.hbs`
+- `fields/code.hbs`
+- `fields/upload.hbs`
+- `fields/join.hbs`
+- `fields/group.hbs`
+- `fields/collapsible.hbs`
+- `fields/tabs.hbs`
+- `fields/row.hbs`
 
 The edit form iterates field definitions and renders the matching partial.
 
@@ -65,7 +75,7 @@ Templates receive context data from the Axum handlers. Common variables include:
 
 - `collection` — collection definition
 - `document` — document data (edit forms)
-- `documents` — document list (list views)
+- `docs` — document list (list views)
 - `fields` — field definitions
-- `globals` — global definitions
+- `global` — global definition (global edit pages)
 - `user` — authenticated user (if auth is configured)

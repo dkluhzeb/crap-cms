@@ -140,17 +140,16 @@ service ContentAPI {
   // Errors:
   //   NOT_FOUND          — collection slug not registered
   //   INVALID_ARGUMENT   — collection is not an auth collection
-  //   UNAUTHENTICATED    — invalid email or password
-  //   PERMISSION_DENIED  — account is locked, or email unverified (when
-  //                        verify_email=true in the collection auth config)
+  //   UNAUTHENTICATED    — invalid email or password (also returned for locked
+  //                        or unverified accounts to prevent state enumeration)
   //   RESOURCE_EXHAUSTED — rate limit exceeded; try again later
   rpc Login (LoginRequest) returns (LoginResponse);
 
   // Me validates a JWT token and returns the associated user document.
   // Use this to verify a token is still valid and to fetch the current user.
   //
-  // The token is passed in the request body (not in metadata). This is the
-  // only auth RPC that uses request-body token passing instead of metadata.
+  // The token is read from the `authorization` metadata header first;
+  // if absent, falls back to the `token` field in the request body.
   //
   // Auth: the token in MeRequest.token is the auth credential.
   //
@@ -396,7 +395,7 @@ message FindRequest {
 
   // Maximum number of documents to return per page.
   // Clamped to server-configured max_limit (default 1000).
-  // Defaults to server-configured default_limit (default 10).
+  // Defaults to server-configured default_limit (default 20).
   optional int64 limit = 4;
 
   // 1-indexed page number for page-based pagination.
@@ -515,11 +514,10 @@ message FindByIDRequest {
   optional bool draft = 6;
 }
 
-// FindByIDResponse wraps the returned document. The document field is absent
-// (not set) when no document exists for the given ID — a 404 is NOT returned.
-// Check document presence before accessing its fields.
+// FindByIDResponse wraps the returned document. When no document exists for
+// the given ID, the server returns a NOT_FOUND (code 5) gRPC status error.
 message FindByIDResponse {
-  // The matching document, or absent if no document with that ID exists.
+  // The matching document.
   optional Document document = 1;
 }
 

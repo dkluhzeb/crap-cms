@@ -91,6 +91,10 @@ input[type="radio"] {
   grid-column: span 6;
 }
 
+.form__field--third {
+  grid-column: span 4;
+}
+
 .form__field--hidden {
   display: none;
 }
@@ -1354,7 +1358,8 @@ select[multiple] {
 }
 
 @media (max-width: 768px) {
-  .form__field--half {
+  .form__field--half,
+  .form__field--third {
     grid-column: span 12;
   }
 

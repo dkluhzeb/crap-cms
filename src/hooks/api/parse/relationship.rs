@@ -24,6 +24,11 @@ pub(super) fn parse_field_relationship(
         } else {
             // Legacy flat syntax: relation_to + has_many on the field itself
             Ok(get_string(field_tbl, "relation_to").map(|collection| {
+                let field_name = get_string(field_tbl, "name").unwrap_or_default();
+                tracing::warn!(
+                    "Field '{}': 'relation_to' is deprecated. Use 'relationship = {{ collection = \"{}\" }}' instead.",
+                    field_name, collection
+                );
                 let has_many = get_bool(field_tbl, "has_many", false);
                 RelationshipConfig::new(collection, has_many)
             }))
@@ -40,7 +45,14 @@ pub(super) fn parse_field_relationship(
         } else {
             let collection = get_string(field_tbl, "relation_to");
             let has_many = get_bool(field_tbl, "has_many", false);
-            Ok(collection.map(|collection| RelationshipConfig::new(collection, has_many)))
+            Ok(collection.map(|collection| {
+                let field_name = get_string(field_tbl, "name").unwrap_or_default();
+                tracing::warn!(
+                    "Field '{}': 'relation_to' is deprecated. Use 'relationship = {{ collection = \"{}\" }}' instead.",
+                    field_name, collection
+                );
+                RelationshipConfig::new(collection, has_many)
+            }))
         }
     } else {
         Ok(None)

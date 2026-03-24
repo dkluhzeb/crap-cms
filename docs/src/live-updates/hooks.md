@@ -2,7 +2,7 @@
 
 ## `before_broadcast`
 
-A lifecycle event that fires inside the write transaction, before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.
+A lifecycle event that fires after the write transaction has committed, before the event reaches the EventBus. Hooks can suppress events or transform the broadcast data.
 
 ### Collection-Level
 

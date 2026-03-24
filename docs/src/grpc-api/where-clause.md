@@ -22,7 +22,7 @@ Multiple fields are combined with AND.
 | `equals` | `{"field": {"equals": "value"}}` | `field = ?` |
 | `not_equals` | `{"field": {"not_equals": "value"}}` | `field != ?` |
 | `like` | `{"field": {"like": "pattern%"}}` | `field LIKE ?` |
-| `contains` | `{"field": {"contains": "text"}}` | `field LIKE '%text%'` |
+| `contains` | `{"field": {"contains": "text"}}` | `field LIKE '%text%' ESCAPE '\'` (wildcards escaped) |
 | `greater_than` | `{"field": {"greater_than": "10"}}` | `field > ?` |
 | `less_than` | `{"field": {"less_than": "10"}}` | `field < ?` |
 | `greater_than_or_equal` | `{"field": {"greater_than_or_equal": "10"}}` | `field >= ?` |
@@ -31,6 +31,8 @@ Multiple fields are combined with AND.
 | `not_in` | `{"field": {"not_in": ["a", "b"]}}` | `field NOT IN (?, ?)` |
 | `exists` | `{"field": {"exists": true}}` | `field IS NOT NULL` |
 | `not_exists` | `{"field": {"not_exists": true}}` | `field IS NULL` |
+
+> **Note:** For `exists`/`not_exists`, the value is ignored — only the key matters. Field values must be strings or operator objects — numeric/boolean shorthand (e.g., `{"count": 42}`) is not supported in the gRPC JSON `where` clause (use `{"count": {"equals": "42"}}` instead).
 
 ## Examples
 

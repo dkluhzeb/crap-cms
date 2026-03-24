@@ -77,7 +77,7 @@ uploads/
     └── a1b2c3_my-photo_card.avif
 ```
 
-Filenames are sanitized (lowercase, non-alphanumeric characters replaced with hyphens) and prefixed with a random 10-character nanoid.
+Filenames are sanitized (lowercase, characters that are not alphanumeric, hyphens, or underscores are replaced with hyphens) and prefixed with a random 10-character nanoid.
 
 ## URL Structure
 

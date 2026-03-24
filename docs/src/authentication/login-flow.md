@@ -53,8 +53,8 @@ Rate limiting applies to the admin UI login, admin forgot-password, and the gRPC
 
 All admin UI form submissions and HTMX requests are protected by a double-submit cookie pattern:
 
-- A `crap_csrf` cookie (SameSite=Strict, not HttpOnly) is set on every response
-- POST, PUT, and DELETE requests must include a matching token via either:
+- A `crap_csrf` cookie (SameSite=Strict, not HttpOnly) is set when absent (persists with a 24-hour Max-Age)
+- POST, PUT, PATCH, and DELETE requests must include a matching token via either:
   - `X-CSRF-Token` header (used by HTMX requests)
   - `_csrf` form field (used by plain form submissions)
 - Mismatched or missing tokens return 403 Forbidden

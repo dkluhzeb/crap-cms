@@ -31,7 +31,7 @@ end
 
 ### Typed Contexts
 
-The type generator (`crap-cms types lua`) emits per-collection field hook contexts
+The type generator (`crap-cms typegen`) emits per-collection field hook contexts
 with typed `data` fields:
 
 - **Collections:** `crap.field_hook.{PascalCase}` — e.g., `crap.field_hook.Posts`

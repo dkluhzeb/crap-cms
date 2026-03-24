@@ -18,6 +18,7 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 | `access` | table | `{}` | Access control function refs |
 | `versions` | boolean or table | `nil` | Versioning and drafts config (see [Versions & Drafts](versions.md)) |
 | `live` | boolean or string | `nil` | Live update broadcasting (see [Live Updates](../live-updates/overview.md)) |
+| `mcp` | table | `{}` | MCP tool config. `{ description = "..." }` for MCP tool descriptions. |
 | `indexes` | IndexDefinition[] | `{}` | Compound indexes (see [Indexes](#indexes) below) |
 
 ## `admin`
@@ -42,6 +43,7 @@ All hook values are arrays of string references in `module.function` format.
 | `after_read` | string[] | Runs after read, before response. No CRUD access. |
 | `before_delete` | string[] | Runs before delete. Has CRUD access. |
 | `after_delete` | string[] | Runs after delete. No CRUD access (fire-and-forget). |
+| `before_broadcast` | string[] | Runs after commit, before broadcast. No CRUD access. See [Live Updates](../live-updates/hooks.md). |
 
 See [Hooks](../hooks/overview.md) for full details.
 

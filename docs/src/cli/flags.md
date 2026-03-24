@@ -172,7 +172,7 @@ crap-cms user change-password [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-p <PA
 ### `init` — Scaffold a new config directory
 
 ```bash
-crap-cms init [DIR]
+crap-cms init [DIR] [--no-input]
 ```
 
 Runs an interactive wizard that scaffolds a complete config directory. Defaults to `./crap-cms` if no directory is given.
@@ -730,5 +730,5 @@ for configuration and usage.
 | Variable | Description |
 |----------|-------------|
 | `CRAP_CONFIG_DIR` | Path to the config directory (same as `--config` flag; flag takes priority) |
-| `RUST_LOG` | Controls log verbosity. Default: `crap_cms=debug,info`. Example: `RUST_LOG=crap_cms=trace` |
+| `RUST_LOG` | Controls log verbosity. Default: `crap_cms=debug,info` for `serve`, `crap_cms=error` for all other commands. Example: `RUST_LOG=crap_cms=trace` |
 | `CRAP_LOG_FORMAT` | Set to `json` for structured JSON log output (same as `--json` flag) |

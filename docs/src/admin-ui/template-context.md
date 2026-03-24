@@ -34,6 +34,7 @@ Every admin page receives a structured context object built by the `ContextBuild
 
 ```handlebars
 {{crap.version}}      {{!-- "0.1.0" --}}
+{{crap.build_hash}}   {{!-- Git commit hash at build time --}}
 {{crap.dev_mode}}     {{!-- true/false --}}
 {{crap.auth_enabled}} {{!-- true if any auth collection exists --}}
 ```
@@ -65,6 +66,7 @@ Every admin page receives a structured context object built by the `ContextBuild
 | `collection_delete` | `/admin/collections/{slug}/{id}/delete` |
 | `collection_versions` | `/admin/collections/{slug}/{id}/versions` |
 | `global_edit` | `/admin/globals/{slug}` |
+| `global_versions` | `/admin/globals/{slug}/versions` |
 | `auth_login` | `/admin/login` |
 | `auth_forgot` | `/admin/forgot-password` |
 | `auth_reset` | `/admin/reset-password` |
@@ -240,9 +242,9 @@ Additional keys:
 {{/each}}
 ```
 
-Collection card fields: `slug`, `display_name`, `singular_name`, `count`.
+Collection card fields: `slug`, `display_name`, `singular_name`, `count`, `last_updated`, `is_auth`, `is_upload`, `has_versions`.
 
-Global card fields: `slug`, `display_name`.
+Global card fields: `slug`, `display_name`, `last_updated`, `has_versions`.
 
 ---
 
@@ -283,7 +285,6 @@ Each doc:
 | `title_value` | string | Value of the title field (falls back to filename for uploads, then ID) |
 | `created_at` | string/null | Creation timestamp |
 | `updated_at` | string/null | Last update timestamp |
-| `status` | string | `"published"` or `"draft"` |
 | `thumbnail_url` | string/null | Thumbnail URL (upload collections with images only) |
 
 ### `pagination`
@@ -460,7 +461,15 @@ Each entry: `slug`, `display_name`, `field_count`.
 | Key | Type | Description |
 |-----|------|-------------|
 | `global` | object | Global definition |
-| `fields` | array | Processed field contexts |
+| `fields` | array | Processed field contexts (main area) |
+| `sidebar_fields` | array | Processed field contexts (sidebar) |
+| `has_drafts` | boolean | Whether the global has drafts enabled |
+| `has_versions` | boolean | Whether the global has versions enabled |
+| `versions` | array | Recent version entries (up to 3) |
+| `has_more_versions` | boolean | `true` if more than 3 versions exist |
+| `restore_url_prefix` | string | URL prefix for version restore actions |
+| `versions_url` | string | URL to the full versions list page |
+| `doc_status` | string | Document status (`"published"` or `"draft"`) |
 
 ### `global`
 
@@ -553,6 +562,18 @@ When localization is enabled in `crap.toml`, edit/create pages receive additiona
 Each locale entry: `value` (e.g., `"en"`), `label` (e.g., `"EN"`), `selected` (boolean).
 
 When editing a non-default locale, non-localized fields are rendered as readonly (locale-locked).
+
+### Editor Locale (Content Locale)
+
+In addition to the UI translation locale (`has_locales`/`current_locale`/`locales`), edit/create pages also receive content editor locale variables when locale is enabled:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `has_editor_locales` | boolean | Always `true` when locale is enabled |
+| `editor_locale` | string | Currently selected content locale (e.g., `"en"`) |
+| `editor_locales` | array | All configured locales with selection state |
+
+These control which content locale is being edited, separate from the admin UI translation locale.
 
 ---
 
