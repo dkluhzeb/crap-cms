@@ -19,14 +19,21 @@ use crate::{
 };
 
 /// Sync all collection tables with their Lua definitions.
+///
+/// Concurrency safety: `transaction_immediate()` acquires SQLite's write lock at
+/// transaction start (not first write), so concurrent `sync_all` calls are serialized
+/// by the database engine. Combined with `busy_timeout` (default 30s), the second caller
+/// waits rather than failing. No additional file lock is needed.
 pub fn sync_all(
     pool: &DbPool,
     registry: &SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let mut conn = pool.get().context("Failed to get DB connection")?;
+    // IMMEDIATE acquires the write lock immediately — serializes concurrent DDL
+    // operations and prevents lock contention during schema changes.
     let tx = conn
-        .transaction()
+        .transaction_immediate()
         .context("Failed to start migration transaction")?;
 
     let ts_default = tx.timestamp_column_default();

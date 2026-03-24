@@ -5,6 +5,10 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
 };
 
 use tokio_stream::{Stream, StreamExt, wrappers::BroadcastStream};
@@ -32,6 +36,34 @@ use super::{
         prost_struct_to_json_map,
     },
 };
+
+/// RAII guard that decrements the Subscribe connection counter on drop.
+struct SubscribeConnectionGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for SubscribeConnectionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Stream wrapper that holds a connection guard, releasing it when the stream ends.
+struct GuardedStream<S> {
+    inner: Pin<Box<S>>,
+    _guard: SubscribeConnectionGuard,
+}
+
+impl<S: Stream + Unpin> Stream for GuardedStream<S> {
+    type Item = S::Item;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
 
 /// Untestable as unit: async methods require full ContentService with pool, registry,
 /// hook_runner, and JWT secret. Covered by integration tests in tests/ directory.
@@ -366,6 +398,26 @@ impl ContentService {
         Response<Pin<Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>>>,
         Status,
     > {
+        // Enforce Subscribe connection limit
+        let max = self.max_subscribe_connections;
+        if max > 0 {
+            let current = self.subscribe_connections.fetch_add(1, Ordering::Relaxed);
+            if current >= max {
+                self.subscribe_connections.fetch_sub(1, Ordering::Relaxed);
+                tracing::warn!(
+                    "Subscribe connection limit reached ({}/{}), rejecting",
+                    current,
+                    max
+                );
+                return Err(Status::resource_exhausted("Too many Subscribe streams"));
+            }
+        } else {
+            self.subscribe_connections.fetch_add(1, Ordering::Relaxed);
+        }
+        let subscribe_guard = SubscribeConnectionGuard {
+            counter: self.subscribe_connections.clone(),
+        };
+
         let metadata = request.metadata().clone();
         let req = request.into_inner();
 
@@ -528,7 +580,16 @@ impl ContentService {
             }
         });
 
-        Ok(Response::new(Box::pin(stream)))
+        // Attach the connection guard to the stream so it decrements on drop
+        let guarded = GuardedStream {
+            inner: Box::pin(stream),
+            _guard: subscribe_guard,
+        };
+
+        Ok(Response::new(Box::pin(guarded)
+            as Pin<
+                Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>,
+            >))
     }
 
     /// List version history for a document.

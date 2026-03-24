@@ -928,7 +928,10 @@ fn enrich_field_contexts_blocks_inside_tabs_populates_rows() {
         ),
         has_auth: false,
         translations,
+        sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     };
 
     // Call enrich_field_contexts — the fix ensures Tabs recurse into Blocks
@@ -1019,7 +1022,10 @@ fn enrich_field_contexts_array_inside_row_populates_rows() {
         ),
         has_auth: false,
         translations,
+        sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     };
 
     enrich_field_contexts(
@@ -1085,7 +1091,10 @@ fn make_test_state() -> crate::admin::AdminState {
         ),
         has_auth: false,
         translations,
+        sse_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections: 0,
         shutdown: tokio_util::sync::CancellationToken::new(),
+        csp_header: None,
     }
 }
 

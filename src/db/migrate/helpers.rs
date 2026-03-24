@@ -405,6 +405,14 @@ pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result
             ),
             &[],
         )?;
+        // Defense-in-depth: prevent duplicate version numbers per document
+        conn.execute(
+            &format!(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_{slug}_parent_version_unique ON {table} (_parent, _version)",
+                slug = slug, table = table_name
+            ),
+            &[],
+        )?;
     }
     Ok(())
 }
@@ -1182,5 +1190,46 @@ mod tests {
             !cols.contains("row_wrap"),
             "row wrapper should NOT be a column"
         );
+    }
+
+    // ── sync_versions_table ──────────────────────────────────────────────
+
+    #[test]
+    fn versions_table_has_unique_parent_version() {
+        use crate::db::DbValue;
+
+        let text = |s: &str| DbValue::Text(s.to_string());
+        let int = |n: i64| DbValue::Integer(n);
+
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        // Need parent table and row for FK
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        conn.execute("INSERT INTO posts (id) VALUES (?1)", &[text("p1")])
+            .unwrap();
+        sync_versions_table(&conn, "posts").unwrap();
+
+        // Insert first version — should succeed
+        conn.execute(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, snapshot) VALUES (?1, ?2, ?3, ?4, ?5)",
+            &[text("v1"), text("p1"), int(1), text("published"), text("{}")],
+        ).unwrap();
+
+        // Insert same parent+version — should fail (UNIQUE constraint)
+        let err = conn.execute(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, snapshot) VALUES (?1, ?2, ?3, ?4, ?5)",
+            &[text("v2"), text("p1"), int(1), text("published"), text("{}")],
+        );
+        assert!(
+            err.is_err(),
+            "Duplicate (parent, version) should be rejected"
+        );
+
+        // Different version same parent — should succeed
+        conn.execute(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, snapshot) VALUES (?1, ?2, ?3, ?4, ?5)",
+            &[text("v3"), text("p1"), int(2), text("published"), text("{}")],
+        ).unwrap();
     }
 }

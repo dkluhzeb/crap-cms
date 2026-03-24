@@ -27,9 +27,11 @@ end
 When auth collections are configured and no `access` function is set, any authenticated user can access the admin.
 
 **Security features:**
+- **Content-Security-Policy** header with configurable per-directive source lists (see `[admin.csp]`)
 - CSRF protection on all forms and HTMX requests (double-submit cookie pattern)
 - `Secure` flag on session cookies in production (`dev_mode = false`)
 - Rate limiting on login (configurable max attempts and lockout duration)
+- `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `Permissions-Policy` headers
 
 ## Technology
 

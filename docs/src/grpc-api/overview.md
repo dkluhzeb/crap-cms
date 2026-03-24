@@ -37,6 +37,24 @@ service ContentAPI {
 
 Default: `50051` (configurable via `[server] grpc_port` in `crap.toml`).
 
+## Message Size Limits
+
+The maximum gRPC message size (both request and response) defaults to **16MB** — configurable via `grpc_max_message_size` in `[server]`. This is higher than Tonic's built-in 4MB default to accommodate large `Find` responses with deep relationship population.
+
+```toml
+[server]
+grpc_max_message_size = "32MB"  # increase for very large responses
+```
+
+## Timeouts
+
+An optional request timeout can be set via `grpc_timeout` in `[server]`. When set, RPCs exceeding the timeout return `DEADLINE_EXCEEDED`.
+
+```toml
+[server]
+grpc_timeout = "30s"
+```
+
 ## Server Reflection
 
 The server supports gRPC reflection, so tools like `grpcurl` work without importing the proto file:

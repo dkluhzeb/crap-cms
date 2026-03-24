@@ -106,6 +106,8 @@ pub async fn start(
         .values()
         .any(|d| d.is_auth_collection());
 
+    let max_sse_connections = config.live.max_sse_connections;
+    let csp_header = config.admin.csp.build_header_value();
     let state = AdminState {
         config,
         config_dir: config_dir.clone(),
@@ -123,6 +125,9 @@ pub async fn start(
         has_auth,
         translations,
         shutdown: shutdown.clone(),
+        sse_connections: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        max_sse_connections,
+        csp_header,
     };
 
     let h2c_enabled = state.config.server.h2c;
@@ -357,7 +362,10 @@ pub fn build_router(state: AdminState) -> Router {
             csrf_middleware,
         ))
         .layer(middleware::from_fn(html_cache_control))
-        .layer(middleware::from_fn(security_headers));
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            security_headers,
+        ));
 
     // Add CORS layer if configured (runs before CSRF in request processing)
     let router = if let Some(cors) = state.config.cors.build_layer() {
@@ -401,6 +409,22 @@ pub fn build_router(state: AdminState) -> Router {
             ),
     );
 
+    // Add request timeout if configured. Uses HandleErrorLayer to convert
+    // tower::timeout errors into 408 Request Timeout responses.
+    let router = if let Some(timeout_secs) = state.config.server.request_timeout {
+        router.layer(
+            tower::ServiceBuilder::new()
+                .layer(axum::error_handling::HandleErrorLayer::new(|_| async {
+                    StatusCode::REQUEST_TIMEOUT
+                }))
+                .layer(tower::timeout::TimeoutLayer::new(Duration::from_secs(
+                    timeout_secs,
+                ))),
+        )
+    } else {
+        router
+    };
+
     router.with_state(state)
 }
 
@@ -423,7 +447,11 @@ async fn health_readiness(State(state): State<AdminState>) -> StatusCode {
 /// Security headers middleware — sets protective headers on every response.
 // Excluded from coverage: async Axum middleware.
 #[cfg(not(tarpaulin_include))]
-async fn security_headers(request: Request<Body>, next: Next) -> Response {
+async fn security_headers(
+    State(state): State<AdminState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
     headers.insert(
@@ -442,6 +470,12 @@ async fn security_headers(request: Request<Body>, next: Next) -> Response {
         HeaderName::from_static("permissions-policy"),
         HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
     );
+
+    if let Some(ref csp) = state.csp_header
+        && let Ok(value) = HeaderValue::from_str(csp)
+    {
+        headers.insert(HeaderName::from_static("content-security-policy"), value);
+    }
 
     response
 }

@@ -1,6 +1,11 @@
 //! `ContentService` struct definition and its impl blocks.
 
-use std::{collections::HashMap, path::PathBuf, pin::Pin, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    pin::Pin,
+    sync::{Arc, atomic::AtomicUsize},
+};
 
 use serde_json::Value;
 use tokio_stream::Stream;
@@ -52,6 +57,10 @@ pub struct ContentService {
     pub(in crate::api::service) pagination_ctx: query::PaginationCtx,
     /// Cached backend identifier (e.g. `"sqlite"`, `"postgres"`), set once at startup.
     pub(in crate::api::service) db_kind: String,
+    /// Current number of active gRPC Subscribe streams (for connection limiting).
+    pub(in crate::api::service) subscribe_connections: Arc<AtomicUsize>,
+    /// Maximum allowed concurrent Subscribe streams. 0 = unlimited.
+    pub(in crate::api::service) max_subscribe_connections: usize,
 }
 
 /// Pure helper methods — testable without I/O dependencies.
@@ -121,6 +130,7 @@ impl ContentService {
         );
         let reset_token_expiry = deps.config.auth.reset_token_expiry;
         let db_kind = deps.pool.kind().to_string();
+        let max_subscribe_connections = deps.config.live.max_subscribe_connections;
 
         Self {
             pool: deps.pool,
@@ -144,6 +154,8 @@ impl ContentService {
             populate_cache,
             pagination_ctx,
             db_kind,
+            subscribe_connections: Arc::new(AtomicUsize::new(0)),
+            max_subscribe_connections,
         }
     }
 

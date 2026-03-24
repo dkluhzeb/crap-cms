@@ -5,6 +5,10 @@ use std::{
     convert::Infallible,
     future::Future,
     pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll},
     time::Duration,
 };
@@ -24,11 +28,25 @@ use crate::{
     db::AccessResult,
 };
 
+/// RAII guard that decrements the SSE connection counter on drop.
+struct SseConnectionGuard {
+    counter: Arc<AtomicUsize>,
+}
+
+impl Drop for SseConnectionGuard {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Stream wrapper that ends when a CancellationToken fires.
+/// Holds an optional SSE connection guard that decrements the counter on drop.
 struct CancellableStream {
     inner: Pin<Box<dyn Stream<Item = Result<Event, Infallible>> + Send>>,
     shutdown: Pin<Box<WaitForCancellationFutureOwned>>,
     done: bool,
+    /// RAII guard — decrements SSE connection counter when the stream is dropped.
+    _guard: Option<SseConnectionGuard>,
 }
 
 impl Stream for CancellableStream {
@@ -57,7 +75,28 @@ impl Stream for CancellableStream {
 pub async fn sse_handler(
     State(state): State<AdminState>,
     auth_user: Option<Extension<AuthUser>>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, axum::http::StatusCode> {
+    // Enforce connection limit
+    let max = state.max_sse_connections;
+    if max > 0 {
+        let current = state.sse_connections.fetch_add(1, Ordering::Relaxed);
+        if current >= max {
+            state.sse_connections.fetch_sub(1, Ordering::Relaxed);
+            tracing::warn!(
+                "SSE connection limit reached ({}/{}), rejecting",
+                current,
+                max
+            );
+            return Err(axum::http::StatusCode::SERVICE_UNAVAILABLE);
+        }
+    } else {
+        state.sse_connections.fetch_add(1, Ordering::Relaxed);
+    }
+
+    let guard = SseConnectionGuard {
+        counter: state.sse_connections.clone(),
+    };
+
     let event_bus = state.event_bus.clone();
     let shutdown = state.shutdown.clone();
 
@@ -164,11 +203,13 @@ pub async fn sse_handler(
 
     // End the stream when the server is shutting down, so Axum's
     // graceful shutdown can complete without waiting for SSE clients.
+    // The guard decrements the SSE connection counter when the stream is dropped.
     let stream = CancellableStream {
         inner: stream,
         shutdown: Box::pin(shutdown.cancelled_owned()),
         done: false,
+        _guard: Some(guard),
     };
 
-    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30)))
+    Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(30))))
 }

@@ -47,7 +47,7 @@ login_lockout_seconds = "5m"
 auto_purge = "7d"
 ```
 
-Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`.
+Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`, `request_timeout`, `grpc_timeout`.
 
 ## File Size Values
 
@@ -65,7 +65,7 @@ max_file_size = "100KB"
 max_file_size = "1GB"
 ```
 
-Fields that support this: `max_file_size` (global and per-collection), `max_memory`, `http_max_response_bytes`.
+Fields that support this: `max_file_size` (global and per-collection), `max_memory`, `http_max_response_bytes`, `grpc_max_message_size`.
 
 ## Full Reference
 
@@ -84,6 +84,9 @@ host = "0.0.0.0"        # Bind address
 # grpc_reflection = true         # Enable gRPC server reflection (default: true)
 # grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled, recommended: 100)
 # grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
+# grpc_max_message_size = "16MB" # Max gRPC message size (default 16MB)
+# request_timeout = "30s"        # Admin HTTP request timeout (none by default)
+# grpc_timeout = "30s"           # gRPC request timeout (none by default)
 
 [database]
 path = "data/crap.db"   # Relative to config dir, or absolute
@@ -95,6 +98,17 @@ connection_timeout = 5   # Pool checkout timeout (seconds or "5s")
 dev_mode = false         # Reload templates per-request (enable in development)
 require_auth = true      # Block admin when no auth collection exists (default: true)
 # access = "access.admin_panel"  # Lua function: which users can access the admin UI
+
+# [admin.csp]                    # Content-Security-Policy (enabled by default)
+# enabled = true
+# script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com"]
+# style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]
+# font_src = ["'self'", "https://fonts.gstatic.com"]
+# img_src = ["'self'", "data:"]
+# connect_src = ["'self'"]
+# frame_ancestors = ["'none'"]
+# form_action = ["'self'"]
+# base_uri = ["'self'"]
 
 [auth]
 secret = ""              # JWT signing key. Empty = auto-generated and persisted to data/.jwt_secret
@@ -151,6 +165,8 @@ http_max_response_bytes = "10MB"  # Max HTTP response body size
 [live]
 enabled = true           # Enable SSE + gRPC Subscribe for live mutation events
 channel_capacity = 1024  # Broadcast channel buffer size
+# max_sse_connections = 1000        # Max concurrent SSE connections (0 = unlimited)
+# max_subscribe_connections = 1000  # Max concurrent gRPC Subscribe streams (0 = unlimited)
 
 [locale]
 default_locale = "en"    # Default locale code
@@ -202,6 +218,9 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `public_url` | string | — | Public-facing base URL (e.g., `"https://cms.example.com"`). Used for password reset emails and other generated links. If not set, defaults to `http://{host}:{admin_port}`. |
 | `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). **Recommended to enable in production** (e.g., `100`). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
 | `grpc_rate_limit_window` | integer/string | `60` (`"1m"`) | Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (`"1m"`, `"30s"`). |
+| `grpc_max_message_size` | integer/string | `16777216` (`"16MB"`) | Maximum gRPC message size in bytes (applies to both send and receive). Tonic's built-in default is 4MB, which can be exceeded by large `Find` responses with deep population. Accepts bytes or file size string (`"16MB"`, `"32MB"`). |
+| `request_timeout` | integer/string | — (none) | Admin HTTP request timeout. When set, requests exceeding this duration return `408 Request Timeout`. SSE streams are exempt (handled by shutdown). Accepts seconds or human-readable (`"30s"`, `"5m"`). |
+| `grpc_timeout` | integer/string | — (none) | gRPC request timeout. When set, RPCs exceeding this duration return `DEADLINE_EXCEEDED`. Applies to all RPCs including Subscribe streams. Accepts seconds or human-readable (`"30s"`, `"5m"`). |
 
 ### `[database]`
 
@@ -219,6 +238,34 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `dev_mode` | boolean | `false` | When true, templates are reloaded from disk on every request. The scaffold sets this to `true` for new projects. Set to `false` in production for cached templates. |
 | `require_auth` | boolean | `true` | When true and no auth collection exists, the admin panel shows a "Setup Required" page (HTTP 503) instead of being open. Set to `false` for fully open dev mode without authentication. |
 | `access` | string | — | Lua function ref (e.g., `"access.admin_panel"`) that gates admin panel access. Called after successful authentication with `{ user }` context. Return `true` to allow, `false`/`nil` to deny (HTTP 403). |
+| `csp` | table | *(see below)* | Content-Security-Policy header configuration. See `[admin.csp]`. |
+
+### `[admin.csp]`
+
+Content-Security-Policy header configuration for the admin UI. Each field is a list of CSP sources for the corresponding directive. Theme developers can extend these lists to allow external resources (CDNs, custom fonts, analytics, etc.).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `true` | Enable the CSP header. Set to `false` to disable entirely. |
+| `script_src` | string[] | `["'self'", "'unsafe-inline'", "https://unpkg.com"]` | Allowed script sources. Includes `'unsafe-inline'` for theme bootstrap and CSRF injection scripts. |
+| `style_src` | string[] | `["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]` | Allowed stylesheet sources. Includes `'unsafe-inline'` for Web Component Shadow DOM styles. |
+| `font_src` | string[] | `["'self'", "https://fonts.gstatic.com"]` | Allowed font sources. Includes Google Fonts for Material Symbols icons. |
+| `img_src` | string[] | `["'self'", "data:"]` | Allowed image sources. Includes `data:` for inline SVGs. |
+| `connect_src` | string[] | `["'self'"]` | Allowed targets for `fetch`, XHR, and WebSocket connections. |
+| `frame_ancestors` | string[] | `["'none'"]` | Who can embed this page in a frame. `'none'` prevents clickjacking. |
+| `form_action` | string[] | `["'self'"]` | Allowed form submission targets. |
+| `base_uri` | string[] | `["'self'"]` | Allowed URLs for `<base>` tags. |
+
+**Example: allowing a custom CDN and analytics:**
+
+```toml
+[admin.csp]
+script_src = ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.example.com", "https://analytics.example.com"]
+style_src = ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://cdn.example.com"]
+font_src = ["'self'", "https://fonts.gstatic.com", "https://cdn.example.com"]
+img_src = ["'self'", "data:", "https://cdn.example.com"]
+connect_src = ["'self'", "https://analytics.example.com"]
+```
 
 ### `[auth]`
 
@@ -302,6 +349,8 @@ When configured, email enables password reset ("Forgot password?" link on login)
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable live event streaming (SSE + gRPC Subscribe). |
 | `channel_capacity` | integer | `1024` | Internal broadcast channel buffer size. Increase if subscribers lag. |
+| `max_sse_connections` | integer | `1000` | Maximum concurrent SSE connections. When reached, new connections receive `503 Service Unavailable`. `0` = unlimited. |
+| `max_subscribe_connections` | integer | `1000` | Maximum concurrent gRPC Subscribe streams. When reached, new subscriptions receive `UNAVAILABLE` status. `0` = unlimited. |
 
 See [Live Updates](../live-updates/overview.md) for full documentation.
 

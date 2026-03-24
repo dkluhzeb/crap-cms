@@ -53,6 +53,10 @@ grpcurl -plaintext -d '{
 
 If the stream is interrupted, clients should reconnect. Events missed during disconnection are not replayed. Use the `sequence` field to detect gaps.
 
+## Connection Limits
+
+The maximum number of concurrent Subscribe streams is controlled by `max_subscribe_connections` in `[live]` (default: 1000). When the limit is reached, new subscriptions receive `UNAVAILABLE` status. Set to `0` for unlimited.
+
 ## Backpressure
 
 The internal broadcast channel has a configurable capacity (default 1024). If a subscriber falls behind, events are dropped and the stream continues from the latest event (logged as a warning on the server).

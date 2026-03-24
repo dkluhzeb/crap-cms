@@ -365,6 +365,13 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
              per-IP rate limiting will use the proxy's IP, not the client's"
         );
     }
+    if !cfg.email.smtp_host.is_empty() && cfg.server.public_url.is_none() {
+        warn!(
+            "Email is configured (smtp_host set) but server.public_url is not set — \
+             password reset links will use http://{}:{} which may not be reachable externally",
+            cfg.server.host, cfg.server.admin_port
+        );
+    }
 
     // Snapshot the registry for hot-path consumers (admin UI + gRPC).
     // HookRunner + scheduler keep the SharedRegistry (which is only read at runtime anyway).

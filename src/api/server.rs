@@ -58,6 +58,8 @@ pub async fn start(
     let grpc_rate_requests = params.config.server.grpc_rate_limit_requests;
     let grpc_rate_window = params.config.server.grpc_rate_limit_window;
     let grpc_reflection = params.config.server.grpc_reflection;
+    let grpc_timeout = params.config.server.grpc_timeout;
+    let grpc_max_msg = params.config.server.grpc_max_message_size as usize;
     let cors_layer = params.config.cors.build_layer();
 
     let content_service = service::ContentService::new(
@@ -98,7 +100,9 @@ pub async fn start(
     let grpc_limiter = Arc::new(GrpcRateLimiter::new(grpc_rate_requests, grpc_rate_window));
     let rate_limit_layer = rate_limit::GrpcRateLimitLayer::new(grpc_limiter);
 
-    let content_svc = content::content_api_server::ContentApiServer::new(content_service);
+    let content_svc = content::content_api_server::ContentApiServer::new(content_service)
+        .max_decoding_message_size(grpc_max_msg)
+        .max_encoding_message_size(grpc_max_msg);
 
     // gRPC health service (grpc.health.v1.Health)
     let (health_reporter, health_service) = tonic_health::server::health_reporter();
@@ -118,9 +122,16 @@ pub async fn start(
         None
     };
 
-    Server::builder()
+    let mut builder = Server::builder()
         .layer(tower::util::option_layer(cors_layer))
-        .layer(rate_limit_layer)
+        .layer(rate_limit_layer);
+
+    // Apply gRPC timeout if configured (applies to all RPCs including Subscribe)
+    if let Some(timeout_secs) = grpc_timeout {
+        builder = builder.timeout(std::time::Duration::from_secs(timeout_secs));
+    }
+
+    builder
         .add_service(health_service)
         .add_optional_service(reflection_service)
         .add_service(content_svc)

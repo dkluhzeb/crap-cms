@@ -276,6 +276,10 @@ pub struct LiveConfig {
     pub enabled: bool,
     /// Broadcast channel capacity. Default: 1024.
     pub channel_capacity: usize,
+    /// Maximum concurrent SSE connections (admin UI). 0 = unlimited. Default: 1000.
+    pub max_sse_connections: usize,
+    /// Maximum concurrent gRPC Subscribe streams. 0 = unlimited. Default: 1000.
+    pub max_subscribe_connections: usize,
 }
 
 impl Default for LiveConfig {
@@ -283,6 +287,8 @@ impl Default for LiveConfig {
         Self {
             enabled: true,
             channel_capacity: 1024,
+            max_sse_connections: 1000,
+            max_subscribe_connections: 1000,
         }
     }
 }
@@ -408,6 +414,8 @@ mod tests {
         let live = LiveConfig::default();
         assert!(live.enabled);
         assert_eq!(live.channel_capacity, 1024);
+        assert_eq!(live.max_sse_connections, 1000);
+        assert_eq!(live.max_subscribe_connections, 1000);
     }
 
     #[test]
