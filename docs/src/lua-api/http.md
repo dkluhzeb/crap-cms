@@ -37,7 +37,7 @@ local resp = crap.http.request({
     method = "POST",
     headers = {
         ["Content-Type"] = "application/json",
-        ["Authorization"] = "Bearer " .. crap.env.get("API_TOKEN"),
+        ["Authorization"] = "Bearer " .. crap.env.get("CRAP_API_TOKEN"),
     },
     body = crap.util.json_encode({ event = "document.created", id = ctx.data.id }),
     timeout = 10,

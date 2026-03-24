@@ -77,6 +77,7 @@ Fields that support this: `max_file_size` (global and per-collection).
 admin_port = 3000       # Admin UI port
 grpc_port = 50051       # gRPC API port
 host = "0.0.0.0"        # Bind address
+# public_url = "https://cms.example.com"  # Public-facing base URL for generated links
 # h2c = false           # Enable HTTP/2 cleartext (for reverse proxies)
 # trust_proxy = false   # Trust X-Forwarded-For (enable behind reverse proxy)
 # compression = "off"   # "off" (default), "gzip", "br", "all"
@@ -189,6 +190,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the **admin HTTP server**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic's `remote_addr()`. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
 | `grpc_reflection` | boolean | `true` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disable in production to hide the API surface from unauthenticated probing. |
+| `public_url` | string | — | Public-facing base URL (e.g., `"https://cms.example.com"`). Used for password reset emails and other generated links. If not set, defaults to `http://{host}:{admin_port}`. |
 | `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). **Recommended to enable in production** (e.g., `100`). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
 | `grpc_rate_limit_window` | integer/string | `60` (`"1m"`) | Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (`"1m"`, `"30s"`). |
 

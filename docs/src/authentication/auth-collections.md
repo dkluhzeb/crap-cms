@@ -35,6 +35,8 @@ crap.collections.define("users", {
 |----------|------|---------|-------------|
 | `token_expiry` | integer | `7200` | JWT token lifetime in seconds. Overrides the global `[auth] token_expiry`. |
 | `disable_local` | boolean | `false` | When `true`, the password login form is hidden. Only custom strategies can authenticate. |
+| `verify_email` | boolean | `false` | When `true`, new users must verify their email before logging in. Requires email configuration. |
+| `forgot_password` | boolean | `true` | When `true`, enables the "Forgot password?" flow. Requires email configuration. |
 | `strategies` | AuthStrategy[] | `{}` | Custom auth strategies. See [Custom Strategies](custom-strategies.md). |
 
 ## Email Auto-Injection

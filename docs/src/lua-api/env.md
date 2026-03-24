@@ -14,13 +14,13 @@ Get the value of an environment variable.
 **Returns:** string or nil — The value, or `nil` if the variable is not set.
 
 ```lua
-local db_url = crap.env.get("DATABASE_URL")
+local db_url = crap.env.get("CRAP_DATABASE_URL")
 if db_url then
     crap.log.info("DB URL: " .. db_url)
 end
 
 -- Common pattern: env with fallback
-local port = crap.env.get("PORT") or "3000"
+local port = crap.env.get("CRAP_PORT") or "3000"
 ```
 
 ## Allowed Prefixes

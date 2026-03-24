@@ -163,6 +163,8 @@ Manually mark a user's email as verified or unverified. Only works on collection
 
 #### `user change-password`
 
+Change a user's password. Prompts for the new password if `-p` is omitted.
+
 ```bash
 crap-cms user change-password [-c <COLLECTION>] [-e <EMAIL>] [--id <ID>] [-p <PASSWORD>]
 ```
@@ -488,7 +490,7 @@ crap-cms migrate <create|up|down|list|fresh>
 |------------|-------------|
 | `create <NAME>` | Generate a new migration file (e.g., `backfill_slugs`) |
 | `up` | Sync schema + run pending migrations |
-| `down [-s N]` | Roll back last N migrations (default: 1) |
+| `down [-s\|--steps N]` | Roll back last N migrations (default: 1) |
 | `list` | Show all migration files with status |
 | `fresh [-y\|--confirm]` | Drop all tables and recreate (destructive, requires confirmation) |
 

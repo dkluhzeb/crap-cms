@@ -162,6 +162,81 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/Delete
 ```
 
+## Count
+
+Count documents matching an optional filter. Respects collection-level read access.
+
+```protobuf
+message CountRequest {
+  string collection = 1;
+  optional string where = 2;            // JSON where clause
+  optional string locale = 3;           // locale code for localized field filtering
+  optional bool draft = 4;              // true = include drafts
+  optional string search = 5;           // FTS5 full-text search query
+}
+
+message CountResponse {
+  int64 count = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "where": "{\"status\": \"published\"}"
+}' localhost:50051 crap.ContentAPI/Count
+```
+
+## UpdateMany
+
+Bulk-update all documents matching a filter. All updates run in a single transaction (all-or-nothing). Fires per-document hooks by default.
+
+```protobuf
+message UpdateManyRequest {
+  string collection = 1;
+  optional string where = 2;            // JSON where clause (omit = all docs)
+  google.protobuf.Struct data = 3;      // field values to apply
+  optional string locale = 4;           // locale code for localized fields
+  optional bool draft = 5;              // true = save as drafts
+  optional bool hooks = 6;              // default: true. Set false to skip hooks.
+}
+
+message UpdateManyResponse {
+  int64 modified = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "where": "{\"status\": \"draft\"}",
+    "data": { "status": "published" }
+}' localhost:50051 crap.ContentAPI/UpdateMany
+```
+
+## DeleteMany
+
+Bulk-delete all documents matching a filter. All deletions run in a single transaction (all-or-nothing). Fires per-document hooks by default.
+
+```protobuf
+message DeleteManyRequest {
+  string collection = 1;
+  optional string where = 2;            // JSON where clause (omit = all docs)
+  optional bool hooks = 3;              // default: true. Set false to skip hooks.
+}
+
+message DeleteManyResponse {
+  int64 deleted = 1;
+}
+```
+
+```bash
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "where": "{\"status\": \"archived\"}"
+}' localhost:50051 crap.ContentAPI/DeleteMany
+```
+
 ## GetGlobal
 
 Get a global's current value.

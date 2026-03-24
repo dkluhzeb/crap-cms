@@ -15,6 +15,9 @@ service ContentAPI {
   rpc UpdateGlobal (UpdateGlobalRequest) returns (UpdateGlobalResponse);
   rpc Login (LoginRequest) returns (LoginResponse);
   rpc Me (MeRequest) returns (MeResponse);
+  rpc Count (CountRequest) returns (CountResponse);
+  rpc UpdateMany (UpdateManyRequest) returns (UpdateManyResponse);
+  rpc DeleteMany (DeleteManyRequest) returns (DeleteManyResponse);
   rpc ListCollections (ListCollectionsRequest) returns (ListCollectionsResponse);
   rpc DescribeCollection (DescribeCollectionRequest) returns (DescribeCollectionResponse);
 }
