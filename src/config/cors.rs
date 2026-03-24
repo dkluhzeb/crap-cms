@@ -22,10 +22,10 @@ pub struct CorsConfig {
     pub allowed_headers: Vec<String>,
     /// Response headers exposed to the browser.
     pub exposed_headers: Vec<String>,
-    /// How long browsers can cache preflight results, in seconds.
-    /// Accepts integer seconds or human-readable string ("1h", "3600").
+    /// How long browsers can cache preflight results.
+    /// Accepts integer seconds or human-readable string ("1h", "3600s").
     #[serde(with = "serde_duration")]
-    pub max_age_seconds: u64,
+    pub max_age: u64,
     /// Whether to allow credentials (cookies, Authorization header).
     /// Cannot be used with `allowed_origins = ["*"]`.
     pub allow_credentials: bool,
@@ -45,7 +45,7 @@ impl Default for CorsConfig {
             ],
             allowed_headers: vec!["Content-Type".into(), "Authorization".into()],
             exposed_headers: Vec::new(),
-            max_age_seconds: 3600,
+            max_age: 3600,
             allow_credentials: false,
         }
     }
@@ -90,7 +90,7 @@ impl CorsConfig {
             .allow_origin(origin)
             .allow_methods(methods)
             .allow_headers(headers)
-            .max_age(std::time::Duration::from_secs(self.max_age_seconds));
+            .max_age(std::time::Duration::from_secs(self.max_age));
 
         if !self.exposed_headers.is_empty() {
             layer = layer.expose_headers(
@@ -124,7 +124,7 @@ mod tests {
         );
         assert_eq!(cors.allowed_headers, vec!["Content-Type", "Authorization"]);
         assert!(cors.exposed_headers.is_empty());
-        assert_eq!(cors.max_age_seconds, 3600);
+        assert_eq!(cors.max_age, 3600);
         assert!(!cors.allow_credentials);
     }
 
@@ -196,7 +196,7 @@ allowed_origins = ["https://example.com", "https://app.example.com"]
 allowed_methods = ["GET", "POST"]
 allowed_headers = ["Content-Type", "Authorization", "X-Custom"]
 exposed_headers = ["X-Request-Id"]
-max_age_seconds = 7200
+max_age = 7200
 allow_credentials = true
 "#,
         )
@@ -212,7 +212,7 @@ allow_credentials = true
             vec!["Content-Type", "Authorization", "X-Custom"]
         );
         assert_eq!(config.cors.exposed_headers, vec!["X-Request-Id"]);
-        assert_eq!(config.cors.max_age_seconds, 7200);
+        assert_eq!(config.cors.max_age, 7200);
         assert!(config.cors.allow_credentials);
     }
 }

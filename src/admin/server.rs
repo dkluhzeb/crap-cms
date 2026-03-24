@@ -1,7 +1,8 @@
 //! Axum router setup, auth middleware, and admin server startup.
 
 use std::{
-    collections::HashMap, future::Future, path::PathBuf, pin::Pin, sync::Arc, time::Duration,
+    collections::HashMap, future::Future, net::SocketAddr, path::PathBuf, pin::Pin, sync::Arc,
+    time::Duration,
 };
 
 use anyhow::Result;
@@ -141,9 +142,12 @@ pub async fn start(
         Box::pin(serve_h2c(listener, app, shutdown))
     } else {
         Box::pin(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown.cancelled_owned())
-                .await?;
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown.cancelled_owned())
+            .await?;
             Ok(())
         })
     };

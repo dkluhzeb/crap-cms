@@ -47,7 +47,7 @@ login_lockout_seconds = "5m"
 auto_purge = "7d"
 ```
 
-Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age_seconds`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`, `request_timeout`, `grpc_timeout`.
+Fields that support this: `token_expiry`, `login_lockout_seconds`, `reset_token_expiry`, `forgot_password_window_seconds`, `max_age`, `poll_interval`, `cron_interval`, `heartbeat_interval`, `auto_purge`, `grpc_rate_limit_window`, `connection_timeout`, `smtp_timeout`, `busy_timeout`, `request_timeout`, `grpc_timeout`.
 
 ## File Size Values
 
@@ -190,7 +190,7 @@ allowed_origins = []     # Origins allowed for CORS. Empty = CORS disabled (defa
 allowed_methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
 allowed_headers = ["Content-Type", "Authorization"]
 exposed_headers = []     # Response headers exposed to the browser
-max_age_seconds = "1h"   # How long browsers cache preflight results
+max_age = "1h"   # How long browsers cache preflight results
 allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] origins
 
 [mcp]
@@ -389,7 +389,7 @@ Enable this to enforce a "secure by default" posture — every collection must e
 | `allowed_methods` | string[] | `["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]` | HTTP methods allowed in CORS preflight. |
 | `allowed_headers` | string[] | `["Content-Type", "Authorization"]` | Request headers allowed in CORS requests. |
 | `exposed_headers` | string[] | `[]` (empty) | Response headers the browser is allowed to access. |
-| `max_age_seconds` | integer/string | `3600` (`"1h"`) | How long browsers may cache preflight results. Accepts seconds or human-readable. |
+| `max_age` | integer/string | `3600` (`"1h"`) | How long browsers may cache preflight results. Accepts seconds or human-readable. |
 | `allow_credentials` | boolean | `false` | Allow credentials (cookies, `Authorization` header). **Cannot be used with `allowed_origins = ["*"]`** — if both are set, credentials are ignored with a warning. |
 
 When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC API (Tonic) servers. CORS runs before CSRF middleware, so preflight `OPTIONS` requests get CORS headers without triggering CSRF validation.

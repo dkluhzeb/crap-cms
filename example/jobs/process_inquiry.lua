@@ -44,7 +44,7 @@ function M.run(context)
   })
 
   -- Send webhook notification
-  local webhook_url = crap.config.get("crap.inquiry_webhook_url")
+  local webhook_url = crap.env.get("CRAP_INQUIRY_WEBHOOK_URL")
   if webhook_url then
     local ok, err = pcall(function()
       crap.http.request({

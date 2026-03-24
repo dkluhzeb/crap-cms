@@ -39,7 +39,6 @@ locales = ["en", "de"]
 fallback = true
 
 [jobs]
-enabled = true
 poll_interval = 5
 
 [pagination]
@@ -51,16 +50,11 @@ mode = "cursor"
 allowed_origins = ["http://localhost:3000", "http://localhost:5173"]
 allowed_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
 allowed_headers = ["Content-Type", "Authorization"]
-max_age = 3600
+max_age = "1h"
 
 [access]
-# default_read = "access.authenticated"
+# default_deny = false
 
 [hooks]
 on_init = ["hooks.on_init"]
 vm_pool_size = 16
-
-[crap]
-studio_name = "Crap Studio"
-max_budget = 500000
-inquiry_webhook_url = "https://hooks.example.com/inquiries"

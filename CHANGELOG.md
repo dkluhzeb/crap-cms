@@ -91,6 +91,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   that the caller must `.commit()` after their DB transaction succeeds. Prevents
   orphaned files when the DB write fails after files are already on disk.
 
+- **CORS `max_age_seconds`** renamed to **`max_age`** for consistency with other
+  duration fields. Accepts integer seconds or human-readable (`"1h"`, `"30m"`).
+
 ### Security
 
 - **Content-Security-Policy** (NEW): Admin UI now sends a CSP header by default

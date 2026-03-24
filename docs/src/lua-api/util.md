@@ -32,6 +32,8 @@ local id = crap.util.nanoid()
 
 Encode a Lua value (table, string, number, boolean, nil) as a JSON string.
 
+> **Tip:** `crap.json.encode()` and `crap.json.decode()` are aliases — see [crap.json](json.md).
+
 ```lua
 local json = crap.util.json_encode({ name = "test", count = 42 })
 -- '{"count":42,"name":"test"}'

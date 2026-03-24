@@ -864,6 +864,23 @@ function crap.log.warn(msg) end
 function crap.log.error(msg) end
 
 
+-- ── crap.json ────────────────────────────────────────────────
+
+--- JSON encode/decode.
+--- @class crap.json
+crap.json = {}
+
+--- Encode a Lua value as a JSON string.
+--- @param value any  Lua value to encode.
+--- @return string json  JSON string.
+function crap.json.encode(value) end
+
+--- Decode a JSON string into a Lua value.
+--- @param str string  JSON string.
+--- @return any value  Decoded Lua value.
+function crap.json.decode(str) end
+
+
 -- ── crap.util ────────────────────────────────────────────────
 
 --- Utility functions.
