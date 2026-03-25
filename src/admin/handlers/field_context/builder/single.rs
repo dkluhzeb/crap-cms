@@ -9,7 +9,9 @@ use crate::{
     core::field::{FieldDefinition, FieldType},
 };
 
-use super::super::{MAX_FIELD_DEPTH, count_errors_in_fields, safe_template_id};
+use super::super::{
+    MAX_FIELD_DEPTH, collect_node_attr_errors, count_errors_in_fields, safe_template_id,
+};
 use super::build_select_options;
 
 /// Resolve the full form name for a field, accounting for layout transparency.
@@ -431,6 +433,13 @@ pub fn build_single_field_context(
             // Store node names — full defs resolved in enrich_field_contexts
             if !field.admin.nodes.is_empty() {
                 ctx["_node_names"] = json!(field.admin.nodes);
+            }
+
+            // Attach node attr validation errors (e.g. content[cta#0].text)
+            if ctx.get("error").is_none_or(|v| v.is_null())
+                && let Some(node_err) = collect_node_attr_errors(errors, &full_name)
+            {
+                ctx["error"] = json!(node_err);
             }
         }
         FieldType::Blocks => {

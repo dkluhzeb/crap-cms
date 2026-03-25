@@ -502,6 +502,8 @@ pub(super) fn enrich_join(
 
 /// Enrich a top-level Richtext field context with custom node definitions from registry.
 pub(super) fn enrich_richtext(ctx: &mut Value, reg: &Registry) {
+    use crate::core::field::to_title_case;
+
     if let Some(node_names) = ctx.get("_node_names").cloned() {
         if let Some(names) = node_names.as_array() {
             let node_defs: Vec<_> = names
@@ -513,26 +515,83 @@ pub(super) fn enrich_richtext(ctx: &mut Value, reg: &Registry) {
                         "name": def.name,
                         "label": def.label,
                         "inline": def.inline,
-                        "attrs": def.attrs.iter().map(|a| {
+                        "attrs": def.attrs.iter().map(|f| {
+                            let label = f.admin.label
+                                .as_ref()
+                                .map(|ls| ls.resolve_default().to_string())
+                                .unwrap_or_else(|| to_title_case(&f.name));
+
                             let mut attr = json!({
-                                "name": a.name,
-                                "type": a.attr_type.as_str(),
-                                "label": a.label,
-                                "required": a.required,
+                                "name": f.name,
+                                "type": f.field_type.as_str(),
+                                "label": label,
+                                "required": f.required,
                             });
 
-                            if let Some(ref dv) = a.default_value {
+                            if let Some(ref dv) = f.default_value {
                                 attr["default"] = dv.clone();
                             }
 
-                            if !a.options.is_empty() {
+                            if !f.options.is_empty() {
                                 attr["options"] = json!(
-                                    a.options.iter().map(|o| json!({
+                                    f.options.iter().map(|o| json!({
                                         "label": o.label.resolve_default(),
                                         "value": o.value,
                                     })).collect::<Vec<_>>()
                                 );
                             }
+
+                            if let Some(ref ph) = f.admin.placeholder {
+                                attr["placeholder"] = json!(ph.resolve_default());
+                            }
+
+                            if let Some(ref desc) = f.admin.description {
+                                attr["description"] = json!(desc.resolve_default());
+                            }
+
+                            // Admin display hints
+                            if f.admin.hidden {
+                                attr["hidden"] = json!(true);
+                            }
+                            if f.admin.readonly {
+                                attr["readonly"] = json!(true);
+                            }
+                            if let Some(ref w) = f.admin.width {
+                                attr["width"] = json!(w);
+                            }
+                            if let Some(ref s) = f.admin.step {
+                                attr["step"] = json!(s);
+                            }
+                            if let Some(rows) = f.admin.rows {
+                                attr["rows"] = json!(rows);
+                            }
+                            if let Some(ref lang) = f.admin.language {
+                                attr["language"] = json!(lang);
+                            }
+
+                            // Validation bounds
+                            if let Some(v) = f.min {
+                                attr["min"] = json!(v);
+                            }
+                            if let Some(v) = f.max {
+                                attr["max"] = json!(v);
+                            }
+                            if let Some(v) = f.min_length {
+                                attr["min_length"] = json!(v);
+                            }
+                            if let Some(v) = f.max_length {
+                                attr["max_length"] = json!(v);
+                            }
+                            if let Some(ref d) = f.min_date {
+                                attr["min_date"] = json!(d);
+                            }
+                            if let Some(ref d) = f.max_date {
+                                attr["max_date"] = json!(d);
+                            }
+                            if let Some(ref pa) = f.picker_appearance {
+                                attr["picker_appearance"] = json!(pa);
+                            }
+
                             attr
                         }).collect::<Vec<_>>(),
                     })

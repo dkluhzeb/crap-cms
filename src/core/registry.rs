@@ -103,7 +103,7 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::richtext::{NodeAttr, NodeAttrType, RichtextNodeDef};
+    use crate::core::{FieldDefinition, FieldType, richtext::RichtextNodeDef};
 
     fn make_collection(slug: &str) -> CollectionDefinition {
         CollectionDefinition::new(slug)
@@ -164,8 +164,7 @@ mod tests {
             RichtextNodeDef::builder("cta", "Call to Action")
                 .inline(false)
                 .attrs(vec![
-                    NodeAttr::builder("text", "Button Text")
-                        .attr_type(NodeAttrType::Text)
+                    FieldDefinition::builder("text", FieldType::Text)
                         .required(true)
                         .build(),
                 ])

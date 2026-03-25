@@ -1188,3 +1188,47 @@ fn max_depth_prevents_infinite_recursion() {
     assert_eq!(result.len(), 1);
     assert_eq!(result[0]["field_type"], "array");
 }
+
+// --- richtext node attr error display ---
+
+#[test]
+fn build_richtext_field_shows_node_attr_errors() {
+    let field = make_field("content", FieldType::Richtext);
+    let fields = vec![field];
+    let values = HashMap::new();
+    let mut errors = HashMap::new();
+    errors.insert(
+        "content[cta#0].text".to_string(),
+        "Text is required".to_string(),
+    );
+
+    let result = build_field_contexts(&fields, &values, &errors, false, false);
+    assert_eq!(result[0]["field_type"], "richtext");
+    assert_eq!(result[0]["error"], "Text is required");
+}
+
+#[test]
+fn build_richtext_field_direct_error_takes_priority() {
+    let field = make_field("content", FieldType::Richtext);
+    let fields = vec![field];
+    let values = HashMap::new();
+    let mut errors = HashMap::new();
+    // Direct field error and node attr error both present
+    errors.insert("content".to_string(), "Field is required".to_string());
+    errors.insert(
+        "content[cta#0].text".to_string(),
+        "Text is required".to_string(),
+    );
+
+    let result = build_field_contexts(&fields, &values, &errors, false, false);
+    // Direct error should take priority
+    assert_eq!(result[0]["error"], "Field is required");
+}
+
+#[test]
+fn build_richtext_field_no_errors_no_error_key() {
+    let field = make_field("content", FieldType::Richtext);
+    let fields = vec![field];
+    let result = build_field_contexts(&fields, &HashMap::new(), &HashMap::new(), false, false);
+    assert!(result[0].get("error").is_none() || result[0]["error"].is_null());
+}

@@ -1,15 +1,11 @@
 //! Registers `crap.richtext` — custom ProseMirror node registration and rendering.
 
-use anyhow::Result;
 use mlua::{Function, Lua, Table, Value};
 use serde_json::Value as JsonValue;
 
 use crate::core::{
-    LocalizedString, SelectOption, SharedRegistry,
-    richtext::{
-        NodeAttr, NodeAttrType, RichtextNodeDef, render_html_custom_nodes,
-        render_prosemirror_to_html,
-    },
+    SharedRegistry,
+    richtext::{RichtextNodeDef, render_html_custom_nodes, render_prosemirror_to_html},
 };
 
 /// Register the `crap.richtext` namespace on the `crap` global table.
@@ -18,7 +14,7 @@ use crate::core::{
 /// - `_crap_richtext_nodes` Lua global table (stores full specs including render functions)
 /// - `crap.richtext.register_node(name, spec)` — registers a custom node type
 /// - `crap.richtext.render(content_string)` — renders custom nodes to HTML
-pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> Result<()> {
+pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> anyhow::Result<()> {
     // Node specs stored in Lua registry (invisible to Lua code)
     let nodes_storage = lua.create_table()?;
     lua.set_named_registry_value("_crap_richtext_nodes", nodes_storage)?;
@@ -27,7 +23,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
 
     // crap.richtext.register_node(name, spec)
     let reg_clone = registry.clone();
-    let register_node_fn = lua.create_function(move |lua, (name, spec): (String, Table)| {
+    let register_node_fn = lua.create_function(move |_lua, (name, spec): (String, Table)| {
         // Validate name: alphanumeric + underscore
         if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
             return Err(mlua::Error::RuntimeError(format!(
@@ -40,9 +36,24 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
             .unwrap_or_else(|_| name.clone());
         let inline: bool = spec.get::<bool>("inline").unwrap_or(false);
 
-        // Parse attrs
+        // Parse attrs using the shared field parser (crap.fields.* factory syntax)
         let attrs = if let Ok(attrs_tbl) = spec.get::<Table>("attrs") {
-            parse_node_attrs(lua, &attrs_tbl)?
+            let fields = super::parse::fields::parse_fields(&attrs_tbl)
+                .map_err(|e| mlua::Error::RuntimeError(format!("Invalid node attrs: {}", e)))?;
+
+            // Validate: only scalar types allowed as node attrs
+            for f in &fields {
+                if !f.field_type.is_node_attr_type() {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "Node attr '{}' has type '{}' which is not allowed as a node attribute. \
+                         Allowed types: text, number, textarea, select, radio, checkbox, date, email, json, code",
+                        f.name,
+                        f.field_type.as_str(),
+                    )));
+                }
+                warn_irrelevant_node_attr_features(&name, f);
+            }
+            fields
         } else {
             Vec::new()
         };
@@ -62,8 +73,8 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
             .unwrap_or(false);
 
         // Store the full spec in Lua registry (including render function)
-        let storage: Table = lua.named_registry_value("_crap_richtext_nodes")?;
-        let node_entry = lua.create_table()?;
+        let storage: Table = _lua.named_registry_value("_crap_richtext_nodes")?;
+        let node_entry = _lua.create_table()?;
         node_entry.set("label", label.as_str())?;
         node_entry.set("inline", inline)?;
 
@@ -136,68 +147,81 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> R
     Ok(())
 }
 
-/// Parse a Lua array of attr tables into `Vec<NodeAttr>`.
-fn parse_node_attrs(lua: &Lua, attrs_tbl: &Table) -> mlua::Result<Vec<NodeAttr>> {
-    let mut attrs = Vec::new();
-    for pair in attrs_tbl.clone().sequence_values::<Table>() {
-        let attr_tbl = pair?;
-        let name: String = attr_tbl.get("name")?;
-        let attr_type_str: String = attr_tbl
-            .get::<String>("type")
-            .unwrap_or_else(|_| "text".into());
-        let label: String = attr_tbl
-            .get::<String>("label")
-            .unwrap_or_else(|_| name.clone());
-        let required: bool = attr_tbl.get::<bool>("required").unwrap_or(false);
+/// Warn when a node attr uses features that have no effect on node attributes.
+fn warn_irrelevant_node_attr_features(node_name: &str, f: &crate::core::FieldDefinition) {
+    let warn = |feature: &str| {
+        tracing::warn!(
+            "Node '{}' attr '{}': '{}' has no effect on node attributes",
+            node_name,
+            f.name,
+            feature,
+        );
+    };
 
-        let default_value = match attr_tbl.get::<Value>("default")? {
-            Value::Nil => None,
-            v => Some(super::lua_to_json(lua, &v)?),
-        };
-
-        let options = if let Ok(opts_tbl) = attr_tbl.get::<Table>("options") {
-            parse_select_options(&opts_tbl)?
-        } else {
-            Vec::new()
-        };
-
-        let mut node_attr_builder = NodeAttr::builder(name, label)
-            .attr_type(NodeAttrType::from_name(&attr_type_str))
-            .required(required)
-            .options(options);
-
-        if let Some(dv) = default_value {
-            node_attr_builder = node_attr_builder.default_value(dv);
-        }
-        attrs.push(node_attr_builder.build());
+    // Hooks that don't apply (no per-attr write/read lifecycle)
+    if !f.hooks.before_change.is_empty() {
+        warn("hooks.before_change");
     }
-    Ok(attrs)
-}
-
-/// Parse select options from a Lua table.
-fn parse_select_options(tbl: &Table) -> mlua::Result<Vec<SelectOption>> {
-    let mut options = Vec::new();
-    for pair in tbl.clone().sequence_values::<Table>() {
-        let opt_tbl = pair?;
-        let label: String = opt_tbl.get("label")?;
-        let value: String = opt_tbl.get("value")?;
-        options.push(SelectOption::new(LocalizedString::Plain(label), value));
+    if !f.hooks.after_change.is_empty() {
+        warn("hooks.after_change");
     }
-    Ok(options)
+    if !f.hooks.after_read.is_empty() {
+        warn("hooks.after_read");
+    }
+
+    // Access control doesn't apply
+    if f.access.read.is_some() {
+        warn("access.read");
+    }
+    if f.access.create.is_some() {
+        warn("access.create");
+    }
+    if f.access.update.is_some() {
+        warn("access.update");
+    }
+
+    // DB features don't apply (no column)
+    if f.unique {
+        warn("unique");
+    }
+    if f.index {
+        warn("index");
+    }
+
+    // Localized doesn't apply (richtext field itself is localized or not)
+    if f.localized {
+        warn("localized");
+    }
+
+    // has_many doesn't apply to scalar node attrs
+    if f.has_many {
+        warn("has_many");
+    }
+
+    // MCP description doesn't apply
+    if f.mcp.description.is_some() {
+        warn("mcp.description");
+    }
+
+    // admin.condition is deferred — warn for now
+    if f.admin.condition.is_some() {
+        warn("admin.condition");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::Registry;
+    use crate::hooks::api::fields::register_fields;
 
     fn setup_lua() -> (Lua, SharedRegistry) {
         let lua = Lua::new();
         let registry = Registry::shared();
         let crap = lua.create_table().unwrap();
+        register_fields(&lua, &crap).unwrap();
         register_richtext(&lua, &crap, registry.clone()).unwrap();
         lua.globals().set("crap", crap).unwrap();
-        // Also register json_to_lua helper for round-tripping
         (lua, registry)
     }
 
@@ -210,8 +234,8 @@ mod tests {
                 label = "Call to Action",
                 inline = false,
                 attrs = {
-                    { name = "text", type = "text", label = "Button Text", required = true },
-                    { name = "url", type = "text", label = "URL" },
+                    crap.fields.text({ name = "text", required = true }),
+                    crap.fields.text({ name = "url" }),
                 },
                 searchable_attrs = { "text" },
             })
@@ -240,7 +264,7 @@ mod tests {
                 label = "Badge",
                 inline = true,
                 attrs = {
-                    { name = "text", type = "text", label = "Text", required = true },
+                    crap.fields.text({ name = "text", required = true }),
                 },
                 render = function(attrs)
 
@@ -342,10 +366,10 @@ mod tests {
             crap.richtext.register_node("alert", {
                 label = "Alert",
                 attrs = {
-                    { name = "style", type = "select", label = "Style", options = {
+                    crap.fields.select({ name = "style", options = {
                         { label = "Info", value = "info" },
                         { label = "Warning", value = "warning" },
-                    }},
+                    }}),
                 },
             })
         "#,
@@ -381,7 +405,9 @@ mod tests {
             r#"
             crap.richtext.register_node("badge", {
                 label = "Badge",
-                attrs = { { name = "text", type = "text" } },
+                attrs = {
+                    crap.fields.text({ name = "text" }),
+                },
             })
         "#,
         )
@@ -470,5 +496,86 @@ mod tests {
             )
             .exec();
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn register_node_rejects_non_scalar_attr_type() {
+        let (lua, _) = setup_lua();
+        let result = lua
+            .load(
+                r#"
+            crap.richtext.register_node("bad", {
+                label = "Bad",
+                attrs = {
+                    crap.fields.array({ name = "items" }),
+                },
+            })
+        "#,
+            )
+            .exec();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not allowed"),
+            "error should mention not allowed: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn register_node_warns_on_irrelevant_features_but_succeeds() {
+        let (lua, registry) = setup_lua();
+        // Register with features that have no effect on node attrs.
+        // Registration should succeed (warnings are logged, not errors).
+        lua.load(
+            r#"
+            crap.richtext.register_node("warn_test", {
+                label = "Warn Test",
+                attrs = {
+                    crap.fields.text({ name = "title", unique = true, index = true, localized = true }),
+                },
+            })
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let reg = registry.read().unwrap();
+        let node = reg.get_richtext_node("warn_test").unwrap();
+        assert_eq!(node.attrs.len(), 1);
+        // The attrs still carry the original values — just warned
+        assert!(node.attrs[0].unique);
+        assert!(node.attrs[0].index);
+        assert!(node.attrs[0].localized);
+    }
+
+    #[test]
+    fn register_node_with_new_scalar_types() {
+        let (lua, registry) = setup_lua();
+        lua.load(
+            r#"
+            crap.richtext.register_node("form", {
+                label = "Form",
+                attrs = {
+                    crap.fields.email({ name = "contact" }),
+                    crap.fields.date({ name = "due_date" }),
+                    crap.fields.radio({ name = "priority", options = {
+                        { label = "Low", value = "low" },
+                        { label = "High", value = "high" },
+                    }}),
+                    crap.fields.code({ name = "snippet" }),
+                    crap.fields.json({ name = "metadata" }),
+                    crap.fields.checkbox({ name = "active" }),
+                    crap.fields.number({ name = "count" }),
+                },
+            })
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let reg = registry.read().unwrap();
+        let node = reg.get_richtext_node("form").unwrap();
+        assert_eq!(node.attrs.len(), 7);
     }
 }

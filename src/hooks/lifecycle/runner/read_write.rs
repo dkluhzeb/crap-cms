@@ -113,6 +113,9 @@ impl HookRunner {
             &wctx,
         )?;
 
+        // Run before_validate hooks on richtext node attrs (normalize attr values)
+        self.run_richtext_node_attr_before_validate(fields, &mut ctx.data, &ctx.collection);
+
         // Collection-level before_validate
         let ctx = self.run_hooks_with_conn(hooks, HookEvent::BeforeValidate, ctx, val_ctx.conn)?;
 
@@ -177,9 +180,70 @@ impl HookRunner {
         self.run_hooks_with_conn(hooks, event, ctx, conn)
     }
 
+    /// Run `before_validate` hooks on richtext node attrs within field data.
+    ///
+    /// For each Richtext field with custom nodes that have `before_validate` hooks,
+    /// extracts node attrs, runs the hooks, and writes the modified content back.
+    fn run_richtext_node_attr_before_validate(
+        &self,
+        fields: &[FieldDefinition],
+        data: &mut HashMap<String, Value>,
+        collection: &str,
+    ) {
+        use super::super::validation::richtext_attrs::run_before_validate_on_node_attrs;
+        use crate::core::FieldType;
+
+        // Check if any richtext field has node attr before_validate hooks
+        let richtext_fields: Vec<&FieldDefinition> = fields
+            .iter()
+            .filter(|f| f.field_type == FieldType::Richtext && !f.admin.nodes.is_empty())
+            .collect();
+
+        if richtext_fields.is_empty() {
+            return;
+        }
+
+        let has_any_hooks = richtext_fields.iter().any(|f| {
+            f.admin.nodes.iter().any(|node_name| {
+                self.registry
+                    .get_richtext_node(node_name)
+                    .map(|nd| nd.attrs.iter().any(|a| !a.hooks.before_validate.is_empty()))
+                    .unwrap_or(false)
+            })
+        });
+
+        if !has_any_hooks {
+            return;
+        }
+
+        let lua = match self.pool.acquire() {
+            Ok(l) => l,
+            Err(e) => {
+                tracing::warn!("VM pool error in richtext node attr before_validate: {}", e);
+                return;
+            }
+        };
+
+        for field in richtext_fields {
+            if let Some(Value::String(content)) = data.get(&field.name) {
+                let new_content = run_before_validate_on_node_attrs(
+                    &lua,
+                    content,
+                    field,
+                    &self.registry,
+                    collection,
+                );
+                if new_content != *content {
+                    data.insert(field.name.clone(), Value::String(new_content));
+                }
+            }
+        }
+    }
+
     /// Validate field data against field definitions.
     /// Checks `required`, `unique`, and custom `validate` (Lua function ref).
     /// Runs inside the caller's transaction for unique checks.
+    /// Automatically injects the registry for richtext node attr validation.
     pub fn validate_fields(
         &self,
         fields: &[FieldDefinition],
@@ -191,6 +255,18 @@ impl HookRunner {
             .acquire()
             .map_err(|_| ValidationError::new(vec![FieldError::new("_system", "VM pool error")]))?;
 
-        validate_fields_inner(&lua, fields, data, ctx)
+        // Inject registry for richtext node attr validation if not already set
+        if ctx.registry.is_some() {
+            return validate_fields_inner(&lua, fields, data, ctx);
+        }
+        let enriched_ctx = ValidationCtx {
+            conn: ctx.conn,
+            table: ctx.table,
+            exclude_id: ctx.exclude_id,
+            is_draft: ctx.is_draft,
+            locale_ctx: ctx.locale_ctx,
+            registry: Some(&self.registry),
+        };
+        validate_fields_inner(&lua, fields, data, &enriched_ctx)
     }
 }

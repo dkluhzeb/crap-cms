@@ -214,5 +214,6 @@
   "link_nofollow": "Nofollow",
   "insert_link": "Insert Link",
   "edit_link": "Edit Link",
-  "remove_link": "Remove Link"
+  "remove_link": "Remove Link",
+  "validating": "Validating..."
 }

@@ -813,24 +813,12 @@ function crap.hooks.list(event) end
 --- @class crap.richtext
 crap.richtext = {}
 
---- Attribute type for custom richtext node attributes.
---- @alias crap.NodeAttrType "text"|"number"|"select"|"checkbox"|"textarea"
-
---- A single attribute on a custom richtext node.
---- @class crap.NodeAttr
---- @field name     string              Attribute name.
---- @field type     crap.NodeAttrType   Input type in admin editor.
---- @field label?   string              Display label (defaults to name).
---- @field required? boolean            Whether the attribute is required (default: false).
---- @field default?  any                Default value.
---- @field options?  crap.SelectOption[] Options for select-type attributes.
-
 --- Spec for registering a custom richtext node.
 --- @class crap.RichtextNodeSpec
---- @field label?           string          Display label (defaults to name).
---- @field inline?          boolean         Whether the node is inline (default: false = block).
---- @field attrs?           crap.NodeAttr[] Attribute definitions.
---- @field searchable_attrs? string[]       Attr names to include in FTS search index.
+--- @field label?           string               Display label (defaults to name).
+--- @field inline?          boolean              Whether the node is inline (default: false = block).
+--- @field attrs?           crap.FieldDefinition[] Attribute definitions (scalar types only: text, number, textarea, select, radio, checkbox, date, email, json, code). Use `crap.fields.*` factory functions.
+--- @field searchable_attrs? string[]            Attr names to include in FTS search index.
 --- @field render?          fun(attrs: table): string  Server-side render function.
 
 --- Register a custom ProseMirror node type.

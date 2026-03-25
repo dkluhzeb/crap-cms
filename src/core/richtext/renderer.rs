@@ -228,7 +228,7 @@ where
 }
 
 /// Extract an attribute value from a tag string. Handles both single and double quotes.
-pub(super) fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
+pub(crate) fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
     let patterns = [format!("{}=\"", attr_name), format!("{}='", attr_name)];
 
     for pattern in &patterns {

@@ -2,6 +2,8 @@
 //! Builds template context objects from field definitions, handling recursive
 //! composite types (Array, Blocks, Group) with nesting depth limits.
 
+use std::collections::HashMap;
+
 use crate::{
     core::FieldDefinition,
     hooks::{HookRunner, lifecycle::DisplayConditionResult},
@@ -54,6 +56,25 @@ pub(super) fn count_errors_in_fields(fields: &[Value]) -> usize {
         }
     }
     count
+}
+
+/// Collect richtext node attribute errors for a given field name.
+/// Matches error keys like `{field_name}[cta#0].text` and joins messages.
+pub(super) fn collect_node_attr_errors(
+    errors: &HashMap<String, String>,
+    field_name: &str,
+) -> Option<String> {
+    let prefix = format!("{}[", field_name);
+    let msgs: Vec<&str> = errors
+        .iter()
+        .filter(|(k, _)| k.starts_with(&prefix))
+        .map(|(_, v)| v.as_str())
+        .collect();
+    if msgs.is_empty() {
+        None
+    } else {
+        Some(msgs.join("; "))
+    }
 }
 
 /// Max nesting depth for recursive field context building (guard against infinite nesting).

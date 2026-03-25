@@ -160,11 +160,25 @@ fn validate_scalar_field(
     checks::check_has_many_elements(field, &data_key, value, is_empty, errors);
     checks::check_date_field(field, &data_key, value, is_empty, errors);
     checks::check_custom_validate(lua, field, &data_key, value, data, ctx.table, errors);
+
+    // Validate custom node attrs within richtext content
+    if field.field_type == FieldType::Richtext
+        && !is_empty
+        && !field.admin.nodes.is_empty()
+        && let Some(registry) = ctx.registry
+        && let Some(Value::String(content)) = value
+    {
+        super::richtext_attrs::validate_richtext_node_attrs(
+            lua, content, &data_key, field, registry, ctx.table, errors,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::core::field::{FieldDefinition, FieldTab, FieldType, JoinConfig};
+    use crate::core::field::{FieldAdmin, FieldDefinition, FieldTab, FieldType, JoinConfig};
+    use crate::core::registry::Registry;
+    use crate::core::richtext::RichtextNodeDef;
     use crate::db::InMemoryConn;
     use crate::hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner};
     use serde_json::json;
@@ -832,5 +846,192 @@ mod tests {
             "Invalid date inside row at top-level should fail"
         );
         assert!(result.unwrap_err().errors[0].message.contains("valid date"));
+    }
+
+    // --- Richtext node attr validation integration tests ---
+
+    #[test]
+    fn test_richtext_node_attr_required_through_validation_pipeline() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, content TEXT)");
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("cta", "CTA")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text)
+                        .required(true)
+                        .build(),
+                    FieldDefinition::builder("url", FieldType::Text)
+                        .required(true)
+                        .build(),
+                ])
+                .build(),
+        );
+
+        let fields = vec![
+            FieldDefinition::builder("content", FieldType::Richtext)
+                .admin(
+                    FieldAdmin::builder()
+                        .nodes(vec!["cta".to_string()])
+                        .richtext_format("json")
+                        .build(),
+                )
+                .build(),
+        ];
+
+        let json_content =
+            r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
+        let mut data = HashMap::new();
+        data.insert("content".to_string(), json!(json_content));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "pages")
+                .registry(&reg)
+                .build(),
+        );
+
+        assert!(result.is_err(), "empty required node attrs should fail");
+        let errs = result.unwrap_err().errors;
+        assert_eq!(errs.len(), 2);
+        assert_eq!(errs[0].field, "content[cta#0].text");
+        assert_eq!(errs[1].field, "content[cta#0].url");
+    }
+
+    #[test]
+    fn test_richtext_node_attr_valid_passes_pipeline() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, content TEXT)");
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("cta", "CTA")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text)
+                        .required(true)
+                        .build(),
+                ])
+                .build(),
+        );
+
+        let fields = vec![
+            FieldDefinition::builder("content", FieldType::Richtext)
+                .admin(
+                    FieldAdmin::builder()
+                        .nodes(vec!["cta".to_string()])
+                        .richtext_format("json")
+                        .build(),
+                )
+                .build(),
+        ];
+
+        let json_content =
+            r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click me"}}]}"#;
+        let mut data = HashMap::new();
+        data.insert("content".to_string(), json!(json_content));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "pages")
+                .registry(&reg)
+                .build(),
+        );
+
+        assert!(result.is_ok(), "valid node attrs should pass");
+    }
+
+    #[test]
+    fn test_richtext_node_attr_no_registry_skips_validation() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, content TEXT)");
+
+        let fields = vec![
+            FieldDefinition::builder("content", FieldType::Richtext)
+                .admin(
+                    FieldAdmin::builder()
+                        .nodes(vec!["cta".to_string()])
+                        .richtext_format("json")
+                        .build(),
+                )
+                .build(),
+        ];
+
+        // Content with invalid data, but no registry provided
+        let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
+        let mut data = HashMap::new();
+        data.insert("content".to_string(), json!(json_content));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "pages").build(), // no registry
+        );
+
+        assert!(
+            result.is_ok(),
+            "without registry, node attr validation is skipped"
+        );
+    }
+
+    #[test]
+    fn test_richtext_node_attrs_alongside_regular_field_errors() {
+        let lua = mlua::Lua::new();
+        let conn = InMemoryConn::open();
+        conn.setup("CREATE TABLE pages (id TEXT PRIMARY KEY, title TEXT, content TEXT)");
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("cta", "CTA")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text)
+                        .required(true)
+                        .build(),
+                ])
+                .build(),
+        );
+
+        let fields = vec![
+            FieldDefinition::builder("title", FieldType::Text)
+                .required(true)
+                .build(),
+            FieldDefinition::builder("content", FieldType::Richtext)
+                .admin(
+                    FieldAdmin::builder()
+                        .nodes(vec!["cta".to_string()])
+                        .richtext_format("json")
+                        .build(),
+                )
+                .build(),
+        ];
+
+        let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), json!(""));
+        data.insert("content".to_string(), json!(json_content));
+
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "pages")
+                .registry(&reg)
+                .build(),
+        );
+
+        assert!(result.is_err());
+        let errs = result.unwrap_err().errors;
+        assert_eq!(errs.len(), 2);
+        // Regular field error first, then node attr error
+        assert_eq!(errs[0].field, "title");
+        assert_eq!(errs[1].field, "content[cta#0].text");
     }
 }

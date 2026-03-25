@@ -74,9 +74,12 @@ impl<'a> HookRunnerBuilder<'a> {
             tracing::info!("HookRunner: registered events: {:?}", registered_events);
         }
 
+        let registry_snapshot = crate::core::registry::Registry::snapshot(&registry);
+
         Ok(HookRunner {
             pool: Arc::new(VmPool::new(vms)),
             registered_events: Arc::new(registered_events),
+            registry: registry_snapshot,
         })
     }
 }

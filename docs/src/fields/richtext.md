@@ -90,18 +90,22 @@ them on specific fields via `admin.nodes`.
 
 ### Registration
 
+Node attributes use the same `crap.fields.*` factory functions as collection fields.
+Only scalar types are allowed: `text`, `number`, `textarea`, `select`, `radio`,
+`checkbox`, `date`, `email`, `json`, `code`.
+
 ```lua
 -- init.lua
 crap.richtext.register_node("cta", {
     label = "Call to Action",
     inline = false, -- block-level node
     attrs = {
-        { name = "text", type = "text", label = "Button Text", required = true },
-        { name = "url", type = "text", label = "URL", required = true },
-        { name = "style", type = "select", label = "Style", options = {
+        crap.fields.text({ name = "text", required = true, admin = { label = "Button Text" } }),
+        crap.fields.text({ name = "url", required = true, admin = { label = "URL", placeholder = "https://..." } }),
+        crap.fields.select({ name = "style", admin = { label = "Style" }, options = {
             { label = "Primary", value = "primary" },
             { label = "Secondary", value = "secondary" },
-        }},
+        }}),
     },
     searchable_attrs = { "text" },
     render = function(attrs)
@@ -136,15 +140,105 @@ crap.fields.richtext({
 | `searchable_attrs` | string[] | Attr names included in FTS search index |
 | `render` | function | Server-side render function: `(attrs) -> html` |
 
-### Attribute types
+### Allowed attribute types
+
+Node attrs support all scalar field types. Complex types (`array`, `group`, `blocks`,
+`relationship`, `upload`, `richtext`, `row`, `collapsible`, `tabs`, `join`) are rejected
+at registration time.
 
 | Type | Admin Input |
 |---|---|
 | `text` | Text input |
 | `number` | Number input |
-| `select` | Dropdown with options |
-| `checkbox` | Checkbox |
 | `textarea` | Multi-line textarea |
+| `select` | Dropdown with options |
+| `radio` | Radio button group |
+| `checkbox` | Checkbox |
+| `date` | Date picker |
+| `email` | Email input |
+| `json` | Monospace textarea |
+| `code` | Monospace textarea |
+
+### Supported attribute features
+
+Node attrs support most field features that make sense in the richtext context.
+
+#### Admin display hints
+
+These control how attributes appear in the node edit modal:
+
+| Feature | Effect |
+|---|---|
+| `admin.hidden` | Attribute is not rendered in the modal (value preserved) |
+| `admin.readonly` | Input is read-only / disabled |
+| `admin.width` | CSS width on the field container (e.g. `"50%"`) |
+| `admin.step` | `step` attribute on number inputs (e.g. `"0.01"`) |
+| `admin.rows` | Number of rows for textarea/code/json fields |
+| `admin.language` | Language label suffix for code fields (e.g. `"JSON"`) |
+| `admin.placeholder` | Placeholder text on inputs |
+| `admin.description` | Help text below the input |
+| `min` / `max` | Min/max on number inputs |
+| `min_length` / `max_length` | Minlength/maxlength on text/textarea inputs |
+| `min_date` / `max_date` | Min/max on date inputs |
+| `picker_appearance` | Date input type: `"dayOnly"` (default), `"dayAndTime"`, `"timeOnly"`, `"monthOnly"` |
+
+#### Server-side validation
+
+Node attribute values inside richtext content are validated server-side on create/update.
+The following checks run automatically:
+
+| Check | Description |
+|---|---|
+| `required` | Attribute must have a non-empty value |
+| `validate` | Custom Lua validation function |
+| `min_length` / `max_length` | Text length bounds |
+| `min` / `max` | Numeric bounds |
+| `min_date` / `max_date` | Date bounds |
+| email format | Valid email for `email` type attrs |
+| option validity | Value must be in `options` for `select`/`radio` |
+
+Validation errors reference the node location: `"content[cta#0].url"` (first CTA node's
+`url` attribute in the `content` field).
+
+#### `before_validate` hooks
+
+Node attrs support `hooks.before_validate` for normalizing values before validation:
+
+```lua
+crap.richtext.register_node("cta", {
+    label = "CTA",
+    attrs = {
+        crap.fields.text({
+            name = "url",
+            required = true,
+            hooks = {
+                before_validate = { "hooks.trim_whitespace" },
+            },
+        }),
+    },
+})
+```
+
+The hook receives `(value, context)` and returns the transformed value. Runs before
+validation checks.
+
+#### Unsupported features
+
+These features have no effect on node attributes and will produce a warning at
+registration time:
+
+| Feature | Reason |
+|---|---|
+| `hooks.before_change` | No per-attr write lifecycle |
+| `hooks.after_change` | No per-attr write lifecycle |
+| `hooks.after_read` | No per-attr read lifecycle |
+| `access` (read/create/update) | No per-attr access control |
+| `unique` | No DB column |
+| `index` | No DB column |
+| `localized` | Richtext field itself is localized or not |
+| `mcp.description` | Not exposed as MCP fields |
+| `has_many` | Doesn't apply to scalar node attrs |
+| `admin.condition` | Not yet supported (deferred) |
 
 ### Server-side rendering
 
