@@ -67,15 +67,14 @@ For shared hooks that work across multiple collections, use the generic
 ## Definition
 
 ```lua
-{
+crap.fields.text({
     name = "title",
-    type = "text",
     hooks = {
         before_validate = { "hooks.fields.trim" },
         before_change = { "hooks.fields.sanitize_html" },
         after_read = { "hooks.fields.add_word_count" },
     },
-}
+})
 ```
 
 ## Example

@@ -178,23 +178,20 @@ crap.collections.define("posts", {
         list_searchable_fields = { "title", "slug", "content" },
     },
     fields = {
-        {
+        crap.fields.text({
             name = "title",
-            type = "text",
             required = true,
             hooks = {
                 before_validate = { "hooks.posts.trim_title" },
             },
-        },
-        {
+        }),
+        crap.fields.text({
             name = "slug",
-            type = "text",
             required = true,
             unique = true,
-        },
-        {
+        }),
+        crap.fields.select({
             name = "status",
-            type = "select",
             required = true,
             default_value = "draft",
             options = {
@@ -202,13 +199,12 @@ crap.collections.define("posts", {
                 { label = "Published", value = "published" },
                 { label = "Archived", value = "archived" },
             },
-        },
-        { name = "content", type = "richtext" },
-        {
+        }),
+        crap.fields.richtext({ name = "content" }),
+        crap.fields.relationship({
             name = "tags",
-            type = "relationship",
             relationship = { collection = "tags", has_many = true },
-        },
+        }),
     },
     hooks = {
         before_change = { "hooks.posts.auto_slug" },

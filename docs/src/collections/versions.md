@@ -240,10 +240,10 @@ crap.collections.define("articles", {
         default_sort = "-created_at",
     },
     fields = {
-        { name = "title", type = "text", required = true },
-        { name = "slug", type = "text", required = true, unique = true },
-        { name = "summary", type = "textarea" },
-        { name = "body", type = "richtext" },
+        crap.fields.text({ name = "title", required = true }),
+        crap.fields.text({ name = "slug", required = true, unique = true }),
+        crap.fields.textarea({ name = "summary" }),
+        crap.fields.richtext({ name = "body" }),
     },
     access = {
         read   = "hooks.access.public_read",

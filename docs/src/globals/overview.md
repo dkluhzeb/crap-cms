@@ -13,8 +13,8 @@ crap.globals.define("site_settings", {
         singular = "Site Settings",
     },
     fields = {
-        { name = "site_name", type = "text", required = true, default_value = "My Site" },
-        { name = "tagline", type = "text" },
+        crap.fields.text({ name = "site_name", required = true, default_value = "My Site" }),
+        crap.fields.text({ name = "tagline" }),
     },
 })
 ```

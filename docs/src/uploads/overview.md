@@ -21,7 +21,7 @@ crap.collections.define("media", {
         },
     },
     fields = {
-        { name = "alt", type = "text", admin = { description = "Alt text" } },
+        crap.fields.text({ name = "alt", admin = { description = "Alt text" } }),
     },
 })
 ```

@@ -10,7 +10,7 @@ Define a new collection. Call this in collection definition files (`collections/
 crap.collections.define("posts", {
     labels = { singular = "Post", plural = "Posts" },
     fields = {
-        { name = "title", type = "text", required = true },
+        crap.fields.text({ name = "title", required = true }),
     },
 })
 ```
@@ -28,7 +28,7 @@ Returns `nil` if the collection doesn't exist.
 local def = crap.collections.config.get("posts")
 if def then
     -- Add a field
-    def.fields[#def.fields + 1] = { name = "extra", type = "text" }
+    def.fields[#def.fields + 1] = crap.fields.text({ name = "extra" })
     crap.collections.define("posts", def)
 end
 ```
@@ -41,7 +41,7 @@ Get all registered collections as a slug-keyed table. Iterate with `pairs()`.
 for slug, def in pairs(crap.collections.config.list()) do
     if def.upload then
         -- Add alt_text to every upload collection
-        def.fields[#def.fields + 1] = { name = "alt_text", type = "text" }
+        def.fields[#def.fields + 1] = crap.fields.text({ name = "alt_text" })
         crap.collections.define(slug, def)
     end
 end

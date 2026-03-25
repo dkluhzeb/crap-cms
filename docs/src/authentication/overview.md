@@ -34,11 +34,11 @@ Auth middleware activates when at least one auth collection exists **or** when `
 crap.collections.define("users", {
     auth = true,
     fields = {
-        { name = "name", type = "text", required = true },
-        { name = "role", type = "select", options = {
+        crap.fields.text({ name = "name", required = true }),
+        crap.fields.select({ name = "role", options = {
             { label = "Admin", value = "admin" },
             { label = "Editor", value = "editor" },
-        }},
+        }}),
     },
 })
 ```

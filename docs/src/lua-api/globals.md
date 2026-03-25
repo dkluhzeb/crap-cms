@@ -10,8 +10,8 @@ Define a new global. Call this in global definition files (`globals/*.lua`).
 crap.globals.define("site_settings", {
     labels = { singular = "Site Settings" },
     fields = {
-        { name = "site_name", type = "text", required = true, default_value = "My Site" },
-        { name = "tagline", type = "text" },
+        crap.fields.text({ name = "site_name", required = true, default_value = "My Site" }),
+        crap.fields.text({ name = "tagline" }),
     },
 })
 ```
@@ -28,7 +28,7 @@ Returns `nil` if the global doesn't exist.
 ```lua
 local def = crap.globals.config.get("site_settings")
 if def then
-    def.fields[#def.fields + 1] = { name = "footer_text", type = "textarea" }
+    def.fields[#def.fields + 1] = crap.fields.textarea({ name = "footer_text" })
     crap.globals.define("site_settings", def)
 end
 ```
@@ -40,7 +40,7 @@ Get all registered globals as a slug-keyed table. Iterate with `pairs()`.
 ```lua
 for slug, def in pairs(crap.globals.config.list()) do
     -- Add a "last_updated_by" field to every global
-    def.fields[#def.fields + 1] = { name = "last_updated_by", type = "text" }
+    def.fields[#def.fields + 1] = crap.fields.text({ name = "last_updated_by" })
     crap.globals.define(slug, def)
 end
 ```

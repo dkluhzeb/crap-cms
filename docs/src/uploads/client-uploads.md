@@ -220,12 +220,11 @@ Reference upload documents via relationship fields:
 -- collections/posts.lua
 crap.collections.define("posts", {
     fields = {
-        { name = "title", type = "text", required = true },
-        {
+        crap.fields.text({ name = "title", required = true }),
+        crap.fields.relationship({
             name = "cover_image",
-            type = "relationship",
             relationship = { collection = "media", has_many = false },
-        },
+        }),
     },
 })
 ```

@@ -124,14 +124,13 @@ return {
 ### Field level
 
 ```lua
-{
+crap.fields.select({
   name = "status",
-  type = "select",
   mcp = {
     description = "Publication status - controls visibility on the frontend",
   },
   options = { ... },
-}
+})
 ```
 
 If no `mcp.description` is set, the tool falls back to `admin.description`

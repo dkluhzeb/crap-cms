@@ -44,13 +44,12 @@ crap.collections.define("users", {
 When `auth = true` and no `email` field exists in the field definitions, one is automatically injected:
 
 ```lua
-{
+crap.fields.email({
     name = "email",
-    type = "email",
     required = true,
     unique = true,
     admin = { placeholder = "user@example.com" },
-}
+})
 ```
 
 If you define your own `email` field, it's used as-is.
