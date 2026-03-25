@@ -1,4 +1,5 @@
-label {
+label,
+.form__label {
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--text-primary);

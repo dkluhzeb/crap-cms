@@ -65,7 +65,7 @@ class CrapRelationshipSearch extends HTMLElement {
     /** @type {Array<{id: string, label: string, collection?: string, thumbnail_url?: string, filename?: string, is_image?: boolean}>} */
     let selected = [];
     try {
-      selected = JSON.parse(this.getAttribute('selected') || '[]');
+      selected = JSON.parse(this.getAttribute('selected') || '[]') || [];
     } catch { /* empty */ }
 
     // Build the DOM
@@ -88,6 +88,7 @@ class CrapRelationshipSearch extends HTMLElement {
     inputWrapper.className = 'relationship-search__input-wrapper';
     const input = document.createElement('input');
     input.type = 'text';
+    input.id = 'field-' + fieldName;
     input.className = 'relationship-search__input' + errorClass;
     input.placeholder = hasMany ? 'Search to add...' : 'Search...';
     input.autocomplete = 'off';
@@ -457,6 +458,7 @@ class CrapRelationshipSearch extends HTMLElement {
     searchInput.type = 'text';
     searchInput.placeholder = 'Search...';
     searchInput.autocomplete = 'off';
+    searchInput.setAttribute('aria-label', 'Search');
     Object.assign(searchInput.style, {
       width: '100%',
       boxSizing: 'border-box',
