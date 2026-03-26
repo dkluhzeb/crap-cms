@@ -6,25 +6,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [0.1.0-alpha.3] — Unreleased
 
-### Changed
-
-- **Richtext node attrs now use the field system** — `register_node` attrs are now
-  defined with `crap.fields.*` factory functions instead of the old `{ name, type }`
-  table syntax. Supports all scalar field types (`text`, `number`, `textarea`, `select`,
-  `radio`, `checkbox`, `date`, `email`, `json`, `code`). Complex types are rejected at
-  registration time. Node edit modals now support `placeholder`, `description`, radio
-  groups, date pickers, email inputs, and monospace editors for code/json fields.
-
-- **Full field feature support for richtext node attrs:**
-  - Admin display hints: `hidden`, `readonly`, `width`, `step`, `rows`, `language`,
-    `min`/`max`, `min_length`/`max_length`, `min_date`/`max_date`, `picker_appearance`
-  - Server-side validation: `required`, `validate`, length/numeric/date bounds, email
-    format, option validity — errors reference node location (e.g. `content[cta#0].url`)
-  - `before_validate` hooks for normalizing attr values before validation
-  - Registration-time warnings for features that have no effect on node attrs
-    (`unique`, `index`, `localized`, `access`, `before_change`, `after_change`,
-    `after_read`, `has_many`, `mcp`, `admin.condition`)
-
 ### Added
 
 - **Content-Security-Policy header** — configurable `[admin.csp]` section with
@@ -95,6 +76,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   enabling IDE autocompletion and type checking.
 
 ### Changed
+
+- **Richtext node attrs now use the field system** — `register_node` attrs are now
+  defined with `crap.fields.*` factory functions instead of the old `{ name, type }`
+  table syntax. Supports all scalar field types (`text`, `number`, `textarea`, `select`,
+  `radio`, `checkbox`, `date`, `email`, `json`, `code`). Complex types are rejected at
+  registration time. Node edit modals now support `placeholder`, `description`, radio
+  groups, date pickers, email inputs, and monospace editors for code/json fields.
+
+- **Full field feature support for richtext node attrs:**
+  - Admin display hints: `hidden`, `readonly`, `width`, `step`, `rows`, `language`,
+    `min`/`max`, `min_length`/`max_length`, `min_date`/`max_date`, `picker_appearance`
+  - Server-side validation: `required`, `validate`, length/numeric/date bounds, email
+    format, option validity — errors reference node location (e.g. `content[cta#0].url`)
+  - `before_validate` hooks for normalizing attr values before validation
+  - Registration-time warnings for features that have no effect on node attrs
+    (`unique`, `index`, `localized`, `access`, `before_change`, `after_change`,
+    `after_read`, `has_many`, `mcp`, `admin.condition`)
 
 - **Scaffold `dev_mode`** defaults to `false` (was `true`). New projects start
   secure by default.
