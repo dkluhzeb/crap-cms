@@ -311,6 +311,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   replaced the first `__INDEX__` occurrence per attribute. Changed to
   `replaceAll()` so nested templates work correctly.
 
+- **Duplicate IDs in nested array templates**: When adding a parent array row,
+  `_replaceIndexInNestedTemplates` replaced **all** `__INDEX__` placeholders —
+  including those belonging to child array levels — corrupting nested templates
+  so every child row cloned from them got identical hardcoded IDs. Rewritten to
+  use targeted replacement based on the parent fieldset's `data-field-name`,
+  replacing only the parent-level `__INDEX__` while preserving child-level
+  placeholders. Also added nested template reindexing in `_reindexRows` so child
+  templates reflect the correct parent index after drag-reorder.
+
+- **Nested array actions fired twice (event bubbling)**: Click events on nested
+  `crap-array-field` actions (add/remove/move/duplicate) bubbled up to the
+  parent `crap-array-field`, which also handled them — doubling the effect
+  (e.g., adding 2 sub-items instead of 1). Added ownership check so each
+  component only handles actions belonging to its own level.
+
 - **`getConfirmDialog()` null crash**: `dirty-form.js` called `.prompt()` on
   null when no `<crap-confirm-dialog>` exists. Added null guard with safe
   fallback.
