@@ -333,10 +333,7 @@ pub fn build_router(state: AdminState) -> Router {
             "/admin/login",
             get(auth_handlers::login_page).post(auth_handlers::login_action),
         )
-        .route(
-            "/admin/logout",
-            get(auth_handlers::logout_action).post(auth_handlers::logout_action),
-        )
+        .route("/admin/logout", post(auth_handlers::logout_action))
         .route(
             "/admin/forgot-password",
             get(auth_handlers::forgot_password_page).post(auth_handlers::forgot_password_action),

@@ -159,6 +159,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Version uniqueness constraint** — UNIQUE index on `(_parent, _version)` in
   versions tables prevents duplicate version numbers from race conditions.
 
+- **SSRF IPv6-mapped IPv4 bypass** (HIGH): `is_private_ip()` did not check
+  IPv6-mapped IPv4 addresses (`::ffff:127.0.0.1`, `::ffff:10.0.0.1`, etc.).
+  These bypassed the SSRF filter entirely. Now extracts the inner v4 address
+  via `to_ipv4_mapped()` and re-checks it.
+
+- **Field access fail-open on VM pool exhaustion** (HIGH): `check_field_read_access`
+  and `check_field_write_access` returned empty denied lists (= allow all) when
+  the Lua VM pool failed to acquire. Changed to fail-closed — all
+  access-controlled fields are denied when the pool is unavailable.
+
+- **Rate limiter IPv6 bypass** (MEDIUM): With `trust_proxy = true`, the raw
+  `X-Forwarded-For` string was used as the rate limiter key. Different IPv6
+  representations of the same address (e.g., `2001:db8::1` vs
+  `2001:0db8:0:0:0:0:0:1`) got separate buckets. Now parsed as `IpAddr` and
+  re-serialized to canonical form.
+
+- **Logout CSRF** (LOW): The `/admin/logout` endpoint accepted GET requests,
+  allowing forced logout via `<img src="/admin/logout">`. Now POST-only.
+
+- **Sensitive form Debug redaction** (LOW): `LoginForm` and `ResetPasswordForm`
+  now redact passwords and tokens in their `Debug` output, preventing
+  accidental exposure in logs.
+
+- **UNIQUE constraint error leaks schema** (MEDIUM): gRPC error messages for
+  unique constraint violations included internal table names (e.g.,
+  `UNIQUE constraint failed: users.email`). Now sanitized to show only the
+  column name.
+
 ### Fixed
 
 - **Page metadata stomping**: `with_pagination` no longer overwrites the `page`
@@ -197,6 +225,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Form validation double-submit**: The `<crap-validate-form>` component's
   `_runValidation()` could fire concurrently on rapid double-click. Added a
   guard flag to prevent concurrent validation requests.
+
+- **Verification token expiry silent failure**: `find_by_verification_token`
+  silently defaulted expiry to 0 on data corruption, making all tokens appear
+  expired. Now uses proper error propagation (consistent with reset tokens).
+
+- **`DeleteMany` file deletion before commit**: Upload files were deleted from
+  disk before the DB transaction committed. If the commit failed, documents
+  would reference missing files. Files are now deleted after successful commit.
+
+- **Heading level not lower-bounded**: A ProseMirror document with
+  `"level": 0` produced invalid `<h0>`. Now clamped to 1-6.
+
+- **Job retry stale heartbeat**: `fail_job` with retry did not clear
+  `heartbeat_at`, leaving a stale timestamp from the failed run.
+
+- **`__INDEX__` partial replacement in array templates**: `replace()` only
+  replaced the first `__INDEX__` occurrence per attribute. Changed to
+  `replaceAll()` so nested templates work correctly.
+
+- **`getConfirmDialog()` null crash**: `dirty-form.js` called `.prompt()` on
+  null when no `<crap-confirm-dialog>` exists. Added null guard with safe
+  fallback.
+
+- **Password max_length error message**: Said "characters" but checked bytes.
+  Fixed to say "bytes" (intentional for Argon2 DoS prevention).
+
+- **Richtext modals inaccessible**: Link and node edit modals were plain
+  `<div>` overlays without focus trapping, Escape handling, or ARIA roles.
+  Converted to native `<dialog>` elements with `aria-labelledby`.
+
+- **Relationship search dropdown invisible to screen readers**: Added
+  `role="combobox"`, `aria-expanded`, `role="listbox"`, and `role="option"`.
+
+- **Hardcoded English in UI components**: Replaced hardcoded "Cancel",
+  "Confirm", "OK", "Search..." strings with `t()` translations in confirm,
+  richtext, and relationship-search components.
 
 ### Internal
 

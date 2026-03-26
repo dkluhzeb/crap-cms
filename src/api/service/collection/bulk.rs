@@ -354,17 +354,17 @@ impl ContentService {
                 count += 1;
             }
 
-            // Clean up upload files before commit — failures are logged but don't
-            // abort the transaction (files are non-critical relative to data).
+            tx.commit()
+                .context("Commit transaction")
+                .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
+
+            // Clean up upload files AFTER commit — only delete files once the DB
+            // changes have succeeded. Failures are logged but non-fatal.
             if def_owned.is_upload_collection() {
                 for doc in &docs {
                     upload::delete_upload_files(&config_dir, &doc.fields);
                 }
             }
-
-            tx.commit()
-                .context("Commit transaction")
-                .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
             Ok(count)
         })

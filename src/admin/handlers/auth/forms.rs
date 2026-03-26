@@ -3,7 +3,7 @@
 use serde::Deserialize;
 
 /// Form data for the login page.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct LoginForm {
     /// The slug of the collection the user belongs to.
     pub collection: String,
@@ -11,6 +11,16 @@ pub struct LoginForm {
     pub email: String,
     /// The user's password.
     pub password: String,
+}
+
+impl std::fmt::Debug for LoginForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginForm")
+            .field("collection", &self.collection)
+            .field("email", &self.email)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Query parameters for the login page.
@@ -37,7 +47,7 @@ pub struct ResetPasswordQuery {
 }
 
 /// Form data for the reset password page.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct ResetPasswordForm {
     /// The reset token from the URL.
     pub token: String,
@@ -45,6 +55,16 @@ pub struct ResetPasswordForm {
     pub password: String,
     /// Confirmation of the new password.
     pub password_confirm: String,
+}
+
+impl std::fmt::Debug for ResetPasswordForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResetPasswordForm")
+            .field("token", &"[REDACTED]")
+            .field("password", &"[REDACTED]")
+            .field("password_confirm", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Query parameters for the email verification page.

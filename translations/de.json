@@ -215,5 +215,8 @@
   "insert_link": "Link einfügen",
   "edit_link": "Link bearbeiten",
   "remove_link": "Link entfernen",
-  "validating": "Wird validiert..."
+  "validating": "Wird validiert...",
+  "ok": "OK",
+  "search": "Suchen...",
+  "search_to_add": "Suchen und hinzufügen..."
 }

@@ -102,6 +102,9 @@ impl HookRunner {
 
     /// Check field-level read access. Returns a list of field names that should be
     /// stripped from the response (denied fields).
+    ///
+    /// Fail-closed: if the Lua VM pool is exhausted, all access-controlled fields
+    /// are denied rather than silently allowed.
     pub fn check_field_read_access(
         &self,
         fields: &[FieldDefinition],
@@ -114,7 +117,10 @@ impl HookRunner {
         }
         let lua = match self.pool.acquire() {
             Ok(l) => l,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::error!("Lua VM pool exhausted during field read access check: {e}");
+                return deny_all_access_controlled(fields, |f| f.access.read.as_deref());
+            }
         };
         let _guard = TxContextGuard::set(&lua, conn, None, None);
         check_field_read_access_with_lua(&lua, fields, user)
@@ -122,6 +128,9 @@ impl HookRunner {
 
     /// Check field-level write access for a given operation ("create" or "update").
     /// Returns a list of field names that should be stripped from the input.
+    ///
+    /// Fail-closed: if the Lua VM pool is exhausted, all access-controlled fields
+    /// are denied rather than silently allowed.
     pub fn check_field_write_access(
         &self,
         fields: &[FieldDefinition],
@@ -140,9 +149,25 @@ impl HookRunner {
         }
         let lua = match self.pool.acquire() {
             Ok(l) => l,
-            Err(_) => return Vec::new(),
+            Err(e) => {
+                tracing::error!("Lua VM pool exhausted during field write access check: {e}");
+                return deny_all_access_controlled(fields, extractor);
+            }
         };
         let _guard = TxContextGuard::set(&lua, conn, None, None);
         check_field_write_access_with_lua(&lua, fields, user, operation)
     }
+}
+
+/// Collect names of all fields that have an access control function configured.
+/// Used as fail-closed fallback when the Lua VM pool is unavailable.
+fn deny_all_access_controlled(
+    fields: &[FieldDefinition],
+    extractor: impl Fn(&FieldDefinition) -> Option<&str>,
+) -> Vec<String> {
+    fields
+        .iter()
+        .filter(|f| extractor(f).is_some())
+        .map(|f| f.name.clone())
+        .collect()
 }

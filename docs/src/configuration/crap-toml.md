@@ -99,7 +99,7 @@ host = "0.0.0.0"        # Bind address
 # h2c = false           # Enable HTTP/2 cleartext (for reverse proxies)
 # trust_proxy = false   # Trust X-Forwarded-For (enable behind reverse proxy)
 # compression = "off"   # "off" (default), "gzip", "br", "all"
-# grpc_reflection = true         # Enable gRPC server reflection (default: true)
+# grpc_reflection = false        # Enable gRPC server reflection (default: false)
 # grpc_rate_limit_requests = 0   # Per-IP request limit (0 = disabled, recommended: 100)
 # grpc_rate_limit_window = 60    # Sliding window in seconds (or "1m")
 # grpc_max_message_size = "16MB" # Max gRPC message size (default 16MB)
@@ -232,7 +232,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `h2c` | boolean | `false` | Enable HTTP/2 cleartext (h2c). Allows reverse proxies (Caddy, nginx) to speak HTTP/2 to the backend without TLS. Browsers that don't support h2c fall back to HTTP/1.1 on the same port. |
 | `trust_proxy` | boolean | `false` | Trust the `X-Forwarded-For` header for client IP extraction on the **admin HTTP server**. **Enable when running behind a reverse proxy** (nginx, Caddy, etc.) so per-IP rate limiting uses the real client IP. When false (default), the TCP socket address is used and XFF is ignored — preventing IP spoofing when exposed directly to the internet. Does not affect the gRPC server, which always uses the TCP peer address from Tonic's `remote_addr()`. |
 | `compression` | string | `"off"` | Response compression. `"off"` = disabled (default), `"gzip"` = gzip only, `"br"` = brotli only, `"all"` = gzip + brotli. Most deployments use a reverse proxy (nginx/caddy) for compression, so this is opt-in. |
-| `grpc_reflection` | boolean | `true` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disable in production to hide the API surface from unauthenticated probing. |
+| `grpc_reflection` | boolean | `false` | Enable gRPC server reflection. Allows clients (e.g., `grpcurl`, Postman) to discover services and methods without a `.proto` file. Disabled by default to hide the API surface from unauthenticated probing. |
 | `public_url` | string | — | Public-facing base URL (e.g., `"https://cms.example.com"`). Used for password reset emails and other generated links. If not set, defaults to `http://{host}:{admin_port}`. |
 | `grpc_rate_limit_requests` | integer | `0` | Maximum number of gRPC requests per IP within the sliding window. `0` = disabled (default). **Recommended to enable in production** (e.g., `100`). When enabled, requests exceeding the limit receive `ResourceExhausted` status. |
 | `grpc_rate_limit_window` | integer/string | `60` (`"1m"`) | Sliding window duration for rate limiting. Accepts seconds (integer) or human-readable (`"1m"`, `"30s"`). |
@@ -265,6 +265,7 @@ Content-Security-Policy header configuration for the admin UI. Each field is a l
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Enable the CSP header. Set to `false` to disable entirely. |
+| `default_src` | string[] | `["'self'"]` | Fallback for any directive not explicitly set. |
 | `script_src` | string[] | `["'self'", "'unsafe-inline'", "https://unpkg.com"]` | Allowed script sources. Includes `'unsafe-inline'` for theme bootstrap and CSRF injection scripts. |
 | `style_src` | string[] | `["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"]` | Allowed stylesheet sources. Includes `'unsafe-inline'` for Web Component Shadow DOM styles. |
 | `font_src` | string[] | `["'self'", "https://fonts.gstatic.com"]` | Allowed font sources. Includes Google Fonts for Material Symbols icons. |

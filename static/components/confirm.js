@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 /**
  * <crap-confirm> — Confirmation dialog that wraps destructive form actions.
  *
@@ -95,8 +97,8 @@ class CrapConfirm extends HTMLElement {
           <p></p>
         </div>
         <div class="dialog__actions">
-          <button class="btn-cancel" type="button">Cancel</button>
-          <button class="btn-confirm" type="button">Confirm</button>
+          <button class="btn-cancel" type="button">${t('cancel')}</button>
+          <button class="btn-confirm" type="button">${t('confirm')}</button>
         </div>
       </dialog>
     `;

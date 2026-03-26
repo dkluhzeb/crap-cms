@@ -214,15 +214,8 @@ pub fn find_by_verification_token(
         Some(row) => {
             let doc = row_to_document(conn, &row)?;
             let exp = row
-                .get_named("_verification_token_exp")
-                .and_then(|v| {
-                    if let DbValue::Integer(i) = v {
-                        Some(*i)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(0);
+                .get_i64("_verification_token_exp")
+                .context("Failed to read _verification_token_exp")?;
             Ok(Some((doc, exp)))
         }
         None => Ok(None),

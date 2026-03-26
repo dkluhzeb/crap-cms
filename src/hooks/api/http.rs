@@ -19,7 +19,7 @@ pub(super) fn register_http(
     max_response_bytes: u64,
 ) -> Result<()> {
     if !allow_private_networks {
-        tracing::info!("crap.http: private network blocking enabled with DNS pinning");
+        tracing::debug!("crap.http: private network blocking enabled with DNS pinning");
     }
 
     let http_table = lua.create_table()?;
@@ -202,6 +202,13 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
         std::net::IpAddr::V6(v6) => {
+            // Check IPv6-mapped IPv4 (::ffff:x.x.x.x) — extract the inner v4 and re-check
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return mapped.is_loopback()
+                    || mapped.is_unspecified()
+                    || mapped.is_private()
+                    || mapped.is_link_local();
+            }
             let segments = v6.segments();
             // fc00::/7 (unique local) or fe80::/10 (link-local)
             (segments[0] & 0xfe00) == 0xfc00 || (segments[0] & 0xffc0) == 0xfe80
@@ -309,5 +316,31 @@ mod tests {
     fn is_private_ip_allows_public() {
         assert!(!is_private_ip("93.184.215.14".parse().unwrap()));
         assert!(!is_private_ip("8.8.8.8".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_detects_ipv6_mapped_ipv4() {
+        // ::ffff:127.0.0.1 — loopback via IPv6-mapped
+        assert!(is_private_ip("::ffff:127.0.0.1".parse().unwrap()));
+        // ::ffff:10.0.0.1 — RFC1918 via IPv6-mapped
+        assert!(is_private_ip("::ffff:10.0.0.1".parse().unwrap()));
+        // ::ffff:192.168.1.1 — RFC1918 via IPv6-mapped
+        assert!(is_private_ip("::ffff:192.168.1.1".parse().unwrap()));
+        // ::ffff:169.254.0.1 — link-local via IPv6-mapped
+        assert!(is_private_ip("::ffff:169.254.0.1".parse().unwrap()));
+        // ::ffff:0.0.0.0 — unspecified via IPv6-mapped
+        assert!(is_private_ip("::ffff:0.0.0.0".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_detects_unspecified() {
+        assert!(is_private_ip("0.0.0.0".parse().unwrap()));
+        assert!(is_private_ip("::".parse().unwrap()));
+    }
+
+    #[test]
+    fn is_private_ip_allows_public_ipv6_mapped() {
+        // ::ffff:93.184.215.14 — public via IPv6-mapped
+        assert!(!is_private_ip("::ffff:93.184.215.14".parse().unwrap()));
     }
 }

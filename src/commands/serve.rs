@@ -13,7 +13,7 @@ use std::{
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::{select, try_join};
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Which server to start when using `--only`.
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -135,7 +135,7 @@ fn resolve_jwt_secret(auth_cfg: &AuthConfig, config_dir: &Path) -> String {
         if let Ok(s) = fs::read_to_string(&secret_path)
             && !s.trim().is_empty()
         {
-            info!("Using persisted JWT secret from {}", secret_path.display());
+            debug!("Using persisted JWT secret from {}", secret_path.display());
             return s.trim().to_string();
         }
 

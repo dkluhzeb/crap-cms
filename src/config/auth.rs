@@ -96,9 +96,10 @@ impl PasswordPolicy {
         if password.chars().count() < self.min_length {
             bail!("Password must be at least {} characters", self.min_length);
         }
-        // Max length uses byte length for Argon2 DoS protection
+        // Max length uses byte length intentionally: Argon2 hashes the raw bytes,
+        // so limiting bytes prevents DoS via large multi-byte payloads.
         if password.len() > self.max_length {
-            bail!("Password must be at most {} characters", self.max_length);
+            bail!("Password must be at most {} bytes", self.max_length);
         }
         if self.require_uppercase && !password.chars().any(|c| c.is_ascii_uppercase()) {
             bail!("Password must contain at least one uppercase letter");
@@ -178,6 +179,27 @@ mod tests {
         };
         assert!(policy.validate("12345678").is_ok());
         assert!(policy.validate("12345678901").is_err());
+    }
+
+    /// Regression: max_length error message said "characters" but the check uses byte length.
+    #[test]
+    fn password_policy_max_length_error_says_bytes() {
+        let policy = PasswordPolicy {
+            max_length: 10,
+            ..Default::default()
+        };
+        let err = policy.validate("12345678901").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("bytes"),
+            "error message should say 'bytes', got: {}",
+            msg
+        );
+        assert!(
+            !msg.contains("characters"),
+            "error message should not say 'characters', got: {}",
+            msg
+        );
     }
 
     #[test]

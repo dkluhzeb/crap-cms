@@ -564,13 +564,13 @@ class CrapRichtext extends HTMLElement {
     const isEdit = !!attrs.href;
     const savedSelection = this._view.state.selection;
 
-    const modal = document.createElement('div');
+    const modal = document.createElement('dialog');
     modal.className = 'crap-node-modal';
+    modal.setAttribute('aria-labelledby', 'crap-link-modal-heading');
 
     modal.innerHTML = `
-      <div class="crap-node-modal__backdrop"></div>
       <div class="crap-node-modal__dialog">
-        <div class="crap-node-modal__header">${isEdit ? t('edit_link') : t('insert_link')}</div>
+        <div class="crap-node-modal__header" id="crap-link-modal-heading">${isEdit ? t('edit_link') : t('insert_link')}</div>
         <div class="crap-node-modal__body">
           <div class="crap-node-modal__field">
             <label class="crap-node-modal__label" for="crap-link-href">${t('link_url')} *</label>
@@ -602,11 +602,12 @@ class CrapRichtext extends HTMLElement {
     `;
 
     this.shadowRoot.appendChild(modal);
+    modal.showModal();
 
     const hrefInput = modal.querySelector('[data-field="href"]');
     if (hrefInput) hrefInput.focus();
 
-    const close = () => modal.remove();
+    const close = () => { modal.close(); modal.remove(); };
 
     const applyLink = () => {
       const href = modal.querySelector('[data-field="href"]').value.trim();
@@ -642,7 +643,7 @@ class CrapRichtext extends HTMLElement {
       this._view.focus();
     };
 
-    modal.querySelector('.crap-node-modal__backdrop').addEventListener('click', close);
+    modal.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
     modal.querySelector('.crap-node-modal__btn--cancel').addEventListener('click', close);
     modal.querySelector('.crap-node-modal__btn--ok').addEventListener('click', applyLink);
 
@@ -716,8 +717,9 @@ class CrapRichtext extends HTMLElement {
     const existing = this.shadowRoot.querySelector('.crap-node-modal');
     if (existing) existing.remove();
 
-    const modal = document.createElement('div');
+    const modal = document.createElement('dialog');
     modal.className = 'crap-node-modal';
+    modal.setAttribute('aria-labelledby', 'crap-node-modal-heading');
 
     const esc = CrapRichtext._esc;
     const formFields = (nodeDef.attrs || []).filter(a => !a.hidden).map(a => {
@@ -796,26 +798,26 @@ class CrapRichtext extends HTMLElement {
     }).join('');
 
     modal.innerHTML = `
-      <div class="crap-node-modal__backdrop"></div>
       <div class="crap-node-modal__dialog">
-        <div class="crap-node-modal__header">${CrapRichtext._esc(nodeDef.label)}</div>
+        <div class="crap-node-modal__header" id="crap-node-modal-heading">${CrapRichtext._esc(nodeDef.label)}</div>
         <div class="crap-node-modal__body">${formFields}</div>
         <div class="crap-node-modal__footer">
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--cancel">Cancel</button>
-          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--ok">OK</button>
+          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--cancel">${t('cancel')}</button>
+          <button type="button" class="crap-node-modal__btn crap-node-modal__btn--ok">${t('ok')}</button>
         </div>
       </div>
     `;
 
     this.shadowRoot.appendChild(modal);
+    modal.showModal();
 
     // Focus first input
     const firstInput = modal.querySelector('input, textarea, select');
     if (firstInput) firstInput.focus();
 
-    const close = () => modal.remove();
+    const close = () => { modal.close(); modal.remove(); };
 
-    modal.querySelector('.crap-node-modal__backdrop').addEventListener('click', close);
+    modal.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
     modal.querySelector('.crap-node-modal__btn--cancel').addEventListener('click', close);
     modal.querySelector('.crap-node-modal__btn--ok').addEventListener('click', async () => {
       // Collect new attrs from dialog fields
@@ -895,7 +897,7 @@ class CrapRichtext extends HTMLElement {
 
       // Re-enable OK button
       okBtn.disabled = false;
-      okBtn.textContent = 'OK';
+      okBtn.textContent = t('ok');
     });
   }
 
@@ -1288,22 +1290,8 @@ class CrapRichtext extends HTMLElement {
       /* -- Node edit modal -- */
 
       .crap-node-modal {
-        position: fixed;
-        inset: 0;
-        z-index: 10000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-
-      .crap-node-modal__backdrop {
-        position: absolute;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.3);
-      }
-
-      .crap-node-modal__dialog {
-        position: relative;
+        border: none;
+        padding: 0;
         width: 400px;
         max-width: 90vw;
         max-height: 80vh;
@@ -1311,6 +1299,13 @@ class CrapRichtext extends HTMLElement {
         background: var(--surface-primary, #fff);
         border-radius: var(--radius-md, 6px);
         box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.12));
+      }
+
+      .crap-node-modal::backdrop {
+        background: rgba(0, 0, 0, 0.3);
+      }
+
+      .crap-node-modal__dialog {
       }
 
       .crap-node-modal__header {

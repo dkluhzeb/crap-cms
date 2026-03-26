@@ -92,8 +92,12 @@ class CrapRelationshipSearch extends HTMLElement {
     input.type = 'text';
     input.id = 'field-' + fieldName;
     input.className = 'relationship-search__input' + errorClass;
-    input.placeholder = hasMany ? 'Search to add...' : 'Search...';
+    input.placeholder = hasMany ? t('search_to_add') : t('search');
     input.autocomplete = 'off';
+    input.setAttribute('role', 'combobox');
+    input.setAttribute('aria-expanded', 'false');
+    input.setAttribute('aria-autocomplete', 'list');
+    input.setAttribute('aria-controls', 'dropdown-' + fieldName);
     if (readonly) input.disabled = true;
     inputWrapper.appendChild(input);
     this.appendChild(inputWrapper);
@@ -101,6 +105,8 @@ class CrapRelationshipSearch extends HTMLElement {
     // Dropdown
     const dropdown = document.createElement('div');
     dropdown.className = 'relationship-search__dropdown';
+    dropdown.id = 'dropdown-' + fieldName;
+    dropdown.setAttribute('role', 'listbox');
     dropdown.style.display = 'none';
     this.appendChild(dropdown);
 
@@ -224,6 +230,7 @@ class CrapRelationshipSearch extends HTMLElement {
 
           const option = document.createElement('div');
           option.className = 'relationship-search__option';
+          option.setAttribute('role', 'option');
           if (idx === activeIndex) option.classList.add('relationship-search__option--active');
 
           const isSelected = selected.some((s) => s.id === item.id);
@@ -238,6 +245,7 @@ class CrapRelationshipSearch extends HTMLElement {
         });
       }
       dropdown.style.display = '';
+      input.setAttribute('aria-expanded', 'true');
     }
 
     /** @param {{id: string, label: string, collection?: string}} item */
@@ -261,6 +269,7 @@ class CrapRelationshipSearch extends HTMLElement {
       dropdown.innerHTML = '';
       results = [];
       activeIndex = -1;
+      input.setAttribute('aria-expanded', 'false');
     }
 
     /**
@@ -471,7 +480,7 @@ class CrapRelationshipSearch extends HTMLElement {
     // Search input
     const searchInput = document.createElement('input');
     searchInput.type = 'text';
-    searchInput.placeholder = 'Search...';
+    searchInput.placeholder = t('search');
     searchInput.autocomplete = 'off';
     searchInput.setAttribute('aria-label', 'Search');
     Object.assign(searchInput.style, {

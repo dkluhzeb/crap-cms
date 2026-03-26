@@ -53,11 +53,28 @@ pub(in crate::api::service::collection) fn map_db_error(
         Status::unavailable("Service temporarily unavailable, please retry")
     } else if is_hook_error {
         tracing::warn!("{}: {}", prefix, msg);
-        Status::invalid_argument(msg)
+        Status::invalid_argument(sanitize_constraint_error(&msg))
     } else {
         tracing::error!("{}: {}", prefix, msg);
         Status::internal("Internal error")
     }
+}
+
+/// Sanitize database constraint error messages to avoid leaking internal schema details.
+///
+/// Converts "UNIQUE constraint failed: table.column" to a user-friendly message
+/// that only exposes the column name. Non-constraint messages are returned unchanged.
+fn sanitize_constraint_error(msg: &str) -> String {
+    // SQLite: "UNIQUE constraint failed: table.column"
+    if let Some(rest) = msg.strip_prefix("UNIQUE constraint failed: ")
+        && let Some(dot_pos) = rest.find('.')
+    {
+        let column = &rest[dot_pos + 1..];
+        return format!("Unique constraint violated for field '{}'", column);
+    }
+    // PostgreSQL: "duplicate key value violates unique constraint" — already generic enough,
+    // but we could sanitize further if needed. For now, pass through.
+    msg.to_string()
 }
 
 /// Extract and validate password from an auth collection's data map.
@@ -149,6 +166,11 @@ mod tests {
         let e = anyhow!("UNIQUE constraint failed: posts.slug");
         let status = map_db_error(e, "test", "sqlite");
         assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert_eq!(
+            status.message(),
+            "Unique constraint violated for field 'slug'",
+            "should sanitize table.column to just column name"
+        );
     }
 
     #[test]
@@ -326,5 +348,53 @@ mod tests {
         // Should not panic on None fields
         strip_denied_proto_fields(&mut doc, &["anything".to_string()]);
         assert!(doc.fields.is_none());
+    }
+
+    // ── sanitize_constraint_error tests ──────────────────────────────
+
+    #[test]
+    fn sanitize_unique_constraint_extracts_column() {
+        let msg = "UNIQUE constraint failed: users.email";
+        assert_eq!(
+            sanitize_constraint_error(msg),
+            "Unique constraint violated for field 'email'"
+        );
+    }
+
+    #[test]
+    fn sanitize_unique_constraint_different_table() {
+        let msg = "UNIQUE constraint failed: posts.slug";
+        assert_eq!(
+            sanitize_constraint_error(msg),
+            "Unique constraint violated for field 'slug'"
+        );
+    }
+
+    #[test]
+    fn sanitize_non_constraint_message_unchanged() {
+        let msg = "hook error: title is required";
+        assert_eq!(sanitize_constraint_error(msg), msg);
+    }
+
+    #[test]
+    fn sanitize_postgres_duplicate_key_unchanged() {
+        let msg = "duplicate key value violates unique constraint";
+        assert_eq!(sanitize_constraint_error(msg), msg);
+    }
+
+    /// Regression: unique constraint errors leaked internal table.column names to clients.
+    #[test]
+    fn map_db_error_unique_constraint_sanitized_message() {
+        let e = anyhow!("UNIQUE constraint failed: users.email");
+        let status = map_db_error(e, "test", "sqlite");
+        assert_eq!(status.code(), tonic::Code::InvalidArgument);
+        assert!(
+            !status.message().contains("users.email"),
+            "should not leak table.column"
+        );
+        assert!(
+            status.message().contains("email"),
+            "should contain the field name"
+        );
     }
 }

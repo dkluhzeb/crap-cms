@@ -51,7 +51,7 @@ where
                 .and_then(|a| a.get("level"))
                 .and_then(|l| l.as_u64())
                 .unwrap_or(1)
-                .min(6);
+                .clamp(1, 6);
             out.push_str(&format!("<h{}>", level));
             render_children(node, custom_renderer, out);
             out.push_str(&format!("</h{}>", level));
@@ -445,5 +445,21 @@ mod tests {
     fn extract_attr_value_missing() {
         let tag = "<crap-node></crap-node>";
         assert_eq!(extract_attr_value(tag, "data-type"), None);
+    }
+
+    /// Regression: heading level 0 produced invalid `<h0>` tags.
+    #[test]
+    fn render_heading_level_zero_clamped_to_1() {
+        let json = r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":0},"content":[{"type":"text","text":"Title"}]}]}"#;
+        let result = render_prosemirror_to_html(json, &no_custom).unwrap();
+        assert_eq!(result, "<h1>Title</h1>");
+    }
+
+    /// Regression: heading level > 6 produced invalid HTML heading tags.
+    #[test]
+    fn render_heading_level_above_6_clamped() {
+        let json = r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":99},"content":[{"type":"text","text":"Title"}]}]}"#;
+        let result = render_prosemirror_to_html(json, &no_custom).unwrap();
+        assert_eq!(result, "<h6>Title</h6>");
     }
 }

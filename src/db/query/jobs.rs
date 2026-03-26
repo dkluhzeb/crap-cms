@@ -172,7 +172,7 @@ pub fn fail_job(conn: &dyn DbConnection, id: &str, error: &str, should_retry: bo
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     if should_retry {
         conn.execute(
-            &format!("UPDATE _crap_jobs SET status = 'pending', error = {p2}, started_at = NULL, completed_at = NULL
+            &format!("UPDATE _crap_jobs SET status = 'pending', error = {p2}, started_at = NULL, completed_at = NULL, heartbeat_at = NULL
              WHERE id = {p1}"),
             &[DbValue::Text(id.to_string()), DbValue::Text(error.to_string())],
         )
@@ -615,6 +615,27 @@ mod tests {
         fail_job(&conn, &job.id, "transient error", true).unwrap();
         let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
         assert_eq!(fetched.status, JobStatus::Pending);
+    }
+
+    /// Regression: fail_job with retry did not clear heartbeat_at, causing the
+    /// re-queued job to be immediately detected as stale by find_stale_jobs.
+    #[test]
+    fn test_fail_job_retry_clears_heartbeat() {
+        let (_dir, conn) = setup_db();
+        let job = insert_job(&conn, "test", "{}", "manual", 3, "default").unwrap();
+        conn.execute(
+            "UPDATE _crap_jobs SET status = 'running', attempt = 1, heartbeat_at = datetime('now') WHERE id = ?1",
+            &[DbValue::Text(job.id.clone())],
+        )
+        .unwrap();
+
+        fail_job(&conn, &job.id, "transient error", true).unwrap();
+        let fetched = get_job_run(&conn, &job.id).unwrap().unwrap();
+        assert_eq!(fetched.status, JobStatus::Pending);
+        assert!(
+            fetched.heartbeat_at.is_none(),
+            "heartbeat_at should be cleared on retry so the job is not detected as stale"
+        );
     }
 
     #[test]

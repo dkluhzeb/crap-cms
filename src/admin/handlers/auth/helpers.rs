@@ -19,6 +19,8 @@ use crate::{
 /// Extract client IP from the request.
 /// When `trust_proxy` is true, uses the first entry in X-Forwarded-For (for reverse proxy setups).
 /// When false, uses the TCP socket address — XFF is ignored to prevent spoofing.
+/// The result is always a canonical IP string (parsed and re-serialized) to prevent
+/// rate limiter bypasses via alternative IPv6 representations.
 pub(in crate::admin::handlers) fn client_ip(
     headers: &HeaderMap,
     addr: &SocketAddr,
@@ -29,7 +31,12 @@ pub(in crate::admin::handlers) fn client_ip(
         && let Some(first) = xff.split(',').next().map(str::trim)
         && !first.is_empty()
     {
-        return first.to_string();
+        // Parse and re-serialize to normalize IPv6 representations
+        // (e.g., "2001:0db8::0001" → "2001:db8::1")
+        return first
+            .parse::<std::net::IpAddr>()
+            .map(|ip| ip.to_string())
+            .unwrap_or_else(|_| first.to_string());
     }
     addr.ip().to_string()
 }
@@ -167,5 +174,26 @@ mod tests {
         headers.insert("x-forwarded-for", "".parse().unwrap());
         let addr: SocketAddr = "10.0.0.2:80".parse().unwrap();
         assert_eq!(client_ip(&headers, &addr, true), "10.0.0.2");
+    }
+
+    #[test]
+    fn client_ip_normalizes_ipv6_xff() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "2001:0db8:0000:0000:0000:0000:0000:0001".parse().unwrap(),
+        );
+        let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        // Must normalize to canonical form to prevent rate limiter bypass
+        assert_eq!(client_ip(&headers, &addr, true), "2001:db8::1");
+    }
+
+    #[test]
+    fn client_ip_handles_unparseable_xff() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
+        let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
+        // Falls back to raw string when parsing fails
+        assert_eq!(client_ip(&headers, &addr, true), "not-an-ip");
     }
 }

@@ -5,7 +5,7 @@ host = "0.0.0.0"
 
 [database]
 path = "data/crap.db"
-pool_max_size = 64
+# pool_max_size = 32
 
 [admin]
 dev_mode = false

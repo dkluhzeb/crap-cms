@@ -114,30 +114,30 @@ class CrapArrayField extends HTMLElement {
     root.querySelectorAll('.form__array-row-title').forEach(
       /** @param {HTMLElement} el */ (el) => {
         if (el.textContent?.includes('__INDEX__')) {
-          el.textContent = el.textContent.replace('__INDEX__', String(index));
+          el.textContent = el.textContent.replaceAll('__INDEX__', String(index));
         }
       }
     );
     root.querySelectorAll('input, select, textarea').forEach(
       /** @param {HTMLInputElement} input */ (input) => {
-        if (input.name) input.name = input.name.replace('__INDEX__', String(index));
+        if (input.name) input.name = input.name.replaceAll('__INDEX__', String(index));
       }
     );
     root.querySelectorAll('[data-field-name*="__INDEX__"]').forEach(
       /** @param {HTMLElement} el */ (el) => {
         const fn = el.getAttribute('data-field-name');
-        if (fn) el.setAttribute('data-field-name', fn.replace('__INDEX__', String(index)));
+        if (fn) el.setAttribute('data-field-name', fn.replaceAll('__INDEX__', String(index)));
       }
     );
     root.querySelectorAll('[id*="__INDEX__"]').forEach(
       /** @param {HTMLElement} el */ (el) => {
-        el.id = el.id.replace('__INDEX__', String(index));
+        el.id = el.id.replaceAll('__INDEX__', String(index));
       }
     );
     root.querySelectorAll('[data-template-id*="__INDEX__"]').forEach(
       /** @param {HTMLElement} el */ (el) => {
         const tid = el.getAttribute('data-template-id');
-        if (tid) el.setAttribute('data-template-id', tid.replace('__INDEX__', String(index)));
+        if (tid) el.setAttribute('data-template-id', tid.replaceAll('__INDEX__', String(index)));
       }
     );
   }

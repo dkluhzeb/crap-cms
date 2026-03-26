@@ -119,7 +119,9 @@ class CrapDirtyForm extends HTMLElement {
    * @returns {Promise<boolean>}
    */
   _askLeave() {
-    return getConfirmDialog().prompt(
+    const dialog = getConfirmDialog();
+    if (!dialog) return Promise.resolve(true);
+    return dialog.prompt(
       t('unsaved_changes'),
       { confirmLabel: t('leave'), cancelLabel: t('stay') },
     );
