@@ -4,7 +4,10 @@ use std::{fs, path::Path};
 
 use anyhow::{Context as _, Result};
 
-use crate::hooks::{HookRunner, lifecycle::types::TxContextGuard};
+use crate::{
+    db::DbConnection,
+    hooks::{HookRunner, lifecycle::types::TxContextGuard},
+};
 
 impl HookRunner {
     /// Run a migration file (up or down direction) within a transaction.
@@ -13,7 +16,7 @@ impl HookRunner {
         &self,
         path: &Path,
         direction: &str,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Result<()> {
         let code = fs::read_to_string(path)
             .with_context(|| format!("Failed to read migration {}", path.display()))?;

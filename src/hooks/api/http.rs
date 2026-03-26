@@ -1,11 +1,15 @@
 //! `crap.http` namespace — outbound HTTP via reqwest (blocking, safe in spawn_blocking context).
 
-use std::io::Read as _;
-use std::net::{SocketAddr, ToSocketAddrs};
+use std::{
+    io::Read as _,
+    net::{IpAddr, SocketAddr, ToSocketAddrs},
+    result::Result as StdResult,
+    time::Duration,
+};
 
 use anyhow::Result;
-use mlua::{Lua, Table};
-use reqwest::redirect;
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table};
+use reqwest::{Method, blocking::Client, redirect};
 use url::Url;
 
 const MAX_REDIRECTS: u8 = 10;
@@ -23,7 +27,7 @@ pub(super) fn register_http(
     }
 
     let http_table = lua.create_table()?;
-    let http_request_fn = lua.create_function(move |lua, opts: Table| -> mlua::Result<Table> {
+    let http_request_fn = lua.create_function(move |lua, opts: Table| -> LuaResult<Table> {
         let url: String = opts.get("url")?;
         let method: String = opts
             .get::<Option<String>>("method")?
@@ -31,37 +35,35 @@ pub(super) fn register_http(
             .to_uppercase();
         let timeout: u64 = opts.get::<Option<u64>>("timeout")?.unwrap_or(30);
         let body: Option<String> = opts.get("body")?;
-        let timeout_dur = std::time::Duration::from_secs(timeout);
+        let timeout_dur = Duration::from_secs(timeout);
 
         // Validate method before any network call
         if !ALLOWED_METHODS.contains(&method.as_str()) {
-            return Err(mlua::Error::RuntimeError(format!(
-                "unsupported HTTP method: {method}"
-            )));
+            return Err(RuntimeError(format!("unsupported HTTP method: {method}")));
         }
-        let method: reqwest::Method = method
+        let method: Method = method
             .parse()
-            .map_err(|e| mlua::Error::RuntimeError(format!("invalid HTTP method: {e}")))?;
+            .map_err(|e| RuntimeError(format!("invalid HTTP method: {e}")))?;
 
         // Collect headers
         let headers: Vec<(String, String)> = if let Ok(headers_tbl) = opts.get::<Table>("headers") {
             headers_tbl
                 .pairs::<String, String>()
-                .collect::<mlua::Result<Vec<_>>>()?
+                .collect::<LuaResult<Vec<_>>>()?
         } else {
             Vec::new()
         };
 
         // Resolve + pin DNS (or skip when private networks allowed)
         let pin = if !allow_private_networks {
-            let (host, addr) = validate_url(&url).map_err(mlua::Error::RuntimeError)?;
+            let (host, addr) = validate_url(&url).map_err(RuntimeError)?;
             Some((host, addr))
         } else {
             None
         };
 
         let client = build_client(pin.as_ref().map(|(h, a)| (h.as_str(), *a)), timeout_dur)
-            .map_err(mlua::Error::RuntimeError)?;
+            .map_err(RuntimeError)?;
 
         // Manual redirect loop — re-validate DNS on each hop
         let mut current_url = url;
@@ -82,35 +84,30 @@ pub(super) fn register_http(
 
             let resp = req
                 .send()
-                .map_err(|e| mlua::Error::RuntimeError(format!("HTTP transport error: {e}")))?;
+                .map_err(|e| RuntimeError(format!("HTTP transport error: {e}")))?;
 
             // Check for redirect
             if resp.status().is_redirection() {
                 redirects += 1;
                 if redirects > MAX_REDIRECTS {
-                    return Err(mlua::Error::RuntimeError(
-                        "too many redirects (max 10)".to_string(),
-                    ));
+                    return Err(RuntimeError("too many redirects (max 10)".to_string()));
                 }
                 let location = resp
                     .headers()
                     .get("location")
                     .and_then(|v| v.to_str().ok())
-                    .ok_or_else(|| {
-                        mlua::Error::RuntimeError("redirect without Location header".to_string())
-                    })?
+                    .ok_or_else(|| RuntimeError("redirect without Location header".to_string()))?
                     .to_string();
 
                 // Resolve relative redirect
                 let next_url = Url::parse(&current_url)
                     .and_then(|base| base.join(&location))
-                    .map_err(|e| mlua::Error::RuntimeError(format!("invalid redirect URL: {e}")))?
+                    .map_err(|e| RuntimeError(format!("invalid redirect URL: {e}")))?
                     .to_string();
 
                 // Re-validate + re-pin DNS for the new URL
                 let next_pin = if !allow_private_networks {
-                    let (host, addr) =
-                        validate_url(&next_url).map_err(mlua::Error::RuntimeError)?;
+                    let (host, addr) = validate_url(&next_url).map_err(RuntimeError)?;
                     Some((host, addr))
                 } else {
                     None
@@ -120,7 +117,7 @@ pub(super) fn register_http(
                     next_pin.as_ref().map(|(h, a)| (h.as_str(), *a)),
                     timeout_dur,
                 )
-                .map_err(mlua::Error::RuntimeError)?;
+                .map_err(RuntimeError)?;
                 current_url = next_url;
                 continue;
             }
@@ -140,22 +137,23 @@ pub(super) fn register_http(
             let mut body_buf = String::new();
             resp.take(max_response_bytes)
                 .read_to_string(&mut body_buf)
-                .map_err(|e| {
-                    mlua::Error::RuntimeError(format!("failed to read response body: {e}"))
-                })?;
+                .map_err(|e| RuntimeError(format!("failed to read response body: {e}")))?;
             result.set("body", body_buf)?;
 
             return Ok(result);
         }
     })?;
+
     http_table.set("request", http_request_fn)?;
+
     crap.set("http", http_table)?;
+
     Ok(())
 }
 
 /// Resolve and validate a URL against SSRF policy.
 /// Returns `(hostname, SocketAddr)` — caller pins via `ClientBuilder::resolve()`.
-fn validate_url(url_str: &str) -> std::result::Result<(String, SocketAddr), String> {
+fn validate_url(url_str: &str) -> StdResult<(String, SocketAddr), String> {
     let parsed = Url::parse(url_str).map_err(|e| format!("invalid URL: {e}"))?;
 
     match parsed.scheme() {
@@ -195,13 +193,13 @@ fn validate_url(url_str: &str) -> std::result::Result<(String, SocketAddr), Stri
 }
 
 /// Check whether an IP address is private/loopback/link-local/unspecified.
-fn is_private_ip(ip: std::net::IpAddr) -> bool {
+fn is_private_ip(ip: IpAddr) -> bool {
     if ip.is_loopback() || ip.is_unspecified() {
         return true;
     }
     match ip {
-        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
-        std::net::IpAddr::V6(v6) => {
+        IpAddr::V4(v4) => v4.is_private() || v4.is_link_local(),
+        IpAddr::V6(v6) => {
             // Check IPv6-mapped IPv4 (::ffff:x.x.x.x) — extract the inner v4 and re-check
             if let Some(mapped) = v6.to_ipv4_mapped() {
                 return mapped.is_loopback()
@@ -217,11 +215,8 @@ fn is_private_ip(ip: std::net::IpAddr) -> bool {
 }
 
 /// Build a reqwest blocking client with optional DNS pinning.
-fn build_client(
-    pin: Option<(&str, SocketAddr)>,
-    timeout: std::time::Duration,
-) -> std::result::Result<reqwest::blocking::Client, String> {
-    let mut builder = reqwest::blocking::Client::builder()
+fn build_client(pin: Option<(&str, SocketAddr)>, timeout: Duration) -> StdResult<Client, String> {
+    let mut builder = Client::builder()
         .timeout(timeout)
         .redirect(redirect::Policy::none());
 

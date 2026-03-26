@@ -3,11 +3,11 @@
 use std::{fs, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
-use mlua::{Lua, StdLib};
+use mlua::{Lua, LuaOptions, StdLib};
 
 use crate::{
     config::CrapConfig,
-    core::SharedRegistry,
+    core::{SharedRegistry, registry::Registry},
     hooks::{
         self, HookRunner,
         api::{self, VmLabel},
@@ -75,7 +75,7 @@ impl<'a> HookRunnerBuilder<'a> {
             tracing::info!("HookRunner: registered events: {:?}", registered_events);
         }
 
-        let registry_snapshot = crate::core::registry::Registry::snapshot(&registry);
+        let registry_snapshot = Registry::snapshot(&registry);
 
         Ok(HookRunner {
             pool: Arc::new(VmPool::new(vms)),
@@ -93,7 +93,7 @@ fn create_lua_vm(
     config: &CrapConfig,
     vm_index: usize,
 ) -> Result<Lua> {
-    let lua = Lua::new_with(StdLib::ALL_SAFE, mlua::LuaOptions::default())?;
+    let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
     hooks::sandbox_lua(&lua)?;
     if config.hooks.max_memory > 0 {
         lua.set_memory_limit(config.hooks.max_memory as usize)?;

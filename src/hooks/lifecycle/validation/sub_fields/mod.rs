@@ -5,7 +5,11 @@ use serde_json::{Map as JsonMap, Value};
 
 use crate::core::{FieldDefinition, FieldType, registry::Registry, validate::FieldError};
 
-use super::{checks::is_valid_date_format, custom::run_validate_function_inner};
+use super::{
+    checks::is_valid_date_format,
+    custom::run_validate_function_inner,
+    richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
+};
 
 /// Stable context shared across recursive validation calls for a single row.
 struct RowValidationCtx<'a> {
@@ -214,14 +218,13 @@ fn validate_leaf_sub_field(
         && let Some(registry) = ctx.registry
         && let Some(Value::String(content)) = value
     {
-        super::richtext_attrs::validate_richtext_node_attrs(
-            ctx.lua,
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(ctx.lua, registry, ctx.table)
+                .draft(ctx.is_draft)
+                .build(),
             content,
             qualified_name,
             sf,
-            registry,
-            ctx.table,
-            ctx.is_draft,
             errors,
         );
     }

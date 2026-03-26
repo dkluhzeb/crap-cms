@@ -14,6 +14,8 @@ use crate::{
     },
 };
 
+use super::create::append_default_value;
+
 /// Shared context for ALTER TABLE operations.
 struct AlterCtx<'a> {
     conn: &'a dyn DbConnection,
@@ -101,7 +103,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                     warn_type_mismatch(ctx, &col_name, expected_type);
                 } else {
                     let mut col_def = expected_type.to_string();
-                    super::create::append_default_value(
+                    append_default_value(
                         &mut col_def,
                         &spec.field.default_value,
                         &spec.field.field_type,
@@ -120,7 +122,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
             warn_type_mismatch(ctx, &spec.col_name, expected_type);
         } else {
             let mut col_def = expected_type.to_string();
-            super::create::append_default_value(
+            append_default_value(
                 &mut col_def,
                 &spec.field.default_value,
                 &spec.field.field_type,

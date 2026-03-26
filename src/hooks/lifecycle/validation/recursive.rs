@@ -5,11 +5,13 @@ use serde_json::Value;
 
 use crate::{
     core::{FieldDefinition, FieldType, validate::FieldError},
+    db::{LocaleMode, query::sanitize_locale},
     hooks::ValidationCtx,
 };
 
 use super::{
     checks,
+    richtext_attrs::{RichtextValidationCtx, validate_richtext_node_attrs},
     sub_fields::{SubFieldParams, validate_sub_fields_inner},
 };
 
@@ -152,7 +154,6 @@ fn validate_scalar_field(
     // Localized fields store data in suffixed columns (e.g., slug__en).
     let is_localized = (inherited_localized || field.localized) && ctx.locale_ctx.is_some();
     let col_name = if is_localized {
-        use crate::db::{LocaleMode, query::sanitize_locale};
         let lctx = ctx.locale_ctx.unwrap();
         let locale = match &lctx.mode {
             LocaleMode::Single(l) => l.as_str(),
@@ -179,14 +180,13 @@ fn validate_scalar_field(
         && let Some(registry) = ctx.registry
         && let Some(Value::String(content)) = value
     {
-        super::richtext_attrs::validate_richtext_node_attrs(
-            lua,
+        validate_richtext_node_attrs(
+            &RichtextValidationCtx::builder(lua, registry, ctx.table)
+                .draft(ctx.is_draft)
+                .build(),
             content,
             &data_key,
             field,
-            registry,
-            ctx.table,
-            ctx.is_draft,
             errors,
         );
     }

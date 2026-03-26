@@ -5,12 +5,14 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::Value;
 
+use super::run::FieldWriteCtx;
 use crate::{
     core::{
-        Document, FieldDefinition,
+        Document, FieldDefinition, FieldType,
         collection::Hooks,
         validate::{FieldError, ValidationError},
     },
+    db::DbConnection,
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
@@ -99,7 +101,7 @@ impl HookRunner {
         val_ctx: &ValidationCtx,
     ) -> Result<HookContext> {
         // Field-level before_validate (normalize inputs, CRUD available)
-        let wctx = super::run::FieldWriteCtx::builder(val_ctx.conn)
+        let wctx = FieldWriteCtx::builder(val_ctx.conn)
             .user(ctx.user.as_ref())
             .ui_locale(ctx.ui_locale.as_deref())
             .build();
@@ -124,7 +126,7 @@ impl HookRunner {
 
         // Field-level before_change (post-validation transforms, CRUD available)
         let mut ctx = ctx;
-        let wctx = super::run::FieldWriteCtx::builder(val_ctx.conn)
+        let wctx = FieldWriteCtx::builder(val_ctx.conn)
             .user(ctx.user.as_ref())
             .ui_locale(ctx.ui_locale.as_deref())
             .build();
@@ -152,7 +154,7 @@ impl HookRunner {
         fields: &[FieldDefinition],
         event: HookEvent,
         ctx: HookContext,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Result<HookContext> {
         // Run field-level after_change hooks (with CRUD access)
         if matches!(event, HookEvent::AfterChange) {
@@ -160,7 +162,7 @@ impl HookRunner {
 
             if has_field_hooks {
                 let mut data = ctx.data.clone();
-                let wctx = super::run::FieldWriteCtx::builder(conn)
+                let wctx = FieldWriteCtx::builder(conn)
                     .user(ctx.user.as_ref())
                     .ui_locale(ctx.ui_locale.as_deref())
                     .build();
@@ -277,8 +279,6 @@ fn collect_richtext_fields_recursive<'a>(
     fields: &'a [FieldDefinition],
     prefix: &str,
 ) -> Vec<(&'a FieldDefinition, String)> {
-    use crate::core::FieldType;
-
     let mut out = Vec::new();
     for field in fields {
         match field.field_type {

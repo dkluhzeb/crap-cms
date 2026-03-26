@@ -1,6 +1,7 @@
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
 use std::collections::HashMap;
 
 /// Validate date format and date bounds (min_date / max_date).
@@ -61,8 +62,6 @@ pub(crate) fn check_date_field(
 /// Accepts: YYYY-MM-DD, YYYY-MM-DDTHH:MM, YYYY-MM-DDTHH:MM:SS, full ISO 8601/RFC 3339,
 /// HH:MM (time only), HH:MM:SS, YYYY-MM (month only).
 pub(crate) fn is_valid_date_format(value: &str) -> bool {
-    use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
-
     // Time only: HH:MM or HH:MM:SS
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
         let parts: Vec<&str> = value.split(':').collect();

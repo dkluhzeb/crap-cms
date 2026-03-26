@@ -3,7 +3,7 @@
 use mlua::Lua;
 use serde_json::Value;
 
-use crate::core::Document;
+use crate::{core::Document, db::DbConnection};
 
 /// Result of evaluating a display condition function.
 #[derive(Debug, Clone)]
@@ -77,11 +77,11 @@ impl TxContext {
     /// connection referenced by `conn` is dropped. The pointer is only
     /// dereferenced inside `get_tx_conn`, which runs while the Lua VM is
     /// locked and the connection is still alive.
-    pub(crate) fn new(conn: &dyn crate::db::DbConnection) -> Self {
+    pub(crate) fn new(conn: &dyn DbConnection) -> Self {
         // Decompose the fat pointer into its two raw words.
         // `*const dyn Trait` is a (data_ptr, vtable_ptr) pair.
         // We store them as `usize` so the struct is `'static`.
-        let fat_ptr: *const dyn crate::db::DbConnection = conn;
+        let fat_ptr: *const dyn DbConnection = conn;
         // SAFETY: *const dyn Trait is repr(data_ptr, vtable_ptr) on all
         // supported platforms. We transmute to [usize; 2] to erase lifetimes.
         let [data, vtable]: [usize; 2] = unsafe { std::mem::transmute(fat_ptr) };
@@ -92,7 +92,7 @@ impl TxContext {
     ///
     /// # Safety
     /// Must only be called while the original connection is still alive.
-    pub(crate) fn as_ptr(&self) -> *const dyn crate::db::DbConnection {
+    pub(crate) fn as_ptr(&self) -> *const dyn DbConnection {
         let words: [usize; 2] = [self.data, self.vtable];
         unsafe { std::mem::transmute(words) }
     }
@@ -166,7 +166,7 @@ impl<'a> TxContextGuard<'a> {
     /// Set TxContext, UserContext, and UiLocaleContext, returning a guard that cleans up on drop.
     pub(crate) fn set(
         lua: &'a Lua,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
         user: Option<Document>,
         ui_locale: Option<String>,
     ) -> Self {

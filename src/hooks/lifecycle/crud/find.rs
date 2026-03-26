@@ -1,7 +1,7 @@
 //! Registration of `crap.collections.find`, `find_by_id`, and `count` Lua functions.
 
 use anyhow::Result;
-use mlua::{Lua, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 
 use std::collections::HashSet;
 
@@ -23,7 +23,7 @@ use crate::{
 use super::get_tx_conn;
 
 /// Convert a [`PaginationResult`] into an mlua table.
-fn pagination_result_to_lua_table(lua: &Lua, pr: &PaginationResult) -> mlua::Result<mlua::Table> {
+fn pagination_result_to_lua_table(lua: &Lua, pr: &PaginationResult) -> LuaResult<Table> {
     let t = lua.create_table()?;
     t.set("totalDocs", pr.total_docs)?;
     t.set("limit", pr.limit)?;
@@ -57,7 +57,7 @@ fn pagination_result_to_lua_table(lua: &Lua, pr: &PaginationResult) -> mlua::Res
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_find(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
     pagination_config: &PaginationConfig,
@@ -68,7 +68,7 @@ pub(super) fn register_find(
     let pg_max = pagination_config.max_limit;
     let pg_cursor = pagination_config.is_cursor();
     let find_fn = lua.create_function(
-        move |lua, (collection, query_table): (String, Option<mlua::Table>)| {
+        move |lua, (collection, query_table): (String, Option<Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
             let conn = unsafe { &*conn_ptr };
 
@@ -98,10 +98,10 @@ pub(super) fn register_find(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                r.get_collection(&collection).cloned().ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Collection '{}' not found", collection))
-                })?
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                r.get_collection(&collection)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
             };
 
             let draft: bool = query_table
@@ -156,10 +156,10 @@ pub(super) fn register_find(
                     None,
                     None,
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
+                        return Err(RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => find_query.filters.extend(extra),
                     AccessResult::Allowed => {}
@@ -172,13 +172,13 @@ pub(super) fn register_find(
                 .ui_locale(hook_ui_locale.as_deref())
                 .build();
             run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
-                .map_err(|e| mlua::Error::RuntimeError(format!("before_read hook error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("before_read hook error: {}", e)))?;
 
             query::validate_query_fields(&def, &find_query, locale_ctx.as_ref())
-                .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("find error: {}", e)))?;
 
             let mut docs = query::find(conn, &collection, &def, &find_query, locale_ctx.as_ref())
-                .map_err(|e| mlua::Error::RuntimeError(format!("find error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("find error: {}", e)))?;
             let total = query::count_with_search(
                 conn,
                 &collection,
@@ -187,7 +187,7 @@ pub(super) fn register_find(
                 locale_ctx.as_ref(),
                 find_query.search.as_deref(),
             )
-            .map_err(|e| mlua::Error::RuntimeError(format!("count error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("count error: {}", e)))?;
 
             // Hydrate join table data + populate relationships
             let select_slice = find_query.select.as_deref();
@@ -200,12 +200,12 @@ pub(super) fn register_find(
                     select_slice,
                     locale_ctx.as_ref(),
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("hydrate error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("hydrate error: {}", e)))?;
             }
             if depth > 0 {
                 let r = reg
                     .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
                 let pop_ctx = query::PopulateContext::new(conn, &r, &collection, &def);
                 let mut pop_opts = query::PopulateOpts::new(depth);
                 if let Some(s) = select_slice {
@@ -215,7 +215,7 @@ pub(super) fn register_find(
                     pop_opts = pop_opts.locale_ctx(lc);
                 }
                 query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)
-                    .map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
+                    .map_err(|e| RuntimeError(format!("populate error: {}", e)))?;
             }
             // Assemble sizes for upload collections
             if let Some(ref upload_config) = def.upload
@@ -292,14 +292,14 @@ pub(super) fn register_find(
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_find_by_id(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let reg = registry;
     let lc = locale_config.clone();
     let find_by_id_fn = lua.create_function(
-        move |lua, (collection, id, opts): (String, String, Option<mlua::Table>)| {
+        move |lua, (collection, id, opts): (String, String, Option<Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
             let conn = unsafe { &*conn_ptr };
 
@@ -334,15 +334,15 @@ pub(super) fn register_find_by_id(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                r.get_collection(&collection).cloned().ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Collection '{}' not found", collection))
-                })?
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                r.get_collection(&collection)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
             };
 
             let select: Option<Vec<String>> = opts
                 .as_ref()
-                .and_then(|o| o.get::<mlua::Table>("select").ok())
+                .and_then(|o| o.get::<Table>("select").ok())
                 .map(|t| {
                     t.sequence_values::<String>()
                         .filter_map(|r| r.ok())
@@ -355,7 +355,7 @@ pub(super) fn register_find_by_id(
                 .ui_locale(hook_ui_locale.as_deref())
                 .build();
             run_hooks_inner(lua, &def.hooks, HookEvent::BeforeRead, before_ctx)
-                .map_err(|e| mlua::Error::RuntimeError(format!("before_read hook error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("before_read hook error: {}", e)))?;
 
             // Check access and determine constraints
             let access_constraints = if !override_access {
@@ -369,10 +369,10 @@ pub(super) fn register_find_by_id(
                     Some(&id),
                     None,
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
+                        return Err(RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => Some(extra),
                     AccessResult::Allowed => None,
@@ -391,7 +391,7 @@ pub(super) fn register_find_by_id(
                 access_constraints,
                 use_draft,
             )
-            .map_err(|e| mlua::Error::RuntimeError(format!("find_by_id error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("find_by_id error: {}", e)))?;
 
             if let Some(ref mut d) = doc {
                 let select_slice = select.as_deref();
@@ -399,7 +399,7 @@ pub(super) fn register_find_by_id(
                 if depth > 0 {
                     let r = reg
                         .read()
-                        .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
                     let mut visited = HashSet::new();
                     let pop_ctx = query::PopulateContext::new(conn, &r, &collection, &def);
                     let mut pop_opts = query::PopulateOpts::new(depth);
@@ -410,7 +410,7 @@ pub(super) fn register_find_by_id(
                         pop_opts = pop_opts.locale_ctx(lc);
                     }
                     query::populate_relationships(&pop_ctx, d, &mut visited, &pop_opts)
-                        .map_err(|e| mlua::Error::RuntimeError(format!("populate error: {}", e)))?;
+                        .map_err(|e| RuntimeError(format!("populate error: {}", e)))?;
                 }
                 if let Some(ref upload_config) = def.upload
                     && upload_config.enabled
@@ -458,7 +458,7 @@ pub(super) fn register_find_by_id(
 #[cfg(not(tarpaulin_include))]
 pub(super) fn register_count(
     lua: &Lua,
-    table: &mlua::Table,
+    table: &Table,
     registry: SharedRegistry,
     locale_config: &LocaleConfig,
 ) -> Result<()> {
@@ -482,10 +482,10 @@ pub(super) fn register_count(
             let def = {
                 let r = reg
                     .read()
-                    .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock: {}", e)))?;
-                r.get_collection(&collection).cloned().ok_or_else(|| {
-                    mlua::Error::RuntimeError(format!("Collection '{}' not found", collection))
-                })?
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                r.get_collection(&collection)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
             };
 
             let draft: bool = query_table
@@ -520,10 +520,10 @@ pub(super) fn register_count(
                     None,
                     None,
                 )
-                .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
+                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
+                        return Err(RuntimeError("Read access denied".into()));
                     }
                     AccessResult::Constrained(extra) => filters.extend(extra),
                     AccessResult::Allowed => {}
@@ -538,7 +538,7 @@ pub(super) fn register_count(
                 locale_ctx.as_ref(),
                 search.as_deref(),
             )
-            .map_err(|e| mlua::Error::RuntimeError(format!("count error: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("count error: {}", e)))?;
 
             Ok(count)
         },

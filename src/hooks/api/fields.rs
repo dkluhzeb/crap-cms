@@ -40,6 +40,7 @@ pub(super) fn register_fields(lua: &Lua, crap: &Table) -> Result<()> {
     }
 
     crap.set("fields", fields_table)?;
+
     Ok(())
 }
 

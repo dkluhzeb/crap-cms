@@ -1,7 +1,7 @@
 //! Standalone hook execution functions (inner implementations and helpers).
 
 use anyhow::{Context as _, Result, anyhow, bail};
-use mlua::{Lua, Value};
+use mlua::{Function as LuaFunction, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use std::collections::{HashMap, HashSet};
 
@@ -13,7 +13,7 @@ use crate::{
         api,
         lifecycle::{
             DisplayConditionResult, FieldHookEvent, HookEvent, UiLocaleContext, UserContext,
-            context::HookContext, evaluate_condition_table,
+            context::HookContext, converters::document_to_lua_table, evaluate_condition_table,
         },
     },
 };
@@ -153,7 +153,7 @@ pub(crate) fn get_hook_refs<'a>(hooks: &'a Hooks, event: &HookEvent) -> &'a [Str
 
 /// Check if any globally registered hooks exist for the given event.
 pub(crate) fn has_registered_hooks(lua: &Lua, event: &str) -> bool {
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return false,
     };
@@ -205,7 +205,7 @@ pub(crate) fn has_field_hooks_for_event(
 /// that have at least one registered handler. Called once during HookRunner::new().
 pub(crate) fn scan_registered_events(lua: &Lua) -> HashSet<String> {
     let mut events = HashSet::new();
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return events,
     };
@@ -233,7 +233,7 @@ pub(crate) fn call_before_broadcast_hook(
     match result {
         Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
-            let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+            let data_result: LuaResult<Table> = tbl.get("data");
 
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
@@ -258,12 +258,12 @@ pub(crate) fn call_registered_before_broadcast(
     lua: &Lua,
     mut context: HookContext,
 ) -> Result<Option<HookContext>> {
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return Ok(Some(context)),
     };
 
-    let list: mlua::Table = match event_hooks.get::<Value>("before_broadcast") {
+    let list: Table = match event_hooks.get::<Value>("before_broadcast") {
         Ok(Value::Table(t)) => t,
         _ => return Ok(Some(context)),
     };
@@ -275,7 +275,7 @@ pub(crate) fn call_registered_before_broadcast(
     }
 
     for i in 1..=len {
-        let func: mlua::Function = list.raw_get(i).with_context(|| {
+        let func: LuaFunction = list.raw_get(i).with_context(|| {
             format!(
                 "registered before_broadcast hook at index {} is not a function",
                 i
@@ -289,7 +289,7 @@ pub(crate) fn call_registered_before_broadcast(
         match result {
             Value::Boolean(false) | Value::Nil => return Ok(None),
             Value::Table(tbl) => {
-                let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+                let data_result: LuaResult<Table> = tbl.get("data");
 
                 if let Ok(data_tbl) = data_result {
                     let mut new_data = HashMap::new();
@@ -315,12 +315,12 @@ pub(crate) fn call_registered_hooks(
     event: &HookEvent,
     mut context: HookContext,
 ) -> Result<HookContext> {
-    let event_hooks: mlua::Table = match lua.named_registry_value("_crap_event_hooks") {
+    let event_hooks: Table = match lua.named_registry_value("_crap_event_hooks") {
         Ok(t) => t,
         Err(_) => return Ok(context),
     };
 
-    let list: mlua::Table = match event_hooks.get::<Value>(event.as_str()) {
+    let list: Table = match event_hooks.get::<Value>(event.as_str()) {
         Ok(Value::Table(t)) => t,
         _ => return Ok(context),
     };
@@ -332,7 +332,7 @@ pub(crate) fn call_registered_hooks(
     }
 
     for i in 1..=len {
-        let func: mlua::Function = list
+        let func: LuaFunction = list
             .raw_get(i)
             .with_context(|| format!("registered hook at index {} is not a function", i))?;
 
@@ -348,7 +348,7 @@ pub(crate) fn call_registered_hooks(
         let result: Value = func.call(ctx_table)?;
 
         if let Value::Table(tbl) = result {
-            let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+            let data_result: LuaResult<Table> = tbl.get("data");
 
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();
@@ -460,7 +460,7 @@ pub(crate) fn call_field_hook_ref(
     if let Some(user_ctx) = lua.app_data_ref::<UserContext>()
         && let Some(ref user) = user_ctx.0
     {
-        let user_table = crate::hooks::lifecycle::converters::document_to_lua_table(lua, user)?;
+        let user_table = document_to_lua_table(lua, user)?;
         ctx_table.set("user", user_table)?;
     }
     if let Some(locale_ctx) = lua.app_data_ref::<UiLocaleContext>()
@@ -481,8 +481,8 @@ pub(crate) fn call_field_hook_ref(
 ///
 /// Tries file-per-hook first: `require("hooks.posts.auto_slug")` → function.
 /// Falls back to module pattern: `require("hooks.posts")["auto_slug"]`.
-pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::Function> {
-    let require: mlua::Function = lua.globals().get("require")?;
+pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<LuaFunction> {
+    let require: LuaFunction = lua.globals().get("require")?;
 
     // Try file-per-hook: require("hooks.posts.auto_slug") → function
     if let Ok(Value::Function(f)) = require.call::<Value>(hook_ref) {
@@ -498,10 +498,10 @@ pub(crate) fn resolve_hook_function(lua: &Lua, hook_ref: &str) -> Result<mlua::F
     let module_path = parts[..parts.len() - 1].join(".");
     let func_name = parts[parts.len() - 1];
 
-    let module: mlua::Table = require
+    let module: Table = require
         .call(module_path.clone())
         .with_context(|| format!("Failed to require module '{}'", module_path))?;
-    let func: mlua::Function = module.get(func_name).with_context(|| {
+    let func: LuaFunction = module.get(func_name).with_context(|| {
         format!(
             "Function '{}' not found in module '{}'",
             func_name, module_path
@@ -529,7 +529,7 @@ pub(crate) fn call_hook_ref(
     match result {
         Value::Table(tbl) => {
             let mut new_ctx = context;
-            let data_result: mlua::Result<mlua::Table> = tbl.get("data");
+            let data_result: LuaResult<Table> = tbl.get("data");
 
             if let Ok(data_tbl) = data_result {
                 let mut new_data = HashMap::new();

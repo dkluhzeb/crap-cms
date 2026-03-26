@@ -1,11 +1,11 @@
 //! Pure Lua <-> Rust type conversion helpers (no DB access, no side effects).
 
-use mlua::{Lua, Value};
+use mlua::{Error::RuntimeError, Lua, Result as LuaResult, Table, Value};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 
 use crate::{
-    core::{FieldDefinition, FieldType},
+    core::{Document, FieldDefinition, FieldType},
     db::{Filter, FilterClause, FilterOp, FindQuery, query::cursor::CursorData},
     hooks::api,
 };
@@ -17,8 +17,8 @@ use crate::{
 /// which only handles scalars.
 pub(crate) fn lua_table_to_json_map(
     lua: &Lua,
-    tbl: &mlua::Table,
-) -> mlua::Result<HashMap<String, JsonValue>> {
+    tbl: &Table,
+) -> LuaResult<HashMap<String, JsonValue>> {
     let mut map = HashMap::new();
     for pair in tbl.pairs::<String, Value>() {
         let (k, v) = pair?;
@@ -34,8 +34,8 @@ pub(crate) fn lua_table_to_json_map(
 /// Convert a Lua query table to a FindQuery.
 /// Supports both simple filters (`{ status = "published" }`) and operator-based
 /// filters (`{ title = { contains = "hello" } }`).
-pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQuery, Option<i64>)> {
-    let filters = if let Ok(filters_tbl) = tbl.get::<mlua::Table>("where") {
+pub(crate) fn lua_table_to_find_query(tbl: &Table) -> LuaResult<(FindQuery, Option<i64>)> {
+    let filters = if let Ok(filters_tbl) = tbl.get::<Table>("where") {
         let mut clauses = Vec::new();
         for pair in filters_tbl.pairs::<String, Value>() {
             let (field, value) = pair?;
@@ -44,7 +44,7 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQu
             if field == "or" {
                 if let Value::Table(or_array) = value {
                     let mut groups = Vec::new();
-                    for element in or_array.sequence_values::<mlua::Table>() {
+                    for element in or_array.sequence_values::<Table>() {
                         let tbl = element?;
                         let mut group = Vec::new();
                         for inner_pair in tbl.pairs::<String, Value>() {
@@ -138,7 +138,7 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQu
     } else {
         tbl.get("offset").ok()
     };
-    let select: Option<Vec<String>> = tbl.get::<mlua::Table>("select").ok().map(|t| {
+    let select: Option<Vec<String>> = tbl.get::<Table>("select").ok().map(|t| {
         t.sequence_values::<String>()
             .filter_map(|r| r.ok())
             .collect()
@@ -146,15 +146,13 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQu
 
     let after_cursor = match tbl.get::<Option<String>>("after_cursor").ok().flatten() {
         Some(s) => Some(
-            CursorData::decode(&s)
-                .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?,
+            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {}", e)))?,
         ),
         None => None,
     };
     let before_cursor = match tbl.get::<Option<String>>("before_cursor").ok().flatten() {
         Some(s) => Some(
-            CursorData::decode(&s)
-                .map_err(|e| mlua::Error::RuntimeError(format!("Invalid cursor: {}", e)))?,
+            CursorData::decode(&s).map_err(|e| RuntimeError(format!("Invalid cursor: {}", e)))?,
         ),
         None => None,
     };
@@ -174,14 +172,14 @@ pub(crate) fn lua_table_to_find_query(tbl: &mlua::Table) -> mlua::Result<(FindQu
 }
 
 /// Parse a Lua filter operator name + value into a FilterOp.
-pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> mlua::Result<FilterOp> {
-    let to_string = |v: &Value| -> mlua::Result<String> {
+pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> LuaResult<FilterOp> {
+    let to_string = |v: &Value| -> LuaResult<String> {
         match v {
             Value::String(s) => Ok(s.to_str()?.to_string()),
             Value::Integer(i) => Ok(i.to_string()),
             Value::Number(n) => Ok(n.to_string()),
             Value::Boolean(b) => Ok(b.to_string()),
-            _ => Err(mlua::Error::RuntimeError(
+            _ => Err(RuntimeError(
                 "filter value must be string, number, or boolean".into(),
             )),
         }
@@ -204,9 +202,7 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> mlua::Result<
                 }
                 Ok(FilterOp::In(vals))
             } else {
-                Err(mlua::Error::RuntimeError(
-                    "'in' operator requires a table/array".into(),
-                ))
+                Err(RuntimeError("'in' operator requires a table/array".into()))
             }
         }
         "not_in" => {
@@ -217,14 +213,14 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> mlua::Result<
                 }
                 Ok(FilterOp::NotIn(vals))
             } else {
-                Err(mlua::Error::RuntimeError(
+                Err(RuntimeError(
                     "'not_in' operator requires a table/array".into(),
                 ))
             }
         }
         "exists" => Ok(FilterOp::Exists),
         "not_exists" => Ok(FilterOp::NotExists),
-        _ => Err(mlua::Error::RuntimeError(format!(
+        _ => Err(RuntimeError(format!(
             "unknown filter operator '{}'",
             op_name
         ))),
@@ -232,7 +228,7 @@ pub(crate) fn lua_parse_filter_op(op_name: &str, value: &Value) -> mlua::Result<
 }
 
 /// Convert a Lua data table to a HashMap<String, String> for create/update.
-pub(crate) fn lua_table_to_hashmap(tbl: &mlua::Table) -> mlua::Result<HashMap<String, String>> {
+pub(crate) fn lua_table_to_hashmap(tbl: &Table) -> LuaResult<HashMap<String, String>> {
     let mut map = HashMap::new();
     for pair in tbl.pairs::<String, Value>() {
         let (k, v) = pair?;
@@ -252,15 +248,15 @@ pub(crate) fn lua_table_to_hashmap(tbl: &mlua::Table) -> mlua::Result<HashMap<St
 /// Flatten group fields from a Lua data table into the data map.
 /// Converts `seo = { meta_title = "X" }` → `seo__meta_title = "X"`.
 pub(crate) fn flatten_lua_groups(
-    tbl: &mlua::Table,
+    tbl: &Table,
     fields: &[FieldDefinition],
     data: &mut HashMap<String, String>,
-) -> mlua::Result<()> {
+) -> LuaResult<()> {
     for field in fields {
         if field.field_type != FieldType::Group {
             continue;
         }
-        if let Ok(sub_table) = tbl.get::<mlua::Table>(field.name.as_str()) {
+        if let Ok(sub_table) = tbl.get::<Table>(field.name.as_str()) {
             for sub in &field.fields {
                 if let Ok(val) = sub_table.get::<Value>(sub.name.as_str()) {
                     let s = match val {
@@ -280,10 +276,7 @@ pub(crate) fn flatten_lua_groups(
 }
 
 /// Convert a Document to a Lua table.
-pub(crate) fn document_to_lua_table(
-    lua: &Lua,
-    doc: &crate::core::Document,
-) -> mlua::Result<mlua::Table> {
+pub(crate) fn document_to_lua_table(lua: &Lua, doc: &Document) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
     tbl.set("id", &*doc.id)?;
     for (k, v) in &doc.fields {
@@ -301,9 +294,9 @@ pub(crate) fn document_to_lua_table(
 /// Convert a find result (documents + total) to a Lua table.
 pub(crate) fn find_result_to_lua(
     lua: &Lua,
-    docs: &[crate::core::Document],
-    pagination: mlua::Table,
-) -> mlua::Result<mlua::Table> {
+    docs: &[Document],
+    pagination: Table,
+) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
     let docs_tbl = lua.create_table()?;
     for (i, doc) in docs.iter().enumerate() {

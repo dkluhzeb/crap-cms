@@ -11,9 +11,11 @@ pub(super) fn localized_string_to_lua(lua: &Lua, ls: &LocalizedString) -> mlua::
         LocalizedString::Plain(s) => Ok(Value::String(lua.create_string(s)?)),
         LocalizedString::Localized(map) => {
             let tbl = lua.create_table()?;
+
             for (k, v) in map {
                 tbl.set(k.as_str(), v.as_str())?;
             }
+
             Ok(Value::Table(tbl))
         }
     }
@@ -34,17 +36,21 @@ pub fn lua_to_json(_lua: &Lua, value: &Value) -> mlua::Result<JsonValue> {
 
             if len > 0 {
                 let mut arr = Vec::new();
+
                 for i in 1..=len {
                     let v: Value = t.raw_get(i)?;
                     arr.push(lua_to_json(_lua, &v)?);
                 }
+
                 Ok(JsonValue::Array(arr))
             } else {
                 let mut map = JsonMap::new();
+
                 for pair in t.clone().pairs::<String, Value>() {
                     let (k, v) = pair?;
                     map.insert(k, lua_to_json(_lua, &v)?);
                 }
+
                 Ok(JsonValue::Object(map))
             }
         }
@@ -69,16 +75,20 @@ pub fn json_to_lua(lua: &Lua, value: &JsonValue) -> mlua::Result<Value> {
         JsonValue::String(s) => Ok(Value::String(lua.create_string(s)?)),
         JsonValue::Array(arr) => {
             let tbl = lua.create_table()?;
+
             for (i, v) in arr.iter().enumerate() {
                 tbl.set(i + 1, json_to_lua(lua, v)?)?;
             }
+
             Ok(Value::Table(tbl))
         }
         JsonValue::Object(map) => {
             let tbl = lua.create_table()?;
+
             for (k, v) in map {
                 tbl.set(k.as_str(), json_to_lua(lua, v)?)?;
             }
+
             Ok(Value::Table(tbl))
         }
     }

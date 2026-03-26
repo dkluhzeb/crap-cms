@@ -1,22 +1,27 @@
 //! Register `crap.env` — read-only env var access.
 
 use anyhow::Result;
-use mlua::{Lua, Table};
+use mlua::{Lua, Result as LuaResult, Table};
+use std::env;
 
 pub(super) fn register_env(lua: &Lua, crap: &Table) -> Result<()> {
     let env_table = lua.create_table()?;
-    let env_get_fn = lua.create_function(|_, key: String| -> mlua::Result<Option<String>> {
+    let env_get_fn = lua.create_function(|_, key: String| -> LuaResult<Option<String>> {
         // Only allow CRAP_ and LUA_ prefixed environment variables
         if !key.starts_with("CRAP_") && !key.starts_with("LUA_") {
             return Ok(None);
         }
-        match std::env::var(&key) {
+
+        match env::var(&key) {
             Ok(val) => Ok(Some(val)),
             Err(_) => Ok(None),
         }
     })?;
+
     env_table.set("get", env_get_fn)?;
+
     crap.set("env", env_table)?;
+
     Ok(())
 }
 

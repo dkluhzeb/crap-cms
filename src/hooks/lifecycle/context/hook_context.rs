@@ -1,7 +1,7 @@
 //! Hook context types and Rust↔Lua marshalling.
 
-use mlua::{Lua, Value};
-use serde_json::Value as JsonValue;
+use mlua::{Lua, Result as LuaResult, Table, Value};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
 
 use crate::{
@@ -43,7 +43,7 @@ impl HookContext {
     }
 
     /// Convert this context to a Lua table for passing to hook functions.
-    pub(crate) fn to_lua_table(&self, lua: &Lua) -> mlua::Result<mlua::Table> {
+    pub(crate) fn to_lua_table(&self, lua: &Lua) -> LuaResult<Table> {
         let ctx_table = lua.create_table()?;
         ctx_table.set("collection", self.collection.as_str())?;
         ctx_table.set("operation", self.operation.as_str())?;
@@ -115,7 +115,7 @@ impl HookContext {
     }
 
     /// Read the `context` table from a returned Lua hook table, replacing `self.context`.
-    pub(crate) fn read_context_back(&mut self, lua: &Lua, tbl: &mlua::Table) {
+    pub(crate) fn read_context_back(&mut self, lua: &Lua, tbl: &Table) {
         if let Ok(context_tbl) = tbl.get::<mlua::Table>("context") {
             self.context.clear();
             for (k, v) in context_tbl.pairs::<String, Value>().flatten() {
@@ -130,7 +130,7 @@ impl HookContext {
 /// Recursively flatten a group object into `prefix__key` pairs for the string map.
 fn flatten_group_to_map(
     prefix: &str,
-    obj: &serde_json::Map<String, JsonValue>,
+    obj: &JsonMap<String, JsonValue>,
     map: &mut HashMap<String, String>,
 ) {
     for (sub_key, sub_val) in obj {

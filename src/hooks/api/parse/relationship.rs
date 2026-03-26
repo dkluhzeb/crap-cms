@@ -1,6 +1,6 @@
 //! Parsing functions for field relationship configuration.
 
-use mlua::Table;
+use mlua::{Result as LuaResult, Table};
 
 use crate::core::{FieldType, RelationshipConfig};
 
@@ -11,25 +11,33 @@ use super::helpers::*;
 pub(super) fn parse_field_relationship(
     field_tbl: &Table,
     field_type: &FieldType,
-) -> mlua::Result<Option<RelationshipConfig>> {
+) -> LuaResult<Option<RelationshipConfig>> {
     if *field_type == FieldType::Relationship {
         if let Ok(rel_tbl) = get_table(field_tbl, "relationship") {
             let (collection, polymorphic) = parse_relationship_collection(&rel_tbl);
+
             let has_many = get_bool(&rel_tbl, "has_many", false);
+
             let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
+
             let mut rc = RelationshipConfig::new(collection, has_many);
+
             rc.max_depth = max_depth;
             rc.polymorphic = polymorphic.into_iter().map(|s| s.into()).collect();
+
             Ok(Some(rc))
         } else {
             // Legacy flat syntax: relation_to + has_many on the field itself
             Ok(get_string(field_tbl, "relation_to").map(|collection| {
                 let field_name = get_string(field_tbl, "name").unwrap_or_default();
+
                 tracing::warn!(
                     "Field '{}': 'relation_to' is deprecated. Use 'relationship = {{ collection = \"{}\" }}' instead.",
                     field_name, collection
                 );
+
                 let has_many = get_bool(field_tbl, "has_many", false);
+
                 RelationshipConfig::new(collection, has_many)
             }))
         }
@@ -37,20 +45,29 @@ pub(super) fn parse_field_relationship(
         // Upload: relationship config from relation_to or relationship table
         if let Ok(rel_tbl) = get_table(field_tbl, "relationship") {
             let collection = get_string(&rel_tbl, "collection").unwrap_or_default();
+
             let has_many = get_bool(&rel_tbl, "has_many", false);
+
             let max_depth = rel_tbl.get::<Option<i32>>("max_depth").ok().flatten();
+
             let mut rc = RelationshipConfig::new(collection, has_many);
+
             rc.max_depth = max_depth;
+
             Ok(Some(rc))
         } else {
             let collection = get_string(field_tbl, "relation_to");
+
             let has_many = get_bool(field_tbl, "has_many", false);
+
             Ok(collection.map(|collection| {
                 let field_name = get_string(field_tbl, "name").unwrap_or_default();
+
                 tracing::warn!(
                     "Field '{}': 'relation_to' is deprecated. Use 'relationship = {{ collection = \"{}\" }}' instead.",
                     field_name, collection
                 );
+
                 RelationshipConfig::new(collection, has_many)
             }))
         }

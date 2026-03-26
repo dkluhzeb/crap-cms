@@ -1,7 +1,7 @@
 //! Lua table serializers for FieldDefinition.
 //! Produces round-trip compatible tables that can be passed back to parse_fields().
 
-use mlua::{Lua, Table};
+use mlua::{Lua, Result as LuaResult, Table};
 use serde_json::Value as JsonValue;
 
 use crate::core::{
@@ -12,7 +12,7 @@ use crate::core::{
 use super::{admin::field_admin_to_lua, helpers::localized_string_to_lua};
 
 /// Convert a FieldDefinition to a full Lua table compatible with parse_fields().
-pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Result<Table> {
+pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
     tbl.set("name", f.name.as_str())?;
     tbl.set("type", f.field_type.as_str())?;
@@ -61,6 +61,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Resul
     // options (select fields)
     if !f.options.is_empty() {
         let opts = lua.create_table()?;
+
         for (i, opt) in f.options.iter().enumerate() {
             let o = lua.create_table()?;
             o.set("label", localized_string_to_lua(lua, &opt.label)?)?;
@@ -165,7 +166,7 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> mlua::Resul
 }
 
 /// Convert a `FieldHooks` to a Lua table. Returns `None` if no hooks are set.
-fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> mlua::Result<Option<Table>> {
+fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> LuaResult<Option<Table>> {
     let tbl = lua.create_table()?;
     let mut has_any = false;
     let pairs: &[(&str, &[String])] = &[
@@ -174,6 +175,7 @@ fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> mlua::Result<Option<Tabl
         ("after_change", &hooks.after_change),
         ("after_read", &hooks.after_read),
     ];
+
     for (key, list) in pairs {
         if !list.is_empty() {
             let arr = lua.create_table()?;
@@ -184,11 +186,12 @@ fn field_hooks_to_lua(lua: &Lua, hooks: &FieldHooks) -> mlua::Result<Option<Tabl
             has_any = true;
         }
     }
+
     Ok(if has_any { Some(tbl) } else { None })
 }
 
 /// Convert a `FieldAccess` to a Lua table. Returns `None` if no access rules are set.
-fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> mlua::Result<Option<Table>> {
+fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> LuaResult<Option<Table>> {
     let tbl = lua.create_table()?;
     let mut has_any = false;
 
@@ -204,6 +207,7 @@ fn field_access_to_lua(lua: &Lua, access: &FieldAccess) -> mlua::Result<Option<T
         tbl.set("update", s.as_str())?;
         has_any = true;
     }
+
     Ok(if has_any { Some(tbl) } else { None })
 }
 

@@ -95,9 +95,14 @@ class CrapConditions extends HTMLElement {
           if (name && ref) refs[name] = ref;
         });
 
+        const csrf = this._getCsrf();
+        /** @type {Record<string, string>} */
+        const headers = { 'Content-Type': 'application/json' };
+        if (csrf) headers['X-CSRF-Token'] = csrf;
+
         fetch('/admin/collections/' + slug + '/evaluate-conditions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ form_data: data, conditions: refs }),
         })
         .then((r) => r.json())
@@ -171,6 +176,15 @@ class CrapConditions extends HTMLElement {
       }
     );
     return data;
+  }
+
+  /**
+   * Read the CSRF cookie value.
+   * @returns {string|null}
+   */
+  _getCsrf() {
+    const m = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
+    return m ? m[1] : null;
   }
 
   /**

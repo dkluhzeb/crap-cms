@@ -6,18 +6,21 @@ pub mod lifecycle;
 pub use lifecycle::{HookContext, HookEvent, HookRunner, ValidationCtx};
 
 use anyhow::{Context as _, Result};
-use mlua::{Lua, StdLib};
-use std::path::Path;
+use mlua::{Lua, LuaOptions, StdLib, Table};
+use std::{fs, path::Path};
 
-use crate::{config::CrapConfig, core::SharedRegistry};
+use crate::{
+    config::CrapConfig,
+    core::{Registry, SharedRegistry},
+};
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
 /// and run init.lua. Returns a populated SharedRegistry.
 pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry> {
-    let lua = Lua::new_with(StdLib::ALL_SAFE, mlua::LuaOptions::default())?;
+    let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default())?;
     sandbox_lua(&lua)?;
     lua.set_app_data(api::VmLabel("init".to_string()));
-    let registry = crate::core::Registry::shared();
+    let registry = Registry::shared();
 
     // Set up package paths rooted at config dir
     setup_package_paths(&lua, config_dir)?;
@@ -55,7 +58,7 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
 
     if has_init {
         tracing::debug!("[lua:init] Executing init.lua");
-        let code = std::fs::read_to_string(&init_path)
+        let code = fs::read_to_string(&init_path)
             .with_context(|| format!("Failed to read {}", init_path.display()))?;
         lua.load(&code)
             .set_name(init_path.to_string_lossy())
@@ -95,7 +98,7 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
     // ALL_SAFE excludes `os`, `io`, `ffi`, and `debug`.
     // Re-add os with only safe functions.
     lua.load_std_libs(StdLib::OS)?;
-    let os: mlua::Table = lua.globals().get("os")?;
+    let os: Table = lua.globals().get("os")?;
     os.set("execute", mlua::Value::Nil)?;
     os.set("remove", mlua::Value::Nil)?;
     os.set("rename", mlua::Value::Nil)?;
@@ -115,7 +118,7 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
 /// Load and execute all `.lua` files in a directory (used for `collections/` and `globals/`).
 /// Returns the number of files loaded.
 pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)
+    let mut entries: Vec<_> = fs::read_dir(dir)
         .with_context(|| format!("Failed to read {} directory: {}", kind, dir.display()))?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "lua"))
@@ -136,7 +139,7 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
             .unwrap_or_else(|| "lua".into());
         tracing::debug!("[lua:{label}] Loading {kind}: {name}");
 
-        let code = std::fs::read_to_string(&path)
+        let code = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read {}", path.display()))?;
         lua.load(&code)
             .set_name(path.to_string_lossy())

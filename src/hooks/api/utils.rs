@@ -3,8 +3,11 @@
 
 use anyhow::{Context as _, Result};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-use mlua::{Function, Lua, Table};
+use mlua::{Error::RuntimeError, Function, Lua, Result as LuaResult, Table, Value as LuaValue};
+use nanoid::nanoid;
 use serde_json::Value;
+
+use super::{json_to_lua, lua_to_json};
 
 /// Pure Lua table and string helpers, loaded onto `crap.util` after the table is set.
 const LUA_UTIL_HELPERS: &str = r#"
@@ -150,20 +153,21 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
     let slugify_fn = lua.create_function(|_, s: String| Ok(slugify(&s)))?;
     util_table.set("slugify", slugify_fn)?;
 
-    let nanoid_fn = lua.create_function(|_, ()| Ok(nanoid::nanoid!()))?;
+    let nanoid_fn = lua.create_function(|_, ()| Ok(nanoid!()))?;
     util_table.set("nanoid", nanoid_fn)?;
 
-    let json_encode_fn: Function = lua.create_function(|lua, value: mlua::Value| {
-        let json_value = super::lua_to_json(lua, &value)?;
+    let json_encode_fn: Function = lua.create_function(|lua, value: LuaValue| {
+        let json_value = lua_to_json(lua, &value)?;
+
         serde_json::to_string(&json_value)
-            .map_err(|e| mlua::Error::RuntimeError(format!("JSON encode error: {}", e)))
+            .map_err(|e| RuntimeError(format!("JSON encode error: {}", e)))
     })?;
     util_table.set("json_encode", json_encode_fn.clone())?;
 
     let json_decode_fn: Function = lua.create_function(|lua, s: String| {
         let value: Value = serde_json::from_str(&s)
-            .map_err(|e| mlua::Error::RuntimeError(format!("JSON decode error: {}", e)))?;
-        super::json_to_lua(lua, &value)
+            .map_err(|e| RuntimeError(format!("JSON decode error: {}", e)))?;
+        json_to_lua(lua, &value)
     })?;
     util_table.set("json_decode", json_decode_fn.clone())?;
 
@@ -176,14 +180,14 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
     // Date helpers (Rust, using chrono)
     {
         let date_now_fn =
-            lua.create_function(|_, ()| -> mlua::Result<String> { Ok(Utc::now().to_rfc3339()) })?;
+            lua.create_function(|_, ()| -> LuaResult<String> { Ok(Utc::now().to_rfc3339()) })?;
         util_table.set("date_now", date_now_fn)?;
 
         let date_timestamp_fn =
-            lua.create_function(|_, ()| -> mlua::Result<i64> { Ok(Utc::now().timestamp()) })?;
+            lua.create_function(|_, ()| -> LuaResult<i64> { Ok(Utc::now().timestamp()) })?;
         util_table.set("date_timestamp", date_timestamp_fn)?;
 
-        let date_parse_fn = lua.create_function(|_, s: String| -> mlua::Result<i64> {
+        let date_parse_fn = lua.create_function(|_, s: String| -> LuaResult<i64> {
             // Try RFC 3339 first
             if let Ok(dt) = DateTime::parse_from_rfc3339(&s) {
                 return Ok(dt.timestamp());
@@ -202,27 +206,24 @@ pub(super) fn register_util(lua: &Lua, crap: &Table) -> Result<()> {
                     .and_utc()
                     .timestamp());
             }
-            Err(mlua::Error::RuntimeError(format!(
-                "could not parse date: {}",
-                s
-            )))
+            Err(RuntimeError(format!("could not parse date: {}", s)))
         })?;
         util_table.set("date_parse", date_parse_fn)?;
 
         let date_format_fn =
-            lua.create_function(|_, (ts, fmt): (i64, String)| -> mlua::Result<String> {
+            lua.create_function(|_, (ts, fmt): (i64, String)| -> LuaResult<String> {
                 let dt = DateTime::from_timestamp(ts, 0)
-                    .ok_or_else(|| mlua::Error::RuntimeError("invalid timestamp".into()))?;
+                    .ok_or_else(|| RuntimeError("invalid timestamp".into()))?;
                 Ok(dt.format(&fmt).to_string())
             })?;
         util_table.set("date_format", date_format_fn)?;
 
-        let date_add_fn = lua
-            .create_function(|_, (ts, secs): (i64, i64)| -> mlua::Result<i64> { Ok(ts + secs) })?;
+        let date_add_fn =
+            lua.create_function(|_, (ts, secs): (i64, i64)| -> LuaResult<i64> { Ok(ts + secs) })?;
         util_table.set("date_add", date_add_fn)?;
 
         let date_diff_fn =
-            lua.create_function(|_, (a, b): (i64, i64)| -> mlua::Result<i64> { Ok(a - b) })?;
+            lua.create_function(|_, (a, b): (i64, i64)| -> LuaResult<i64> { Ok(a - b) })?;
         util_table.set("date_diff", date_diff_fn)?;
     }
 

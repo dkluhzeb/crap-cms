@@ -12,6 +12,7 @@ pub use checks::evaluate_condition_table;
 
 use std::collections::HashMap;
 
+use mlua::Lua;
 use serde_json::Value;
 
 use crate::{
@@ -94,7 +95,7 @@ impl<'a> ValidationCtxBuilder<'a> {
 /// Inner implementation of `validate_fields` — operates on a locked `&Lua`.
 /// Used by both `HookRunner::validate_fields` and Lua CRUD closures.
 pub(crate) fn validate_fields_inner(
-    lua: &mlua::Lua,
+    lua: &Lua,
     fields: &[FieldDefinition],
     data: &HashMap<String, Value>,
     ctx: &ValidationCtx,

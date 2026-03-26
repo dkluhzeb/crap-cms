@@ -1,8 +1,9 @@
 //! Registers `crap.richtext` — custom ProseMirror node registration and rendering.
 
-use mlua::{Function, Lua, Table, Value};
+use mlua::{Error::RuntimeError, Function, Lua, Table, Value};
 use serde_json::Value as JsonValue;
 
+use super::parse::fields::parse_fields;
 use crate::core::{
     SharedRegistry,
     richtext::{RichtextNodeDef, render_html_custom_nodes, render_prosemirror_to_html},
@@ -26,7 +27,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
     let register_node_fn = lua.create_function(move |_lua, (name, spec): (String, Table)| {
         // Validate name: alphanumeric + underscore
         if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
-            return Err(mlua::Error::RuntimeError(format!(
+            return Err(RuntimeError(format!(
                 "Invalid node name '{}': must be non-empty and contain only alphanumeric characters and underscores",
                 name
             )));
@@ -38,13 +39,13 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
 
         // Parse attrs using the shared field parser (crap.fields.* factory syntax)
         let attrs = if let Ok(attrs_tbl) = spec.get::<Table>("attrs") {
-            let fields = super::parse::fields::parse_fields(&attrs_tbl)
-                .map_err(|e| mlua::Error::RuntimeError(format!("Invalid node attrs: {}", e)))?;
+            let fields = parse_fields(&attrs_tbl)
+                .map_err(|e| RuntimeError(format!("Invalid node attrs: {}", e)))?;
 
             // Validate: only scalar types allowed as node attrs
             for f in &fields {
                 if !f.field_type.is_node_attr_type() {
-                    return Err(mlua::Error::RuntimeError(format!(
+                    return Err(RuntimeError(format!(
                         "Node attr '{}' has type '{}' which is not allowed as a node attribute. \
                          Allowed types: text, number, textarea, select, radio, checkbox, date, email, json, code",
                         f.name,
@@ -71,7 +72,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
         let attr_names: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
         for sa in &searchable_attrs {
             if !attr_names.contains(&sa.as_str()) {
-                return Err(mlua::Error::RuntimeError(format!(
+                return Err(RuntimeError(format!(
                     "Node '{}': searchable_attrs references unknown attr '{}'.\n\
                      Available attrs: [{}]",
                     name,
@@ -106,7 +107,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
             .has_render(has_render)
             .build();
         let mut reg = reg_clone.write()
-            .map_err(|e| mlua::Error::RuntimeError(format!("Registry lock poisoned: {}", e)))?;
+            .map_err(|e| RuntimeError(format!("Registry lock poisoned: {}", e)))?;
         reg.register_richtext_node(def);
 
         Ok(())
@@ -150,7 +151,7 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
         // Detect format: starts with '{' → JSON, otherwise HTML
         if content.starts_with('{') {
             render_prosemirror_to_html(content, &render_custom)
-                .map_err(|e| mlua::Error::RuntimeError(format!("Render error: {}", e)))
+                .map_err(|e| RuntimeError(format!("Render error: {}", e)))
         } else {
             Ok(render_html_custom_nodes(content, &render_custom))
         }

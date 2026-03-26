@@ -1,6 +1,6 @@
 //! Serializers for CollectionDefinition and GlobalDefinition to Lua tables.
 
-use mlua::{Lua, Table};
+use mlua::{Lua, Result as LuaResult, Table};
 
 use crate::core::{
     CollectionDefinition,
@@ -13,10 +13,7 @@ use super::{
 };
 
 /// Convert a CollectionDefinition to a full Lua table compatible with parse_collection_definition().
-pub(crate) fn collection_config_to_lua(
-    lua: &Lua,
-    def: &CollectionDefinition,
-) -> mlua::Result<Table> {
+pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     // labels
@@ -126,7 +123,7 @@ pub(crate) fn collection_config_to_lua(
 }
 
 /// Convert a GlobalDefinition to a full Lua table compatible with parse_global_definition().
-pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> mlua::Result<Table> {
+pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
 
     // labels
@@ -191,7 +188,7 @@ pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> mlua::R
 }
 
 /// Convert collection-level hooks to a Lua table.
-fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> mlua::Result<Table> {
+fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> LuaResult<Table> {
     let tbl = lua.create_table()?;
     let pairs: &[(&str, &[String])] = &[
         ("before_validate", &hooks.before_validate),
@@ -203,6 +200,7 @@ fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> mlua::Result<Table> {
         ("after_delete", &hooks.after_delete),
         ("before_broadcast", &hooks.before_broadcast),
     ];
+
     for (key, list) in pairs {
         if !list.is_empty() {
             let arr = lua.create_table()?;
@@ -212,6 +210,7 @@ fn collection_hooks_to_lua(lua: &Lua, hooks: &Hooks) -> mlua::Result<Table> {
             tbl.set(*key, arr)?;
         }
     }
+
     Ok(tbl)
 }
 

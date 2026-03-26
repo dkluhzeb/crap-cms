@@ -5,6 +5,7 @@ use serde_json::{Map as JsonMap, Value as JsonValue};
 
 use crate::{
     core::Document,
+    db::DbConnection,
     hooks::{
         HookRunner, api,
         lifecycle::{execution::resolve_hook_function, types::TxContextGuard},
@@ -22,7 +23,7 @@ impl HookRunner {
         data_json: &str,
         attempt: u32,
         max_attempts: u32,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
         let _guard = TxContextGuard::set(&lua, conn, None, None);
@@ -65,7 +66,7 @@ impl HookRunner {
     pub fn eval_lua_with_conn(
         &self,
         code: &str,
-        conn: &dyn crate::db::DbConnection,
+        conn: &dyn DbConnection,
         user: Option<&Document>,
     ) -> Result<String> {
         let lua = self.pool.acquire()?;

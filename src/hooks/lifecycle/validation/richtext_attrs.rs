@@ -5,14 +5,65 @@ use std::collections::HashMap;
 use mlua::Lua;
 use serde_json::Value;
 
-use crate::core::{
-    FieldDefinition,
-    registry::Registry,
-    richtext::renderer::{extract_attr_value, html_escape_attr},
-    validate::FieldError,
+use crate::{
+    core::{
+        FieldDefinition,
+        registry::Registry,
+        richtext::renderer::{extract_attr_value, html_escape_attr},
+        validate::FieldError,
+    },
+    hooks::{api, lifecycle::execution::resolve_hook_function},
 };
 
-use super::checks;
+use super::{checks, custom::run_validate_function_inner};
+
+/// Bundled context for richtext node attr validation.
+pub(crate) struct RichtextValidationCtx<'a> {
+    pub lua: &'a Lua,
+    pub registry: &'a Registry,
+    pub collection: &'a str,
+    pub is_draft: bool,
+}
+
+impl<'a> RichtextValidationCtx<'a> {
+    /// Create a builder with the required fields.
+    pub fn builder(
+        lua: &'a Lua,
+        registry: &'a Registry,
+        collection: &'a str,
+    ) -> RichtextValidationCtxBuilder<'a> {
+        RichtextValidationCtxBuilder {
+            lua,
+            registry,
+            collection,
+            is_draft: false,
+        }
+    }
+}
+
+/// Builder for [`RichtextValidationCtx`].
+pub(crate) struct RichtextValidationCtxBuilder<'a> {
+    lua: &'a Lua,
+    registry: &'a Registry,
+    collection: &'a str,
+    is_draft: bool,
+}
+
+impl<'a> RichtextValidationCtxBuilder<'a> {
+    pub fn draft(mut self, is_draft: bool) -> Self {
+        self.is_draft = is_draft;
+        self
+    }
+
+    pub fn build(self) -> RichtextValidationCtx<'a> {
+        RichtextValidationCtx {
+            lua: self.lua,
+            registry: self.registry,
+            collection: self.collection,
+            is_draft: self.is_draft,
+        }
+    }
+}
 
 /// A single extracted custom node instance with its attr values.
 struct NodeInstance {
@@ -135,15 +186,11 @@ fn extract_nodes_from_html(
 ///
 /// Error field names use the format `"{field_name}[{node_type}#{index}].{attr_name}"`
 /// to make errors identifiable (e.g., `"content[cta#0].url"`).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_richtext_node_attrs(
-    lua: &Lua,
+    ctx: &RichtextValidationCtx<'_>,
     content: &str,
     field_name: &str,
     field: &FieldDefinition,
-    registry: &Registry,
-    collection: &str,
-    is_draft: bool,
     errors: &mut Vec<FieldError>,
 ) {
     let format = field.admin.richtext_format.as_deref().unwrap_or("html");
@@ -151,7 +198,7 @@ pub(crate) fn validate_richtext_node_attrs(
     // Build a map of node_name → attr definitions for nodes used by this field
     let mut known_nodes: HashMap<&str, &[FieldDefinition]> = HashMap::new();
     for node_name in &field.admin.nodes {
-        if let Some(node_def) = registry.get_richtext_node(node_name)
+        if let Some(node_def) = ctx.registry.get_richtext_node(node_name)
             && !node_def.attrs.is_empty()
         {
             known_nodes.insert(&node_def.name, &node_def.attrs);
@@ -174,20 +221,16 @@ pub(crate) fn validate_richtext_node_attrs(
             None => continue,
         };
 
-        validate_node_instance(
-            lua, inst, attr_defs, field_name, collection, is_draft, errors,
-        );
+        validate_node_instance(ctx, inst, attr_defs, field_name, errors);
     }
 }
 
 /// Validate a single node instance's attrs against their field definitions.
 fn validate_node_instance(
-    lua: &Lua,
+    ctx: &RichtextValidationCtx<'_>,
     inst: &NodeInstance,
     attr_defs: &[FieldDefinition],
     field_name: &str,
-    collection: &str,
-    is_draft: bool,
     errors: &mut Vec<FieldError>,
 ) {
     for attr_def in attr_defs {
@@ -204,7 +247,7 @@ fn validate_node_instance(
         };
 
         // Required check (skip for drafts)
-        if attr_def.required && is_empty && !is_draft {
+        if attr_def.required && is_empty && !ctx.is_draft {
             errors.push(FieldError::with_key(
                 &data_key,
                 format!("{} is required", attr_def.name),
@@ -229,12 +272,12 @@ fn validate_node_instance(
             && let Some(val) = value
         {
             let data: HashMap<String, Value> = inst.attrs.clone();
-            match super::custom::run_validate_function_inner(
-                lua,
+            match run_validate_function_inner(
+                ctx.lua,
                 validate_ref,
                 val,
                 &data,
-                collection,
+                ctx.collection,
                 &attr_def.name,
             ) {
                 Ok(Some(err_msg)) => {
@@ -453,9 +496,6 @@ fn run_attr_before_validate_hooks(
     collection: &str,
     field_name: &str,
 ) -> Value {
-    use crate::hooks::api;
-    use crate::hooks::lifecycle::execution::resolve_hook_function;
-
     let mut current = value.clone();
     for hook_ref in hook_refs {
         let func = match resolve_hook_function(lua, hook_ref) {
@@ -602,13 +642,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -626,13 +663,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -650,13 +684,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -673,13 +704,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             html,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -695,13 +723,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -727,13 +752,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -765,13 +787,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -798,13 +817,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -828,13 +844,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -875,13 +888,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -1014,13 +1024,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             &json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -1039,13 +1046,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -1069,13 +1073,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
@@ -1139,13 +1140,12 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages")
+                .draft(true)
+                .build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            true,
             &mut errors,
         );
 
@@ -1221,13 +1221,10 @@ mod tests {
         let mut errors = Vec::new();
 
         validate_richtext_node_attrs(
-            &lua,
+            &RichtextValidationCtx::builder(&lua, &reg, "pages").build(),
             json,
             "content",
             &field,
-            &reg,
-            "pages",
-            false,
             &mut errors,
         );
 
