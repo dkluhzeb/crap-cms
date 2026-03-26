@@ -2,7 +2,10 @@
 
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use super::{
     auth::AuthConfig,
@@ -64,7 +67,7 @@ impl CrapConfig {
         let config_path = config_dir.join("crap.toml");
 
         if config_path.exists() {
-            let contents = std::fs::read_to_string(&config_path)
+            let contents = fs::read_to_string(&config_path)
                 .with_context(|| format!("Failed to read {}", config_path.display()))?;
             // Parse TOML first (strips comments), then substitute env vars only in string values.
             // This avoids errors from `${VAR}` patterns in comments.

@@ -1,6 +1,6 @@
 //! CORS (Cross-Origin Resource Sharing) configuration.
 
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
 use axum::http::{HeaderName, Method};
 use serde::{Deserialize, Serialize};
@@ -53,7 +53,7 @@ impl Default for CorsConfig {
 
 impl CorsConfig {
     /// Build a tower-http CorsLayer from this config. Returns None if no origins configured.
-    pub fn build_layer(&self) -> Option<tower_http::cors::CorsLayer> {
+    pub fn build_layer(&self) -> Option<CorsLayer> {
         if self.allowed_origins.is_empty() {
             return None;
         }
@@ -90,7 +90,7 @@ impl CorsConfig {
             .allow_origin(origin)
             .allow_methods(methods)
             .allow_headers(headers)
-            .max_age(std::time::Duration::from_secs(self.max_age));
+            .max_age(Duration::from_secs(self.max_age));
 
         if !self.exposed_headers.is_empty() {
             layer = layer.expose_headers(

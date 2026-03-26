@@ -2,9 +2,15 @@
 
 use anyhow::{Context as _, Result, bail};
 use dialoguer::{Confirm, Input};
+use nanoid::nanoid;
 use std::path::PathBuf;
 
-use crate::cli::{self, crap_theme};
+use super::{load_config_and_sync, make::make_collection_command, user::user_create};
+use crate::{
+    cli::{self, crap_theme},
+    config::CrapConfig,
+    scaffold,
+};
 
 /// Handle the `init` subcommand — scaffold directory, then optionally create collections
 /// and a first admin user via interactive survey.
@@ -25,20 +31,20 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
 
     if no_input {
         // Non-interactive: scaffold with defaults, create auth + upload collections
-        let opts = crate::scaffold::InitOptions::default();
-        crate::scaffold::init(Some(config_dir.clone()), &opts)?;
+        let opts = scaffold::InitOptions::default();
+        scaffold::init(Some(config_dir.clone()), &opts)?;
 
-        let auth_opts = crate::scaffold::CollectionOptions {
+        let auth_opts = scaffold::CollectionOptions {
             auth: true,
-            ..crate::scaffold::CollectionOptions::default()
+            ..scaffold::CollectionOptions::default()
         };
-        crate::scaffold::make_collection(&config_dir, "users", None, &auth_opts)?;
+        scaffold::make_collection(&config_dir, "users", None, &auth_opts)?;
 
-        let upload_opts = crate::scaffold::CollectionOptions {
+        let upload_opts = scaffold::CollectionOptions {
             upload: true,
-            ..crate::scaffold::CollectionOptions::default()
+            ..scaffold::CollectionOptions::default()
         };
-        crate::scaffold::make_collection(&config_dir, "media", None, &upload_opts)?;
+        scaffold::make_collection(&config_dir, "media", None, &upload_opts)?;
 
         println!();
         cli::success("Project created!");
@@ -104,16 +110,16 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
         ("en".to_string(), vec![])
     };
 
-    let opts = crate::scaffold::InitOptions {
+    let opts = scaffold::InitOptions {
         admin_port,
         grpc_port,
         locales,
         default_locale,
-        auth_secret: nanoid::nanoid!(64),
+        auth_secret: nanoid!(64),
     };
 
     // 1. Scaffold the base directory
-    crate::scaffold::init(Some(config_dir.clone()), &opts)?;
+    scaffold::init(Some(config_dir.clone()), &opts)?;
 
     // Phase 3: Auth collection
     cli::step(3, 5, "Auth Collection");
@@ -128,7 +134,7 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
             .with_prompt("Auth collection slug")
             .default("users".to_string())
             .validate_with(|input: &String| -> Result<(), String> {
-                crate::scaffold::validate_slug(input).map_err(|e| e.to_string())
+                scaffold::validate_slug(input).map_err(|e| e.to_string())
             })
             .interact_text()
             .context("Failed to read auth slug")?;
@@ -140,21 +146,24 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
             .interact()
             .context("Failed to read custom fields preference")?
         {
-            crate::scaffold::interactive_field_wizard(enable_locale)?
+            scaffold::interactive_field_wizard(enable_locale)?
         } else {
             vec![]
         };
 
-        let opts = crate::scaffold::CollectionOptions {
+        let opts = scaffold::CollectionOptions {
             auth: true,
-            ..crate::scaffold::CollectionOptions::default()
+            ..scaffold::CollectionOptions::default()
         };
+
         let fields_opt = if fields.is_empty() {
             None
         } else {
             Some(fields)
         };
-        crate::scaffold::make_collection(&config_dir, &slug, fields_opt.as_deref(), &opts)?;
+
+        scaffold::make_collection(&config_dir, &slug, fields_opt.as_deref(), &opts)?;
+
         Some(slug)
     } else {
         None
@@ -170,10 +179,9 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
             .interact()
             .context("Failed to read user creation preference")?
         {
-            let cfg =
-                crate::config::CrapConfig::load(&config_dir).context("Failed to load config")?;
-            let (pool, registry) = super::load_config_and_sync(&config_dir)?;
-            match super::user::user_create(
+            let cfg = CrapConfig::load(&config_dir).context("Failed to load config")?;
+            let (pool, registry) = load_config_and_sync(&config_dir)?;
+            match user_create(
                 &pool,
                 &registry,
                 auth_collection,
@@ -212,7 +220,7 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
             .with_prompt("Upload collection slug")
             .default("media".to_string())
             .validate_with(|input: &String| -> Result<(), String> {
-                crate::scaffold::validate_slug(input).map_err(|e| e.to_string())
+                scaffold::validate_slug(input).map_err(|e| e.to_string())
             })
             .interact_text()
             .context("Failed to read upload slug")?;
@@ -224,21 +232,23 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
             .interact()
             .context("Failed to read custom fields preference")?
         {
-            crate::scaffold::interactive_field_wizard(enable_locale)?
+            scaffold::interactive_field_wizard(enable_locale)?
         } else {
             vec![]
         };
 
-        let opts = crate::scaffold::CollectionOptions {
+        let opts = scaffold::CollectionOptions {
             upload: true,
-            ..crate::scaffold::CollectionOptions::default()
+            ..scaffold::CollectionOptions::default()
         };
+
         let fields_opt = if fields.is_empty() {
             None
         } else {
             Some(fields)
         };
-        crate::scaffold::make_collection(&config_dir, &slug, fields_opt.as_deref(), &opts)?;
+
+        scaffold::make_collection(&config_dir, &slug, fields_opt.as_deref(), &opts)?;
     }
 
     // Phase 5: Additional collections
@@ -253,12 +263,12 @@ pub fn run(dir: Option<PathBuf>, no_input: bool) -> Result<()> {
         {
             break;
         }
-        super::make::make_collection_command(
+        make_collection_command(
             &config_dir,
             None,
             None,
             true, /* interactive */
-            &crate::scaffold::CollectionOptions::default(),
+            &scaffold::CollectionOptions::default(),
         )?;
     }
 

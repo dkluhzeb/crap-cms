@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result, anyhow};
 use serde_json::Value;
 use std::path::Path;
 
+use super::JobsAction;
 use crate::{
     cli::{self, Table},
     config::{CrapConfig, parse_duration_string},
@@ -220,13 +221,13 @@ fn run_healthcheck(cfg: &CrapConfig, registry: &SharedRegistry, pool: &DbPool) -
 // Excluded from coverage: requires full Lua + DB setup (init_lua, create_pool, sync_all)
 // for each subcommand variant. Tested via CLI integration tests.
 #[cfg(not(tarpaulin_include))]
-pub fn run(config_dir: &Path, action: super::JobsAction) -> Result<()> {
+pub fn run(config_dir: &Path, action: JobsAction) -> Result<()> {
     match action {
-        super::JobsAction::List => {
+        JobsAction::List => {
             let (_cfg, registry, pool) = init_stack(config_dir)?;
             run_list(&registry, &pool)
         }
-        super::JobsAction::Trigger { slug, data } => {
+        JobsAction::Trigger { slug, data } => {
             let (_cfg, registry, pool) = init_stack(config_dir)?;
             let reg = registry
                 .read()
@@ -254,11 +255,11 @@ pub fn run(config_dir: &Path, action: super::JobsAction) -> Result<()> {
 
             Ok(())
         }
-        super::JobsAction::Status { id, slug, limit } => {
+        JobsAction::Status { id, slug, limit } => {
             let (_cfg, _registry, pool) = init_stack(config_dir)?;
             run_status(&pool, id, slug, limit)
         }
-        super::JobsAction::Cancel { slug } => {
+        JobsAction::Cancel { slug } => {
             let config_dir = config_dir
                 .canonicalize()
                 .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -272,7 +273,7 @@ pub fn run(config_dir: &Path, action: super::JobsAction) -> Result<()> {
             }
             Ok(())
         }
-        super::JobsAction::Purge { older_than } => {
+        JobsAction::Purge { older_than } => {
             let config_dir = config_dir
                 .canonicalize()
                 .unwrap_or_else(|_| config_dir.to_path_buf());
@@ -291,11 +292,9 @@ pub fn run(config_dir: &Path, action: super::JobsAction) -> Result<()> {
 
             Ok(())
         }
-        super::JobsAction::Healthcheck => {
+        JobsAction::Healthcheck => {
             let (cfg, registry, pool) = init_stack(config_dir)?;
             run_healthcheck(&cfg, &registry, &pool)
         }
     }
 }
-
-// parse_duration_string moved to crate::config — tests are there

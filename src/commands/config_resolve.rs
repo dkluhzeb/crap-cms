@@ -6,7 +6,10 @@
 //! 3. Walk up from CWD looking for `crap.toml`
 
 use anyhow::{Result, anyhow, bail};
-use std::path::{Path, PathBuf};
+use std::{
+    env,
+    path::{Path, PathBuf},
+};
 
 /// Resolve the config directory from an explicit path or by auto-detection.
 ///
@@ -37,7 +40,7 @@ fn validate_config_dir(path: &Path) -> Result<PathBuf> {
 
 /// Walk up from CWD looking for a directory containing `crap.toml`.
 fn find_config_in_ancestors() -> Result<PathBuf> {
-    let cwd = std::env::current_dir().map_err(|e| {
+    let cwd = env::current_dir().map_err(|e| {
         anyhow!(
             "Failed to determine current directory: {}\n\n\
              Use --config <path> or set CRAP_CONFIG_DIR to specify the config directory.",

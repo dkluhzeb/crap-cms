@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// An SMTP password. Debug output is redacted to prevent accidental logging.
 #[derive(Clone, Deserialize)]
@@ -52,7 +52,7 @@ impl From<SmtpPassword> for String {
 }
 
 impl Serialize for SmtpPassword {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str("[REDACTED]")
     }
 }

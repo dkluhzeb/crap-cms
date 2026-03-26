@@ -2,8 +2,13 @@
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process,
+};
 
+use super::MigrateAction;
 use crate::{
     cli::{self, Spinner, Table},
     config::{CrapConfig, LocaleConfig},
@@ -17,13 +22,13 @@ use crate::{
 /// Handle the `migrate` subcommand.
 /// Untestable as unit: requires full Lua VM + DB setup. Covered by CLI integration tests.
 #[cfg(not(tarpaulin_include))]
-pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
+pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
     let config_dir = config_dir
         .canonicalize()
         .unwrap_or_else(|_| config_dir.to_path_buf());
 
     // Create only writes a file — no Lua/DB needed
-    if let super::MigrateAction::Create { ref name } = action {
+    if let MigrateAction::Create { ref name } = action {
         return scaffold::make_migration(&config_dir, name);
     }
 
@@ -32,8 +37,8 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
     let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
     match action {
-        super::MigrateAction::Create { .. } => unreachable!(),
-        super::MigrateAction::Up => {
+        MigrateAction::Create { .. } => unreachable!(),
+        MigrateAction::Up => {
             // Schema sync from Lua definitions
             let spin = Spinner::new("Syncing schema...");
             migrate::sync_all(&pool, &registry, &cfg.locale)
@@ -65,7 +70,7 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
                 cli::success(&format!("{} migration(s) applied.", pending.len()));
             }
         }
-        super::MigrateAction::Down { steps } => {
+        MigrateAction::Down { steps } => {
             let applied = migrate::get_applied_migrations_desc(&pool)?;
             let to_rollback: Vec<_> = applied.into_iter().take(steps).collect();
 
@@ -95,7 +100,7 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
                 cli::success(&format!("{} migration(s) rolled back.", to_rollback.len()));
             }
         }
-        super::MigrateAction::List => {
+        MigrateAction::List => {
             let migrations_dir = config_dir.join("migrations");
             let all_files = migrate::list_migration_files(&migrations_dir)?;
             let applied = migrate::get_applied_migrations(&pool)?;
@@ -118,7 +123,7 @@ pub fn migrate(config_dir: &Path, action: super::MigrateAction) -> Result<()> {
                 table.print();
             }
         }
-        super::MigrateAction::Fresh { confirm } => {
+        MigrateAction::Fresh { confirm } => {
             if !confirm {
                 bail!(
                     "migrate fresh is destructive — it drops ALL tables and recreates them.\n\
@@ -187,7 +192,7 @@ pub fn console(config_dir: &Path) -> Result<()> {
 
             cli::info(&format!("Opening SQLite console: {}", db_path.display()));
 
-            let status = std::process::Command::new("sqlite3")
+            let status = process::Command::new("sqlite3")
                 .arg(&db_path)
                 .status()
                 .context("Failed to launch sqlite3 — is it installed?")?;
@@ -225,7 +230,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
     let backup_base = output.unwrap_or_else(|| config_dir.join("backups"));
     let backup_dir = backup_base.join(&backup_dir_name);
 
-    std::fs::create_dir_all(&backup_dir).with_context(|| {
+    fs::create_dir_all(&backup_dir).with_context(|| {
         format!(
             "Failed to create backup directory: {}",
             backup_dir.display()
@@ -244,9 +249,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         conn.vacuum_into(&backup_db_path)
             .context("VACUUM INTO failed")?;
     }
-    let db_size = std::fs::metadata(&backup_db_path)
-        .map(|m| m.len())
-        .unwrap_or(0);
+    let db_size = fs::metadata(&backup_db_path).map(|m| m.len()).unwrap_or(0);
     spin.finish_success(&format!(
         "Database snapshot: {} ({} bytes)",
         backup_db_path.display(),
@@ -262,7 +265,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         if uploads_dir.exists() && uploads_dir.is_dir() {
             let archive_path = backup_dir.join("uploads.tar.gz");
             let spin = Spinner::new("Compressing uploads...");
-            let status = std::process::Command::new("tar")
+            let status = process::Command::new("tar")
                 .args([
                     "czf",
                     &archive_path.to_string_lossy(),
@@ -273,7 +276,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
                 .status();
             match status {
                 Ok(s) if s.success() => {
-                    uploads_size = std::fs::metadata(&archive_path).map(|m| m.len()).ok();
+                    uploads_size = fs::metadata(&archive_path).map(|m| m.len()).ok();
                     spin.finish_success(&format!(
                         "Uploads archive: {} ({} bytes)",
                         archive_path.display(),
@@ -306,7 +309,7 @@ pub fn backup(config_dir: &Path, output: Option<PathBuf>, include_uploads: bool)
         "source_config": config_dir.to_string_lossy(),
     });
     let manifest_path = backup_dir.join("manifest.json");
-    std::fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)
+    fs::write(&manifest_path, serde_json::to_string_pretty(&manifest)?)
         .context("Failed to write manifest.json")?;
 
     cli::success(&format!("Backup complete: {}", backup_dir.display()));
@@ -350,7 +353,7 @@ pub fn restore(
 
     // Read and display manifest
     let manifest_str =
-        std::fs::read_to_string(&manifest_path).context("Failed to read manifest.json")?;
+        fs::read_to_string(&manifest_path).context("Failed to read manifest.json")?;
     let manifest: Value =
         serde_json::from_str(&manifest_str).context("Failed to parse manifest.json")?;
 
@@ -390,13 +393,13 @@ pub fn restore(
 
     // Ensure target directory exists
     if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)
+        fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
     }
 
     // Replace database file
     let spin = Spinner::new("Restoring database...");
-    std::fs::copy(&backup_db_path, &db_path)
+    fs::copy(&backup_db_path, &db_path)
         .with_context(|| format!("Failed to copy database to {}", db_path.display()))?;
     spin.finish_success("Database restored");
 
@@ -408,7 +411,7 @@ pub fn restore(
         for ext in conn.sidecar_extensions() {
             let sidecar = db_path.with_extension(ext);
             if sidecar.exists() {
-                let _ = std::fs::remove_file(&sidecar);
+                let _ = fs::remove_file(&sidecar);
             }
         }
     }
@@ -419,7 +422,7 @@ pub fn restore(
 
         if archive_path.exists() {
             let spin = Spinner::new("Extracting uploads...");
-            let status = std::process::Command::new("tar")
+            let status = process::Command::new("tar")
                 .args([
                     "xzf",
                     &archive_path.to_string_lossy(),

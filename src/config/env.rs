@@ -2,6 +2,7 @@
 
 use anyhow::{Context as _, Result};
 use regex::Regex;
+use std::env;
 
 /// Recursively walk a TOML `Value` tree and substitute `${VAR}` / `${VAR:-default}`
 /// in all `String` nodes. Tables and arrays are descended into; other types are untouched.
@@ -41,12 +42,12 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
         let inner = &cap[1];
 
         if let Some((var_name, default_val)) = inner.split_once(":-") {
-            match std::env::var(var_name) {
+            match env::var(var_name) {
                 Ok(val) if !val.is_empty() => result.push_str(&val),
                 _ => result.push_str(default_val),
             }
         } else {
-            let val = std::env::var(inner).with_context(|| {
+            let val = env::var(inner).with_context(|| {
                 format!(
                     "Environment variable '{}' referenced in crap.toml is not set \
                      (use ${{{}:-default}} for a fallback)",
@@ -60,6 +61,7 @@ pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
     }
 
     result.push_str(&input[last_end..]);
+
     Ok(result)
 }
 

@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer};
 
 /// An MCP API key. Debug output is redacted to prevent accidental logging.
 #[derive(Clone, Default, Deserialize)]
@@ -46,7 +46,7 @@ impl AsRef<str> for McpApiKey {
 }
 
 impl Serialize for McpApiKey {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str("[REDACTED]")
     }
 }

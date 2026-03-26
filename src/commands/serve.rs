@@ -23,7 +23,7 @@ pub enum ServeMode {
 }
 
 use crate::{
-    admin, api,
+    admin, api, cli,
     config::{AuthConfig, CrapConfig},
     core::{
         Registry, SharedRegistry, event::EventBus, rate_limit::LoginRateLimiter,
@@ -122,7 +122,8 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
 
     let pid = child.id();
     write_pid_file(&config_dir, pid)?;
-    crate::cli::success(&format!("Started crap-cms in background (PID {})", pid));
+    cli::success(&format!("Started crap-cms in background (PID {})", pid));
+
     Ok(())
 }
 
