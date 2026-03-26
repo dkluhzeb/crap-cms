@@ -18,11 +18,19 @@ pub fn is_valid_identifier(s: &str) -> bool {
 /// Converts dashes to underscores (e.g. "de-DE" → "de_DE") and strips anything
 /// except alphanumeric + underscore.
 pub fn sanitize_locale(locale: &str) -> String {
-    locale
+    let result: String = locale
         .chars()
         .map(|c| if c == '-' { '_' } else { c })
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
-        .collect()
+        .collect();
+
+    debug_assert!(
+        !result.is_empty(),
+        "sanitize_locale produced empty string from input: {:?}",
+        locale
+    );
+
+    result
 }
 
 /// Validate a slug: lowercase alphanumeric + underscores, not empty, no leading underscore.
@@ -203,6 +211,19 @@ mod tests {
         assert_eq!(sanitize_locale("en_US"), "en_US");
         // Dashes map to underscores, everything else non-alphanumeric is stripped
         assert_eq!(sanitize_locale("'; DROP TABLE --"), "DROPTABLE__");
+    }
+
+    /// Documents that sanitize_locale returns empty for pathological all-special-char input.
+    /// The debug_assert in sanitize_locale will panic in debug builds to catch misuse.
+    #[test]
+    #[cfg_attr(
+        debug_assertions,
+        should_panic(expected = "sanitize_locale produced empty string")
+    )]
+    fn sanitize_locale_pathological_input_is_empty() {
+        let result = sanitize_locale("!@#$%^&*()");
+        // In release builds, returns empty string (debug_assert is a no-op)
+        assert!(result.is_empty());
     }
 
     #[test]

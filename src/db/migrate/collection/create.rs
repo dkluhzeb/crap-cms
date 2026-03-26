@@ -103,6 +103,8 @@ pub fn append_default_value(
     field_type: &FieldType,
 ) {
     if let Some(default) = &default_value {
+        warn_default_type_mismatch(default, field_type);
+
         match default {
             Value::String(s) => col.push_str(&format!(" DEFAULT '{}'", s.replace('\'', "''"))),
             Value::Number(n) => col.push_str(&format!(" DEFAULT {}", n)),
@@ -111,6 +113,28 @@ pub fn append_default_value(
         }
     } else if *field_type == FieldType::Checkbox {
         col.push_str(" DEFAULT 0");
+    }
+}
+
+/// Log a warning when a default value type obviously mismatches the field type.
+fn warn_default_type_mismatch(default: &Value, field_type: &FieldType) {
+    match (default, field_type) {
+        (Value::String(_), FieldType::Number | FieldType::Checkbox) => {
+            tracing::warn!(
+                "String default value on {:?} field — possible type mismatch",
+                field_type
+            );
+        }
+        (Value::Bool(_), FieldType::Text | FieldType::Textarea | FieldType::Email) => {
+            tracing::warn!(
+                "Bool default value on {:?} field — possible type mismatch",
+                field_type
+            );
+        }
+        (Value::Number(_), FieldType::Checkbox) => {
+            tracing::warn!("Number default value on Checkbox field — use a bool default instead");
+        }
+        _ => {}
     }
 }
 

@@ -84,7 +84,11 @@ pub(crate) fn coerce_value(field_type: &FieldType, value: &str) -> DbValue {
             if value.is_empty() {
                 DbValue::Null
             } else if let Ok(f) = value.parse::<f64>() {
-                DbValue::Real(f)
+                if f.is_finite() {
+                    DbValue::Real(f)
+                } else {
+                    DbValue::Null
+                }
             } else {
                 DbValue::Null
             }
@@ -239,6 +243,18 @@ mod tests {
     #[test]
     fn coerce_value_number_invalid_is_null() {
         assert_eq!(coerce_value(&FieldType::Number, "abc"), DbValue::Null);
+    }
+
+    #[test]
+    fn coerce_value_number_nan_is_null() {
+        assert_eq!(coerce_value(&FieldType::Number, "NaN"), DbValue::Null);
+    }
+
+    #[test]
+    fn coerce_value_number_infinity_is_null() {
+        assert_eq!(coerce_value(&FieldType::Number, "inf"), DbValue::Null);
+        assert_eq!(coerce_value(&FieldType::Number, "infinity"), DbValue::Null);
+        assert_eq!(coerce_value(&FieldType::Number, "-inf"), DbValue::Null);
     }
 
     #[test]

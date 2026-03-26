@@ -38,17 +38,6 @@ pub struct FieldHooks {
     pub after_read: Vec<String>,
 }
 
-impl FieldHooks {
-    /// Returns true if no hooks are defined for this field.
-    #[allow(dead_code)]
-    pub fn is_empty(&self) -> bool {
-        self.before_validate.is_empty()
-            && self.before_change.is_empty()
-            && self.after_change.is_empty()
-            && self.after_read.is_empty()
-    }
-}
-
 /// Complete definition of a single field within a collection.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldDefinition {

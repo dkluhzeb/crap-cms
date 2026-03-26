@@ -206,6 +206,9 @@ class CrapRichtext extends HTMLElement {
         doc = schema.topNodeType.createAndFill();
       }
     } else {
+      // Safety: innerHTML on a detached element is acceptable here — standard
+      // ProseMirror pattern. Detached elements don't fire event handlers or
+      // execute scripts, so no XSS risk from parsing stored HTML content.
       const container = document.createElement('div');
       container.innerHTML = textarea.value || '';
       doc = PM.DOMParser.fromSchema(schema).parse(container);

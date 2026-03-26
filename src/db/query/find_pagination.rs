@@ -82,7 +82,7 @@ pub fn validate_find_pagination(
     let limit = super::apply_pagination_limits(req_limit, default_limit, max_limit);
 
     let page = req_page.unwrap_or(1).max(1);
-    let offset = (page - 1) * limit;
+    let offset = (page - 1).saturating_mul(limit);
 
     let (after_cursor, before_cursor) = if cursor_enabled {
         let ac = if let Some(s) = req_after_cursor {
@@ -262,6 +262,16 @@ mod tests {
             .validate(None, Some(2), Some(&cursor), None)
             .unwrap_err();
         assert!(err.contains("after_cursor and page"));
+    }
+
+    #[test]
+    fn extreme_page_does_not_overflow() {
+        let p = validate_find_pagination(Some(100), Some(i64::MAX), None, None, 20, 100, false)
+            .unwrap();
+        assert_eq!(p.limit, 100);
+        assert_eq!(p.page, i64::MAX);
+        // Must not panic — saturating_mul clamps to i64::MAX
+        assert!(p.offset > 0);
     }
 
     /// Create a valid encoded cursor for testing.

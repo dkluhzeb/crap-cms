@@ -32,11 +32,13 @@ pub(in crate::admin::handlers) fn client_ip(
         && !first.is_empty()
     {
         // Parse and re-serialize to normalize IPv6 representations
-        // (e.g., "2001:0db8::0001" → "2001:db8::1")
+        // (e.g., "2001:0db8::0001" → "2001:db8::1").
+        // Unparseable XFF falls back to socket address — not the raw string,
+        // which an attacker could vary per-request to bypass rate limiting.
         return first
             .parse::<std::net::IpAddr>()
             .map(|ip| ip.to_string())
-            .unwrap_or_else(|_| first.to_string());
+            .unwrap_or_else(|_| addr.ip().to_string());
     }
     addr.ip().to_string()
 }
@@ -193,7 +195,7 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
         let addr: SocketAddr = "127.0.0.1:1234".parse().unwrap();
-        // Falls back to raw string when parsing fails
-        assert_eq!(client_ip(&headers, &addr, true), "not-an-ip");
+        // Falls back to socket address when XFF is unparseable (prevents rate limiter bypass)
+        assert_eq!(client_ip(&headers, &addr, true), "127.0.0.1");
     }
 }

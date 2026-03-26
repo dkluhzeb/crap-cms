@@ -129,6 +129,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **`url_decode` garbled multi-byte UTF-8** (HIGH): Percent-encoded multi-byte
+  sequences (e.g. `%C3%A9` for `é`, CJK, emoji) were decoded byte-by-byte as
+  individual `char`s, producing mojibake. Malformed `%XX` sequences silently
+  dropped characters. Rewritten to collect decoded bytes into `Vec<u8>` then
+  convert via `String::from_utf8_lossy`; malformed sequences are now preserved
+  literally.
+
+- **NaN/Infinity accepted in number fields** (HIGH): Submitting `"NaN"`,
+  `"inf"`, or `"-inf"` as a number field value parsed successfully and stored
+  non-finite floats in the database. Added `is_finite()` check — non-finite
+  values now coerce to `NULL`.
+
+- **Rate limiter bypass via unparseable XFF** (HIGH): When `trust_proxy = true`
+  and `X-Forwarded-For` contained a non-IP string, `client_ip()` used the raw
+  garbage string as the rate limiter key. Attackers could vary this per-request
+  to get unique rate limit buckets. Unparseable XFF now falls back to the TCP
+  socket address.
+
+- **SSE connection limit TOCTOU race** (HIGH): The SSE connection counter used
+  `fetch_add` + check + `fetch_sub`, allowing a race where concurrent requests
+  could exceed the configured `max_sse_connections`. Replaced with a
+  `compare_exchange_weak` loop for atomic slot acquisition.
+
+- **JSON template helper `</script>` breakout** (MEDIUM): The `{{{json ...}}}`
+  Handlebars helper did not escape `</` in serialized values. A value containing
+  `</script>` could break out of a `<script>` block in the admin UI. Now
+  replaces `</` with `<\/` after serialization.
+
+- **Pagination offset overflow** (MEDIUM): Extreme `page` values (near
+  `i64::MAX`) caused integer overflow in `(page - 1) * limit`. Changed to
+  `saturating_mul` to prevent panics.
+
 - **Content-Security-Policy** (NEW): Admin UI now sends a CSP header by default
   with restrictive `default-src`, `frame-ancestors 'none'`, `form-action 'self'`,
   and `base-uri 'self'`. Inline scripts/styles are allowed via `'unsafe-inline'`
@@ -354,6 +386,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Reset token expiry docs hardcoded**: gRPC docs said tokens expire
   "after 1 hour" instead of referencing the configurable `reset_token_expiry`.
+
+- **`sanitize_locale` empty string invariant**: Added `debug_assert!` to catch
+  pathological input (all non-alphanumeric characters) that produces an empty
+  locale identifier. Panics in debug builds; documents the invariant.
+
+- **`append_default_value` type mismatch warnings**: Now logs `tracing::warn!`
+  when a default value type obviously mismatches the field type (e.g., string
+  default on a Number field, bool default on a Text field).
+
+- **Removed dead `FieldHooks::is_empty()`**: Unused `#[allow(dead_code)]`
+  method — individual Vec fields are checked directly at all call sites.
 
 ### Internal
 

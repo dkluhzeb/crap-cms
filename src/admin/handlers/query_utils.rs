@@ -66,26 +66,43 @@ pub(crate) fn parse_where_params(raw_query: &str, def: &CollectionDefinition) ->
 }
 
 /// Simple percent-decoding for URL query values.
+///
+/// Collects decoded bytes into a `Vec<u8>` then converts via `String::from_utf8_lossy`
+/// so multi-byte UTF-8 sequences (e.g. `%C3%A9` → `é`) decode correctly.
+/// Malformed `%XX` sequences are preserved literally instead of being silently dropped.
 pub(crate) fn url_decode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
+    let mut bytes = Vec::with_capacity(s.len());
+    let mut iter = s.bytes();
 
-    let mut chars = s.bytes();
-
-    while let Some(b) = chars.next() {
+    while let Some(b) = iter.next() {
         if b == b'+' {
-            result.push(' ');
+            bytes.push(b' ');
         } else if b == b'%' {
-            let hi = chars.next().and_then(|c| (c as char).to_digit(16));
-            let lo = chars.next().and_then(|c| (c as char).to_digit(16));
-            if let (Some(h), Some(l)) = (hi, lo) {
-                result.push((h * 16 + l) as u8 as char);
+            let hi = iter.next();
+            let lo = hi.and_then(|_| iter.next());
+
+            match (
+                hi.and_then(|c| (c as char).to_digit(16)),
+                lo.and_then(|c| (c as char).to_digit(16)),
+            ) {
+                (Some(h), Some(l)) => bytes.push((h * 16 + l) as u8),
+                _ => {
+                    // Malformed %XX — preserve the literal characters
+                    bytes.push(b'%');
+                    if let Some(h) = hi {
+                        bytes.push(h);
+                    }
+                    if let Some(l) = lo {
+                        bytes.push(l);
+                    }
+                }
             }
         } else {
-            result.push(b as char);
+            bytes.push(b);
         }
     }
 
-    result
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 /// Validate a sort field name against the collection definition.
@@ -412,5 +429,38 @@ mod tests {
         assert_eq!(url_decode("hello%20world"), "hello world");
         assert_eq!(url_decode("foo+bar"), "foo bar");
         assert_eq!(url_decode("plain"), "plain");
+    }
+
+    #[test]
+    fn url_decode_multibyte_utf8() {
+        // é = U+00E9 = 0xC3 0xA9
+        assert_eq!(url_decode("%C3%A9"), "é");
+    }
+
+    #[test]
+    fn url_decode_cjk() {
+        // 中 = U+4E2D = 0xE4 0xB8 0xAD
+        assert_eq!(url_decode("%E4%B8%AD"), "中");
+    }
+
+    #[test]
+    fn url_decode_emoji() {
+        // 😀 = U+1F600 = 0xF0 0x9F 0x98 0x80
+        assert_eq!(url_decode("%F0%9F%98%80"), "😀");
+    }
+
+    #[test]
+    fn url_decode_invalid_hex_preserves() {
+        assert_eq!(url_decode("%ZZ"), "%ZZ");
+    }
+
+    #[test]
+    fn url_decode_trailing_percent() {
+        assert_eq!(url_decode("test%"), "test%");
+    }
+
+    #[test]
+    fn url_decode_partial_hex() {
+        assert_eq!(url_decode("test%2"), "test%2");
     }
 }
