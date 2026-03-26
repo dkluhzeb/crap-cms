@@ -326,6 +326,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   (e.g., adding 2 sub-items instead of 1). Added ownership check so each
   component only handles actions belonging to its own level.
 
+- **Nested drag-and-drop events bubbled to parent**: `_onDragStart`,
+  `_onDragOver`, and `_onDrop` had no ownership checks. Dragging a nested
+  array's row caused both parent and child components to handle the drag,
+  potentially moving rows to the wrong container or corrupting indices. Added
+  ownership checks for drag handles and container elements.
+
+- **`_getDragAfterElement` selected nested rows**: The drop position calculation
+  used `querySelectorAll('.form__array-row:not(...)')` which matched ALL
+  descendant rows including those in nested arrays. Changed to
+  `:scope > .form__array-row` to only consider direct children.
+
+- **Nested `crap:request-add-block` event fired twice**: The
+  `crap:request-add-block` custom event from `crap-block-picker` bubbled to
+  parent `crap-array-field` components, causing duplicate block row additions.
+  Added ownership check on the event target.
+
+- **Listener accumulation on nested component reconnect**: Row move operations
+  (`insertBefore`) triggered `disconnectedCallback`→`connectedCallback` on
+  nested `crap-array-field` elements. Since `disconnectedCallback` reset
+  `_connected` without removing listeners, each reconnect added duplicate
+  handlers via fresh `bind()` calls. Stopped resetting `_connected` so listeners
+  survive disconnect/reconnect cycles without accumulation.
+
+- **Duplicated row label watcher skipped**: `_duplicateRow` cloned the row
+  including `data-label-init="1"`, causing `_setupRowLabelWatcher` to bail out
+  on the clone. Typing in the duplicate's label field never updated the row
+  title. Now clears `data-label-init` before setting up the watcher.
+
+- **`_setupBlockRowLabelWatcher` was exact duplicate**: Identical to
+  `_setupRowLabelWatcher`. Removed and consolidated all callers to use the
+  single method.
+
 - **`getConfirmDialog()` null crash**: `dirty-form.js` called `.prompt()` on
   null when no `<crap-confirm-dialog>` exists. Added null guard with safe
   fallback.

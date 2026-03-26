@@ -25,13 +25,20 @@ class CrapArrayField extends HTMLElement {
     this.addEventListener('dragover', this._onDragOver.bind(this));
     this.addEventListener('drop', this._onDrop.bind(this));
     this.addEventListener('crap:request-add-block', /** @param {CustomEvent} e */ (e) => {
+      if (/** @type {HTMLElement} */ (e.target).closest('crap-array-field') !== this) return;
       this._addBlockRow(e.detail.templateId);
     });
     this._initLabelWatchers();
   }
 
   disconnectedCallback() {
-    this._connected = false;
+    // Do NOT reset _connected — listeners on `this` survive disconnect and must
+    // not be re-added on reconnect (row moves via insertBefore trigger
+    // disconnect→reconnect on nested custom elements, which would duplicate handlers).
+    if (this._draggedRow) {
+      this._draggedRow.classList.remove('form__array-row--dragging');
+      this._draggedRow = null;
+    }
   }
 
   /* ── Click delegation ──────────────────────────────────────── */
@@ -71,26 +78,6 @@ class CrapArrayField extends HTMLElement {
    * @param {string} labelFieldName
    */
   _setupRowLabelWatcher(row, labelFieldName) {
-    if (row.dataset.labelInit) return;
-    row.dataset.labelInit = '1';
-    const titleEl = row.querySelector('.form__array-row-title');
-    if (!titleEl) return;
-    for (const input of row.querySelectorAll('input, select, textarea')) {
-      if (/** @type {HTMLInputElement} */ (input).name?.endsWith('[' + labelFieldName + ']')) {
-        input.addEventListener('input', () => {
-          const val = /** @type {HTMLInputElement} */ (input).value;
-          if (val) titleEl.textContent = val;
-        });
-        break;
-      }
-    }
-  }
-
-  /**
-   * @param {HTMLElement} row
-   * @param {string} labelFieldName
-   */
-  _setupBlockRowLabelWatcher(row, labelFieldName) {
     if (row.dataset.labelInit) return;
     row.dataset.labelInit = '1';
     const titleEl = row.querySelector('.form__array-row-title');
@@ -468,17 +455,20 @@ class CrapArrayField extends HTMLElement {
     }
 
     const clone = /** @type {HTMLElement} */ (row.cloneNode(true));
+    delete clone.dataset.labelInit;
     row.after(clone);
+
     clone.querySelectorAll('crap-richtext').forEach(
       /** @param {HTMLElement} el */ (el) => {
         if (el.connectedCallback) el.connectedCallback();
       }
     );
-    this._reindexRows();
+
     if (fs) {
       const labelField = fs.getAttribute('data-label-field');
       if (labelField) this._setupRowLabelWatcher(clone, labelField);
     }
+
     this._afterRowChange();
   }
 
@@ -487,7 +477,6 @@ class CrapArrayField extends HTMLElement {
     const row = btn.closest('.form__array-row');
     if (!row) return;
     row.remove();
-    this._reindexRows();
     this._afterRowChange();
   }
 
@@ -565,7 +554,7 @@ class CrapArrayField extends HTMLElement {
       if (fs) {
         const blockLabelField = template.getAttribute('data-label-field');
         if (blockLabelField) {
-          this._setupBlockRowLabelWatcher(html, blockLabelField);
+          this._setupRowLabelWatcher(html, blockLabelField);
         } else {
           const labelField = fs.getAttribute('data-label-field');
           if (labelField) this._setupRowLabelWatcher(html, labelField);
@@ -581,6 +570,7 @@ class CrapArrayField extends HTMLElement {
   _onDragStart(e) {
     const el = /** @type {HTMLElement} */ (e.target).closest('[draggable][data-drag]');
     if (!el) return;
+    if (el.closest('crap-array-field') !== this) return;
     this._draggedRow = el.closest('.form__array-row');
     if (!this._draggedRow) return;
     this._draggedRow.classList.add('form__array-row--dragging');
@@ -601,7 +591,7 @@ class CrapArrayField extends HTMLElement {
   /** @param {DragEvent} e */
   _onDragOver(e) {
     const container = /** @type {HTMLElement} */ (e.target).closest('.form__array-rows');
-    if (!container || !this.contains(container)) return;
+    if (!container || container.closest('.form__array') !== this._fieldset) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     if (!this._draggedRow) return;
@@ -615,7 +605,7 @@ class CrapArrayField extends HTMLElement {
   /** @param {DragEvent} e */
   _onDrop(e) {
     const container = /** @type {HTMLElement} */ (e.target).closest('.form__array-rows');
-    if (!container || !this.contains(container)) return;
+    if (!container || container.closest('.form__array') !== this._fieldset) return;
     e.preventDefault();
     if (!this._draggedRow) return;
     const afterEl = this._getDragAfterElement(container, e.clientY);
@@ -636,7 +626,7 @@ class CrapArrayField extends HTMLElement {
    * @returns {HTMLElement|null}
    */
   _getDragAfterElement(container, y) {
-    const rows = [...container.querySelectorAll('.form__array-row:not(.form__array-row--dragging)')];
+    const rows = [...container.querySelectorAll(':scope > .form__array-row:not(.form__array-row--dragging)')];
     return rows.reduce((closest, child) => {
       const box = child.getBoundingClientRect();
       const offset = y - box.top - box.height / 2;
