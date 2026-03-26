@@ -199,6 +199,7 @@ impl FieldDefinition {
 /// Used to auto-generate human-readable labels from field and collection names.
 pub fn to_title_case(s: &str) -> String {
     s.split('_')
+        .filter(|w| !w.is_empty())
         .map(|word| {
             let mut chars = word.chars();
             match chars.next() {
@@ -506,6 +507,6 @@ mod tests {
 
     #[test]
     fn to_title_case_double_underscore() {
-        assert_eq!(to_title_case("seo__title"), "Seo  Title");
+        assert_eq!(to_title_case("seo__title"), "Seo Title");
     }
 }

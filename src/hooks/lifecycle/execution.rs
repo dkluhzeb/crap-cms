@@ -62,7 +62,11 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
             ctx.operation,
         )
     {
-        tracing::warn!("field after_read hook error for {}: {}", ctx.collection, e);
+        tracing::error!(
+            "field after_read hook error for {}: {:#}",
+            ctx.collection,
+            e
+        );
 
         return doc;
     }
@@ -104,7 +108,7 @@ pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Documen
                 .build()
         }
         Err(e) => {
-            tracing::warn!("after_read hook error for {}: {}", ctx.collection, e);
+            tracing::error!("after_read hook error for {}: {:#}", ctx.collection, e);
             doc
         }
     }
@@ -248,7 +252,14 @@ pub(crate) fn call_before_broadcast_hook(
                 Ok(Some(context))
             }
         }
-        _ => Ok(Some(context)),
+        other => {
+            tracing::warn!(
+                "before_broadcast hook '{}' returned {} instead of table/false/nil — ignoring",
+                hook_ref,
+                other.type_name()
+            );
+            Ok(Some(context))
+        }
     }
 }
 
@@ -300,6 +311,13 @@ pub(crate) fn call_registered_before_broadcast(
                     context.data = new_data;
                 }
             }
+            other if !matches!(other, Value::Boolean(false) | Value::Nil) => {
+                tracing::warn!(
+                    "Registered before_broadcast hook #{} returned {} instead of table/false/nil — ignoring",
+                    i,
+                    other.type_name()
+                );
+            }
             _ => {}
         }
     }
@@ -347,7 +365,7 @@ pub(crate) fn call_registered_hooks(
 
         let result: Value = func.call(ctx_table)?;
 
-        if let Value::Table(tbl) = result {
+        if let Value::Table(tbl) = &result {
             let data_result: LuaResult<Table> = tbl.get("data");
 
             if let Ok(data_tbl) = data_result {
@@ -358,7 +376,15 @@ pub(crate) fn call_registered_hooks(
                 }
                 context.data = new_data;
             }
-            context.read_context_back(lua, &tbl);
+            context.read_context_back(lua, tbl);
+        } else if !matches!(result, Value::Nil) {
+            tracing::warn!(
+                "Registered {} hook #{} for {} returned {} instead of a table — ignoring",
+                event.as_str(),
+                i,
+                context.collection,
+                result.type_name()
+            );
         }
     }
 
@@ -542,7 +568,16 @@ pub(crate) fn call_hook_ref(
             new_ctx.read_context_back(lua, &tbl);
             Ok(new_ctx)
         }
-        _ => Ok(context),
+        Value::Nil => Ok(context),
+        other => {
+            tracing::warn!(
+                "Hook '{}' for {} returned {} instead of a table — ignoring return value",
+                hook_ref,
+                context.collection,
+                other.type_name()
+            );
+            Ok(context)
+        }
     }
 }
 

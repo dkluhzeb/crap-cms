@@ -134,16 +134,25 @@ pub fn find(
             col = resolved_col,
             op = op,
         );
-        // Convert sort_val to string for the parameter.
-        // Denormalize ISO timestamps back to SQLite format for comparison:
-        // "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
-        let sort_val_str = match &cursor.sort_val {
-            Value::String(s) => denormalize_timestamp(s),
-            Value::Number(n) => n.to_string(),
-            Value::Null => String::new(),
-            other => other.to_string(),
+        // Bind sort_val with the correct DbValue variant for proper comparison.
+        // Strings: denormalize ISO timestamps back to SQLite format.
+        // Numbers: bind as Integer/Real for correct numeric ordering.
+        // Null: bind as SQL NULL, not empty string.
+        let sort_val = match &cursor.sort_val {
+            Value::String(s) => DbValue::Text(denormalize_timestamp(s)),
+            Value::Number(n) => {
+                if let Some(i) = n.as_i64() {
+                    DbValue::Integer(i)
+                } else if let Some(f) = n.as_f64() {
+                    DbValue::Real(f)
+                } else {
+                    DbValue::Text(n.to_string())
+                }
+            }
+            Value::Null => DbValue::Null,
+            other => DbValue::Text(other.to_string()),
         };
-        params.push(DbValue::Text(sort_val_str));
+        params.push(sort_val);
         params.push(DbValue::Text(cursor.id.clone()));
         // Append to existing WHERE or start WHERE
         if where_clause.is_empty() {
@@ -626,39 +635,182 @@ mod tests {
 
     #[test]
     fn cursor_sort_val_number_in_params() {
-        // Inserting docs and using a numeric sort_val cursor
+        // Numeric cursor pagination must use numeric comparison, not string.
+        // With string comparison "9" > "10", so pagination would be wrong.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let conn = db_pool.get().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE scores (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                points INTEGER,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("scores");
+        def.fields = vec![
+            FieldDefinition::builder("name", FieldType::Text).build(),
+            FieldDefinition::builder("points", FieldType::Number).build(),
+        ];
+
+        // Insert rows with numeric values that would sort wrong as strings
+        // String order: "10" < "5" < "9" (lexicographic)
+        // Numeric order: 5 < 9 < 10 < 20 < 100
+        let values = [
+            (5, "five"),
+            (9, "nine"),
+            (10, "ten"),
+            (20, "twenty"),
+            (100, "hundred"),
+        ];
+
+        for (pts, name) in &values {
+            conn.execute(
+                "INSERT INTO scores (id, name, points, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+                &[
+                    DbValue::Text(format!("id-{name}")),
+                    DbValue::Text(name.to_string()),
+                    DbValue::Integer(*pts),
+                    DbValue::Text("2026-01-01 00:00:00".into()),
+                ],
+            )
+            .unwrap();
+        }
+
+        // Page 1: limit 2, order by points ASC → should get 5, 9
+        let mut q1 = FindQuery::new();
+        q1.order_by = Some("points".to_string());
+        q1.limit = Some(2);
+        let page1 = find(&conn, "scores", &def, &q1, None).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].get_str("name"), Some("five"));
+        assert_eq!(page1[1].get_str("name"), Some("nine"));
+
+        // Page 2: cursor after points=9 → should get 10, 20 (NOT skip 10 as string "9" > "10")
+        let cursor = super::super::super::cursor::CursorData {
+            sort_col: "points".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: json!(9),
+            id: "id-nine".to_string(),
+        };
+        let mut q2 = FindQuery::new();
+        q2.order_by = Some("points".to_string());
+        q2.limit = Some(2);
+        q2.after_cursor = Some(cursor);
+        let page2 = find(&conn, "scores", &def, &q2, None).unwrap();
+        assert_eq!(page2.len(), 2);
+        assert_eq!(page2[0].get_str("name"), Some("ten"));
+        assert_eq!(page2[1].get_str("name"), Some("twenty"));
+
+        // Page 3: cursor after points=20 → should get 100
+        let cursor2 = super::super::super::cursor::CursorData {
+            sort_col: "points".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: json!(20),
+            id: "id-twenty".to_string(),
+        };
+        let mut q3 = FindQuery::new();
+        q3.order_by = Some("points".to_string());
+        q3.limit = Some(2);
+        q3.after_cursor = Some(cursor2);
+        let page3 = find(&conn, "scores", &def, &q3, None).unwrap();
+        assert_eq!(page3.len(), 1);
+        assert_eq!(page3[0].get_str("name"), Some("hundred"));
+    }
+
+    #[test]
+    fn cursor_sort_val_null_binds_as_null() {
         let (_tmp, pool) = setup_db();
         let conn = pool.get().unwrap();
         let def = test_def();
 
-        for i in 1..=3 {
-            let mut data = HashMap::new();
-            data.insert("title".to_string(), format!("Post {:02}", i));
-            create(&conn, "posts", &def, &data, None).unwrap();
-        }
-
-        // Build a cursor with a Number sort_val (e.g. for a numeric field)
-        // We use "id" as sort_col and supply a numeric sort_val to exercise the Number arm
-        let mut q = FindQuery::new();
-        q.order_by = Some("title".to_string());
-        q.limit = Some(1);
-        let page1 = find(&conn, "posts", &def, &q, None).unwrap();
-        assert_eq!(page1.len(), 1);
-
-        // Build cursor with Number sort_val
+        // Null sort_val should execute without error (binds DbValue::Null, not empty string)
         let cursor = super::super::super::cursor::CursorData {
             sort_col: "title".to_string(),
             sort_dir: "ASC".to_string(),
-            sort_val: json!(99i64), // Number variant
-            id: page1[0].id.to_string(),
+            sort_val: Value::Null,
+            id: "anyid".to_string(),
         };
-        let mut q2 = FindQuery::new();
-        q2.order_by = Some("title".to_string());
-        q2.limit = Some(10);
-        q2.after_cursor = Some(cursor);
-        // Should execute without error (all docs have title > 99 as string comparison goes)
-        let result = find(&conn, "posts", &def, &q2, None);
+        let mut q = FindQuery::new();
+        q.order_by = Some("title".to_string());
+        q.after_cursor = Some(cursor);
+        let result = find(&conn, "posts", &def, &q, None);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn cursor_sort_val_real_in_params() {
+        // Verify f64 cursor values bind as DbValue::Real
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        let conn = db_pool.get().unwrap();
+
+        conn.execute_batch(
+            "CREATE TABLE ratings (
+                id TEXT PRIMARY KEY,
+                label TEXT,
+                score REAL,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("ratings");
+        def.fields = vec![
+            FieldDefinition::builder("label", FieldType::Text).build(),
+            FieldDefinition::builder("score", FieldType::Number).build(),
+        ];
+
+        let values = [(1.5, "low"), (2.7, "mid"), (3.9, "high")];
+
+        for (score, label) in &values {
+            conn.execute(
+                "INSERT INTO ratings (id, label, score, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+                &[
+                    DbValue::Text(format!("id-{label}")),
+                    DbValue::Text(label.to_string()),
+                    DbValue::Real(*score),
+                    DbValue::Text("2026-01-01 00:00:00".into()),
+                ],
+            )
+            .unwrap();
+        }
+
+        // Cursor after score=1.5 → should get mid, high
+        let cursor = super::super::super::cursor::CursorData {
+            sort_col: "score".to_string(),
+            sort_dir: "ASC".to_string(),
+            sort_val: json!(1.5),
+            id: "id-low".to_string(),
+        };
+        let mut q = FindQuery::new();
+        q.order_by = Some("score".to_string());
+        q.limit = Some(10);
+        q.after_cursor = Some(cursor);
+        let results = find(&conn, "ratings", &def, &q, None).unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].get_str("label"), Some("mid"));
+        assert_eq!(results[1].get_str("label"), Some("high"));
     }
 
     #[test]

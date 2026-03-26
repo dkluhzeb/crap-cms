@@ -509,3 +509,70 @@ pub fn build_single_field_context(
 
     ctx
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::core::field::{FieldDefinition, FieldType};
+
+    use super::build_single_field_context;
+
+    fn group_field(name: &str, localized: bool, children: Vec<FieldDefinition>) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Group,
+            localized,
+            fields: children,
+            ..Default::default()
+        }
+    }
+
+    fn text_field(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Text,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn non_localized_group_in_non_default_locale_locks_children() {
+        let field = group_field("meta", false, vec![text_field("title")]);
+        let values = HashMap::new();
+        let errors = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &values, &errors, "", true, 0);
+
+        // The group itself should be locale-locked
+        assert_eq!(ctx["locale_locked"], true);
+
+        // Children should inherit locale lock (non_default_locale=true, group not localized)
+        let sub = &ctx["sub_fields"][0];
+        assert_eq!(
+            sub["locale_locked"], true,
+            "child of non-localized group must be locale_locked in non-default locale"
+        );
+        assert_eq!(sub["readonly"], true);
+    }
+
+    #[test]
+    fn localized_group_in_non_default_locale_unlocks_children() {
+        let field = group_field("meta", true, vec![text_field("title")]);
+        let values = HashMap::new();
+        let errors = HashMap::new();
+
+        let ctx = build_single_field_context(&field, &values, &errors, "", true, 0);
+
+        // The localized group itself should NOT be locale-locked
+        assert_eq!(ctx["locale_locked"], false);
+
+        // Children should be editable (non_default_locale reset to false for localized group)
+        let sub = &ctx["sub_fields"][0];
+        assert_eq!(
+            sub["locale_locked"], false,
+            "child of localized group must NOT be locale_locked"
+        );
+        assert_eq!(sub["readonly"], false);
+    }
+}

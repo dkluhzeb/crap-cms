@@ -256,6 +256,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Cursor pagination broken on numeric fields**: Cursor sort values were always
+  bound as `TEXT`, so numeric columns compared lexicographically (`"9" > "10"`).
+  Number values now bind as `INTEGER`/`REAL` and `NULL` cursors bind as SQL `NULL`
+  instead of empty string.
+
+- **Silent "unknown" block type on missing `_block_type`**: Block rows without a
+  `_block_type` key silently defaulted to `"unknown"`, masking form parsing bugs
+  and persisting unrenderable blocks. Now returns an error.
+
+- **Version snapshot corruption silently lost**: Malformed JSON in version
+  snapshots was swallowed via `unwrap_or(Null)`, permanently losing the snapshot
+  data with no error. Now propagates the parse error.
+
+- **Double-space labels for group sub-fields**: `to_title_case("seo__title")`
+  produced `"Seo  Title"` (double space). Now filters empty segments from
+  consecutive underscores, producing `"Seo Title"`.
+
+- **`after_read` hook errors silently swallowed**: Hook failures were logged at
+  WARN and the unmodified document was returned, serving stale data with no
+  visible indication. Elevated to `error!` with full error chain.
+
+- **Hook non-table return silently ignored**: If a Lua hook returned a string,
+  number, or boolean instead of a table (common mistake), the original context
+  was used with no feedback. Non-nil non-table returns now log a warning.
+
+- **Form field read errors silently became empty strings**: Multipart form field
+  read failures (e.g., truncated uploads) were hidden by `unwrap_or_default()`.
+  Now logs the error before falling back.
+
+- **Field name `__` collision with group naming**: Field names containing double
+  underscores (e.g., `seo__title`) are now rejected during schema parsing, since
+  `__` is reserved as the group field separator in column names.
+
+- **Theme picker crash in restricted storage contexts**: `localStorage` access in
+  the theme picker could throw in embedded iframes or with storage policies
+  disabled. Wrapped in try/catch.
+
+- **Dirty form / list settings listeners lost on DOM reconnect**: The
+  `<crap-dirty-form>` and `<crap-list-settings>` components cleaned up
+  document/window listeners in `disconnectedCallback` but did not reset their
+  initialization guard, so re-insertion into the DOM left them inert. Guard is
+  now reset on disconnect.
+
 - **Page metadata stomping**: `with_pagination` no longer overwrites the `page`
   context object (title, type, title_name) with the pagination page number.
 

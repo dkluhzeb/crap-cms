@@ -103,7 +103,10 @@ pub fn find_latest_version(
                     .version(version)
                     .status(status)
                     .latest(latest)
-                    .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                    .snapshot(
+                        serde_json::from_str(&snapshot_str)
+                            .context("Failed to parse version snapshot JSON")?,
+                    )
                     .build(),
             ))
         }
@@ -175,7 +178,10 @@ pub fn list_versions(
                 .version(version)
                 .status(status)
                 .latest(latest)
-                .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                .snapshot(
+                    serde_json::from_str(&snapshot_str)
+                        .context("Failed to parse version snapshot JSON")?,
+                )
                 .build(),
         );
     }
@@ -209,7 +215,10 @@ pub fn find_version_by_id(
                     .version(version)
                     .status(status)
                     .latest(latest)
-                    .snapshot(serde_json::from_str(&snapshot_str).unwrap_or(Value::Null))
+                    .snapshot(
+                        serde_json::from_str(&snapshot_str)
+                            .context("Failed to parse version snapshot JSON")?,
+                    )
                     .build(),
             ))
         }
@@ -438,6 +447,29 @@ mod tests {
         let (_dir, conn) = setup_versions_db();
         let status = get_document_status(&conn, "posts", "nonexistent").unwrap();
         assert!(status.is_none());
+    }
+
+    #[test]
+    fn malformed_snapshot_json_returns_error() {
+        let (_dir, conn) = setup_versions_db();
+
+        // Insert a version row with corrupt snapshot JSON directly
+        conn.execute_batch(
+            "INSERT INTO _versions_posts (id, _parent, _version, _status, _latest, snapshot) \
+             VALUES ('bad1', 'p1', 1, 'published', 1, '{not valid json!')",
+        )
+        .unwrap();
+
+        let result = find_latest_version(&conn, "posts", "p1");
+        assert!(
+            result.is_err(),
+            "Malformed snapshot JSON should return an error"
+        );
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Failed to parse version snapshot JSON"),
+            "Error should mention snapshot parsing, got: {msg}"
+        );
     }
 
     #[test]

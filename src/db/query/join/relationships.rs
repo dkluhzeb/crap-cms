@@ -4,9 +4,11 @@ use anyhow::Result;
 
 use crate::db::{DbConnection, DbValue};
 
-/// Set related IDs for a has-many relationship junction table.
-/// Deletes all existing rows for the parent and inserts new ones with _order.
-/// When `locale` is Some, scopes the DELETE to that locale and includes `_locale` in INSERT.
+/// Set the related IDs for a has-many relationship junction table.
+/// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
+///
+/// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
+/// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
 pub fn set_related_ids(
     conn: &dyn DbConnection,
     collection: &str,
@@ -133,7 +135,10 @@ pub fn find_related_ids(
 
 /// Set related items for a polymorphic has-many relationship junction table.
 /// Each item is a `(related_collection, related_id)` pair.
-/// Deletes all existing rows for the parent and inserts new ones with _order.
+/// Deletes all existing rows for the parent (scoped by locale if provided) and inserts new ones.
+///
+/// **Must be called within a transaction.** The DELETE + INSERT sequence is not atomic on its own;
+/// without a wrapping transaction, a failed INSERT leaves the relationship in an inconsistent state.
 pub fn set_polymorphic_related(
     conn: &dyn DbConnection,
     collection: &str,

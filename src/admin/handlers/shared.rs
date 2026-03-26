@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn auto_label_double_underscore() {
-        assert_eq!(auto_label_from_name("seo__title"), "Seo  Title");
+        assert_eq!(auto_label_from_name("seo__title"), "Seo Title");
     }
 
     // --- strip_denied_fields tests ---

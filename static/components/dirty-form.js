@@ -112,7 +112,7 @@ class CrapDirtyForm extends HTMLElement {
   }
 
   disconnectedCallback() {
-    // Do NOT reset _connected — self-bound listeners survive DOM moves.
+    this._connected = false;
     if (this._form) {
       this._form.removeEventListener('input', this._markDirty);
       this._form.removeEventListener('change', this._markDirty);

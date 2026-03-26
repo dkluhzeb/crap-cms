@@ -227,6 +227,13 @@ mod tests {
     }
 
     #[test]
+    fn field_name_double_underscore_is_valid_identifier_but_reserved() {
+        // Double underscores pass is_valid_identifier but are reserved for group naming
+        assert!(is_valid_identifier("seo__title"));
+        // The rejection happens at a higher level (field name validation in schema parsing)
+    }
+
+    #[test]
     fn validate_slug_accepts_valid() {
         assert!(validate_slug("posts").is_ok());
         assert!(validate_slug("site_settings").is_ok());

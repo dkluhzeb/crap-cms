@@ -16,7 +16,11 @@ window.CrapTheme = {
    * @returns {string} Theme name or '' for default light.
    */
   get() {
-    return localStorage.getItem(this._key) || '';
+    try {
+      return localStorage.getItem(this._key) || '';
+    } catch {
+      return '';
+    }
   },
 
   /**
@@ -34,11 +38,13 @@ window.CrapTheme = {
    * @param {string} theme
    */
   set(theme) {
-    if (theme) {
-      localStorage.setItem(this._key, theme);
-    } else {
-      localStorage.removeItem(this._key);
-    }
+    try {
+      if (theme) {
+        localStorage.setItem(this._key, theme);
+      } else {
+        localStorage.removeItem(this._key);
+      }
+    } catch { /* storage unavailable */ }
     this.apply(theme);
   },
 };

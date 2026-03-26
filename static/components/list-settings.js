@@ -68,6 +68,7 @@ class CrapListSettings extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._connected = false;
     document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
     document.removeEventListener('htmx:afterSettle', this._onAfterSettle);
     if (this._resizeObserver) this._resizeObserver.disconnect();

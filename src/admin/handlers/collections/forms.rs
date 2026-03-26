@@ -307,7 +307,13 @@ pub(crate) async fn parse_multipart_form(
                 );
             }
         } else {
-            let text = field.text().await.unwrap_or_default();
+            let text = match field.text().await {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!("Failed to read form field '{}': {}", name, e);
+                    String::new()
+                }
+            };
             form_data.insert(name, text);
         }
     }
