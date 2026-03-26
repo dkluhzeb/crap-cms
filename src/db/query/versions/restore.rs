@@ -138,6 +138,7 @@ fn restore_locale_and_join_data(
                         .get(&base)
                         .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
                     restore_locale_columns(
+                        conn,
                         val,
                         &base,
                         locale_config,
@@ -152,6 +153,7 @@ fn restore_locale_and_join_data(
             // Recurse to handle nested layout wrappers.
             if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
                 collect_locale_restore_fields(
+                    conn,
                     &field.fields,
                     obj,
                     locale_config,
@@ -166,6 +168,7 @@ fn restore_locale_and_join_data(
             if field.field_type == FieldType::Tabs {
                 for tab in &field.tabs {
                     collect_locale_restore_fields(
+                        conn,
                         &tab.fields,
                         obj,
                         locale_config,
@@ -180,6 +183,7 @@ fn restore_locale_and_join_data(
                 continue;
             }
             restore_locale_columns(
+                conn,
                 obj.get(&field.name),
                 &field.name,
                 locale_config,
@@ -191,10 +195,10 @@ fn restore_locale_and_join_data(
 
         if !set_clauses.is_empty() {
             let sql = format!(
-                "UPDATE {} SET {} WHERE id = ?{}",
+                "UPDATE {} SET {} WHERE id = {}",
                 table,
                 set_clauses.join(", "),
-                idx
+                conn.placeholder(idx)
             );
             params.push(DbValue::Text(parent_id.to_string()));
             conn.execute(&sql, &params)
@@ -215,6 +219,7 @@ fn restore_locale_and_join_data(
 
 /// Recursively collect locale fields to restore from layout wrappers (Row/Collapsible/Tabs).
 fn collect_locale_restore_fields(
+    conn: &dyn DbConnection,
     fields: &[FieldDefinition],
     obj: &Map<String, Value>,
     locale_config: &LocaleConfig,
@@ -235,10 +240,11 @@ fn collect_locale_restore_fields(
                 let val = obj
                     .get(&base)
                     .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
-                restore_locale_columns(val, &base, locale_config, set_clauses, params, idx);
+                restore_locale_columns(conn, val, &base, locale_config, set_clauses, params, idx);
             }
         } else if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
             collect_locale_restore_fields(
+                conn,
                 &field.fields,
                 obj,
                 locale_config,
@@ -249,6 +255,7 @@ fn collect_locale_restore_fields(
         } else if field.field_type == FieldType::Tabs {
             for tab in &field.tabs {
                 collect_locale_restore_fields(
+                    conn,
                     &tab.fields,
                     obj,
                     locale_config,
@@ -259,6 +266,7 @@ fn collect_locale_restore_fields(
             }
         } else if field.localized && field.has_parent_column() {
             restore_locale_columns(
+                conn,
                 obj.get(&field.name),
                 &field.name,
                 locale_config,
@@ -273,6 +281,7 @@ fn collect_locale_restore_fields(
 /// Emit SET clauses that NULL all locale columns for a field, then set the
 /// default locale column to the snapshot value.
 fn restore_locale_columns(
+    conn: &dyn DbConnection,
     snapshot_val: Option<&Value>,
     field_name: &str,
     locale_config: &LocaleConfig,
@@ -287,17 +296,17 @@ fn restore_locale_columns(
             // Set default locale from snapshot
             match snapshot_val {
                 Some(Value::String(s)) => {
-                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
                     params.push(DbValue::Text(s.clone()));
                     *idx += 1;
                 }
                 Some(Value::Number(n)) => {
-                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
                     params.push(DbValue::Text(n.to_string()));
                     *idx += 1;
                 }
                 Some(Value::Bool(b)) => {
-                    set_clauses.push(format!("{} = ?{}", col, idx));
+                    set_clauses.push(format!("{} = {}", col, conn.placeholder(*idx)));
                     params.push(DbValue::Integer(if *b { 1 } else { 0 }));
                     *idx += 1;
                 }

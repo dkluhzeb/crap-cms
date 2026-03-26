@@ -17,7 +17,7 @@ use crate::{
                 check_field_write_access_with_lua, has_any_field_access,
             },
             execution::resolve_hook_function,
-            types::{TxContext, UserContext},
+            types::TxContextGuard,
         },
     },
 };
@@ -35,55 +35,48 @@ impl HookRunner {
     ) -> Result<Option<Document>> {
         let lua = self.pool.acquire()?;
 
-        // Inject connection for CRUD access
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
+        // Inject connection for CRUD access — guard ensures cleanup on all exit paths
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
 
-        let result = (|| -> Result<Option<Document>> {
-            let func = resolve_hook_function(&lua, authenticate_ref)?;
+        let func = resolve_hook_function(&lua, authenticate_ref)?;
 
-            // Build context table: { headers = {...}, collection = "..." }
-            let ctx_table = lua.create_table()?;
-            let headers_table = lua.create_table()?;
-            for (k, v) in headers {
-                headers_table.set(k.as_str(), v.as_str())?;
-            }
-            ctx_table.set("headers", headers_table)?;
-            ctx_table.set("collection", collection)?;
+        // Build context table: { headers = {...}, collection = "..." }
+        let ctx_table = lua.create_table()?;
+        let headers_table = lua.create_table()?;
+        for (k, v) in headers {
+            headers_table.set(k.as_str(), v.as_str())?;
+        }
+        ctx_table.set("headers", headers_table)?;
+        ctx_table.set("collection", collection)?;
 
-            let result: Value = func.call(ctx_table)?;
+        let result: Value = func.call(ctx_table)?;
 
-            match result {
-                Value::Table(tbl) => {
-                    // Strategy returned a user table — convert to Document
-                    let id: String = tbl.get("id")?;
-                    let mut fields = HashMap::new();
-                    for pair in tbl.pairs::<String, Value>() {
-                        let (k, v) = pair?;
+        match result {
+            Value::Table(tbl) => {
+                // Strategy returned a user table — convert to Document
+                let id: String = tbl.get("id")?;
+                let mut fields = HashMap::new();
+                for pair in tbl.pairs::<String, Value>() {
+                    let (k, v) = pair?;
 
-                        if k == "id" || k == "created_at" || k == "updated_at" {
-                            continue;
-                        }
-                        fields.insert(k, api::lua_to_json(&lua, &v)?);
+                    if k == "id" || k == "created_at" || k == "updated_at" {
+                        continue;
                     }
-                    let created_at: Option<String> = tbl.get("created_at").ok();
-                    let updated_at: Option<String> = tbl.get("updated_at").ok();
-                    Ok(Some(
-                        DocumentBuilder::new(id)
-                            .fields(fields)
-                            .created_at(created_at)
-                            .updated_at(updated_at)
-                            .build(),
-                    ))
+                    fields.insert(k, api::lua_to_json(&lua, &v)?);
                 }
-                Value::Nil | Value::Boolean(false) => Ok(None),
-                _ => Ok(None),
+                let created_at: Option<String> = tbl.get("created_at").ok();
+                let updated_at: Option<String> = tbl.get("updated_at").ok();
+                Ok(Some(
+                    DocumentBuilder::new(id)
+                        .fields(fields)
+                        .created_at(created_at)
+                        .updated_at(updated_at)
+                        .build(),
+                ))
             }
-        })();
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+            Value::Nil | Value::Boolean(false) => Ok(None),
+            _ => Ok(None),
+        }
     }
 
     /// Run a collection-level or global-level access check.
@@ -103,16 +96,8 @@ impl HookRunner {
         conn: &dyn crate::db::DbConnection,
     ) -> Result<AccessResult> {
         let lua = self.pool.acquire()?;
-
-        // Inject connection for CRUD access in access functions
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
-
-        let result = check_access_with_lua(&lua, access_ref, user, id, data);
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        check_access_with_lua(&lua, access_ref, user, id, data)
     }
 
     /// Check field-level read access. Returns a list of field names that should be
@@ -131,14 +116,8 @@ impl HookRunner {
             Ok(l) => l,
             Err(_) => return Vec::new(),
         };
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
-
-        let result = check_field_read_access_with_lua(&lua, fields, user);
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        check_field_read_access_with_lua(&lua, fields, user)
     }
 
     /// Check field-level write access for a given operation ("create" or "update").
@@ -163,13 +142,7 @@ impl HookRunner {
             Ok(l) => l,
             Err(_) => return Vec::new(),
         };
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
-
-        let result = check_field_write_access_with_lua(&lua, fields, user, operation);
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-        result
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
+        check_field_write_access_with_lua(&lua, fields, user, operation)
     }
 }

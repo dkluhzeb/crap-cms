@@ -53,11 +53,59 @@ pub fn update(
         .ok_or_else(|| anyhow!("Document not found after update"))
 }
 
+/// Partial update: like [`update`] but skips absent checkbox fields instead of
+/// defaulting them to 0. Used for bulk updates where not all fields are provided.
+pub fn update_partial(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    id: &str,
+    data: &HashMap<String, String>,
+    locale_ctx: Option<&LocaleContext>,
+) -> Result<Document> {
+    let now = chrono::Utc::now()
+        .format("%Y-%m-%dT%H:%M:%S.000Z")
+        .to_string();
+
+    let mut col = UpdateCollector::new_partial();
+
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "");
+
+    if def.timestamps {
+        col.set_clauses
+            .push(format!("updated_at = {}", conn.placeholder(col.idx)));
+        col.params.push(DbValue::Text(now));
+        col.idx += 1;
+    }
+
+    if col.set_clauses.is_empty() {
+        return find_by_id_raw(conn, slug, def, id, locale_ctx)?
+            .ok_or_else(|| anyhow!("Document not found"));
+    }
+
+    let sql = format!(
+        "UPDATE {} SET {} WHERE id = {}",
+        slug,
+        col.set_clauses.join(", "),
+        conn.placeholder(col.idx)
+    );
+    col.params.push(DbValue::Text(id.to_string()));
+
+    conn.execute(&sql, &col.params)
+        .with_context(|| format!("Failed to update document {} in '{}'", id, slug))?;
+
+    find_by_id_raw(conn, slug, def, id, locale_ctx)?
+        .ok_or_else(|| anyhow!("Document not found after update"))
+}
+
 /// Accumulates SET clauses and parameter values for an UPDATE statement.
-pub(super) struct UpdateCollector {
+pub(in crate::db::query) struct UpdateCollector {
     pub set_clauses: Vec<String>,
     pub params: Vec<DbValue>,
     pub idx: usize,
+    /// When true, absent checkbox fields are skipped instead of defaulting to 0.
+    /// Used in bulk updates where not all fields are provided.
+    pub skip_absent_checkboxes: bool,
 }
 
 impl UpdateCollector {
@@ -66,13 +114,24 @@ impl UpdateCollector {
             set_clauses: Vec::new(),
             params: Vec::new(),
             idx: 1,
+            skip_absent_checkboxes: false,
+        }
+    }
+
+    /// Create a collector that skips absent checkboxes (for bulk/partial updates).
+    pub fn new_partial() -> Self {
+        Self {
+            set_clauses: Vec::new(),
+            params: Vec::new(),
+            idx: 1,
+            skip_absent_checkboxes: true,
         }
     }
 }
 
 /// Recursively collect SET clauses + params for UPDATE.
 /// Handles arbitrary nesting: Group (prefixed), Row/Collapsible/Tabs (promoted flat).
-pub(super) fn collect_update_params(
+pub(in crate::db::query) fn collect_update_params(
     fields: &[FieldDefinition],
     data: &HashMap<String, String>,
     locale_ctx: &Option<&LocaleContext>,
@@ -126,7 +185,9 @@ pub(super) fn collect_update_params(
                         .params
                         .push(coerce_value(&field.field_type, value));
                     collector.idx += 1;
-                } else if field.field_type == FieldType::Checkbox {
+                } else if field.field_type == FieldType::Checkbox
+                    && !collector.skip_absent_checkboxes
+                {
                     collector.set_clauses.push(format!(
                         "{} = {}",
                         col_name,
@@ -430,6 +491,87 @@ mod tests {
             doc.get_str("meta__slug"),
             Some("old"),
             "Unset field should be preserved"
+        );
+    }
+
+    // ── Regression: update_partial skips absent checkboxes ─────────────
+
+    fn checkbox_ddl() -> &'static str {
+        "CREATE TABLE items (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            active INTEGER DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        )"
+    }
+
+    fn checkbox_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("items");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("active", FieldType::Checkbox).build(),
+        ];
+        def
+    }
+
+    #[test]
+    fn update_resets_absent_checkbox_to_zero() {
+        let (_dir, conn) = setup_db(checkbox_ddl());
+        let def = checkbox_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Test".to_string());
+        data.insert("active".to_string(), "1".to_string());
+        let doc = create(&conn, "items", &def, &data, None).unwrap();
+
+        // Regular update without checkbox field -> should reset to 0
+        let mut update_data = HashMap::new();
+        update_data.insert("title".to_string(), "Updated".to_string());
+        let updated = update(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
+        assert_eq!(
+            updated.fields.get("active").and_then(|v| v.as_i64()),
+            Some(0),
+            "Regular update should reset absent checkbox to 0"
+        );
+    }
+
+    #[test]
+    fn update_partial_preserves_absent_checkbox() {
+        let (_dir, conn) = setup_db(checkbox_ddl());
+        let def = checkbox_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Test".to_string());
+        data.insert("active".to_string(), "1".to_string());
+        let doc = create(&conn, "items", &def, &data, None).unwrap();
+
+        // Partial update without checkbox field -> should preserve existing value
+        let mut update_data = HashMap::new();
+        update_data.insert("title".to_string(), "Partial".to_string());
+        let updated = update_partial(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
+        assert_eq!(
+            updated.fields.get("active").and_then(|v| v.as_i64()),
+            Some(1),
+            "Partial update should preserve absent checkbox value"
+        );
+    }
+
+    #[test]
+    fn update_partial_still_sets_provided_checkbox() {
+        let (_dir, conn) = setup_db(checkbox_ddl());
+        let def = checkbox_def();
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "Test".to_string());
+        data.insert("active".to_string(), "1".to_string());
+        let doc = create(&conn, "items", &def, &data, None).unwrap();
+
+        // Partial update WITH checkbox field -> should update it
+        let mut update_data = HashMap::new();
+        update_data.insert("active".to_string(), "0".to_string());
+        let updated = update_partial(&conn, "items", &def, &doc.id, &update_data, None).unwrap();
+        assert_eq!(
+            updated.fields.get("active").and_then(|v| v.as_i64()),
+            Some(0),
+            "Partial update with explicit checkbox value should set it"
         );
     }
 }

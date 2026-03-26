@@ -4,7 +4,8 @@ mod create;
 mod update;
 
 pub use create::create;
-pub use update::update;
+pub(in crate::db::query) use update::{UpdateCollector, collect_update_params};
+pub use update::{update, update_partial};
 
 use anyhow::{Context as _, Result};
 

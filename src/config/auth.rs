@@ -62,7 +62,7 @@ impl Default for AuthConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PasswordPolicy {
-    /// Minimum password length. Default: 8.
+    /// Minimum password length. Default: 8. Recommended: 12+ for modern security.
     pub min_length: usize,
     /// Maximum password length. Default: 128. Prevents DoS via Argon2 on huge inputs.
     pub max_length: usize,
@@ -93,9 +93,10 @@ impl PasswordPolicy {
     /// Validate a password against this policy. Returns `Ok(())` if the password
     /// meets all requirements, or `Err` with a human-readable message.
     pub fn validate(&self, password: &str) -> Result<()> {
-        if password.len() < self.min_length {
+        if password.chars().count() < self.min_length {
             bail!("Password must be at least {} characters", self.min_length);
         }
+        // Max length uses byte length for Argon2 DoS protection
         if password.len() > self.max_length {
             bail!("Password must be at most {} characters", self.max_length);
         }

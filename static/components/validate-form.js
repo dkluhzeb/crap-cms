@@ -204,7 +204,7 @@ class CrapValidateForm extends HTMLElement {
         const perNode = {};
         for (const [key, message] of Object.entries(errors)) {
           // Match keys like "content[cta#0].text" where parent is "content"
-          const m = key.match(new RegExp(`^${parent.replace(/[[\]]/g, '\\$&')}\\[([^\\]]*#[^\\]]*)\\]\\.`));
+          const m = key.match(new RegExp(`^${parent.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\[([^\\]]*#[^\\]]*)\\]\\.`));
           if (m) {
             (perNode[m[1]] ??= []).push(message);
           }

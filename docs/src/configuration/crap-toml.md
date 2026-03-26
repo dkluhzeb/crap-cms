@@ -34,11 +34,12 @@ This allows keeping secrets out of config files and varying configuration across
 
 ## Duration Values
 
-Most time-related fields accept **both** an integer (seconds) and a human-readable string:
+Most time-related fields accept an integer (seconds), a human-readable string with a suffix, or a bare number string:
 
 ```toml
-# These are equivalent:
+# These are all equivalent:
 token_expiry = 7200
+token_expiry = "7200"
 token_expiry = "2h"
 
 # Supported suffixes: s (seconds), m (minutes), h (hours), d (days)
@@ -66,6 +67,23 @@ max_file_size = "1GB"
 ```
 
 Fields that support this: `max_file_size` (global and per-collection), `max_memory`, `http_max_response_bytes`, `grpc_max_message_size`.
+
+## Configuration Validation
+
+`crap.toml` is validated at startup. Fatal validation errors prevent the server from starting with a descriptive error message. Non-fatal issues log warnings.
+
+**Fatal errors:**
+- `database.pool_max_size = 0`
+- `database.connection_timeout = 0`
+- `hooks.vm_pool_size = 0`
+- `server.admin_port` or `server.grpc_port` is `0`
+- `server.admin_port == server.grpc_port` (ports must be distinct)
+- `auth.password_policy.min_length > auth.password_policy.max_length`
+
+**Warnings (server starts but logs a warning):**
+- `jobs.max_concurrent = 0` — no jobs will execute
+- `auth.secret` is set but shorter than 32 characters
+- `depth.max_depth = 0` — all population requests capped to 0
 
 ## Full Reference
 
@@ -286,8 +304,8 @@ Password strength requirements applied to all password-setting paths (create, up
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `min_length` | integer | `8` | Minimum password length. |
-| `max_length` | integer | `128` | Maximum password length. Prevents DoS via Argon2 on huge inputs. |
+| `min_length` | integer | `8` | Minimum password length in Unicode characters (codepoints). Multi-byte characters (accented letters, CJK, emoji) each count as 1. Must be ≤ `max_length` or the server refuses to start. |
+| `max_length` | integer | `128` | Maximum password length in bytes. Prevents DoS via Argon2 on huge inputs. Uses byte count (not characters) to bound hashing cost. |
 | `require_uppercase` | boolean | `false` | Require at least one uppercase letter (A-Z). |
 | `require_lowercase` | boolean | `false` | Require at least one lowercase letter (a-z). |
 | `require_digit` | boolean | `false` | Require at least one digit (0-9). |

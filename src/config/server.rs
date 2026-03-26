@@ -33,7 +33,7 @@ pub struct ServerConfig {
     /// Options: "off", "gzip", "br", "all".
     pub compression: CompressionMode,
     /// Enable gRPC server reflection (allows clients to discover services).
-    /// Default: true. Disable in production to hide API surface.
+    /// Default: false. Enable during development to allow clients to discover services.
     pub grpc_reflection: bool,
     /// Per-IP gRPC rate limit: max requests per window. 0 = disabled (default).
     pub grpc_rate_limit_requests: u32,
@@ -86,7 +86,7 @@ impl Default for ServerConfig {
             grpc_port: 50051,
             host: "0.0.0.0".to_string(),
             compression: CompressionMode::Off,
-            grpc_reflection: true,
+            grpc_reflection: false,
             grpc_rate_limit_requests: 0,
             grpc_rate_limit_window: 60,
             h2c: false,

@@ -28,12 +28,16 @@ impl LocalizedString {
     }
 
     /// Resolve using the default locale only (for when locale config is disabled).
+    /// Uses the alphabetically-first key for deterministic results across runs.
     pub fn resolve_default(&self) -> &str {
         match self {
             LocalizedString::Plain(s) => s,
-            LocalizedString::Localized(map) => {
-                map.values().next().map(|s| s.as_str()).unwrap_or("")
-            }
+            LocalizedString::Localized(map) => map
+                .keys()
+                .min()
+                .and_then(|k| map.get(k))
+                .map(|s| s.as_str())
+                .unwrap_or(""),
         }
     }
 }
@@ -72,5 +76,16 @@ mod tests {
         let ls = LocalizedString::Localized(map);
         assert_eq!(ls.resolve("en", "en"), "");
         assert_eq!(ls.resolve_default(), "");
+    }
+
+    #[test]
+    fn localized_string_resolve_default_deterministic() {
+        let mut map = HashMap::new();
+        map.insert("de".to_string(), "Titel".to_string());
+        map.insert("en".to_string(), "Title".to_string());
+        map.insert("fr".to_string(), "Titre".to_string());
+        let ls = LocalizedString::Localized(map);
+        // Should always pick "de" (alphabetically first), not arbitrary order
+        assert_eq!(ls.resolve_default(), "Titel");
     }
 }

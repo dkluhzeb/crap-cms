@@ -174,7 +174,7 @@ The MCP server also exposes read-only resources:
 |-----|-------------|
 | `crap://schema/collections` | Full schema of all collections as JSON |
 | `crap://schema/globals` | Full schema of all globals as JSON |
-| `crap://config` | Current configuration (secrets sanitized) |
+| `crap://config` | Current configuration (secrets sanitized: `auth.secret`, `email.smtp_pass`, `mcp.api_key`) |
 
 ## Query Parameters
 

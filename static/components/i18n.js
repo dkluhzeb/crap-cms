@@ -37,7 +37,7 @@ export function t(key, params) {
   let value = strings[key] || key;
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      value = value.replace(`{{${k}}}`, String(v));
+      value = value.replaceAll(`{{${k}}}`, String(v));
     }
   }
   return value;

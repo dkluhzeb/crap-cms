@@ -330,7 +330,10 @@ pub fn get_job_run(conn: &dyn DbConnection, id: &str) -> Result<Option<JobRun>> 
 pub fn cancel_pending_jobs(conn: &dyn DbConnection, slug: Option<&str>) -> Result<i64> {
     let deleted = if let Some(slug) = slug {
         conn.execute(
-            "DELETE FROM _crap_jobs WHERE status = 'pending' AND slug = ?1",
+            &format!(
+                "DELETE FROM _crap_jobs WHERE status = 'pending' AND slug = {}",
+                conn.placeholder(1)
+            ),
             &[DbValue::Text(slug.to_string())],
         )? as i64
     } else {

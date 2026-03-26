@@ -65,7 +65,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 webp = "0.3"
 
 # HTTP client (blocking — used in Lua spawn_blocking context)
-ureq = "3"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Crypto
 ring = "0.17"

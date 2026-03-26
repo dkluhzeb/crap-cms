@@ -6,6 +6,8 @@ mod parsing;
 mod auth;
 mod cors;
 mod features;
+/// Newtype wrapper for MCP API keys.
+pub mod mcp_api_key;
 mod server;
 /// Newtype wrapper for SMTP passwords.
 pub mod smtp_password;
@@ -17,6 +19,7 @@ pub use features::{
     AccessConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig, LocaleConfig,
     McpConfig, PaginationConfig, PaginationMode, SmtpTls, UploadConfig,
 };
+pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};
 pub use server::{AdminConfig, CompressionMode, DatabaseConfig, ServerConfig};
 pub use smtp_password::SmtpPassword;

@@ -108,6 +108,8 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
+            // Release connection before service call (which acquires its own)
+            drop(conn);
             let (doc, _req_context) = service::create_document(
                 &pool,
                 &runner,
@@ -126,6 +128,7 @@ impl ContentService {
             // Proto conversion + field stripping
             let mut proto_doc = document_to_proto(&doc, &collection);
             let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
             let tx = conn.transaction().map_err(|e| {
                 tracing::error!("Field read access tx error: {}", e);
                 Status::internal("Internal error")
@@ -280,6 +283,8 @@ impl ContentService {
                     }
 
                     let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+                    // Release connection before service call (which acquires its own)
+                    drop(conn);
                     let doc = service::unpublish_document(
                         &pool,
                         &runner,
@@ -292,6 +297,7 @@ impl ContentService {
 
                     let mut proto_doc = document_to_proto(&doc, &collection);
                     let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
+                    let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
                     let tx = conn.transaction().map_err(|e| {
                         tracing::error!("Field read access tx error: {}", e);
                         Status::internal("Internal error")
@@ -388,6 +394,8 @@ impl ContentService {
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let auth_user_ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
             let ui_locale = user_doc.as_ref().and_then(|_| auth_user_ui_locale.clone());
+            // Release connection before service call (which acquires its own)
+            drop(conn);
             let (doc, _req_context) = service::update_document(
                 &pool,
                 &runner,
@@ -407,6 +415,7 @@ impl ContentService {
             // Proto conversion + field stripping
             let mut proto_doc = document_to_proto(&doc, &collection);
             let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
+            let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
             let tx = conn.transaction().map_err(|e| {
                 tracing::error!("Field read access tx error: {}", e);
                 Status::internal("Internal error")
@@ -489,6 +498,8 @@ impl ContentService {
             }
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
+            // Release connection before service call (which acquires its own)
+            drop(conn);
             service::delete_document(
                 &pool,
                 &runner,

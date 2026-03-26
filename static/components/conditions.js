@@ -12,6 +12,8 @@ class CrapConditions extends HTMLElement {
   connectedCallback() {
     /** @type {number|null} */
     this._serverTimer = null;
+    /** @type {Array<{el: Element, type: string, fn: Function}>} */
+    this._clientListeners = [];
     this._init();
   }
 
@@ -24,6 +26,10 @@ class CrapConditions extends HTMLElement {
         form.removeEventListener('change', this._debouncedServer);
       }
     }
+    for (const { el, type, fn } of this._clientListeners) {
+      el.removeEventListener(type, fn);
+    }
+    this._clientListeners = [];
   }
 
   /**
@@ -65,10 +71,12 @@ class CrapConditions extends HTMLElement {
     };
 
     watchedFields.forEach((fieldName) => {
-      const input = form.querySelector('[name="' + fieldName + '"]');
+      const input = form.querySelector('[name="' + CSS.escape(fieldName) + '"]');
       if (input) {
         input.addEventListener('input', runClient);
         input.addEventListener('change', runClient);
+        this._clientListeners.push({ el: input, type: 'input', fn: runClient });
+        this._clientListeners.push({ el: input, type: 'change', fn: runClient });
       }
     });
 
@@ -96,7 +104,7 @@ class CrapConditions extends HTMLElement {
         .then((result) => {
           for (const fieldName in result) {
             const el = this.querySelector(
-              '[data-field-name="' + fieldName + '"][data-condition-ref]'
+              '[data-field-name="' + CSS.escape(fieldName) + '"][data-condition-ref]'
             );
             if (el) el.classList.toggle('form__field--hidden', !result[fieldName]);
           }

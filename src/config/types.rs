@@ -78,6 +78,7 @@ impl CrapConfig {
                 .locale
                 .validate()
                 .context("Invalid locale configuration")?;
+            config.validate().context("Invalid configuration")?;
             Ok(config)
         } else {
             tracing::info!("No crap.toml found, using defaults");
@@ -130,6 +131,15 @@ impl CrapConfig {
         // Warning: max_depth = 0 means no population will ever work
         if self.depth.max_depth == 0 {
             tracing::warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
+        }
+
+        // Fatal: password min_length > max_length
+        if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
+            bail!(
+                "auth.password.min_length ({}) must be <= auth.password.max_length ({})",
+                self.auth.password_policy.min_length,
+                self.auth.password_policy.max_length
+            );
         }
 
         Ok(())

@@ -113,20 +113,38 @@ class CrapLiveEvents extends HTMLElement {
       ? t('stale_deleted', { who })
       : t('stale_updated', { who });
 
-    banner.innerHTML = `
-      <span class="stale-warning__icon">&#9888;</span>
-      <span class="stale-warning__text">${message}</span>
-      <span class="stale-warning__actions">
-        ${isDeleted ? '' : `<button type="button" class="stale-warning__reload button button--ghost button--small">${t('reload')}</button>`}
-        <button type="button" class="stale-warning__dismiss">&times;</button>
-      </span>
-    `;
+    banner.textContent = '';
 
-    const reloadBtn = banner.querySelector('.stale-warning__reload');
-    if (reloadBtn) reloadBtn.onclick = () => location.reload();
+    const icon = document.createElement('span');
+    icon.className = 'stale-warning__icon';
+    icon.textContent = '\u26A0';
+    banner.appendChild(icon);
 
-    const dismissBtn = banner.querySelector('.stale-warning__dismiss');
-    if (dismissBtn) dismissBtn.onclick = () => banner.remove();
+    const text = document.createElement('span');
+    text.className = 'stale-warning__text';
+    text.textContent = message;
+    banner.appendChild(text);
+
+    const actions = document.createElement('span');
+    actions.className = 'stale-warning__actions';
+
+    if (!isDeleted) {
+      const reloadBtn = document.createElement('button');
+      reloadBtn.type = 'button';
+      reloadBtn.className = 'stale-warning__reload button button--ghost button--small';
+      reloadBtn.textContent = t('reload');
+      reloadBtn.onclick = () => location.reload();
+      actions.appendChild(reloadBtn);
+    }
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.type = 'button';
+    dismissBtn.className = 'stale-warning__dismiss';
+    dismissBtn.textContent = '\u00d7';
+    dismissBtn.onclick = () => banner.remove();
+    actions.appendChild(dismissBtn);
+
+    banner.appendChild(actions);
 
     if (isDeleted) {
       form.querySelectorAll('input, select, textarea, button[type="submit"]').forEach(

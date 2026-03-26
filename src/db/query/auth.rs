@@ -292,6 +292,7 @@ pub fn set_user_settings(
     settings_json: &str,
 ) -> Result<()> {
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
+    // ON CONFLICT ... DO UPDATE (UPSERT) is valid for both SQLite (>= 3.24) and PostgreSQL (>= 9.5).
     let sql = format!(
         "INSERT INTO _crap_user_settings (user_id, settings) VALUES ({}, {})
          ON CONFLICT(user_id) DO UPDATE SET settings = excluded.settings",

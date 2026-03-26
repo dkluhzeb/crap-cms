@@ -189,7 +189,11 @@ grpcurl -plaintext -d '{
 
 ## UpdateMany
 
-Bulk-update all documents matching a filter. All updates run in a single transaction (all-or-nothing). Fires per-document hooks by default.
+Bulk-update all documents matching a filter. All updates run in a single transaction (all-or-nothing). Runs the full per-document lifecycle by default: `before_validate` → field validation → `before_change` → DB update → `after_change` — the same pipeline as single-document `Update`.
+
+Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are **not** reset to `0` as they would be in a full single-document update.
+
+Password updates are rejected in bulk operations. Use single-document `Update` instead.
 
 ```protobuf
 message UpdateManyRequest {
@@ -198,7 +202,7 @@ message UpdateManyRequest {
   google.protobuf.Struct data = 3;      // field values to apply
   optional string locale = 4;           // locale code for localized fields
   optional bool draft = 5;              // true = save as drafts
-  optional bool hooks = 6;              // default: true. Set false to skip hooks.
+  optional bool hooks = 6;              // default: true. Set false to skip hooks & validation.
 }
 
 message UpdateManyResponse {
@@ -347,7 +351,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/ForgotPassword
 ```
 
-Requires email configuration (`[email]` in `crap.toml`). If email is not configured, the token is still generated but no email is sent.
+Requires email configuration (`[email]` in `crap.toml`). Without email configured, the reset token is generated and stored but never delivered — the forgot-password flow is non-functional without SMTP.
 
 ## ResetPassword
 

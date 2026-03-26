@@ -1009,7 +1009,7 @@ class CrapRichtext extends HTMLElement {
     // Custom node insert buttons
     if (customNodes && customNodes.length > 0) {
       const insertButtons = customNodes.map(nd =>
-        `<button type="button" data-cmd="insert-${nd.name}" title="Insert ${nd.label}">${nd.label}</button>`
+        `<button type="button" data-cmd="insert-${CrapRichtext._esc(nd.name)}" title="Insert ${CrapRichtext._esc(nd.label)}">${CrapRichtext._esc(nd.label)}</button>`
       ).join('');
       html += `<div class="richtext__toolbar-group">${insertButtons}</div>`;
     }

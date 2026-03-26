@@ -513,7 +513,7 @@ pub fn cleanup(config_dir: &Path, confirm: bool) -> Result<()> {
 
     for (table, cols) in &orphans {
         for col in cols {
-            let sql = format!("ALTER TABLE {} DROP COLUMN {}", table, col);
+            let sql = format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table, col);
             conn.execute(&sql, &[])
                 .with_context(|| format!("Failed to drop column {}.{}", table, col))?;
             cli::success(&format!("Dropped: {}.{}", table, col));

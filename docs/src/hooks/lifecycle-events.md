@@ -6,13 +6,13 @@ Nine lifecycle events fire during CRUD operations and admin page rendering.
 
 | Event | Fires On | Mutable Data | CRUD Access | Notes |
 |-------|----------|-------------|-------------|-------|
-| `before_validate` | create, update | Yes | Yes | Normalize inputs before validation |
-| `before_change` | create, update | Yes | Yes | Transform data after validation passes |
-| `after_change` | create, update | Yes | Yes | Runs inside the transaction. Audit logs, counters, side-effects. Errors roll back the entire operation. |
+| `before_validate` | create, update, update_many | Yes | Yes | Normalize inputs before validation |
+| `before_change` | create, update, update_many | Yes | Yes | Transform data after validation passes |
+| `after_change` | create, update, update_many | Yes | Yes | Runs inside the transaction. Audit logs, counters, side-effects. Errors roll back the entire operation. |
 | `before_read` | find, find_by_id | No | No* | Can abort the read by returning an error |
 | `after_read` | find, find_by_id | Yes | No | Transform data before it reaches the client |
-| `before_delete` | delete | No | Yes | Can abort the delete. CRUD access for cascading deletes. |
-| `after_delete` | delete | No | Yes | Runs inside the transaction. Cleanup, cascading deletes. Errors roll back the entire operation. |
+| `before_delete` | delete, delete_many | No | Yes | Can abort the delete. CRUD access for cascading deletes. |
+| `after_delete` | delete, delete_many | No | Yes | Runs inside the transaction. Cleanup, cascading deletes. Errors roll back the entire operation. |
 | `before_broadcast` | create, update, delete | Yes (data) | No | Can suppress or transform live update events. See [Live Updates](../live-updates/hooks.md). |
 | `before_render` | admin page render | Yes (context) | No | Runs before rendering admin pages. Receives the full template context and can modify it. Global-only (no collection-level refs). Useful for injecting global template data. |
 
@@ -42,6 +42,18 @@ In `after_change` and `after_delete` hooks, `context.data.id` contains the docum
 15. before_broadcast hooks (background, no CRUD)
 16. EventBus publish (if not suppressed)
 ```
+
+## Bulk Operations (update_many/delete_many)
+
+`update_many` and `delete_many` run the same per-document lifecycle as their single-document counterparts. Each matched document goes through the full hook pipeline individually, all within a single transaction (all-or-nothing).
+
+**update_many** runs steps 1–12 above for each document. Key differences from single-document `update`:
+- Only provided fields are written (partial update). Absent fields — including checkboxes — are left unchanged.
+- Password updates are rejected. Use single-document `Update` instead.
+- Hook-modified data is captured and written (hooks can transform the data).
+- Set `hooks = false` to skip all hooks and validation for performance.
+
+**delete_many** runs the delete lifecycle (steps 1–5 below) for each document.
 
 ## Read Lifecycle (find/find_by_id)
 

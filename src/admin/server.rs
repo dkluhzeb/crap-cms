@@ -481,6 +481,14 @@ async fn security_headers(
         headers.insert(HeaderName::from_static("content-security-policy"), value);
     }
 
+    // HSTS: instruct browsers to always use HTTPS (skip in dev mode)
+    if !state.config.admin.dev_mode {
+        headers.insert(
+            HeaderName::from_static("strict-transport-security"),
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        );
+    }
+
     response
 }
 
@@ -651,6 +659,21 @@ fn validate_jwt_and_load_user(
     let token = extract_cookie(cookie_header, "crap_session")?;
     let claims = auth::validate_token(token, state.jwt_secret.as_ref()).ok()?;
     let auth_user = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale);
+
+    // Reject locked users even if their JWT is still valid
+    if let Some(ref au) = auth_user {
+        let locked = au
+            .user_doc
+            .fields
+            .get("_locked")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            != 0;
+        if locked {
+            return None;
+        }
+    }
+
     Some((claims, auth_user))
 }
 

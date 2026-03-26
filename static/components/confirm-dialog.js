@@ -110,6 +110,7 @@ class CrapConfirmDialog extends HTMLElement {
       const cleanup = () => {
         cancelBtn.removeEventListener('click', onCancel);
         confirmBtn.removeEventListener('click', onConfirm);
+        dialog.removeEventListener('cancel', onDialogCancel);
       };
 
       const onCancel = () => {
@@ -124,8 +125,14 @@ class CrapConfirmDialog extends HTMLElement {
         resolve(true);
       };
 
+      const onDialogCancel = () => {
+        cleanup();
+        resolve(false);
+      };
+
       cancelBtn.addEventListener('click', onCancel);
       confirmBtn.addEventListener('click', onConfirm);
+      dialog.addEventListener('cancel', onDialogCancel);
 
       dialog.showModal();
     });

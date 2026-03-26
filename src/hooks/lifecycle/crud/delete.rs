@@ -214,7 +214,7 @@ pub(super) fn register_update_many(
                     .and_then(|uc| uc.0.clone());
                 let result = check_access_with_lua(
                     lua,
-                    def.access.read.as_deref(),
+                    def.access.update.as_deref(),
                     user_doc.as_ref(),
                     None,
                     None,
@@ -222,7 +222,7 @@ pub(super) fn register_update_many(
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
+                        return Err(mlua::Error::RuntimeError("Update access denied".into()));
                     }
                     AccessResult::Constrained(extra) => find_query.filters.extend(extra),
                     AccessResult::Allowed => {}
@@ -301,9 +301,15 @@ pub(super) fn register_update_many(
                     )?;
                 }
 
-                let updated =
-                    query::update(conn, &collection, &def, &doc.id, &data, locale_ctx.as_ref())
-                        .map_err(|e| mlua::Error::RuntimeError(format!("update error: {}", e)))?;
+                let updated = query::update_partial(
+                    conn,
+                    &collection,
+                    &def,
+                    &doc.id,
+                    &data,
+                    locale_ctx.as_ref(),
+                )
+                .map_err(|e| mlua::Error::RuntimeError(format!("update error: {}", e)))?;
                 query::save_join_table_data(
                     conn,
                     &collection,
@@ -423,7 +429,7 @@ pub(super) fn register_delete_many(
                     .and_then(|uc| uc.0.clone());
                 let result = check_access_with_lua(
                     lua,
-                    def.access.read.as_deref(),
+                    def.access.delete.as_deref(),
                     user_doc.as_ref(),
                     None,
                     None,
@@ -431,7 +437,7 @@ pub(super) fn register_delete_many(
                 .map_err(|e| mlua::Error::RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
-                        return Err(mlua::Error::RuntimeError("Read access denied".into()));
+                        return Err(mlua::Error::RuntimeError("Delete access denied".into()));
                     }
                     AccessResult::Constrained(extra) => find_query.filters.extend(extra),
                     AccessResult::Allowed => {}

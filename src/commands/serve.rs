@@ -351,9 +351,9 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
 
     // Security warnings for common misconfigurations
     if cfg.mcp.enabled && cfg.mcp.http && cfg.mcp.api_key.is_empty() {
-        warn!(
+        bail!(
             "MCP HTTP endpoint enabled without an API key — \
-             all collections are accessible without authentication"
+             set mcp.api_key in crap.toml to secure the endpoint"
         );
     }
     if cfg.server.grpc_rate_limit_requests == 0 {

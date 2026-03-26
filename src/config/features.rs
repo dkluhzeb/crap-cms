@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    SmtpPassword,
+    McpApiKey, SmtpPassword,
     parsing::{serde_duration, serde_duration_option, serde_filesize},
 };
 
@@ -149,7 +149,7 @@ pub struct McpConfig {
     pub config_tools: bool,
     /// API key for HTTP transport auth. **Strongly recommended** when `http = true`.
     /// Empty = no auth (all MCP operations are unauthenticated).
-    pub api_key: String,
+    pub api_key: McpApiKey,
     /// Whitelist of collection slugs to expose (empty = all).
     pub include_collections: Vec<String>,
     /// Blacklist of collection slugs to hide (takes precedence over include).

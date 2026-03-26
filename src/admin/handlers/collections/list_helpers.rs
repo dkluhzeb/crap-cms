@@ -157,10 +157,9 @@ pub(super) fn compute_cells(
                             }
                             FieldType::Textarea => {
                                 let text = raw.as_str().unwrap_or("");
-                                let truncated = if text.len() > 80 {
-                                    format!("{}…", &text[..80])
-                                } else {
-                                    text.to_string()
+                                let truncated = match text.char_indices().nth(80) {
+                                    Some((i, _)) => format!("{}…", &text[..i]),
+                                    None => text.to_string(),
                                 };
 
                                 json!({ "value": truncated })

@@ -19,7 +19,7 @@ use crate::{
     config::LocaleConfig,
     core::{
         AuthUser, Document, FieldAdmin, FieldDefinition, document::VersionSnapshot,
-        event::EventUser, field, validate::ValidationError,
+        event::EventUser, field, richtext::renderer::html_escape, validate::ValidationError,
     },
     db::{AccessResult, DbPool, LocaleContext, query},
     hooks::{HookRunner, lifecycle::access::has_any_field_access},
@@ -421,7 +421,10 @@ pub(crate) fn forbidden(state: &AdminState, message: &str) -> Response {
 
     let html = match state.render("errors/403", &data) {
         Ok(html) => Html(html),
-        Err(_) => Html(format!("<h1>403 Forbidden</h1><p>{}</p>", message)),
+        Err(_) => Html(format!(
+            "<h1>403 Forbidden</h1><p>{}</p>",
+            html_escape(message)
+        )),
     };
 
     (StatusCode::FORBIDDEN, html).into_response()
@@ -493,7 +496,7 @@ pub(crate) fn not_found(state: &AdminState, message: &str) -> Response {
 
     let html = match state.render("errors/404", &data) {
         Ok(html) => Html(html),
-        Err(_) => Html(format!("<h1>404</h1><p>{}</p>", message)),
+        Err(_) => Html(format!("<h1>404</h1><p>{}</p>", html_escape(message))),
     };
 
     (StatusCode::NOT_FOUND, html).into_response()
@@ -510,7 +513,7 @@ pub(crate) fn server_error(state: &AdminState, message: &str) -> Response {
 
     let html = match state.render("errors/500", &data) {
         Ok(html) => Html(html),
-        Err(_) => Html(format!("<h1>500</h1><p>{}</p>", message)),
+        Err(_) => Html(format!("<h1>500</h1><p>{}</p>", html_escape(message))),
     };
 
     (StatusCode::INTERNAL_SERVER_ERROR, html).into_response()

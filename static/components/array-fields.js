@@ -340,7 +340,7 @@ class CrapArrayField extends HTMLElement {
       );
       if (fs) {
         const labelField = fs.getAttribute('data-label-field');
-        if (labelField) this._setupRowLabelWatcher(html, fs);
+        if (labelField) this._setupRowLabelWatcher(html, labelField);
       }
     }
     this._afterRowChange();

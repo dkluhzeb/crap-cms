@@ -166,7 +166,7 @@ impl ContentService {
                     fields: &fields,
                     collection: &collection,
                     operation: "find",
-                    user: None,
+                    user: auth_user.as_ref().map(|au| &au.user_doc),
                     ui_locale: None,
                 };
                 let mut docs = runner.apply_after_read_many(&ar_ctx, docs);
@@ -335,7 +335,7 @@ impl ContentService {
                 fields: &fields,
                 collection: &collection,
                 operation: "find_by_id",
-                user: None,
+                user: auth_user.as_ref().map(|au| &au.user_doc),
                 ui_locale: None,
             };
             let mut doc = doc.map(|d| runner.apply_after_read(&ar_ctx, d));

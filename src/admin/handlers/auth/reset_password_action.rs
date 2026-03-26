@@ -50,8 +50,10 @@ pub async fn reset_password_action(
 ) -> Response {
     let ip = client_ip(&headers, &addr, state.config.server.trust_proxy);
 
-    // Rate limit by IP — prevents brute-forcing reset tokens
-    if state.ip_login_limiter.is_blocked(&ip) {
+    // Rate limit by IP — prevents brute-forcing reset tokens.
+    // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid
+    // reset failures blocking legitimate login attempts from the same IP.
+    if state.ip_forgot_password_limiter.is_blocked(&ip) {
         return render_reset_error(&state, Some(&form.token), "error_reset_link_invalid");
     }
 
@@ -105,7 +107,7 @@ pub async fn reset_password_action(
         Ok(Ok(())) => Redirect::to("/admin/login?success=success_password_reset").into_response(),
         Ok(Err(e)) => {
             // Record failure on invalid/expired token — not on success
-            state.ip_login_limiter.record_failure(&ip);
+            state.ip_forgot_password_limiter.record_failure(&ip);
 
             let msg = match e.downcast_ref::<ResetTokenError>() {
                 Some(ResetTokenError::Expired) => "error_reset_link_expired",

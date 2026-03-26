@@ -144,6 +144,38 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             _ => None,
         };
 
+        // Validate min <= max constraints
+        if let (Some(mn), Some(mx)) = (min_rows, max_rows)
+            && mn > mx
+        {
+            bail!(
+                "Field '{}': min_rows ({}) must not exceed max_rows ({})",
+                name,
+                mn,
+                mx
+            );
+        }
+        if let (Some(mn), Some(mx)) = (min_length, max_length)
+            && mn > mx
+        {
+            bail!(
+                "Field '{}': min_length ({}) must not exceed max_length ({})",
+                name,
+                mn,
+                mx
+            );
+        }
+        if let (Some(mn), Some(mx)) = (min, max)
+            && mn > mx
+        {
+            bail!(
+                "Field '{}': min ({}) must not exceed max ({})",
+                name,
+                mn,
+                mx
+            );
+        }
+
         let has_many = get_bool(&field_tbl, "has_many", false);
         let min_date = get_string(&field_tbl, "min_date");
         let max_date = get_string(&field_tbl, "max_date");
@@ -571,5 +603,47 @@ mod tests {
         assert_eq!(hooks.before_change, vec!["hooks.transform_title"]);
         assert_eq!(hooks.after_change, vec!["hooks.after_title_change"]);
         assert_eq!(hooks.after_read, vec!["hooks.format_title"]);
+    }
+
+    #[test]
+    fn test_parse_fields_min_exceeds_max_rejected() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "score").unwrap();
+        field.set("type", "number").unwrap();
+        field.set("min", 100.0f64).unwrap();
+        field.set("max", 10.0f64).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(err.to_string().contains("min"), "{}", err);
+    }
+
+    #[test]
+    fn test_parse_fields_min_length_exceeds_max_length_rejected() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "slug").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("min_length", 100usize).unwrap();
+        field.set("max_length", 10usize).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(err.to_string().contains("min_length"), "{}", err);
+    }
+
+    #[test]
+    fn test_parse_fields_min_rows_exceeds_max_rows_rejected() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "items").unwrap();
+        field.set("type", "array").unwrap();
+        field.set("min_rows", 10usize).unwrap();
+        field.set("max_rows", 3usize).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let err = parse_fields(&fields_tbl).unwrap_err();
+        assert!(err.to_string().contains("min_rows"), "{}", err);
     }
 }

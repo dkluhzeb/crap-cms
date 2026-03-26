@@ -221,7 +221,9 @@ Lua CRUD operations run the **same lifecycle hooks** as the gRPC API and admin U
 
 - **`create`**: before_validate → validate → before_change → DB insert → after_change
 - **`update`**: before_validate → validate → before_change → DB update → after_change
+- **`update_many`**: per-document: before_validate → validate → before_change → DB update → after_change
 - **`delete`**: before_delete → DB delete → after_delete
+- **`delete_many`**: per-document: before_delete → DB delete → after_delete
 - **`find` / `find_by_id`**: before_read → DB query → after_read
 
 All hooks have full CRUD access within the same transaction.
@@ -308,7 +310,9 @@ Update multiple documents matching a query. Returns `{ modified = N }`.
 
 **All-or-nothing semantics:** finds all matching documents, checks update access for each (if `overrideAccess = false`), and only proceeds if all pass. If any document fails access, an error is returned and nothing is modified.
 
-Fires per-document lifecycle hooks (`before_change`, `after_change`) by default. Set `hooks = false` in opts to skip for performance on large batch operations.
+Runs the full per-document lifecycle by default: `before_validate` → field validation → `before_change` → DB update → `after_change` — the same pipeline as single-document `update`. Set `hooks = false` in opts to skip hooks and validation for performance on large batch operations.
+
+Only provided fields are written (partial update). Absent fields are left unchanged — including checkbox fields, which are **not** reset to `0` as they would be in a full single-document update.
 
 **Only available inside hooks with transaction context.**
 
@@ -320,7 +324,7 @@ local result = crap.collections.update_many("posts", {
 })
 print(result.modified)  -- number of updated documents
 
--- Skip hooks for performance
+-- Skip hooks and validation for performance
 local result = crap.collections.update_many("posts", {
     where = { status = "draft" },
 }, {
@@ -341,7 +345,7 @@ local result = crap.collections.update_many("posts", {
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `overrideAccess` | boolean | `true` | Skip access control checks. |
 | `draft` | boolean | `false` | Include draft documents. |
-| `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_change` and `after_change` hooks. |
+| `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip all hooks (`before_validate`, `before_change`, `after_change`) and field validation. |
 
 ### Data (3rd argument)
 

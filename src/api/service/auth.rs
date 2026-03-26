@@ -28,13 +28,11 @@ impl ContentService {
         let ip = request
             .remote_addr()
             .map(|a| a.ip().to_string())
-            .unwrap_or_default();
+            .unwrap_or_else(|| "unknown".to_string());
         let req = request.into_inner();
 
         // Check rate limit before doing any work
-        if self.login_limiter.is_blocked(&req.email)
-            || (!ip.is_empty() && self.ip_login_limiter.is_blocked(&ip))
-        {
+        if self.login_limiter.is_blocked(&req.email) || self.ip_login_limiter.is_blocked(&ip) {
             return Err(Status::resource_exhausted(
                 "Too many login attempts. Please try again later.",
             ));
@@ -113,9 +111,7 @@ impl ContentService {
             Ok(Some(u)) => u,
             Ok(None) => {
                 self.login_limiter.record_failure(&req.email);
-                if !ip.is_empty() {
-                    self.ip_login_limiter.record_failure(&ip);
-                }
+                self.ip_login_limiter.record_failure(&ip);
                 return Err(Status::unauthenticated("Invalid email or password"));
             }
             Err(msg) => {
@@ -124,9 +120,7 @@ impl ContentService {
                 // confirming password correctness on locked/unverified accounts.
                 tracing::warn!("Login denied for '{}': {}", req.email, msg);
                 self.login_limiter.record_failure(&req.email);
-                if !ip.is_empty() {
-                    self.ip_login_limiter.record_failure(&ip);
-                }
+                self.ip_login_limiter.record_failure(&ip);
                 return Err(Status::unauthenticated("Invalid email or password"));
             }
         };
@@ -198,6 +192,17 @@ impl ContentService {
 
         let doc = doc.ok_or_else(|| Status::not_found("User not found"))?;
 
+        // Reject locked users even if their JWT is still valid
+        let locked = doc
+            .fields
+            .get("_locked")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            != 0;
+        if locked {
+            return Err(Status::unauthenticated("Account is locked"));
+        }
+
         Ok(Response::new(content::MeResponse {
             user: Some(document_to_proto(&doc, &claims.collection)),
         }))
@@ -212,37 +217,38 @@ impl ContentService {
         let ip = request
             .remote_addr()
             .map(|a| a.ip().to_string())
-            .unwrap_or_default();
+            .unwrap_or_else(|| "unknown".to_string());
         let req = request.into_inner();
 
-        // Rate limit: prevent email/IP flooding (check only — don't record yet)
+        // Rate limit: prevent email/IP flooding
         if self.forgot_password_limiter.is_blocked(&req.email)
-            || (!ip.is_empty() && self.ip_forgot_password_limiter.is_blocked(&ip))
+            || self.ip_forgot_password_limiter.is_blocked(&ip)
         {
             return Ok(Response::new(content::ForgotPasswordResponse {
                 success: true,
             }));
         }
 
-        let def = self.get_collection_def(&req.collection)?;
+        // Record rate limit immediately to prevent concurrent request bypass.
+        // Safe to record unconditionally — the response is always "success"
+        // regardless of whether the email exists, so no information is leaked.
+        self.forgot_password_limiter.record_failure(&req.email);
+        self.ip_forgot_password_limiter.record_failure(&ip);
 
-        if !def.is_auth_collection() {
-            return Err(Status::invalid_argument(format!(
-                "Collection '{}' is not an auth collection",
-                req.collection
-            )));
-        }
+        let ok_response = Response::new(content::ForgotPasswordResponse { success: true });
 
-        if !def.auth.as_ref().is_some_and(|a| a.forgot_password) {
-            return Err(Status::permission_denied(
-                "Password reset is not enabled for this collection",
-            ));
-        }
+        let def = match self.get_collection_def(&req.collection) {
+            Ok(d) => d,
+            // Return success for non-existent collections to prevent leaking validity
+            Err(_) => return Ok(ok_response),
+        };
 
-        if def.auth.as_ref().is_some_and(|a| a.disable_local) {
-            return Err(Status::permission_denied(
-                "Local login is disabled for this collection",
-            ));
+        if !def.is_auth_collection()
+            || !def.auth.as_ref().is_some_and(|a| a.forgot_password)
+            || def.auth.as_ref().is_some_and(|a| a.disable_local)
+        {
+            // Return success to prevent leaking collection configuration
+            return Ok(ok_response);
         }
 
         let pool = self.pool.clone();
@@ -253,9 +259,6 @@ impl ContentService {
         let email_renderer = self.email_renderer.clone();
         let server_config = self.server_config.clone();
         let reset_expiry = self.reset_token_expiry;
-        let forgot_limiter = self.forgot_password_limiter.clone();
-        let ip_forgot_limiter = self.ip_forgot_password_limiter.clone();
-
         // Fire and forget -- always return success
         tokio::task::spawn_blocking(move || {
             let conn = match pool.get() {
@@ -276,18 +279,6 @@ impl ContentService {
                     return;
                 }
             };
-
-            // Only record rate limit when a user was actually found —
-            // prevents attackers from exhausting the rate limit with non-existent emails.
-            //
-            // Trade-off: recording happens inside the background task, so concurrent
-            // requests arriving before this point can bypass the rate limit window.
-            // This is acceptable — moving recording before the lookup would leak
-            // whether an email exists (rate-limited vs. not).
-            forgot_limiter.record_failure(&user_email);
-            if !ip.is_empty() {
-                ip_forgot_limiter.record_failure(&ip);
-            }
 
             let token = nanoid::nanoid!();
             let exp = chrono::Utc::now().timestamp() + reset_expiry as i64;
@@ -347,11 +338,11 @@ impl ContentService {
         let ip = request
             .remote_addr()
             .map(|a| a.ip().to_string())
-            .unwrap_or_default();
+            .unwrap_or_else(|| "unknown".to_string());
         let req = request.into_inner();
 
         // Rate limit by IP — prevents brute-forcing reset tokens
-        if !ip.is_empty() && self.ip_login_limiter.is_blocked(&ip) {
+        if self.ip_login_limiter.is_blocked(&ip) {
             return Err(Status::resource_exhausted(
                 "Too many attempts, try again later",
             ));
@@ -412,9 +403,7 @@ impl ContentService {
             })),
             Err(e) => {
                 // Record failure on invalid/expired token — not on success
-                if !ip.is_empty() {
-                    self.ip_login_limiter.record_failure(&ip);
-                }
+                self.ip_login_limiter.record_failure(&ip);
 
                 match e.downcast_ref::<ResetTokenError>() {
                     Some(_) => Err(Status::invalid_argument(e.to_string())),
@@ -454,15 +443,20 @@ impl ContentService {
         let def_owned = def;
 
         let found = tokio::task::spawn_blocking(move || {
-            let conn = pool.get().context("DB connection")?;
-            match query::find_by_verification_token(&conn, &slug, &def_owned, &token)? {
+            let mut conn = pool.get().context("DB connection")?;
+            let tx = conn.transaction().context("Start transaction")?;
+            match query::find_by_verification_token(&tx, &slug, &def_owned, &token)? {
                 Some((user, exp)) => {
                     if chrono::Utc::now().timestamp() >= exp {
                         // Clean up expired token
-                        let _ = query::clear_verification_token(&conn, &slug, &user.id);
+                        if let Err(e) = query::clear_verification_token(&tx, &slug, &user.id) {
+                            tracing::warn!("Failed to clear expired verification token: {}", e);
+                        }
+                        tx.commit()?;
                         return Ok(false); // Token expired
                     }
-                    query::mark_verified(&conn, &slug, &user.id)?;
+                    query::mark_verified(&tx, &slug, &user.id)?;
+                    tx.commit()?;
                     Ok(true)
                 }
                 None => Ok(false),

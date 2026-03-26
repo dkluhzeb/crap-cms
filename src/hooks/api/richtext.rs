@@ -67,6 +67,20 @@ pub fn register_richtext(lua: &Lua, crap: &Table, registry: SharedRegistry) -> a
             Vec::new()
         };
 
+        // Validate searchable_attrs reference existing attr names
+        let attr_names: Vec<&str> = attrs.iter().map(|a| a.name.as_str()).collect();
+        for sa in &searchable_attrs {
+            if !attr_names.contains(&sa.as_str()) {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "Node '{}': searchable_attrs references unknown attr '{}'.\n\
+                     Available attrs: [{}]",
+                    name,
+                    sa,
+                    attr_names.join(", "),
+                )));
+            }
+        }
+
         // Check for render function
         let has_render = spec.get::<Value>("render")
             .map(|v| matches!(v, Value::Function(_)))
@@ -577,5 +591,30 @@ mod tests {
         let reg = registry.read().unwrap();
         let node = reg.get_richtext_node("form").unwrap();
         assert_eq!(node.attrs.len(), 7);
+    }
+
+    #[test]
+    fn register_node_searchable_attrs_unknown_rejected() {
+        let (lua, _) = setup_lua();
+        let result = lua
+            .load(
+                r#"
+            crap.richtext.register_node("article", {
+                label = "Article",
+                attrs = {
+                    crap.fields.text({ name = "title" }),
+                },
+                searchable_attrs = { "title", "nonexistent" },
+            })
+        "#,
+            )
+            .exec();
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("nonexistent"),
+            "error should mention the unknown attr: {}",
+            err_msg
+        );
     }
 }

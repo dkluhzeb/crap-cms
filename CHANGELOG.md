@@ -83,6 +83,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `X-Content-Type-Options: nosniff`, `Referrer-Policy`,
   `Permissions-Policy` (camera, microphone, geolocation disabled).
 
+- **`crap.json` namespace** — `crap.json.encode()` / `crap.json.decode()` as
+  cleaner aliases for `crap.util.json_encode()` / `crap.util.json_decode()`.
+  The old `crap.util.json_*` functions continue to work.
+
+- **Lua type definitions** — `types/crap.lua` provides LuaLS-compatible
+  `@class`/`@param`/`@return` annotations for the entire `crap.*` API,
+  enabling IDE autocompletion and type checking.
+
 ### Changed
 
 - **Scaffold `dev_mode`** defaults to `false` (was `true`). New projects start
@@ -113,6 +121,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **CORS `max_age_seconds`** renamed to **`max_age`** for consistency with other
   duration fields. Accepts integer seconds or human-readable (`"1h"`, `"30m"`).
 
+- **Scaffold CORS config** — `crap init` now outputs `max_age` instead of the
+  old `max_age_seconds` in the commented CORS section.
+
 ### Security
 
 - **Content-Security-Policy** (NEW): Admin UI now sends a CSP header by default
@@ -128,6 +139,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `LoginRateLimiter` instances, preventing attackers from doubling their attempt
   budget by targeting both servers.
 
+- **Richtext node attr XSS** (HIGH): Custom node attribute values were rendered
+  unescaped into `innerHTML` in the richtext editor modal and inline node
+  display. Values containing `<`, `>`, `"`, `'`, or `&` could break the DOM
+  or enable stored XSS. All interpolated values are now HTML-escaped. The
+  server-side `before_validate` hook output is also escaped when
+  reconstructing `<crap-node>` tags.
+
+- **SSRF DNS rebinding closed** (HIGH): `crap.http.request()` now resolves DNS
+  once, validates against the SSRF policy, and pins the validated IP via
+  `reqwest::ClientBuilder::resolve()`. No second DNS lookup occurs at connect
+  time — eliminates the TOCTOU DNS rebinding gap that existed with ureq.
+  Redirects are individually resolved, validated, and pinned before following.
+
 - **Migration concurrency** — `sync_all` now uses `transaction_immediate()` to
   serialize concurrent DDL operations via SQLite's write lock + `busy_timeout`,
   preventing schema corruption from concurrent startups.
@@ -139,6 +163,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - **Page metadata stomping**: `with_pagination` no longer overwrites the `page`
   context object (title, type, title_name) with the pagination page number.
+
+- **Admin socket address extraction**: The non-H2C admin server was not using
+  `into_make_service_with_connect_info::<SocketAddr>()`, so `ConnectInfo`
+  extraction failed at runtime — broke `trust_proxy` and per-IP rate limiting.
+
+- **Relationship link URLs**: The join field template appended `/edit` to
+  relationship item URLs (e.g. `/admin/collections/tags/123/edit` instead of
+  `/admin/collections/tags/123`), causing 404s when clicking linked items.
+
+- **Relationship search label association**: The `<crap-relationship-search>`
+  input was missing an `id` attribute, breaking `<label for="...">` matching.
+
+- **Relationship search null-safety**: `JSON.parse(getAttribute('selected'))`
+  could return `null` instead of an array, causing a TypeError when iterating.
+
+- **Join field label element**: The join field template used a `<label>` without
+  a `for` attribute — changed to `<span class="form__label">` for correct
+  semantics.
+
+- **Richtext `<crap-node>` tag parsing**: The parser searched for `</crap-node>`
+  before `/>`, so a self-closing tag before a full closing tag consumed too
+  much content. Rewritten to find whichever closing pattern comes first.
+
+- **Richtext node attr validation in nested fields**: Richtext fields inside
+  array or blocks containers did not have their custom node attributes
+  validated. Added recursive field walking to find all richtext fields.
+
+- **Richtext node attr `required` skipped for drafts**: Required validation on
+  custom node attributes fired even for drafts, blocking users from saving
+  incomplete work.
+
+- **Form validation double-submit**: The `<crap-validate-form>` component's
+  `_runValidation()` could fire concurrently on rapid double-click. Added a
+  guard flag to prevent concurrent validation requests.
 
 ### Internal
 
@@ -163,3 +221,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 - Extracted `get_text`/`get_opt_text` helpers in image queue code, replacing
   repeated match-and-clone blocks.
+
+- Replaced `ureq` with `reqwest` (blocking + rustls-tls) for the Lua HTTP
+  client. Enables DNS pinning via `ClientBuilder::resolve()` and reuses
+  existing rustls/hyper/tokio transitive deps.

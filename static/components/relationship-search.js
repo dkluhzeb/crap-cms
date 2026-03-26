@@ -41,6 +41,8 @@ class CrapRelationshipSearch extends HTMLElement {
   connectedCallback() {
     if (this._initialized) return;
     this._initialized = true;
+    /** @type {MutationObserver|null} */
+    this._observer = null;
 
     const collection = this.getAttribute('collection') || '';
     const fieldName = this.getAttribute('field-name') || '';
@@ -105,6 +107,7 @@ class CrapRelationshipSearch extends HTMLElement {
     let debounceTimer = null;
     let activeIndex = -1;
     let suppressFocus = false;
+    let searchGen = 0;
     /** @type {Array<{id: string, label: string, collection?: string}>} */
     let results = [];
 
@@ -265,6 +268,7 @@ class CrapRelationshipSearch extends HTMLElement {
      * @param {string} query
      */
     async function doSearch(query) {
+      const gen = ++searchGen;
       if (polymorphic) {
         // Fan out to all target collections
         const promises = collections.map(async (col) => {
@@ -282,6 +286,7 @@ class CrapRelationshipSearch extends HTMLElement {
           } catch { return []; }
         });
         const allResults = await Promise.all(promises);
+        if (gen !== searchGen) return;
         results = allResults.flat();
         // Sort: group by collection
         results.sort((a, b) => {
@@ -294,6 +299,7 @@ class CrapRelationshipSearch extends HTMLElement {
         try {
           const resp = await fetch(url);
           if (!resp.ok) return;
+          if (gen !== searchGen) return;
           results = await resp.json();
         } catch { return; }
       }
@@ -381,6 +387,7 @@ class CrapRelationshipSearch extends HTMLElement {
         clearBtn.style.display = selected.length > 0 ? '' : 'none';
       });
       observer.observe(hiddenContainer, { childList: true, subtree: true });
+      this._observer = observer;
     }
 
     // Listen for picks from external sources (e.g. drawer picker)
@@ -399,6 +406,14 @@ class CrapRelationshipSearch extends HTMLElement {
     if (pickerMode === 'drawer' && !readonly) {
       this._setupDrawerPicker(collection, isUpload, hasMany);
     }
+  }
+
+  disconnectedCallback() {
+    if (this._observer) {
+      this._observer.disconnect();
+      this._observer = null;
+    }
+    this._initialized = false;
   }
 
   /**
@@ -522,7 +537,7 @@ class CrapRelationshipSearch extends HTMLElement {
       }
 
       const limit = DRAWER_PAGE_SIZE;
-      const url = `/admin/api/search/${encodeURIComponent(collection)}?q=${encodeURIComponent(query)}&limit=${limit}`;
+      const url = `/admin/api/search/${encodeURIComponent(collection)}?q=${encodeURIComponent(query)}&limit=${limit}&offset=${currentOffset}`;
       try {
         const resp = await fetch(url);
         if (!resp.ok) return;
@@ -548,7 +563,7 @@ class CrapRelationshipSearch extends HTMLElement {
     });
 
     loadMore.addEventListener('click', () => {
-      loadMore.style.display = 'none';
+      fetchResults(searchInput.value.trim(), true);
     });
 
     // Initial load

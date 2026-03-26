@@ -7,10 +7,7 @@ use crate::{
     core::Document,
     hooks::{
         HookRunner, api,
-        lifecycle::{
-            execution::resolve_hook_function,
-            types::{TxContext, UserContext},
-        },
+        lifecycle::{execution::resolve_hook_function, types::TxContextGuard},
     },
 };
 
@@ -28,47 +25,38 @@ impl HookRunner {
         conn: &dyn crate::db::DbConnection,
     ) -> Result<Option<String>> {
         let lua = self.pool.acquire()?;
+        let _guard = TxContextGuard::set(&lua, conn, None, None);
 
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(None));
+        // Build context table
+        let ctx = lua.create_table()?;
 
-        let result = (|| -> Result<Option<String>> {
-            // Build context table
-            let ctx = lua.create_table()?;
+        // Parse data JSON into Lua table
+        let data_value: JsonValue =
+            serde_json::from_str(data_json).unwrap_or(JsonValue::Object(JsonMap::new()));
+        let data_lua = api::json_to_lua(&lua, &data_value)?;
+        ctx.set("data", data_lua)?;
 
-            // Parse data JSON into Lua table
-            let data_value: JsonValue =
-                serde_json::from_str(data_json).unwrap_or(JsonValue::Object(JsonMap::new()));
-            let data_lua = api::json_to_lua(&lua, &data_value)?;
-            ctx.set("data", data_lua)?;
+        // Job metadata
+        let job_meta = lua.create_table()?;
+        job_meta.set("slug", slug)?;
+        job_meta.set("attempt", attempt)?;
+        job_meta.set("max_attempts", max_attempts)?;
+        ctx.set("job", job_meta)?;
 
-            // Job metadata
-            let job_meta = lua.create_table()?;
-            job_meta.set("slug", slug)?;
-            job_meta.set("attempt", attempt)?;
-            job_meta.set("max_attempts", max_attempts)?;
-            ctx.set("job", job_meta)?;
+        // Resolve the handler function (e.g., "jobs.cleanup.run")
+        let func = resolve_hook_function(&lua, handler_ref)?;
 
-            // Resolve the handler function (e.g., "jobs.cleanup.run")
-            let func = resolve_hook_function(&lua, handler_ref)?;
+        // Call handler(ctx)
+        let return_val: mlua::Value = func.call(ctx)?;
 
-            // Call handler(ctx)
-            let return_val: mlua::Value = func.call(ctx)?;
-
-            // Convert return value to JSON
-            match return_val {
-                mlua::Value::Nil => Ok(None),
-                other => {
-                    let json_val = api::lua_to_json(&lua, &other)?;
-                    Ok(Some(serde_json::to_string(&json_val)?))
-                }
+        // Convert return value to JSON
+        match return_val {
+            mlua::Value::Nil => Ok(None),
+            other => {
+                let json_val = api::lua_to_json(&lua, &other)?;
+                Ok(Some(serde_json::to_string(&json_val)?))
             }
-        })();
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-
-        result
+        }
     }
 
     /// Execute arbitrary Lua code within a transaction + user context.
@@ -81,15 +69,10 @@ impl HookRunner {
         user: Option<&Document>,
     ) -> Result<String> {
         let lua = self.pool.acquire()?;
+        let _guard = TxContextGuard::set(&lua, conn, user.cloned(), None);
 
-        lua.set_app_data(TxContext::new(conn));
-        lua.set_app_data(UserContext(user.cloned()));
-
-        let result = lua.load(code).eval::<String>();
-
-        lua.remove_app_data::<TxContext>();
-        lua.remove_app_data::<UserContext>();
-
-        result.map_err(|e| anyhow!("{}", e))
+        lua.load(code)
+            .eval::<String>()
+            .map_err(|e| anyhow!("{}", e))
     }
 }

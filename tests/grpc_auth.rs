@@ -421,18 +421,21 @@ async fn verify_email_not_enabled() {
 
 #[tokio::test]
 async fn forgot_password_non_auth_collection() {
+    // ForgotPassword returns success even for non-auth collections to avoid
+    // leaking collection configuration details to potential attackers.
     let ts = setup_service(vec![make_posts_def()], vec![]);
 
-    let err = ts
+    let resp = ts
         .service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "posts".to_string(),
             email: "a@b.com".to_string(),
         }))
         .await
-        .unwrap_err();
+        .unwrap()
+        .into_inner();
 
-    assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    assert!(resp.success);
 }
 
 #[tokio::test]
@@ -455,23 +458,25 @@ async fn forgot_password_always_returns_success() {
 
 #[tokio::test]
 async fn forgot_password_not_enabled() {
-    // Create a users def with forgot_password explicitly disabled
+    // ForgotPassword returns success even when forgot_password is disabled to
+    // avoid leaking collection configuration details to potential attackers.
     let mut def = make_users_def();
     if let Some(ref mut auth) = def.auth {
         auth.forgot_password = false;
     }
     let ts = setup_service(vec![def], vec![]);
 
-    let err = ts
+    let resp = ts
         .service
         .forgot_password(Request::new(content::ForgotPasswordRequest {
             collection: "users".to_string(),
             email: "a@b.com".to_string(),
         }))
         .await
-        .unwrap_err();
+        .unwrap()
+        .into_inner();
 
-    assert_eq!(err.code(), tonic::Code::PermissionDenied);
+    assert!(resp.success);
 }
 
 // ── Subscribe Tests ───────────────────────────────────────────────────────

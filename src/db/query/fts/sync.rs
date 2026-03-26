@@ -144,7 +144,7 @@ fn bulk_populate_slow(
         .with_context(|| format!("Failed to query {} for FTS population", slug))?;
 
     let placeholders: Vec<String> = (1..=fts_fields.len() + 1)
-        .map(|i| format!("?{}", i))
+        .map(|i| conn.placeholder(i))
         .collect();
     let insert_sql = format!(
         "INSERT INTO {}(id, {}) VALUES ({})",
@@ -225,7 +225,11 @@ pub fn fts_upsert_with_registry(
 
     // Delete existing row
     conn.execute(
-        &format!("DELETE FROM {} WHERE id = ?1", fts_table),
+        &format!(
+            "DELETE FROM {} WHERE id = {}",
+            fts_table,
+            conn.placeholder(1)
+        ),
         &[DbValue::Text(doc.id.to_string())],
     )
     .with_context(|| format!("FTS delete before upsert in {}", fts_table))?;
@@ -261,7 +265,7 @@ pub fn fts_upsert_with_registry(
         values.push(DbValue::Text(text));
     }
 
-    let placeholders: Vec<String> = (1..=values.len()).map(|i| format!("?{}", i)).collect();
+    let placeholders: Vec<String> = (1..=values.len()).map(|i| conn.placeholder(i)).collect();
     let field_list: String = fts_cols.join(", ");
     let sql = format!(
         "INSERT INTO {}(id, {}) VALUES ({})",
@@ -287,7 +291,11 @@ pub fn fts_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     }
 
     conn.execute(
-        &format!("DELETE FROM {} WHERE id = ?1", fts_table),
+        &format!(
+            "DELETE FROM {} WHERE id = {}",
+            fts_table,
+            conn.placeholder(1)
+        ),
         &[DbValue::Text(id.to_string())],
     )
     .with_context(|| format!("FTS delete in {}", fts_table))?;

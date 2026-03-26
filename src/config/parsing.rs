@@ -10,6 +10,10 @@ pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
+    // Bare number (no suffix) treated as seconds
+    if let Ok(secs) = s.parse::<u64>() {
+        return Some(secs);
+    }
     let (num_str, suffix) = s.split_at(s.len().saturating_sub(1));
     let num: u64 = num_str.parse().ok()?;
     match suffix {

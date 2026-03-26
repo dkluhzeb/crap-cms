@@ -14,7 +14,7 @@ use crate::{
     },
     core::upload,
     db::{AccessResult, DbConnection, FindQuery, LocaleContext, query},
-    hooks::{HookContext, HookEvent},
+    hooks::{HookContext, HookEvent, ValidationCtx},
     service::{self, versions},
 };
 
@@ -130,31 +130,45 @@ impl ContentService {
                 }
             }
 
+            // Strip field-level update-denied fields (same as single Update)
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+            let denied =
+                hook_runner.check_field_write_access(&def_owned.fields, user_doc, "update", &tx);
+            for name in &denied {
+                data.remove(name);
+                join_data.remove(name);
+            }
+
             let mut count = 0i64;
             for doc in &docs {
-                if run_hooks {
-                    let hook_data = service::build_hook_data(&data, &join_data);
+                let hook_data = service::build_hook_data(&data, &join_data);
+
+                // Run the full before-write lifecycle: BeforeValidate → validation → BeforeChange.
+                // Captures modified data from hooks so it flows into the actual DB write.
+                let (write_data, write_join_data) = if run_hooks {
                     let hook_ctx = HookContext::builder(&collection, "update")
                         .data(hook_data)
                         .user(user_doc)
                         .build();
-                    hook_runner
-                        .run_hooks_with_conn(
-                            &def_owned.hooks,
-                            HookEvent::BeforeChange,
-                            hook_ctx,
-                            &tx,
-                        )
+                    let val_ctx = ValidationCtx::builder(&tx, &collection)
+                        .exclude_id(Some(&doc.id))
+                        .locale_ctx(locale_ctx.as_ref())
+                        .build();
+                    let final_ctx = hook_runner
+                        .run_before_write(&def_owned.hooks, &def_owned.fields, hook_ctx, &val_ctx)
                         .map_err(|e| map_db_error(e, "UpdateMany hook error", &db_kind))?;
-                }
+                    let final_data = final_ctx.to_string_map(&def_owned.fields);
+                    (final_data, final_ctx.data)
+                } else {
+                    (data.clone(), join_data.clone())
+                };
 
-                let updated = query::update(
+                let updated = query::update_partial(
                     &tx,
                     &collection,
                     &def_owned,
                     &doc.id,
-                    &data,
+                    &write_data,
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
@@ -163,7 +177,7 @@ impl ContentService {
                     &collection,
                     &def_owned.fields,
                     &doc.id,
-                    &join_data,
+                    &write_join_data,
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;

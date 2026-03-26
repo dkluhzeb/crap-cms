@@ -57,22 +57,32 @@ class CrapUploadPreview extends HTMLElement {
 
     if (preview) {
       if (thumbnailUrl && isImage) {
-        preview.innerHTML = '<img src="' + thumbnailUrl + '" alt="' + t('preview') + '" />';
+        preview.textContent = '';
+        const img = document.createElement('img');
+        img.src = thumbnailUrl;
+        img.alt = t('preview');
+        preview.appendChild(img);
         preview.style.display = '';
       } else {
-        preview.innerHTML = '';
+        preview.textContent = '';
         preview.style.display = 'none';
       }
     }
 
     if (info) {
       if (filename) {
-        info.innerHTML =
-          '<span class="material-symbols-outlined icon--sm">description</span>' +
-          '<span class="upload-field__filename">' + filename + '</span>';
+        info.textContent = '';
+        const icon = document.createElement('span');
+        icon.className = 'material-symbols-outlined icon--sm';
+        icon.textContent = 'description';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'upload-field__filename';
+        nameSpan.textContent = filename;
+        info.appendChild(icon);
+        info.appendChild(nameSpan);
         info.style.display = '';
       } else {
-        info.innerHTML = '';
+        info.textContent = '';
         info.style.display = 'none';
       }
     }

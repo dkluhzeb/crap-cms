@@ -82,7 +82,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
         "\n[auth]\nsecret = \"{}\"\n# token_expiry = 7200              # seconds, default 2 hours\n# max_login_attempts = 5           # failed logins before lockout\n# login_lockout_seconds = 300      # lockout duration (5 minutes)\n# reset_token_expiry = 3600        # password reset token lifetime (1 hour)\n# max_forgot_password_attempts = 3 # rate limit forgot-password per email\n# forgot_password_window_seconds = 900  # rate limit window (15 minutes)\n",
         opts.auth_secret
     ));
-    toml.push_str("\n# [auth.password_policy]\n# min_length = 8                # minimum password length\n# max_length = 128              # maximum password length\n# require_uppercase = false     # require uppercase letter\n# require_lowercase = false     # require lowercase letter\n# require_digit = false         # require digit\n# require_special = false       # require special character\n");
+    toml.push_str("\n# [auth.password_policy]\n# min_length = 12               # minimum password length\n# max_length = 128              # maximum password length\n# require_uppercase = false     # require uppercase letter\n# require_lowercase = false     # require lowercase letter\n# require_digit = false         # require digit\n# require_special = false       # require special character\n");
     toml.push_str("\n[live]\n# enabled = true                # enable SSE + gRPC Subscribe for live mutation events\n# channel_capacity = 1024       # broadcast channel buffer size\n# max_sse_connections = 1000    # max concurrent SSE connections (0 = unlimited)\n# max_subscribe_connections = 1000  # max concurrent gRPC Subscribe streams (0 = unlimited)\n");
 
     if opts.locales.is_empty() {

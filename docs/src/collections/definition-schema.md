@@ -38,11 +38,11 @@ All hook values are arrays of string references in `module.function` format.
 |----------|------|-------------|
 | `before_validate` | string[] | Runs before field validation. Has CRUD access. |
 | `before_change` | string[] | Runs after validation, before write. Has CRUD access. |
-| `after_change` | string[] | Runs after create/update. No CRUD access (fire-and-forget). |
+| `after_change` | string[] | Runs after create/update (inside transaction). Has CRUD access. Errors roll back. |
 | `before_read` | string[] | Runs before returning read results. No CRUD access. |
 | `after_read` | string[] | Runs after read, before response. No CRUD access. |
 | `before_delete` | string[] | Runs before delete. Has CRUD access. |
-| `after_delete` | string[] | Runs after delete. No CRUD access (fire-and-forget). |
+| `after_delete` | string[] | Runs after delete (inside transaction). Has CRUD access. Errors roll back. |
 | `before_broadcast` | string[] | Runs after commit, before broadcast. No CRUD access. See [Live Updates](../live-updates/hooks.md). |
 
 See [Hooks](../hooks/overview.md) for full details.

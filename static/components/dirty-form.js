@@ -43,7 +43,7 @@ class CrapDirtyForm extends HTMLElement {
     }
 
     // Custom component changes (relationship search, uploads)
-    document.addEventListener('crap:change', this._markDirty);
+    this.addEventListener('crap:change', this._markDirty);
 
     // Array/block row mutations
     this._onRowAction = (e) => {
@@ -107,7 +107,7 @@ class CrapDirtyForm extends HTMLElement {
   }
 
   disconnectedCallback() {
-    document.removeEventListener('crap:change', this._markDirty);
+    this.removeEventListener('crap:change', this._markDirty);
     document.removeEventListener('click', this._onRowAction);
     document.removeEventListener('htmx:configRequest', this._onConfigRequest);
     window.removeEventListener('popstate', this._onPopState);

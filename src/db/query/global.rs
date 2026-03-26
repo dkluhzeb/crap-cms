@@ -3,11 +3,11 @@
 use anyhow::{Context as _, Result};
 use std::collections::HashMap;
 
-use crate::core::{Document, FieldDefinition, FieldType, collection::GlobalDefinition};
+use crate::core::{Document, collection::GlobalDefinition};
 use crate::db::{
     DbConnection, DbRow, DbValue, LocaleContext, LocaleMode,
     document::row_to_document,
-    query::{coerce_value, group_locale_fields, locale_write_column},
+    query::{group_locale_fields, write::UpdateCollector, write::collect_update_params},
 };
 
 /// Get the single global document from `_global_{slug}`.
@@ -72,115 +72,27 @@ pub fn update_global(
         .format("%Y-%m-%dT%H:%M:%S.000Z")
         .to_string();
 
-    let mut set_clauses = Vec::new();
-    let mut params: Vec<DbValue> = Vec::new();
-    let mut idx = 1;
+    let mut col = UpdateCollector::new();
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "");
 
-    collect_update_params(
-        &def.fields,
-        data,
-        &locale_ctx,
-        &mut set_clauses,
-        &mut params,
-        &mut idx,
-        "",
-    );
-
-    set_clauses.push(format!("updated_at = ?{}", idx));
-    params.push(DbValue::Text(now));
-
-    if set_clauses.is_empty() {
+    if col.set_clauses.is_empty() {
         return get_global(conn, slug, def, locale_ctx);
     }
+
+    col.set_clauses
+        .push(format!("updated_at = {}", conn.placeholder(col.idx)));
+    col.params.push(DbValue::Text(now));
 
     let sql = format!(
         "UPDATE {} SET {} WHERE id = 'default'",
         table_name,
-        set_clauses.join(", ")
+        col.set_clauses.join(", ")
     );
 
-    conn.execute(&sql, &params)
+    conn.execute(&sql, &col.params)
         .with_context(|| format!("Failed to update global '{}'", slug))?;
 
     get_global(conn, slug, def, locale_ctx)
-}
-
-/// Recursively collect SET clauses + params from a field list.
-/// Handles arbitrary nesting: Group (prefixed), Row/Collapsible/Tabs (promoted flat).
-fn collect_update_params(
-    fields: &[FieldDefinition],
-    data: &HashMap<String, String>,
-    locale_ctx: &Option<&LocaleContext>,
-    set_clauses: &mut Vec<String>,
-    params: &mut Vec<DbValue>,
-    idx: &mut usize,
-    prefix: &str,
-) {
-    for field in fields {
-        match field.field_type {
-            FieldType::Group => {
-                let new_prefix = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                collect_update_params(
-                    &field.fields,
-                    data,
-                    locale_ctx,
-                    set_clauses,
-                    params,
-                    idx,
-                    &new_prefix,
-                );
-            }
-            FieldType::Row | FieldType::Collapsible => {
-                collect_update_params(
-                    &field.fields,
-                    data,
-                    locale_ctx,
-                    set_clauses,
-                    params,
-                    idx,
-                    prefix,
-                );
-            }
-            FieldType::Tabs => {
-                for tab in &field.tabs {
-                    collect_update_params(
-                        &tab.fields,
-                        data,
-                        locale_ctx,
-                        set_clauses,
-                        params,
-                        idx,
-                        prefix,
-                    );
-                }
-            }
-            _ => {
-                if !field.has_parent_column() {
-                    continue;
-                }
-                let data_key = if prefix.is_empty() {
-                    field.name.clone()
-                } else {
-                    format!("{}__{}", prefix, field.name)
-                };
-                let col_name = locale_write_column(&data_key, field, locale_ctx);
-
-                if let Some(value) = data.get(&data_key) {
-                    set_clauses.push(format!("{} = ?{}", col_name, *idx));
-                    params.push(coerce_value(&field.field_type, value));
-                    *idx += 1;
-                } else if field.field_type == FieldType::Checkbox {
-                    set_clauses.push(format!("{} = ?{}", col_name, *idx));
-                    params.push(DbValue::Integer(0));
-                    *idx += 1;
-                }
-            }
-        }
-    }
 }
 
 fn get_global_column_names(def: &GlobalDefinition) -> Vec<String> {

@@ -85,18 +85,9 @@ pub fn read_resource(
         }
         "crap://config" => {
             // Sanitize config: redact secrets
-            let mut config_json = serde_json::to_value(config).unwrap_or(Value::Null);
+            let config_json = serde_json::to_value(config).unwrap_or(Value::Null);
 
-            if let Some(obj) = config_json.as_object_mut() {
-                // auth.secret and email.smtp_pass are auto-redacted via Serialize impls
-                // Redact MCP API key
-                if let Some(mcp) = obj.get_mut("mcp").and_then(|m| m.as_object_mut())
-                    && let Some(key) = mcp.get("api_key").and_then(|k| k.as_str())
-                    && !key.is_empty()
-                {
-                    mcp.insert("api_key".to_string(), Value::String("***".to_string()));
-                }
-            }
+            // auth.secret, email.smtp_pass, and mcp.api_key are auto-redacted via Serialize impls
             Some(ResourceContent {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),
