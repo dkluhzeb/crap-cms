@@ -8,7 +8,10 @@ use crate::{
     hooks::ValidationCtx,
 };
 
-use super::{checks, sub_fields::validate_sub_fields_inner};
+use super::{
+    checks,
+    sub_fields::{SubFieldParams, validate_sub_fields_inner},
+};
 
 /// Recursive validation with prefix support for arbitrary nesting.
 /// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through.
@@ -133,7 +136,15 @@ fn validate_scalar_field(
             } else {
                 &field.fields
             };
-            validate_sub_fields_inner(lua, sub_fields, row_obj, &data_key, idx, ctx.table, errors);
+            let params = SubFieldParams {
+                lua,
+                parent_name: &data_key,
+                idx,
+                table: ctx.table,
+                registry: ctx.registry,
+                is_draft: ctx.is_draft,
+            };
+            validate_sub_fields_inner(&params, sub_fields, row_obj, errors);
         }
     }
 
@@ -169,7 +180,14 @@ fn validate_scalar_field(
         && let Some(Value::String(content)) = value
     {
         super::richtext_attrs::validate_richtext_node_attrs(
-            lua, content, &data_key, field, registry, ctx.table, errors,
+            lua,
+            content,
+            &data_key,
+            field,
+            registry,
+            ctx.table,
+            ctx.is_draft,
+            errors,
         );
     }
 }

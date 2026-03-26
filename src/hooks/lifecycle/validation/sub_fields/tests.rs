@@ -3,7 +3,11 @@ use std::collections::HashMap;
 use serde_json::json;
 
 use crate::{
-    core::field::{BlockDefinition, FieldDefinition, FieldTab, FieldType},
+    core::{
+        field::{BlockDefinition, FieldAdmin, FieldDefinition, FieldTab, FieldType},
+        registry::Registry,
+        richtext::RichtextNodeDef,
+    },
     hooks::lifecycle::validation::{ValidationCtx, validate_fields_inner},
 };
 
@@ -1083,5 +1087,115 @@ fn test_validate_tabs_inside_collapsible_inside_array_required() {
         result.unwrap_err().errors[0]
             .field
             .contains("items[0][body]")
+    );
+}
+
+#[test]
+fn test_validate_richtext_node_attrs_inside_array() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("cta", "CTA")
+            .attrs(vec![
+                FieldDefinition::builder("text", FieldType::Text)
+                    .required(true)
+                    .build(),
+                FieldDefinition::builder("url", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("body", FieldType::Richtext)
+                    .admin(
+                        FieldAdmin::builder()
+                            .nodes(vec!["cta".to_string()])
+                            .richtext_format("json")
+                            .build(),
+                    )
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"body": json_content}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test").registry(&reg).build(),
+    );
+
+    assert!(
+        result.is_err(),
+        "richtext node attrs should be validated inside array rows"
+    );
+    let errs = result.unwrap_err().errors;
+    assert_eq!(errs.len(), 2);
+    assert!(errs[0].field.contains("cta#0"));
+    assert!(errs[1].field.contains("cta#0"));
+}
+
+#[test]
+fn test_validate_richtext_node_attrs_inside_array_draft_skips_required() {
+    let lua = mlua::Lua::new();
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY)")
+        .unwrap();
+
+    let mut reg = Registry::new();
+    reg.register_richtext_node(
+        RichtextNodeDef::builder("cta", "CTA")
+            .attrs(vec![
+                FieldDefinition::builder("text", FieldType::Text)
+                    .required(true)
+                    .build(),
+            ])
+            .build(),
+    );
+
+    let fields = vec![
+        FieldDefinition::builder("items", FieldType::Array)
+            .fields(vec![
+                FieldDefinition::builder("body", FieldType::Richtext)
+                    .admin(
+                        FieldAdmin::builder()
+                            .nodes(vec!["cta".to_string()])
+                            .richtext_format("json")
+                            .build(),
+                    )
+                    .build(),
+            ])
+            .build(),
+    ];
+
+    let json_content = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":""}}]}"#;
+    let mut data = HashMap::new();
+    data.insert("items".to_string(), json!([{"body": json_content}]));
+
+    let result = validate_fields_inner(
+        &lua,
+        &fields,
+        &data,
+        &ValidationCtx::builder(&conn, "test")
+            .registry(&reg)
+            .draft(true)
+            .build(),
+    );
+
+    assert!(
+        result.is_ok(),
+        "draft mode should skip required checks for richtext node attrs in arrays"
     );
 }

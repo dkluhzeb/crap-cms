@@ -29,6 +29,20 @@ import { t } from './i18n.js';
  * </crap-richtext>
  */
 class CrapRichtext extends HTMLElement {
+  /**
+   * Escape a value for safe interpolation into HTML template strings.
+   * @param {*} val
+   * @returns {string}
+   */
+  static _esc(val) {
+    return String(val ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   constructor() {
     super();
 
@@ -560,11 +574,11 @@ class CrapRichtext extends HTMLElement {
         <div class="crap-node-modal__body">
           <div class="crap-node-modal__field">
             <label class="crap-node-modal__label" for="crap-link-href">${t('link_url')} *</label>
-            <input type="url" class="crap-node-modal__input" id="crap-link-href" data-field="href" value="${attrs.href || ''}" required>
+            <input type="url" class="crap-node-modal__input" id="crap-link-href" data-field="href" value="${CrapRichtext._esc(attrs.href || '')}" required>
           </div>
           <div class="crap-node-modal__field">
             <label class="crap-node-modal__label" for="crap-link-title">${t('link_title')}</label>
-            <input type="text" class="crap-node-modal__input" id="crap-link-title" data-field="title" value="${attrs.title || ''}">
+            <input type="text" class="crap-node-modal__input" id="crap-link-title" data-field="title" value="${CrapRichtext._esc(attrs.title || '')}">
           </div>
           <div class="crap-node-modal__field">
             <label class="crap-node-modal__checkbox">
@@ -705,29 +719,31 @@ class CrapRichtext extends HTMLElement {
     const modal = document.createElement('div');
     modal.className = 'crap-node-modal';
 
+    const esc = CrapRichtext._esc;
     const formFields = (nodeDef.attrs || []).filter(a => !a.hidden).map(a => {
       const val = attrs[a.name] ?? a.default ?? '';
-      const ph = a.placeholder ? ` placeholder="${a.placeholder}"` : '';
+      const eVal = esc(val);
+      const ph = a.placeholder ? ` placeholder="${esc(a.placeholder)}"` : '';
       const req = a.required ? ' required' : '';
       const ro = a.readonly ? ' readonly disabled' : '';
-      const widthStyle = a.width ? ` style="width:${a.width}"` : '';
-      const inputId = `crap-node-${nodeDef.name}-${a.name}`;
+      const widthStyle = a.width ? ` style="width:${esc(a.width)}"` : '';
+      const inputId = `crap-node-${esc(nodeDef.name)}-${esc(a.name)}`;
 
       // Numeric bounds
-      const minAttr = a.min != null ? ` min="${a.min}"` : '';
-      const maxAttr = a.max != null ? ` max="${a.max}"` : '';
-      const stepAttr = a.step ? ` step="${a.step}"` : '';
+      const minAttr = a.min != null ? ` min="${esc(a.min)}"` : '';
+      const maxAttr = a.max != null ? ` max="${esc(a.max)}"` : '';
+      const stepAttr = a.step ? ` step="${esc(a.step)}"` : '';
 
       // Text length bounds
-      const minLen = a.min_length != null ? ` minlength="${a.min_length}"` : '';
-      const maxLen = a.max_length != null ? ` maxlength="${a.max_length}"` : '';
+      const minLen = a.min_length != null ? ` minlength="${esc(a.min_length)}"` : '';
+      const maxLen = a.max_length != null ? ` maxlength="${esc(a.max_length)}"` : '';
 
       // Date bounds
-      const minDate = a.min_date ? ` min="${a.min_date}"` : '';
-      const maxDate = a.max_date ? ` max="${a.max_date}"` : '';
+      const minDate = a.min_date ? ` min="${esc(a.min_date)}"` : '';
+      const maxDate = a.max_date ? ` max="${esc(a.max_date)}"` : '';
 
       // Language label suffix for code fields
-      const langSuffix = a.language ? ` (${a.language})` : '';
+      const langSuffix = a.language ? ` (${esc(a.language)})` : '';
 
       // Textarea rows (configurable, default 3 for textarea, 4 for code/json)
       const textareaRows = a.rows || 3;
@@ -742,39 +758,39 @@ class CrapRichtext extends HTMLElement {
       let input;
       switch (a.type) {
         case 'textarea':
-          input = `<textarea class="crap-node-modal__input" id="${inputId}" data-attr="${a.name}" rows="${textareaRows}"${ph}${req}${ro}${minLen}${maxLen}>${val}</textarea>`;
+          input = `<textarea class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" rows="${textareaRows}"${ph}${req}${ro}${minLen}${maxLen}>${eVal}</textarea>`;
           break;
         case 'checkbox':
-          input = `<label class="crap-node-modal__checkbox"><input type="checkbox" id="${inputId}" data-attr="${a.name}"${val ? ' checked' : ''}${ro}> ${a.label}</label>`;
+          input = `<label class="crap-node-modal__checkbox"><input type="checkbox" id="${inputId}" data-attr="${esc(a.name)}"${val ? ' checked' : ''}${ro}> ${esc(a.label)}</label>`;
           break;
         case 'select':
-          input = `<select class="crap-node-modal__input" id="${inputId}" data-attr="${a.name}"${req}${ro}>
-            ${(a.options || []).map(o => `<option value="${o.value}"${o.value === val ? ' selected' : ''}>${o.label}</option>`).join('')}
+          input = `<select class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}"${req}${ro}>
+            ${(a.options || []).map(o => `<option value="${esc(o.value)}"${o.value === val ? ' selected' : ''}>${esc(o.label)}</option>`).join('')}
           </select>`;
           break;
         case 'radio':
-          input = `<div class="crap-node-modal__radio-group" data-attr="${a.name}">
-            ${(a.options || []).map((o, i) => `<label class="crap-node-modal__radio"><input type="radio" id="${inputId}-${i}" name="node-attr-${a.name}" value="${o.value}"${o.value === val ? ' checked' : ''}${ro}> ${o.label}</label>`).join('')}
+          input = `<div class="crap-node-modal__radio-group" data-attr="${esc(a.name)}">
+            ${(a.options || []).map((o, i) => `<label class="crap-node-modal__radio"><input type="radio" id="${inputId}-${i}" name="node-attr-${esc(a.name)}" value="${esc(o.value)}"${o.value === val ? ' checked' : ''}${ro}> ${esc(o.label)}</label>`).join('')}
           </div>`;
           break;
         case 'number':
-          input = `<input type="number" class="crap-node-modal__input" id="${inputId}" data-attr="${a.name}" value="${val}"${ph}${req}${ro}${minAttr}${maxAttr}${stepAttr}>`;
+          input = `<input type="number" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minAttr}${maxAttr}${stepAttr}>`;
           break;
         case 'email':
-          input = `<input type="email" class="crap-node-modal__input" id="${inputId}" data-attr="${a.name}" value="${val}"${ph}${req}${ro}${minLen}${maxLen}>`;
+          input = `<input type="email" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minLen}${maxLen}>`;
           break;
         case 'date':
-          input = `<input type="${dateInputType}" class="crap-node-modal__input" id="${inputId}" data-attr="${a.name}" value="${val}"${req}${ro}${minDate}${maxDate}>`;
+          input = `<input type="${dateInputType}" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${req}${ro}${minDate}${maxDate}>`;
           break;
         case 'code':
         case 'json':
-          input = `<textarea class="crap-node-modal__input crap-node-modal__input--mono" id="${inputId}" data-attr="${a.name}" rows="${codeRows}"${ph}${req}${ro}${minLen}${maxLen}>${val}</textarea>`;
+          input = `<textarea class="crap-node-modal__input crap-node-modal__input--mono" id="${inputId}" data-attr="${esc(a.name)}" rows="${codeRows}"${ph}${req}${ro}${minLen}${maxLen}>${eVal}</textarea>`;
           break;
         default:
-          input = `<input type="text" class="crap-node-modal__input" id="${inputId}" data-attr="${a.name}" value="${val}"${ph}${req}${ro}${minLen}${maxLen}>`;
+          input = `<input type="text" class="crap-node-modal__input" id="${inputId}" data-attr="${esc(a.name)}" value="${eVal}"${ph}${req}${ro}${minLen}${maxLen}>`;
       }
-      const desc = a.description ? `<p class="crap-node-modal__help">${a.description}</p>` : '';
-      const label = a.label + langSuffix;
+      const desc = a.description ? `<p class="crap-node-modal__help">${esc(a.description)}</p>` : '';
+      const label = esc(a.label) + langSuffix;
       if (a.type === 'checkbox') return `<div class="crap-node-modal__field"${widthStyle}>${input}${desc}</div>`;
       return `<div class="crap-node-modal__field"${widthStyle}><label class="crap-node-modal__label" for="${inputId}">${label}${a.required ? ' *' : ''}</label>${input}${desc}</div>`;
     }).join('');
@@ -782,7 +798,7 @@ class CrapRichtext extends HTMLElement {
     modal.innerHTML = `
       <div class="crap-node-modal__backdrop"></div>
       <div class="crap-node-modal__dialog">
-        <div class="crap-node-modal__header">${nodeDef.label}</div>
+        <div class="crap-node-modal__header">${CrapRichtext._esc(nodeDef.label)}</div>
         <div class="crap-node-modal__body">${formFields}</div>
         <div class="crap-node-modal__footer">
           <button type="button" class="crap-node-modal__btn crap-node-modal__btn--cancel">Cancel</button>
@@ -1507,12 +1523,15 @@ class CustomNodeView {
   }
 
   _render() {
-    const label = this.nodeDef.label || this.nodeDef.name;
-    const attrSummary = (this.nodeDef.attrs || [])
-      .slice(0, 3)
-      .map(a => this.node.attrs[a.name])
-      .filter(v => v != null && v !== '')
-      .join(' | ');
+    const esc = CrapRichtext._esc;
+    const label = esc(this.nodeDef.label || this.nodeDef.name);
+    const attrSummary = esc(
+      (this.nodeDef.attrs || [])
+        .slice(0, 3)
+        .map(a => this.node.attrs[a.name])
+        .filter(v => v != null && v !== '')
+        .join(' | ')
+    );
     this.dom.innerHTML =
       `<span class="crap-custom-node__label">${label}</span>` +
       (attrSummary ? `<span class="crap-custom-node__attrs">${attrSummary}</span>` : '');

@@ -186,15 +186,22 @@ where
 
         // Find the end of the opening tag
         let after_start = &remaining[start..];
-        let close_pos = if let Some(p) = after_start.find("</crap-node>") {
-            p + "</crap-node>".len()
-        } else if let Some(p) = after_start.find("/>") {
-            p + "/>".len()
-        } else {
-            // Malformed — just pass through the rest
-            result.push_str(after_start);
-            remaining = "";
-            continue;
+        let close_pos = match (after_start.find("/>"), after_start.find("</crap-node>")) {
+            (Some(sc), Some(et)) => {
+                if sc < et {
+                    sc + "/>".len()
+                } else {
+                    et + "</crap-node>".len()
+                }
+            }
+            (Some(sc), None) => sc + "/>".len(),
+            (None, Some(et)) => et + "</crap-node>".len(),
+            (None, None) => {
+                // Malformed — just pass through the rest
+                result.push_str(after_start);
+                remaining = "";
+                continue;
+            }
         };
 
         let tag = &after_start[..close_pos];
@@ -251,7 +258,7 @@ pub(super) fn html_escape(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
-pub(super) fn html_escape_attr(s: &str) -> String {
+pub(crate) fn html_escape_attr(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
@@ -386,6 +393,27 @@ mod tests {
         let html = r#"<crap-node data-type="unknown" data-attrs='{}'></crap-node>"#;
         let result = render_html_custom_nodes(html, &no_custom);
         assert_eq!(result, html);
+    }
+
+    #[test]
+    fn html_custom_nodes_mixed_tag_styles() {
+        let html = concat!(
+            r#"<p>Start</p>"#,
+            r#"<crap-node data-type="cta" data-attrs='{"text":"A"}'/>"#,
+            r#"<p>Mid</p>"#,
+            r#"<crap-node data-type="cta" data-attrs='{"text":"B"}'></crap-node>"#,
+            r#"<p>End</p>"#,
+        );
+        let renderer = |name: &str, attrs: &Value| -> Option<String> {
+            if name == "cta" {
+                let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                Some(format!("[{}]", text))
+            } else {
+                None
+            }
+        };
+        let result = render_html_custom_nodes(html, &renderer);
+        assert_eq!(result, "<p>Start</p>[A]<p>Mid</p>[B]<p>End</p>");
     }
 
     #[test]

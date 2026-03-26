@@ -6,7 +6,9 @@ use mlua::Lua;
 use serde_json::Value;
 
 use crate::core::{
-    FieldDefinition, registry::Registry, richtext::renderer::extract_attr_value,
+    FieldDefinition,
+    registry::Registry,
+    richtext::renderer::{extract_attr_value, html_escape_attr},
     validate::FieldError,
 };
 
@@ -87,12 +89,17 @@ fn extract_nodes_from_html(
 
     while let Some(start) = remaining.find("<crap-node ") {
         let after_start = &remaining[start..];
-        let close_pos = if let Some(p) = after_start.find("</crap-node>") {
-            p + "</crap-node>".len()
-        } else if let Some(p) = after_start.find("/>") {
-            p + "/>".len()
-        } else {
-            break;
+        let close_pos = match (after_start.find("/>"), after_start.find("</crap-node>")) {
+            (Some(sc), Some(et)) => {
+                if sc < et {
+                    sc + "/>".len()
+                } else {
+                    et + "</crap-node>".len()
+                }
+            }
+            (Some(sc), None) => sc + "/>".len(),
+            (None, Some(et)) => et + "</crap-node>".len(),
+            (None, None) => break,
         };
 
         let tag = &after_start[..close_pos];
@@ -128,6 +135,7 @@ fn extract_nodes_from_html(
 ///
 /// Error field names use the format `"{field_name}[{node_type}#{index}].{attr_name}"`
 /// to make errors identifiable (e.g., `"content[cta#0].url"`).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn validate_richtext_node_attrs(
     lua: &Lua,
     content: &str,
@@ -135,6 +143,7 @@ pub(crate) fn validate_richtext_node_attrs(
     field: &FieldDefinition,
     registry: &Registry,
     collection: &str,
+    is_draft: bool,
     errors: &mut Vec<FieldError>,
 ) {
     let format = field.admin.richtext_format.as_deref().unwrap_or("html");
@@ -165,7 +174,9 @@ pub(crate) fn validate_richtext_node_attrs(
             None => continue,
         };
 
-        validate_node_instance(lua, inst, attr_defs, field_name, collection, errors);
+        validate_node_instance(
+            lua, inst, attr_defs, field_name, collection, is_draft, errors,
+        );
     }
 }
 
@@ -176,6 +187,7 @@ fn validate_node_instance(
     attr_defs: &[FieldDefinition],
     field_name: &str,
     collection: &str,
+    is_draft: bool,
     errors: &mut Vec<FieldError>,
 ) {
     for attr_def in attr_defs {
@@ -191,8 +203,8 @@ fn validate_node_instance(
             _ => false,
         };
 
-        // Required check (simplified — no draft/update semantics for node attrs)
-        if attr_def.required && is_empty {
+        // Required check (skip for drafts)
+        if attr_def.required && is_empty && !is_draft {
             errors.push(FieldError::with_key(
                 &data_key,
                 format!("{} is required", attr_def.name),
@@ -361,14 +373,21 @@ fn run_before_validate_html(
         result.push_str(&remaining[..start]);
         let after_start = &remaining[start..];
 
-        let close_pos = if let Some(p) = after_start.find("</crap-node>") {
-            p + "</crap-node>".len()
-        } else if let Some(p) = after_start.find("/>") {
-            p + "/>".len()
-        } else {
-            result.push_str(after_start);
-            remaining = "";
-            continue;
+        let close_pos = match (after_start.find("/>"), after_start.find("</crap-node>")) {
+            (Some(sc), Some(et)) => {
+                if sc < et {
+                    sc + "/>".len()
+                } else {
+                    et + "</crap-node>".len()
+                }
+            }
+            (Some(sc), None) => sc + "/>".len(),
+            (None, Some(et)) => et + "</crap-node>".len(),
+            (None, None) => {
+                result.push_str(after_start);
+                remaining = "";
+                continue;
+            }
         };
 
         let tag = &after_start[..close_pos];
@@ -409,7 +428,8 @@ fn run_before_validate_html(
                 let attrs_json = serde_json::to_string(&attrs).unwrap_or_default();
                 result.push_str(&format!(
                     "<crap-node data-type=\"{}\" data-attrs='{}'></crap-node>",
-                    node_type, attrs_json,
+                    node_type,
+                    html_escape_attr(&attrs_json),
                 ));
             } else {
                 result.push_str(tag);
@@ -581,7 +601,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 2, "both text and url are required");
         assert!(errors[0].field.contains("content[cta#0].text"));
@@ -596,7 +625,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"X","url":"/ok"}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 1, "text too short (min_length=2)");
         assert!(errors[0].field.contains("content[cta#0].text"));
@@ -611,7 +649,16 @@ mod tests {
             r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"Click me","url":"/go"}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert!(errors.is_empty(), "valid data should produce no errors");
     }
@@ -625,7 +672,16 @@ mod tests {
             r#"<p>Hi</p><crap-node data-type="cta" data-attrs='{"text":"","url":""}'></crap-node>"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, html, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            html,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 2, "both text and url required in HTML format");
     }
@@ -638,7 +694,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert!(errors.is_empty(), "no nodes configured = no validation");
     }
@@ -661,7 +726,16 @@ mod tests {
             r#"{"type":"doc","content":[{"type":"contact","attrs":{"email":"not-an-email"}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("email"));
@@ -690,7 +764,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"alert","attrs":{"style":"invalid"}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("valid option"));
@@ -714,7 +797,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"counter","attrs":{"count":"0"}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("1"));
@@ -735,7 +827,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"event","attrs":{"date":"not-a-date"}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("date"));
@@ -773,7 +874,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"link","attrs":{"href":"example.com"}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].message.contains("URL must start with /"));
@@ -903,7 +1013,16 @@ mod tests {
         );
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, &json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            &json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 1);
         assert!(errors[0].field.contains("content[cta#0].text"));
@@ -919,7 +1038,16 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"cta"}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         // text and url are both required, missing attrs = all empty
         assert_eq!(errors.len(), 2);
@@ -940,7 +1068,16 @@ mod tests {
         ]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert_eq!(errors.len(), 4);
         assert!(errors[0].field.contains("cta#0"));
@@ -994,6 +1131,80 @@ mod tests {
     }
 
     #[test]
+    fn validate_richtext_draft_skips_required() {
+        let lua = Lua::new();
+        let reg = make_registry_with_cta();
+        let field = make_richtext_field(vec!["cta".to_string()], "json");
+        let json = r#"{"type":"doc","content":[{"type":"cta","attrs":{"text":"","url":""}}]}"#;
+        let mut errors = Vec::new();
+
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            true,
+            &mut errors,
+        );
+
+        assert!(
+            errors.is_empty(),
+            "draft mode should skip required check on node attrs"
+        );
+    }
+
+    #[test]
+    fn before_validate_html_escapes_single_quotes() {
+        let lua = Lua::new();
+        lua.load(
+            r#"
+            package.loaded["hooks"] = {
+                add_quote = function(value, ctx)
+                    if type(value) == "string" then
+                        return value .. "'"
+                    end
+                    return value
+                end
+            }
+        "#,
+        )
+        .exec()
+        .unwrap();
+
+        let mut reg = Registry::new();
+        reg.register_richtext_node(
+            RichtextNodeDef::builder("note", "Note")
+                .attrs(vec![
+                    FieldDefinition::builder("text", FieldType::Text)
+                        .hooks(FieldHooks {
+                            before_validate: vec!["hooks.add_quote".to_string()],
+                            ..Default::default()
+                        })
+                        .build(),
+                ])
+                .build(),
+        );
+        let field = make_richtext_field(vec!["note".to_string()], "html");
+        let content =
+            r#"<p>Hi</p><crap-node data-type="note" data-attrs='{"text":"hello"}'></crap-node>"#;
+
+        let result = run_before_validate_on_node_attrs(&lua, content, &field, &reg, "pages");
+
+        // The single quote in the attr value must be escaped as &#39;
+        assert!(
+            result.contains("&#39;"),
+            "single quote should be escaped: {}",
+            result
+        );
+        assert!(
+            !result.contains("data-attrs='{") || !result.contains("'}'"),
+            "unescaped quote should not break the attribute boundary"
+        );
+    }
+
+    #[test]
     fn validate_richtext_checkbox_type() {
         let lua = Lua::new();
         let mut reg = Registry::new();
@@ -1009,9 +1220,41 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"toggle","attrs":{"enabled":true}}]}"#;
         let mut errors = Vec::new();
 
-        validate_richtext_node_attrs(&lua, json, "content", &field, &reg, "pages", &mut errors);
+        validate_richtext_node_attrs(
+            &lua,
+            json,
+            "content",
+            &field,
+            &reg,
+            "pages",
+            false,
+            &mut errors,
+        );
 
         assert!(errors.is_empty(), "checkbox with boolean value should pass");
+    }
+
+    #[test]
+    fn extract_nodes_html_mixed_self_closing_and_full() {
+        let html = concat!(
+            r#"<p>A</p>"#,
+            r#"<crap-node data-type="cta" data-attrs='{"text":"SC","url":"/sc"}'/>"#,
+            r#"<p>B</p>"#,
+            r#"<crap-node data-type="cta" data-attrs='{"text":"Full","url":"/full"}'></crap-node>"#,
+        );
+        let reg = make_registry_with_cta();
+        let attrs = reg.get_richtext_node("cta").unwrap();
+        let mut known = HashMap::new();
+        known.insert("cta", attrs.attrs.as_slice());
+
+        let instances = extract_nodes_from_html(html, &known);
+        assert_eq!(
+            instances.len(),
+            2,
+            "both self-closing and full tags extracted"
+        );
+        assert_eq!(instances[0].attrs.get("text").unwrap(), "SC");
+        assert_eq!(instances[1].attrs.get("text").unwrap(), "Full");
     }
 
     #[test]

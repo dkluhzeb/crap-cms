@@ -25,6 +25,9 @@ class CrapValidateForm extends HTMLElement {
     /** @type {boolean} */
     this._validated = false;
 
+    /** @type {boolean} */
+    this._validating = false;
+
     /** @type {string} */
     this._validateUrl = this.getAttribute('validate-url') || '';
 
@@ -101,25 +104,32 @@ class CrapValidateForm extends HTMLElement {
    * @param {HTMLFormElement} form
    */
   async _runValidation(form) {
-    if (!this._validateUrl) {
-      this._validated = true;
-      this._retrigger(form);
-      return;
-    }
+    if (this._validating) return;
+    this._validating = true;
 
-    const errors = await this.getValidationErrors();
+    try {
+      if (!this._validateUrl) {
+        this._validated = true;
+        this._retrigger(form);
+        return;
+      }
 
-    if (errors === null) {
-      window.CrapToast?.show(t('validation.server_error'), 'error');
-      return;
-    }
+      const errors = await this.getValidationErrors();
 
-    if (Object.keys(errors).length === 0) {
-      this._clearErrors();
-      this._validated = true;
-      this._retrigger(form);
-    } else {
-      this._showErrors(errors);
+      if (errors === null) {
+        window.CrapToast?.show(t('validation.server_error'), 'error');
+        return;
+      }
+
+      if (Object.keys(errors).length === 0) {
+        this._clearErrors();
+        this._validated = true;
+        this._retrigger(form);
+      } else {
+        this._showErrors(errors);
+      }
+    } finally {
+      this._validating = false;
     }
   }
 
