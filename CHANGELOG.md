@@ -266,6 +266,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `"de"` are configured) silently created a `Single("fr")` context. Now
   returns `None` for unknown locale codes.
 
+- **Lua table conversion stack overflow** (HIGH): `lua_to_json` and
+  `json_to_lua` recursed into nested tables with no depth limit. A deeply
+  nested structure (65+ levels) caused stack overflow. Now capped at 64
+  levels with a clear error.
+
+- **Mixed-key Lua tables silently lost string keys** (HIGH): A Lua table
+  with both integer and string keys (e.g., `{1, 2, name="test"}`) was
+  treated as a JSON array, silently dropping string keys. Now detected
+  and serialized as a JSON object preserving all keys.
+
+- **Version table index name collision** (HIGH): Version table indexes
+  used names like `idx_{slug}_parent_latest` that could collide with
+  field-level indexes on fields named `parent_latest`. Namespaced to
+  `idx__ver_{slug}_*`.
+
+- **Polymorphic relationship upgrade left stale PRIMARY KEY** (HIGH):
+  Upgrading a junction table from non-polymorphic to polymorphic added
+  the `related_collection` column but didn't update the PRIMARY KEY
+  constraint. Now rebuilds the table with the correct composite PK.
+
+- **Silent NaN/Infinity and number overflow in gRPC conversion** (MEDIUM):
+  Non-finite floats silently became `null` and overflowing numbers
+  silently became `0.0` in protobuf conversion. Now logs warnings.
+
+- **Event publishing error silently swallowed** (MEDIUM): Collection
+  definition lookup failure during event publishing was discarded with
+  `.ok()`. Now logs a warning.
+
 - **Sessions not invalidated on password change** (HIGH): After a password
   reset, existing JWTs remained valid until expiry. Added a
   `_session_version` counter to auth tables that increments on password

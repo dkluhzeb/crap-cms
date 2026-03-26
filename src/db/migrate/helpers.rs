@@ -48,27 +48,6 @@ pub(super) fn ensure_locale_column(
     Ok(())
 }
 
-/// Ensure a named column exists on a table (ALTER TABLE ADD COLUMN if missing).
-pub(super) fn ensure_column_exists(
-    conn: &dyn DbConnection,
-    table_name: &str,
-    column: &str,
-    col_type: &str,
-) -> Result<()> {
-    let existing = get_table_columns(conn, table_name)?;
-
-    if !existing.contains(column) {
-        let sql = format!(
-            "ALTER TABLE {} ADD COLUMN {} {}",
-            table_name, column, col_type
-        );
-        tracing::info!("Adding {} column to {}", column, table_name);
-        conn.execute(&sql, &[])
-            .with_context(|| format!("Failed to add {} to {}", column, table_name))?;
-    }
-    Ok(())
-}
-
 /// A column specification derived from a field definition.
 /// Used by migration code to generate CREATE TABLE / ALTER TABLE statements.
 pub(super) struct ColumnSpec<'a> {
@@ -233,14 +212,16 @@ fn sync_join_tables_inner(
                         if has_locale_col {
                             ensure_locale_column(conn, &table_name, &locale_config.default_locale)?;
                         }
-                        // Ensure related_collection column for polymorphic upgrades
+                        // Upgrade to polymorphic: add related_collection and rebuild PK
                         if rc.is_polymorphic() {
-                            ensure_column_exists(
-                                conn,
-                                &table_name,
-                                "related_collection",
-                                "TEXT NOT NULL DEFAULT ''",
-                            )?;
+                            let cols = get_table_columns(conn, &table_name)?;
+                            if !cols.contains("related_collection") {
+                                rebuild_junction_table_for_polymorphic(
+                                    conn,
+                                    &table_name,
+                                    has_locale_col,
+                                )?;
+                            }
                         }
                     }
                 }
@@ -362,6 +343,58 @@ fn sync_join_tables_inner(
     Ok(())
 }
 
+/// Rebuild a junction table to add `related_collection` column with correct PRIMARY KEY.
+///
+/// When upgrading a non-polymorphic junction table to polymorphic, we can't just
+/// ALTER TABLE ADD COLUMN — the PRIMARY KEY must change from
+/// `(parent_id, related_id[, _locale])` to `(parent_id, related_id, related_collection[, _locale])`.
+/// SQLite doesn't support ALTER TABLE ... DROP/ADD PRIMARY KEY, so we rebuild.
+fn rebuild_junction_table_for_polymorphic(
+    conn: &dyn DbConnection,
+    table_name: &str,
+    has_locale: bool,
+) -> Result<()> {
+    let temp = format!("_{}_migrate", table_name);
+
+    conn.execute_batch(&format!("ALTER TABLE {} RENAME TO {}", table_name, temp))?;
+
+    let locale_col = if has_locale { ", _locale TEXT" } else { "" };
+    let locale_pk = if has_locale { ", _locale" } else { "" };
+    conn.execute_batch(&format!(
+        "CREATE TABLE {} (\
+            parent_id TEXT NOT NULL, \
+            related_id TEXT NOT NULL, \
+            related_collection TEXT NOT NULL DEFAULT '', \
+            _order INTEGER NOT NULL DEFAULT 0{}, \
+            PRIMARY KEY (parent_id, related_id, related_collection{})\
+        )",
+        table_name, locale_col, locale_pk
+    ))?;
+
+    if has_locale {
+        conn.execute_batch(&format!(
+            "INSERT INTO {} (parent_id, related_id, related_collection, _order, _locale) \
+             SELECT parent_id, related_id, '' AS related_collection, _order, _locale FROM {}",
+            table_name, temp
+        ))?;
+    } else {
+        conn.execute_batch(&format!(
+            "INSERT INTO {} (parent_id, related_id, related_collection, _order) \
+             SELECT parent_id, related_id, '' AS related_collection, _order FROM {}",
+            table_name, temp
+        ))?;
+    }
+
+    conn.execute_batch(&format!("DROP TABLE {}", temp))?;
+
+    tracing::info!(
+        "Rebuilt junction table {} for polymorphic upgrade (updated PRIMARY KEY)",
+        table_name
+    );
+
+    Ok(())
+}
+
 /// Create or verify the `_versions_{slug}` table for document version history.
 pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result<()> {
     let table_name = format!("_versions_{}", slug);
@@ -387,10 +420,13 @@ pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result
         conn.execute(&sql, &[])
             .with_context(|| format!("Failed to create versions table {}", table_name))?;
 
-        // Indexes for efficient version lookups
+        // Indexes for efficient version lookups.
+        // Prefixed with `idx__ver_` to avoid collisions with user field indexes
+        // (e.g. a field named `parent_latest` with `index: true` would create
+        // `idx_{slug}_parent_latest` — same name without the `_ver_` namespace).
         conn.execute(
             &format!(
-                "CREATE INDEX IF NOT EXISTS idx_{slug}_parent_latest ON {table} (_parent, _latest)",
+                "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_latest ON {table} (_parent, _latest)",
                 slug = slug,
                 table = table_name
             ),
@@ -398,7 +434,7 @@ pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result
         )?;
         conn.execute(
             &format!(
-                "CREATE INDEX IF NOT EXISTS idx_{slug}_parent_version ON {table} (_parent, _version DESC)",
+                "CREATE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version ON {table} (_parent, _version DESC)",
                 slug = slug, table = table_name
             ),
             &[],
@@ -406,7 +442,7 @@ pub(super) fn sync_versions_table(conn: &dyn DbConnection, slug: &str) -> Result
         // Defense-in-depth: prevent duplicate version numbers per document
         conn.execute(
             &format!(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_{slug}_parent_version_unique ON {table} (_parent, _version)",
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx__ver_{slug}_parent_version_unique ON {table} (_parent, _version)",
                 slug = slug, table = table_name
             ),
             &[],
@@ -1229,5 +1265,187 @@ mod tests {
             "INSERT INTO _versions_posts (id, _parent, _version, _status, snapshot) VALUES (?1, ?2, ?3, ?4, ?5)",
             &[text("v3"), text("p1"), int(2), text("published"), text("{}")],
         ).unwrap();
+    }
+
+    // ── version table index names are namespaced ────────────────────────
+
+    #[test]
+    fn version_table_indexes_use_ver_prefix() {
+        use crate::db::DbValue;
+
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        sync_versions_table(&conn, "posts").unwrap();
+
+        let indexes: HashSet<String> = conn
+            .query_all(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?1",
+                &[DbValue::Text("_versions_posts".to_string())],
+            )
+            .unwrap()
+            .into_iter()
+            .filter_map(|r| r.get_string("name").ok())
+            .collect();
+
+        // Must use `idx__ver_` prefix, not bare `idx_{slug}_parent_`
+        for idx_name in &indexes {
+            assert!(
+                !idx_name.starts_with("idx_posts_parent_"),
+                "Index '{}' uses bare prefix — should use idx__ver_ namespace",
+                idx_name
+            );
+        }
+
+        assert!(indexes.contains("idx__ver_posts_parent_latest"));
+        assert!(indexes.contains("idx__ver_posts_parent_version"));
+        assert!(indexes.contains("idx__ver_posts_parent_version_unique"));
+    }
+
+    // ── polymorphic upgrade rebuilds PK ─────────────────────────────────
+
+    #[test]
+    fn polymorphic_upgrade_rebuilds_primary_key() {
+        use crate::db::DbValue;
+
+        let text = |s: &str| DbValue::Text(s.to_string());
+        let int = |n: i64| DbValue::Integer(n);
+
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        // Step 1: Create a non-polymorphic junction table (simulates old schema)
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE posts_related (\
+                parent_id TEXT NOT NULL, \
+                related_id TEXT NOT NULL, \
+                _order INTEGER NOT NULL DEFAULT 0, \
+                PRIMARY KEY (parent_id, related_id)\
+            )",
+            &[],
+        )
+        .unwrap();
+
+        // Step 2: Insert some data
+        conn.execute(
+            "INSERT INTO posts_related (parent_id, related_id, _order) VALUES (?1, ?2, ?3)",
+            &[text("p1"), text("r1"), int(0)],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO posts_related (parent_id, related_id, _order) VALUES (?1, ?2, ?3)",
+            &[text("p1"), text("r2"), int(1)],
+        )
+        .unwrap();
+
+        // Step 3: Run the upgrade (simulating schema change to polymorphic)
+        let mut rc = RelationshipConfig::new("tags", true);
+        rc.polymorphic = vec!["tags".into(), "categories".into()];
+
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("related", FieldType::Relationship)
+                    .relationship(rc)
+                    .build(),
+            ],
+        );
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        // Step 4: Verify data is preserved
+        let rows = conn
+            .query_all("SELECT parent_id, related_id, related_collection, _order FROM posts_related ORDER BY _order", &[])
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].get_string("parent_id").unwrap(), "p1");
+        assert_eq!(rows[0].get_string("related_id").unwrap(), "r1");
+        assert_eq!(rows[0].get_string("related_collection").unwrap(), "");
+        assert_eq!(rows[1].get_string("related_id").unwrap(), "r2");
+
+        // Step 5: Verify the new PK allows duplicate (parent_id, related_id)
+        // with different related_collection values
+        conn.execute(
+            "INSERT INTO posts_related (parent_id, related_id, related_collection, _order) VALUES (?1, ?2, ?3, ?4)",
+            &[text("p1"), text("r1"), text("categories"), int(2)],
+        )
+        .unwrap();
+
+        let count = conn
+            .query_all(
+                "SELECT * FROM posts_related WHERE parent_id = ?1 AND related_id = ?2",
+                &[text("p1"), text("r1")],
+            )
+            .unwrap();
+        assert_eq!(
+            count.len(),
+            2,
+            "Same (parent_id, related_id) with different related_collection should be allowed"
+        );
+    }
+
+    #[test]
+    fn polymorphic_upgrade_with_locale_preserves_data() {
+        use crate::db::DbValue;
+
+        let text = |s: &str| DbValue::Text(s.to_string());
+        let int = |n: i64| DbValue::Integer(n);
+
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        // Create a non-polymorphic localized junction table
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE posts_related (\
+                parent_id TEXT NOT NULL, \
+                related_id TEXT NOT NULL, \
+                _order INTEGER NOT NULL DEFAULT 0, \
+                _locale TEXT NOT NULL DEFAULT 'en', \
+                PRIMARY KEY (parent_id, related_id, _locale)\
+            )",
+            &[],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO posts_related (parent_id, related_id, _order, _locale) VALUES (?1, ?2, ?3, ?4)",
+            &[text("p1"), text("r1"), int(0), text("en")],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO posts_related (parent_id, related_id, _order, _locale) VALUES (?1, ?2, ?3, ?4)",
+            &[text("p1"), text("r1"), int(0), text("de")],
+        )
+        .unwrap();
+
+        // Upgrade to polymorphic
+        let mut rc = RelationshipConfig::new("tags", true);
+        rc.polymorphic = vec!["tags".into(), "categories".into()];
+
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("related", FieldType::Relationship)
+                    .localized(true)
+                    .relationship(rc)
+                    .build(),
+            ],
+        );
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        // Data preserved
+        let rows = conn
+            .query_all("SELECT * FROM posts_related ORDER BY _locale", &[])
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+
+        // related_collection column exists
+        let cols = get_table_columns(&conn, "posts_related").unwrap();
+        assert!(cols.contains("related_collection"));
+        assert!(cols.contains("_locale"));
     }
 }

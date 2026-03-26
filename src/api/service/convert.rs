@@ -40,7 +40,10 @@ pub(super) fn json_to_prost_value(v: &Value) -> prost_types::Value {
         },
         Value::Number(n) => prost_types::Value {
             kind: Some(prost_types::value::Kind::NumberValue(
-                n.as_f64().unwrap_or(0.0),
+                n.as_f64().unwrap_or_else(|| {
+                    tracing::warn!("JSON number overflows f64 in gRPC conversion, defaulting to 0");
+                    0.0
+                }),
             )),
         },
         Value::String(s) => prost_types::Value {
@@ -99,9 +102,15 @@ pub(super) fn prost_value_to_json(v: &prost_types::Value) -> Value {
     match &v.kind {
         Some(prost_types::value::Kind::NullValue(_)) => Value::Null,
         Some(prost_types::value::Kind::BoolValue(b)) => Value::Bool(*b),
-        Some(prost_types::value::Kind::NumberValue(n)) => Number::from_f64(*n)
-            .map(Value::Number)
-            .unwrap_or(Value::Null),
+        Some(prost_types::value::Kind::NumberValue(n)) => {
+            Number::from_f64(*n).map(Value::Number).unwrap_or_else(|| {
+                tracing::warn!(
+                    "Non-finite float {} in gRPC response, converting to null",
+                    n
+                );
+                Value::Null
+            })
+        }
         Some(prost_types::value::Kind::StringValue(s)) => Value::String(s.clone()),
         Some(prost_types::value::Kind::ListValue(list)) => {
             Value::Array(list.values.iter().map(prost_value_to_json).collect())

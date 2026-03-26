@@ -324,10 +324,18 @@ impl ContentService {
                     .get_collection_def(&req.collection)
                     .map(|d| d.hooks.clone())
                     .unwrap_or_default(),
-                self.get_collection_def(&req.collection)
-                    .ok()
-                    .and_then(|d| d.live.clone())
-                    .as_ref(),
+                match self.get_collection_def(&req.collection) {
+                    Ok(d) => d.live.clone(),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Event publishing: failed to get collection def for '{}': {}",
+                            req.collection,
+                            e
+                        );
+                        None
+                    }
+                }
+                .as_ref(),
                 PublishEventInput::builder(EventTarget::Collection, EventOperation::Update)
                     .collection(req.collection.clone())
                     .document_id(req.id.clone())
