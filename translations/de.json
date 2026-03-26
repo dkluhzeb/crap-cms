@@ -218,5 +218,6 @@
   "validating": "Wird validiert...",
   "ok": "OK",
   "search": "Suchen...",
-  "search_to_add": "Suchen und hinzufügen..."
+  "search_to_add": "Suchen und hinzufügen...",
+  "are_you_sure": "Sind Sie sicher?"
 }

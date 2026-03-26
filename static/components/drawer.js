@@ -1,3 +1,5 @@
+import { t } from './i18n.js';
+
 /**
  * <crap-drawer> — Slide-in drawer panel using native <dialog>.
  *
@@ -271,7 +273,7 @@ class CrapDrawer extends HTMLElement {
       <dialog>
         <div class="header">
           <h3 class="header__title"></h3>
-          <button class="header__close" type="button" aria-label="Close">close</button>
+          <button class="header__close" type="button" aria-label="${t('close')}">close</button>
         </div>
         <div class="body"></div>
       </dialog>

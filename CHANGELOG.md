@@ -274,6 +274,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Populate cache not locale-aware — cross-locale data leakage**: The
+  relationship populate cache keyed on `(collection, id)` without locale.
+  Two requests for the same document in different locales could return
+  cached data from the wrong locale. Cache key now includes locale.
+
+- **JWT secret loss on failed write**: If the auto-generated JWT secret
+  could not be persisted to disk (permissions, full disk), the server
+  started with an ephemeral secret. On restart, a new secret was
+  generated, invalidating all sessions. Now fails to start instead.
+
+- **Config validation gaps**: Added checks for `smtp_port = 0` when SMTP
+  host is configured, `request_timeout = 0` / `grpc_timeout = 0` (use
+  `None` to disable), and `grpc_rate_limit_window = 0` when rate limiting
+  is enabled.
+
+- **Cron `skip_if_running` TOCTOU race**: The check for running jobs and
+  the insert of a new job were not atomic. Two scheduler instances could
+  both see count=0 and both insert. Now wrapped in
+  `transaction_immediate()`.
+
+- **Join field populate with negative depth**: Join field population
+  passed `depth - 1` without guarding `depth > 0`, allowing negative
+  depth values. Now skipped when depth is exhausted.
+
+- **Hardcoded English strings in UI components**: Drawer close button
+  aria-label, confirm dialog fallback text, and toast colors now use
+  `t()` translations and CSS custom properties respectively.
+
+- **Card header text overflow**: Long card titles broke flex layout.
+  Added `text-overflow: ellipsis` and overflow containment.
+
 - **Cursor encoding error silently dropped**: `cursor.encode().ok()` discarded
   serialization errors, causing pagination to silently break. Now logs the
   error before returning `None`.

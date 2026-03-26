@@ -136,7 +136,7 @@ class CrapConfirm extends HTMLElement {
       e.preventDefault();
       e.stopImmediatePropagation();
       this._pendingForm = /** @type {HTMLFormElement} */ (e.target);
-      messageEl.textContent = this.getAttribute('message') || 'Are you sure?';
+      messageEl.textContent = this.getAttribute('message') || t('are_you_sure');
       dialog.showModal();
     }, true);
 

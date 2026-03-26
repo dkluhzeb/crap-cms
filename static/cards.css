@@ -39,6 +39,10 @@ a.card:hover {
   margin: 0;
   font-size: var(--text-base);
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .card__body {

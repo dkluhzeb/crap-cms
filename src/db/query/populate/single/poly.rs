@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use super::populate_relationships_cached;
 use crate::db::query::populate::{
     MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
-    parse_poly_ref,
+    locale_cache_key, parse_poly_ref,
 };
 use crate::{
     core::{Document, upload},
@@ -85,8 +85,9 @@ pub(super) fn populate_poly_has_many(
                             },
                             ctx.cache,
                         )?;
+                        let locale_key = locale_cache_key(ctx.locale_ctx);
                         ctx.cache
-                            .insert((col.clone(), rd.id.to_string()), rd.clone());
+                            .insert((col.clone(), rd.id.to_string(), locale_key), rd.clone());
                         populated.push(document_to_json(&rd, &col));
                     } else {
                         populated.push(Value::String(item.clone()));
@@ -124,7 +125,8 @@ pub(super) fn populate_poly_has_one(
         }
         if let Some(item_def) = ctx.registry.get_collection(&col) {
             let item_def = item_def.clone();
-            let poly_cache_key = (col.clone(), id.clone());
+            let locale_key = locale_cache_key(ctx.locale_ctx);
+            let poly_cache_key = (col.clone(), id.clone(), locale_key);
 
             if let Some(cached) = ctx.cache.get(&poly_cache_key) {
                 doc.fields.insert(
@@ -395,7 +397,10 @@ mod tests {
         cached_article
             .fields
             .insert("title".to_string(), json!("Cached Article"));
-        cache.insert(("articles".to_string(), "a1".to_string()), cached_article);
+        cache.insert(
+            ("articles".to_string(), "a1".to_string(), None),
+            cached_article,
+        );
 
         let mut doc = Document::new("e1".to_string());
         doc.fields

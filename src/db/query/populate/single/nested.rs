@@ -12,7 +12,7 @@ use crate::core::{
 };
 use crate::db::query::populate::{
     MAX_POPULATE_CACHE_SIZE, PopulateContext, PopulateCtx, PopulateOpts, document_to_json,
-    parse_poly_ref,
+    locale_cache_key, parse_poly_ref,
 };
 use crate::db::query::read::find_by_id;
 
@@ -223,7 +223,11 @@ fn populate_has_one_in_map(
         return Ok(());
     }
 
-    let cache_key = (rel_collection.to_string(), id.clone());
+    let cache_key = (
+        rel_collection.to_string(),
+        id.clone(),
+        locale_cache_key(pctx.locale_ctx),
+    );
 
     if let Some(cached) = pctx.cache.get(&cache_key) {
         map.insert(
@@ -289,7 +293,11 @@ fn populate_has_many_in_map(
             populated.push(Value::String(id.clone()));
             continue;
         }
-        let cache_key = (rel_collection.to_string(), id.clone());
+        let cache_key = (
+            rel_collection.to_string(),
+            id.clone(),
+            locale_cache_key(pctx.locale_ctx),
+        );
 
         if let Some(cached) = pctx.cache.get(&cache_key) {
             populated.push(document_to_json(cached.value(), rel_collection));
@@ -356,7 +364,7 @@ fn populate_poly_has_one_in_map(
         None => return Ok(()),
     };
 
-    let cache_key = (col.clone(), id.clone());
+    let cache_key = (col.clone(), id.clone(), locale_cache_key(pctx.locale_ctx));
 
     if let Some(cached) = pctx.cache.get(&cache_key) {
         map.insert(name.to_string(), document_to_json(cached.value(), &col));
@@ -429,7 +437,7 @@ fn populate_poly_has_many_in_map(
             }
         };
 
-        let cache_key = (col.clone(), id.clone());
+        let cache_key = (col.clone(), id.clone(), locale_cache_key(pctx.locale_ctx));
 
         if let Some(cached) = pctx.cache.get(&cache_key) {
             populated.push(document_to_json(cached.value(), &col));

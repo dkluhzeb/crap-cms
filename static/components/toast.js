@@ -37,8 +37,8 @@ class CrapToast extends HTMLElement {
           font-family: inherit;
           font-size: var(--text-base, 0.875rem);
           font-weight: 500;
-          color: #fff;
-          background: #1f2937;
+          color: var(--text-on-primary, #fff);
+          background: var(--bg-elevated, #1f2937);
           box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.15));
           pointer-events: auto;
           cursor: pointer;

@@ -181,6 +181,24 @@ impl CrapConfig {
             );
         }
 
+        // Fatal: SMTP port 0 when host is configured
+        if !self.email.smtp_host.is_empty() && self.email.smtp_port == 0 {
+            bail!("email.smtp_port must be > 0 when smtp_host is configured");
+        }
+
+        // Fatal: zero timeouts are nonsensical
+        if self.server.request_timeout == Some(0) {
+            bail!("server.request_timeout must be > 0 (or omitted to disable)");
+        }
+        if self.server.grpc_timeout == Some(0) {
+            bail!("server.grpc_timeout must be > 0 (or omitted to disable)");
+        }
+
+        // Fatal: rate limit window must be positive when rate limiting is enabled
+        if self.server.grpc_rate_limit_requests > 0 && self.server.grpc_rate_limit_window == 0 {
+            bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
+        }
+
         // Fatal: password min_length > max_length
         if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
             bail!(
@@ -544,6 +562,64 @@ dev_mode = false
         config.mcp.enabled = true;
         config.mcp.http = false;
         // stdio transport doesn't need API key — process-level access controls it
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_smtp_port_zero() {
+        let mut config = CrapConfig::default();
+        config.email.smtp_host = "smtp.example.com".to_string();
+        config.email.smtp_port = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("smtp_port"));
+    }
+
+    #[test]
+    fn validate_smtp_port_zero_ok_when_host_empty() {
+        let mut config = CrapConfig::default();
+        config.email.smtp_host = String::new();
+        config.email.smtp_port = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_request_timeout_zero() {
+        let mut config = CrapConfig::default();
+        config.server.request_timeout = Some(0);
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("request_timeout"));
+    }
+
+    #[test]
+    fn validate_rejects_grpc_timeout_zero() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_timeout = Some(0);
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("grpc_timeout"));
+    }
+
+    #[test]
+    fn validate_timeout_none_passes() {
+        let mut config = CrapConfig::default();
+        config.server.request_timeout = None;
+        config.server.grpc_timeout = None;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_grpc_rate_limit_window_zero() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_rate_limit_requests = 100;
+        config.server.grpc_rate_limit_window = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("grpc_rate_limit_window"));
+    }
+
+    #[test]
+    fn validate_grpc_rate_limit_window_zero_ok_when_disabled() {
+        let mut config = CrapConfig::default();
+        config.server.grpc_rate_limit_requests = 0;
+        config.server.grpc_rate_limit_window = 0;
         assert!(config.validate().is_ok());
     }
 

@@ -128,7 +128,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
 }
 
 /// Resolve the JWT secret: load from file, generate + persist, or use config value.
-fn resolve_jwt_secret(auth_cfg: &AuthConfig, config_dir: &Path) -> String {
+fn resolve_jwt_secret(auth_cfg: &AuthConfig, config_dir: &Path) -> Result<String> {
     if auth_cfg.secret.is_empty() {
         let secret_path = config_dir.join("data").join(".jwt_secret");
 
@@ -137,38 +137,39 @@ fn resolve_jwt_secret(auth_cfg: &AuthConfig, config_dir: &Path) -> String {
             && !s.trim().is_empty()
         {
             debug!("Using persisted JWT secret from {}", secret_path.display());
-            return s.trim().to_string();
+            return Ok(s.trim().to_string());
         }
 
         // Generate and persist a new secret
         let secret = nanoid::nanoid!(64);
         let _ = fs::create_dir_all(secret_path.parent().expect("path has parent"));
 
-        if let Err(e) = fs::write(&secret_path, &secret) {
+        fs::write(&secret_path, &secret).with_context(|| {
+            format!(
+                "Failed to persist JWT secret to {} — cannot start with ephemeral secret \
+                 (all sessions would be lost on restart)",
+                secret_path.display()
+            )
+        })?;
+
+        // Restrict file permissions to owner-only on Unix
+        #[cfg(unix)]
+        if let Err(e) = fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600)) {
             warn!(
-                "Failed to write JWT secret to {}: {}",
+                "Failed to set permissions on JWT secret file {}: {}",
                 secret_path.display(),
                 e
             );
-        } else {
-            // Restrict file permissions to owner-only on Unix
-            #[cfg(unix)]
-            if let Err(e) = fs::set_permissions(&secret_path, fs::Permissions::from_mode(0o600)) {
-                warn!(
-                    "Failed to set permissions on JWT secret file {}: {}",
-                    secret_path.display(),
-                    e
-                );
-            }
-            warn!(
-                "Generated and persisted JWT secret to {}",
-                secret_path.display()
-            );
         }
 
-        secret
+        warn!(
+            "Generated and persisted JWT secret to {}",
+            secret_path.display()
+        );
+
+        Ok(secret)
     } else {
-        auth_cfg.secret.clone().into_inner()
+        Ok(auth_cfg.secret.clone().into_inner())
     }
 }
 
@@ -345,7 +346,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     }
 
     // Resolve JWT secret
-    let jwt_secret = resolve_jwt_secret(&cfg.auth, &config_dir);
+    let jwt_secret = resolve_jwt_secret(&cfg.auth, &config_dir)?;
 
     // Log auth collection info and validate upload limits
     log_startup_info(&registry, &cfg)?;
@@ -582,5 +583,63 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join("crap.toml"), "").unwrap();
         validate_config_dir(tmp.path()).unwrap();
+    }
+
+    #[test]
+    fn resolve_jwt_secret_generates_and_persists() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let auth = AuthConfig::default(); // secret is empty
+
+        let secret = resolve_jwt_secret(&auth, tmp.path()).unwrap();
+        assert!(!secret.is_empty());
+
+        // Secret file must exist on disk
+        let secret_path = tmp.path().join("data").join(".jwt_secret");
+        assert!(secret_path.exists());
+
+        let persisted = fs::read_to_string(&secret_path).unwrap();
+        assert_eq!(persisted, secret);
+    }
+
+    #[test]
+    fn resolve_jwt_secret_reuses_persisted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let auth = AuthConfig::default();
+
+        let first = resolve_jwt_secret(&auth, tmp.path()).unwrap();
+        let second = resolve_jwt_secret(&auth, tmp.path()).unwrap();
+
+        assert_eq!(first, second, "Must reuse persisted secret across calls");
+    }
+
+    #[test]
+    fn resolve_jwt_secret_uses_config_value() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let auth = AuthConfig {
+            secret: crate::core::JwtSecret::new("my-explicit-secret"),
+            ..Default::default()
+        };
+
+        let secret = resolve_jwt_secret(&auth, tmp.path()).unwrap();
+        assert_eq!(secret, "my-explicit-secret");
+
+        // No file should be written when config provides the secret
+        let secret_path = tmp.path().join("data").join(".jwt_secret");
+        assert!(!secret_path.exists());
+    }
+
+    #[test]
+    fn resolve_jwt_secret_fails_on_unwritable_path() {
+        // Regression: previously, a write failure would silently return an
+        // ephemeral secret, causing session loss on restart.
+        let err = resolve_jwt_secret(&AuthConfig::default(), Path::new("/nonexistent/path"));
+        assert!(err.is_err());
+
+        let msg = err.unwrap_err().to_string();
+        assert!(
+            msg.contains("cannot start with ephemeral secret"),
+            "unexpected error: {}",
+            msg
+        );
     }
 }

@@ -104,7 +104,10 @@ pub fn check_cron_schedules(
         .read()
         .map_err(|e| anyhow!("Registry lock poisoned: {}", e))?;
 
-    let conn = pool.get().context("Failed to get DB connection for cron")?;
+    let mut conn = pool.get().context("Failed to get DB connection for cron")?;
+    let tx = conn
+        .transaction_immediate()
+        .context("Failed to start cron check transaction")?;
 
     for (slug, def) in &reg.jobs {
         let schedule_str = match &def.schedule {
@@ -139,9 +142,9 @@ pub fn check_cron_schedules(
             continue;
         }
 
-        // Check skip_if_running
+        // Check skip_if_running (atomic with insert inside the same IMMEDIATE transaction)
         if def.skip_if_running {
-            let running = job_query::count_running(&conn, Some(slug))?;
+            let running = job_query::count_running(&tx, Some(slug))?;
 
             if running > 0 {
                 tracing::debug!("Skipping cron job '{}' — still running", slug);
@@ -150,9 +153,12 @@ pub fn check_cron_schedules(
         }
 
         // Insert a pending job
-        let job = job_query::insert_job(&conn, slug, "{}", "cron", def.retries + 1, &def.queue)?;
+        let job = job_query::insert_job(&tx, slug, "{}", "cron", def.retries + 1, &def.queue)?;
         tracing::info!("Cron scheduled job '{}' (run {})", slug, job.id);
     }
+
+    tx.commit()
+        .context("Failed to commit cron check transaction")?;
 
     Ok(())
 }
