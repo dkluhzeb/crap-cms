@@ -158,7 +158,9 @@ class CrapConfirm extends HTMLElement {
 
   /** @returns {void} */
   disconnectedCallback() {
-    this._connected = false;
+    // Do NOT reset _connected — listeners on `this` and shadow DOM elements
+    // survive DOM moves. Resetting causes duplicate submit interception on
+    // reconnect, which blocks confirmed form submissions.
   }
 }
 

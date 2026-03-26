@@ -11,6 +11,9 @@ import { t } from './i18n.js';
 
 class CrapUploadPreview extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     // Legacy: <select> for locale_locked fields
     const select = /** @type {HTMLSelectElement|null} */ (this.querySelector('[data-upload-select]'));
     if (select) {

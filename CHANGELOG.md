@@ -407,12 +407,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `id` or `label[for]` attributes, breaking label association after drag-reorder.
   Both methods now update all relevant attributes.
 
-- **Web Component event listener accumulation**: `CrapArrayField`,
-  `CrapConfirm`, `CrapTags`, `CrapDirtyForm`, and all picker components
-  (`CrapThemePicker`, `CrapLocalePicker`, `CrapUiLocalePicker`) did not
-  fully clean up event listeners in `disconnectedCallback()`. HTMX-driven
-  DOM swaps could cause listener accumulation. Added proper cleanup and
-  reconnection guards.
+- **Web Component event listener accumulation**: Multiple components lacked
+  `_connected` guards or reset their guard flag in `disconnectedCallback`,
+  causing duplicate event listeners on DOM reconnect (HTMX swaps, drag
+  reorder). Affected: `CrapArrayField`, `CrapConfirm`, `CrapTags`,
+  `CrapDirtyForm`, `CrapCollapsible`, `CrapBlockPicker`, `CrapTabs`,
+  `CrapFocalPoint`, `CrapListSettings`, `CrapUploadPreview`,
+  `CrapRelationshipSearch`, and all picker components (`CrapThemePicker`,
+  `CrapLocalePicker`, `CrapUiLocalePicker`). Symptoms ranged from
+  double-toggling collapsible groups, duplicate block additions, drawer
+  opening multiple times, to confirmed form submissions being blocked.
+  Added `_connected` guards to all components; stopped resetting the flag
+  in `disconnectedCallback`.
+
+- **Relationship search state loss on reconnect**: `CrapRelationshipSearch`
+  reset `_initialized` in `disconnectedCallback`, causing a full DOM rebuild
+  (`innerHTML = ''`) on reconnect that destroyed selected items and search
+  state.
+
+- **Focal point `0` treated as center**: `parseFloat(...) || 0.5` in
+  `CrapFocalPoint` treated a legitimate focal-point coordinate of `0` as
+  falsy, defaulting it to `0.5` (center). Changed to explicit `Number.isNaN`
+  check.
+
+- **Dirty form re-queried form reference in disconnect**:
+  `CrapDirtyForm.disconnectedCallback` called `this.querySelector('#edit-form')`
+  to remove listeners. If the form element was detached before the wrapper,
+  the query could miss it, leaking `input`/`change` listeners. Now stores the
+  form reference during `connectedCallback`.
 
 - **Tab keyboard navigation**: `CrapTabs` did not implement WAI-ARIA keyboard
   navigation. Added ArrowLeft/Right, Home/End key handling with proper

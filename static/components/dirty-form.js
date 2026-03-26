@@ -23,6 +23,9 @@ class CrapDirtyForm extends HTMLElement {
   }
 
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     this._formUrl = location.href;
     this._dirty = false;
     /** @type {boolean} */
@@ -35,8 +38,10 @@ class CrapDirtyForm extends HTMLElement {
     // setup from marking the form dirty.
     requestAnimationFrame(() => { this._armed = true; });
 
-    // Track form input/change
-    const form = this.querySelector('#edit-form');
+    // Track form input/change — store reference for cleanup
+    /** @type {HTMLElement|null} */
+    this._form = this.querySelector('#edit-form');
+    const form = this._form;
     if (form) {
       form.addEventListener('input', this._markDirty);
       form.addEventListener('change', this._markDirty);
@@ -107,10 +112,11 @@ class CrapDirtyForm extends HTMLElement {
   }
 
   disconnectedCallback() {
-    const form = this.querySelector('#edit-form');
-    if (form) {
-      form.removeEventListener('input', this._markDirty);
-      form.removeEventListener('change', this._markDirty);
+    // Do NOT reset _connected — self-bound listeners survive DOM moves.
+    if (this._form) {
+      this._form.removeEventListener('input', this._markDirty);
+      this._form.removeEventListener('change', this._markDirty);
+      this._form = null;
     }
     this.removeEventListener('crap:change', this._markDirty);
     document.removeEventListener('click', this._onRowAction);

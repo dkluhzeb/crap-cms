@@ -423,7 +423,8 @@ class CrapRelationshipSearch extends HTMLElement {
       this._observer.disconnect();
       this._observer = null;
     }
-    this._initialized = false;
+    // Do NOT reset _initialized — DOM, listeners, and selection state survive
+    // DOM moves. Resetting would cause full DOM rebuild and state loss.
   }
 
   /**

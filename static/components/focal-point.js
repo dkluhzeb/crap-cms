@@ -9,6 +9,9 @@
 
 class CrapFocalPoint extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     const img = this.querySelector('.focal-point img');
     const marker = this.querySelector('.focal-point__marker');
     const inputX = /** @type {HTMLInputElement|null} */ (this.querySelector('input[name="focal_x"]'));
@@ -23,10 +26,11 @@ class CrapFocalPoint extends HTMLElement {
       inputY.value = y.toFixed(4);
     };
 
-    // Position from existing data attributes (default center)
-    const initX = parseFloat(this.dataset.focalX) || 0.5;
-    const initY = parseFloat(this.dataset.focalY) || 0.5;
-    setMarker(initX, initY);
+    // Position from existing data attributes (default center).
+    // Use explicit NaN check — `|| 0.5` would treat a legitimate 0 as 0.5.
+    const rawX = parseFloat(this.dataset.focalX);
+    const rawY = parseFloat(this.dataset.focalY);
+    setMarker(Number.isNaN(rawX) ? 0.5 : rawX, Number.isNaN(rawY) ? 0.5 : rawY);
 
     img.addEventListener('click', (e) => {
       const rect = img.getBoundingClientRect();

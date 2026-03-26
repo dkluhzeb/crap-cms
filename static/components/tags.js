@@ -76,7 +76,8 @@ class CrapTags extends HTMLElement {
   }
 
   disconnectedCallback() {
-    this._connected = false;
+    // Do NOT reset _connected — listeners on `this` and child elements
+    // survive DOM moves. Resetting causes duplicate handlers on reconnect.
   }
 
   /**

@@ -8,6 +8,9 @@
 
 class CrapLocalePicker extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     const toggle = this.querySelector('[data-locale-toggle]');
     const dropdown = this.querySelector('[data-locale-dropdown]');
     if (!toggle || !dropdown) return;

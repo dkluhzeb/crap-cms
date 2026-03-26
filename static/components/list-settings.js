@@ -29,6 +29,9 @@ const OPS_BY_TYPE = {
 
 class CrapListSettings extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     /** @type {boolean} */
     this._searchWasActive = false;
 

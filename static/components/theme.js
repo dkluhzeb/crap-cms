@@ -48,6 +48,9 @@ window.CrapTheme.apply(window.CrapTheme.get());
 
 class CrapThemePicker extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     const toggle = this.querySelector('[data-theme-toggle]');
     const dropdown = this.querySelector('[data-theme-dropdown]');
     if (!toggle || !dropdown) return;

@@ -10,6 +10,9 @@
 
 class CrapBlockPicker extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     const select = /** @type {HTMLSelectElement|null} */ (
       this.querySelector('.form__blocks-select')
     );
