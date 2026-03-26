@@ -117,6 +117,10 @@ pub(crate) struct UiLocaleContext(pub(crate) Option<String>);
 /// Maximum Lua instructions per hook invocation. Stored in app_data.
 pub(crate) struct MaxInstructions(pub(crate) u64);
 
+/// Config directory path, stored in Lua `app_data` so CRUD functions
+/// can find upload files for cleanup on delete.
+pub(crate) struct ConfigDir(pub(crate) std::path::PathBuf);
+
 /// Tracks hook recursion depth for Lua CRUD → hook → CRUD chains.
 /// Stored in Lua `app_data` alongside `TxContext`.
 pub(crate) struct HookDepth(pub(crate) u32);
@@ -227,5 +231,17 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(lua.app_data_ref::<HookDepth>().unwrap().0, 2);
+    }
+
+    /// Regression: ConfigDir must be retrievable from Lua app_data so that
+    /// delete/delete_many CRUD functions can clean up upload files.
+    #[test]
+    fn config_dir_stored_and_retrieved() {
+        let lua = Lua::new();
+        let path = std::path::PathBuf::from("/tmp/test-config");
+        lua.set_app_data(ConfigDir(path.clone()));
+
+        let retrieved = lua.app_data_ref::<ConfigDir>().unwrap();
+        assert_eq!(retrieved.0, path);
     }
 }

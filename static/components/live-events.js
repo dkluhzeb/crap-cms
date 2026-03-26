@@ -17,6 +17,8 @@ class CrapLiveEvents extends HTMLElement {
     this._source = null;
     /** @type {number} */
     this._lastSaveTime = 0;
+    /** @type {ReturnType<typeof setTimeout>|null} */
+    this._reconnectTimer = null;
   }
 
   connectedCallback() {
@@ -38,12 +40,20 @@ class CrapLiveEvents extends HTMLElement {
       this._source.close();
       this._source = null;
     }
+    if (this._reconnectTimer != null) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     if (this._onBeforeRequest) {
       document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
     }
   }
 
   _connect() {
+    if (this._reconnectTimer != null) {
+      clearTimeout(this._reconnectTimer);
+      this._reconnectTimer = null;
+    }
     this._source = new EventSource('/admin/events');
     const SAVE_GRACE_MS = 5000;
 
@@ -85,7 +95,7 @@ class CrapLiveEvents extends HTMLElement {
     this._source.onerror = () => {
       if (this._source && this._source.readyState === EventSource.CLOSED) {
         this._source = null;
-        setTimeout(() => this._connect(), 5000);
+        this._reconnectTimer = setTimeout(() => this._connect(), 5000);
       }
     };
   }

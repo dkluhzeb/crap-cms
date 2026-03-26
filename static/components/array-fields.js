@@ -12,9 +12,13 @@ class CrapArrayField extends HTMLElement {
     super();
     /** @type {HTMLElement|null} */
     this._draggedRow = null;
+    /** @type {boolean} */
+    this._connected = false;
   }
 
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
     this.addEventListener('click', this._onClick.bind(this));
     this.addEventListener('dragstart', this._onDragStart.bind(this));
     this.addEventListener('dragend', this._onDragEnd.bind(this));
@@ -24,6 +28,10 @@ class CrapArrayField extends HTMLElement {
       this._addBlockRow(e.detail.templateId);
     });
     this._initLabelWatchers();
+  }
+
+  disconnectedCallback() {
+    this._connected = false;
   }
 
   /* ── Click delegation ──────────────────────────────────────── */
@@ -82,6 +90,8 @@ class CrapArrayField extends HTMLElement {
    * @param {string} labelFieldName
    */
   _setupBlockRowLabelWatcher(row, labelFieldName) {
+    if (row.dataset.labelInit) return;
+    row.dataset.labelInit = '1';
     const titleEl = row.querySelector('.form__array-row-title');
     if (!titleEl) return;
     for (const input of row.querySelectorAll('input, select, textarea')) {
@@ -222,6 +232,7 @@ class CrapArrayField extends HTMLElement {
   }
 
   _afterRowChange() {
+    this._reindexRows();
     this._updateRowCount();
     this._toggleEmptyState();
     this._enforceMaxRows();

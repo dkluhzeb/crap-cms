@@ -36,6 +36,13 @@ class CrapConfirm extends HTMLElement {
      */
     this._pendingForm = null;
 
+    /**
+     * Guard against duplicate listener registration on reconnection.
+     * @type {boolean}
+     * @private
+     */
+    this._connected = false;
+
     this.attachShadow({ mode: 'open' });
     this.shadowRoot.innerHTML = `
       <style>
@@ -106,6 +113,9 @@ class CrapConfirm extends HTMLElement {
 
   /** @returns {void} */
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     /** @type {HTMLDialogElement} */
     const dialog = this.shadowRoot.querySelector('dialog');
     /** @type {HTMLParagraphElement} */
@@ -144,6 +154,11 @@ class CrapConfirm extends HTMLElement {
         form.requestSubmit();
       }
     });
+  }
+
+  /** @returns {void} */
+  disconnectedCallback() {
+    this._connected = false;
   }
 }
 

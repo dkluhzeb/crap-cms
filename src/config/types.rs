@@ -128,9 +128,54 @@ impl CrapConfig {
             bail!("admin_port and grpc_port must be different");
         }
 
+        // Fatal: broadcast channel capacity must be > 0 (tokio panics on 0)
+        if self.live.enabled && self.live.channel_capacity == 0 {
+            bail!("live.channel_capacity must be > 0 when live events are enabled");
+        }
+
+        // Fatal: pagination limits must be positive
+        if self.pagination.default_limit <= 0 {
+            bail!("pagination.default_limit must be > 0");
+        }
+        if self.pagination.max_limit <= 0 {
+            bail!("pagination.max_limit must be > 0");
+        }
+        if self.pagination.default_limit > self.pagination.max_limit {
+            bail!(
+                "pagination.default_limit ({}) must be <= pagination.max_limit ({})",
+                self.pagination.default_limit,
+                self.pagination.max_limit
+            );
+        }
+
+        // Fatal: negative depth values make no sense
+        if self.depth.default_depth < 0 {
+            bail!("depth.default_depth must be >= 0");
+        }
+        if self.depth.max_depth < 0 {
+            bail!("depth.max_depth must be >= 0");
+        }
+
         // Warning: max_depth = 0 means no population will ever work
         if self.depth.max_depth == 0 {
             tracing::warn!("depth.max_depth = 0 — all depth/populate requests will be capped to 0");
+        }
+
+        // Warning: default_depth exceeds max_depth
+        if self.depth.default_depth > self.depth.max_depth {
+            tracing::warn!(
+                "depth.default_depth ({}) exceeds depth.max_depth ({}) — requests will be capped",
+                self.depth.default_depth,
+                self.depth.max_depth
+            );
+        }
+
+        // Fatal: MCP HTTP without API key is unauthenticated full CRUD access
+        if self.mcp.enabled && self.mcp.http && self.mcp.api_key.is_empty() {
+            bail!(
+                "mcp.http is enabled without an API key — \
+                 set mcp.api_key in crap.toml to secure the MCP HTTP endpoint"
+            );
         }
 
         // Fatal: password min_length > max_length
@@ -456,5 +501,112 @@ dev_mode = false
         .unwrap();
         let config = CrapConfig::load(tmp.path()).unwrap();
         assert!(config.crap_version.is_none());
+    }
+
+    #[test]
+    fn validate_mcp_http_without_api_key_errors() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = true;
+        // api_key is empty by default
+        let err = config.validate().unwrap_err();
+        assert!(
+            err.to_string().contains("mcp.api_key"),
+            "Expected mcp.api_key error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn validate_mcp_http_with_api_key_passes() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = true;
+        config.mcp.api_key = crate::config::McpApiKey::from("secret-key-123");
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_disabled_no_api_key_passes() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = false;
+        config.mcp.http = true;
+        // Should not error — MCP is disabled entirely
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_mcp_stdio_no_api_key_passes() {
+        let mut config = CrapConfig::default();
+        config.mcp.enabled = true;
+        config.mcp.http = false;
+        // stdio transport doesn't need API key — process-level access controls it
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_channel_capacity_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.live.channel_capacity = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("channel_capacity"));
+    }
+
+    #[test]
+    fn validate_channel_capacity_zero_ok_when_live_disabled() {
+        let mut config = CrapConfig::default();
+        config.live.enabled = false;
+        config.live.channel_capacity = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_pagination_default_limit_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.default_limit = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_limit"));
+    }
+
+    #[test]
+    fn validate_pagination_default_limit_negative_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.default_limit = -5;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_limit"));
+    }
+
+    #[test]
+    fn validate_pagination_max_limit_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.max_limit = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_limit"));
+    }
+
+    #[test]
+    fn validate_pagination_default_exceeds_max_errors() {
+        let mut config = CrapConfig::default();
+        config.pagination.default_limit = 100;
+        config.pagination.max_limit = 50;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_limit"));
+        assert!(err.to_string().contains("max_limit"));
+    }
+
+    #[test]
+    fn validate_depth_negative_default_errors() {
+        let mut config = CrapConfig::default();
+        config.depth.default_depth = -1;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_depth"));
+    }
+
+    #[test]
+    fn validate_depth_negative_max_errors() {
+        let mut config = CrapConfig::default();
+        config.depth.max_depth = -1;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("max_depth"));
     }
 }

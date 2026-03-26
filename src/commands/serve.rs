@@ -350,12 +350,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     log_startup_info(&registry, &cfg)?;
 
     // Security warnings for common misconfigurations
-    if cfg.mcp.enabled && cfg.mcp.http && cfg.mcp.api_key.is_empty() {
-        bail!(
-            "MCP HTTP endpoint enabled without an API key — \
-             set mcp.api_key in crap.toml to secure the endpoint"
-        );
-    }
+    // NOTE: MCP HTTP without API key is now caught in CrapConfig::validate()
     if cfg.server.grpc_rate_limit_requests == 0 {
         warn!("gRPC API rate limiting is disabled (grpc_rate_limit_requests = 0)");
     }

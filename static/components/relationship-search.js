@@ -265,6 +265,7 @@ class CrapRelationshipSearch extends HTMLElement {
     }
 
     function closeDropdown() {
+      searchGen++;
       dropdown.style.display = 'none';
       dropdown.innerHTML = '';
       results = [];

@@ -420,9 +420,9 @@ When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC AP
 | `enabled` | boolean | `false` | Enable the MCP (Model Context Protocol) server. Required for both stdio and HTTP transports. |
 | `http` | boolean | `false` | Mount `POST /mcp` on the admin server for HTTP-based MCP access. |
 | `config_tools` | boolean | `false` | Enable config generation tools (`read_config_file`, `write_config_file`, `list_config_files`). Opt-in because they allow filesystem writes. |
-| `api_key` | string | `""` (empty) | API key for HTTP transport. When set, requests must include `Authorization: Bearer <key>`. Empty = no auth. **Strongly recommended** when `http = true` — without it, all MCP operations (full CRUD on all collections) are unauthenticated. |
-| `include_collections` | string[] | `[]` (empty) | Only expose these collections via MCP. Empty = all collections. |
-| `exclude_collections` | string[] | `[]` (empty) | Hide these collections from MCP. Takes precedence over `include_collections`. |
+| `api_key` | string | `""` (empty) | API key for HTTP transport. **Required** when `http = true` — the server will refuse to start without one. Requests must include `Authorization: Bearer <key>`. |
+| `include_collections` | string[] | `[]` (empty) | Only expose these collections via MCP. Empty = all collections. Enforced at both tool listing and execution time. |
+| `exclude_collections` | string[] | `[]` (empty) | Hide these collections from MCP. Takes precedence over `include_collections`. Enforced at both tool listing and execution time. |
 
 See [MCP Overview](../mcp/overview.md) for usage details.
 

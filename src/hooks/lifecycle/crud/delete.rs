@@ -8,16 +8,20 @@ use serde_json::Value;
 
 use crate::{
     config::LocaleConfig,
-    core::SharedRegistry,
+    core::{SharedRegistry, upload},
     db::{
         AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext,
         query::{self, filter::normalize_filter_fields},
     },
     hooks::{
-        HookContext, HookEvent,
+        HookContext, HookEvent, ValidationCtx,
         lifecycle::{
-            HookDepth, HookDepthGuard, MaxHookDepth, UiLocaleContext, UserContext,
-            access::check_access_with_lua, converters::*, execution::run_hooks_inner,
+            ConfigDir, FieldHookEvent, HookDepth, HookDepthGuard, MaxHookDepth, UiLocaleContext,
+            UserContext,
+            access::{check_access_with_lua, check_field_write_access_with_lua},
+            converters::*,
+            execution::{run_field_hooks_inner, run_hooks_inner},
+            validation::validate_fields_inner,
         },
     },
     service::versions,
@@ -103,6 +107,16 @@ pub(super) fn register_delete(
                 None
             };
 
+            // For upload collections, load the document before deleting to get file paths
+            let upload_doc_fields = if def.is_upload_collection() {
+                query::find_by_id(conn, &collection, &def, &id, None)
+                    .ok()
+                    .flatten()
+                    .map(|doc| doc.fields.clone())
+            } else {
+                None
+            };
+
             if hooks_enabled {
                 let hook_ctx = HookContext::builder(&collection, "delete")
                     .data([("id".to_string(), Value::String(id.clone()))].into())
@@ -121,6 +135,13 @@ pub(super) fn register_delete(
             if conn.supports_fts() {
                 query::fts::fts_delete(conn, &collection, &id)
                     .map_err(|e| mlua::Error::RuntimeError(format!("FTS delete error: {}", e)))?;
+            }
+
+            // Clean up upload files after successful DB delete
+            if let Some(fields) = upload_doc_fields
+                && let Some(config_dir) = lua.app_data_ref::<ConfigDir>()
+            {
+                upload::delete_upload_files(&config_dir.0, &fields);
             }
 
             if hooks_enabled {
@@ -278,35 +299,130 @@ pub(super) fn register_update_many(
                 None
             };
 
-            let data = lua_table_to_hashmap(&data_table)?;
+            let mut data = lua_table_to_hashmap(&data_table)?;
             let join_data = lua_table_to_json_map(lua, &data_table)?;
+
+            // Build hook data (JSON values for hooks to see)
+            let mut base_hook_data: HashMap<String, Value> = data
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect();
+            for (k, v) in &join_data {
+                base_hook_data.insert(k.clone(), v.clone());
+            }
+
+            // Field-level write access: strip denied fields (parity with single update)
+            if !override_access {
+                let user_doc = lua
+                    .app_data_ref::<UserContext>()
+                    .and_then(|uc| uc.0.clone());
+                let denied = check_field_write_access_with_lua(
+                    lua,
+                    &def.fields,
+                    user_doc.as_ref(),
+                    "update",
+                );
+                for name in &denied {
+                    data.remove(name);
+                    base_hook_data.remove(name);
+                }
+            }
+
             let mut modified = 0i64;
 
+            // Full per-document lifecycle (parity with single update and gRPC update_many):
+            // 1. Field-level before_validate hooks
+            // 2. Collection-level BeforeValidate hook
+            // 3. validate_fields_inner
+            // 4. Field-level before_change hooks
+            // 5. Collection-level BeforeChange hook (capture modified data)
+            // 6. DB write with hook-modified data
+            // 7. After-change hooks
             for doc in &docs {
+                let mut hook_data = base_hook_data.clone();
+
                 if hooks_enabled {
-                    let mut hook_data: HashMap<String, Value> = data
-                        .iter()
-                        .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-                        .collect();
-                    for (k, v) in &join_data {
-                        hook_data.insert(k.clone(), v.clone());
-                    }
+                    // Field-level before_validate
+                    run_field_hooks_inner(
+                        lua,
+                        &def.fields,
+                        &FieldHookEvent::BeforeValidate,
+                        &mut hook_data,
+                        &collection,
+                        "update",
+                    )
+                    .map_err(|e| {
+                        mlua::Error::RuntimeError(format!(
+                            "before_validate field hook error: {}",
+                            e
+                        ))
+                    })?;
+
+                    // Collection-level BeforeValidate
                     let hook_ctx = HookContext::builder(&collection, "update")
-                        .data(hook_data)
+                        .data(hook_data.clone())
+                        .locale(locale_str.as_deref())
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
-                    run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, hook_ctx).map_err(
-                        |e| mlua::Error::RuntimeError(format!("before_change hook error: {}", e)),
-                    )?;
+                    let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeValidate, hook_ctx)
+                        .map_err(|e| {
+                            mlua::Error::RuntimeError(format!("before_validate hook error: {}", e))
+                        })?;
+                    hook_data = ctx.data;
                 }
+
+                // Validation (always runs unless hooks=false)
+                if run_hooks {
+                    let val_ctx = ValidationCtx::builder(conn, &collection)
+                        .exclude_id(Some(&doc.id))
+                        .locale_ctx(locale_ctx.as_ref())
+                        .build();
+                    validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx).map_err(|e| {
+                        mlua::Error::RuntimeError(format!("validation error: {}", e))
+                    })?;
+                }
+
+                if hooks_enabled {
+                    // Field-level before_change
+                    run_field_hooks_inner(
+                        lua,
+                        &def.fields,
+                        &FieldHookEvent::BeforeChange,
+                        &mut hook_data,
+                        &collection,
+                        "update",
+                    )
+                    .map_err(|e| {
+                        mlua::Error::RuntimeError(format!("before_change field hook error: {}", e))
+                    })?;
+
+                    // Collection-level BeforeChange (capture modified data)
+                    let hook_ctx = HookContext::builder(&collection, "update")
+                        .data(hook_data.clone())
+                        .locale(locale_str.as_deref())
+                        .user(hook_user.as_ref())
+                        .ui_locale(hook_ui_locale.as_deref())
+                        .build();
+                    let ctx = run_hooks_inner(lua, &def.hooks, HookEvent::BeforeChange, hook_ctx)
+                        .map_err(|e| {
+                        mlua::Error::RuntimeError(format!("before_change hook error: {}", e))
+                    })?;
+                    hook_data = ctx.data;
+                }
+
+                // Convert hook-processed data back to string map for DB write
+                let final_data = HookContext::builder(&collection, "update")
+                    .data(hook_data.clone())
+                    .build()
+                    .to_string_map(&def.fields);
 
                 let updated = query::update_partial(
                     conn,
                     &collection,
                     &def,
                     &doc.id,
-                    &data,
+                    &final_data,
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| mlua::Error::RuntimeError(format!("update error: {}", e)))?;
@@ -315,7 +431,7 @@ pub(super) fn register_update_many(
                     &collection,
                     &def.fields,
                     &doc.id,
-                    &join_data,
+                    &hook_data,
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| mlua::Error::RuntimeError(format!("join data error: {}", e)))?;
@@ -339,9 +455,22 @@ pub(super) fn register_update_many(
 
                 if hooks_enabled {
                     let mut after_data = updated.fields.clone();
+                    run_field_hooks_inner(
+                        lua,
+                        &def.fields,
+                        &FieldHookEvent::AfterChange,
+                        &mut after_data,
+                        &collection,
+                        "update",
+                    )
+                    .map_err(|e| {
+                        mlua::Error::RuntimeError(format!("after_change field hook error: {}", e))
+                    })?;
+
                     after_data.insert("id".to_string(), Value::String(updated.id.to_string()));
                     let after_ctx = HookContext::builder(&collection, "update")
                         .data(after_data)
+                        .locale(locale_str.as_deref())
                         .user(hook_user.as_ref())
                         .ui_locale(hook_ui_locale.as_deref())
                         .build();
@@ -493,6 +622,13 @@ pub(super) fn register_delete_many(
                 None
             };
 
+            let is_upload = def.is_upload_collection();
+            let config_dir_path = if is_upload {
+                lua.app_data_ref::<ConfigDir>().map(|cd| cd.0.clone())
+            } else {
+                None
+            };
+
             let mut deleted = 0i64;
             for doc in &docs {
                 if hooks_enabled {
@@ -512,6 +648,11 @@ pub(super) fn register_delete_many(
                     query::fts::fts_delete(conn, &collection, &doc.id).map_err(|e| {
                         mlua::Error::RuntimeError(format!("FTS delete error: {}", e))
                     })?;
+                }
+
+                // Clean up upload files after successful DB delete
+                if let Some(dir) = &config_dir_path {
+                    upload::delete_upload_files(dir, &doc.fields);
                 }
 
                 if hooks_enabled {

@@ -962,19 +962,28 @@ pub(crate) fn extract_cookie<'a>(header: &'a str, name: &str) -> Option<&'a str>
 // Excluded from coverage: async Axum handler requiring full server state.
 #[cfg(not(tarpaulin_include))]
 async fn mcp_http_handler(State(state): State<AdminState>, request: Request<Body>) -> Response {
-    // API key auth — constant-time comparison to prevent timing attacks
-    if !state.config.mcp.api_key.is_empty() {
-        let auth_header = request
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        let expected = format!("Bearer {}", state.config.mcp.api_key);
-        let is_valid = auth_header.as_bytes().ct_eq(expected.as_bytes());
+    // Defense-in-depth: reject all requests when no API key is configured.
+    // The startup check in commands/serve.rs already bails if http=true and api_key is empty,
+    // but this guard protects against programmatic construction of AdminState without that check.
+    if state.config.mcp.api_key.is_empty() {
+        return (
+            StatusCode::FORBIDDEN,
+            "MCP HTTP endpoint requires an API key — set mcp.api_key in crap.toml",
+        )
+            .into_response();
+    }
 
-        if !bool::from(is_valid) {
-            return (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response();
-        }
+    // API key auth — constant-time comparison to prevent timing attacks
+    let auth_header = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    let expected = format!("Bearer {}", state.config.mcp.api_key);
+    let is_valid = auth_header.as_bytes().ct_eq(expected.as_bytes());
+
+    if !bool::from(is_valid) {
+        return (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response();
     }
 
     let body_bytes = match body::to_bytes(request.into_body(), 1024 * 1024).await {

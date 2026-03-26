@@ -285,6 +285,13 @@ pub fn execute_tool(
 
     // Dynamic CRUD tools
     if let Some(parsed) = parse_tool_name(name, registry) {
+        // Enforce include/exclude at execution time — not just in tools/list.
+        // Without this, an attacker who knows a collection slug could directly call
+        // e.g. find_<slug> even if the collection was excluded from tool listing.
+        if !should_include(&parsed.slug, &config.mcp) {
+            bail!("Tool not available: {}", name);
+        }
+
         return match parsed.op {
             ToolOp::Find => exec_find(args, &parsed.slug, registry, pool, runner, config),
             ToolOp::FindById => exec_find_by_id(args, &parsed.slug, registry, pool, config),

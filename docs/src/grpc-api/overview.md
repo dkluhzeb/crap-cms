@@ -57,7 +57,7 @@ grpc_timeout = "30s"
 
 ## Server Reflection
 
-The server supports gRPC reflection, so tools like `grpcurl` work without importing the proto file:
+When enabled (`grpc_reflection = true` in `[server]`, disabled by default), the server supports gRPC reflection, so tools like `grpcurl` work without importing the proto file:
 
 ```bash
 # List services

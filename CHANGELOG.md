@@ -76,7 +76,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `hooks = false` in the request.
 
 - **Startup config validation** — validates port > 0, admin_port != grpc_port,
-  and warns on questionable settings (e.g., SMTP configured but `public_url`
+  `channel_capacity > 0`, `pagination.default_limit > 0`,
+  `pagination.default_limit <= max_limit`, `depth >= 0`,
+  `default_locale` in `locales` list, MCP HTTP requires `api_key`, and
+  warns on questionable settings (e.g., SMTP configured but `public_url`
   missing).
 
 - **Security headers** on all admin responses: `X-Frame-Options: DENY`,
@@ -187,6 +190,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `UNIQUE constraint failed: users.email`). Now sanitized to show only the
   column name.
 
+- **MCP HTTP unauthenticated access** (HIGH): When `mcp.http = true` and
+  `api_key` was empty, the MCP HTTP endpoint accepted unauthenticated requests
+  with full CRUD access (MCP bypasses all access control). The server now
+  requires an API key when MCP HTTP is enabled (config validation error at
+  startup). The HTTP handler also rejects requests as a defense-in-depth guard.
+
+- **MCP `exclude_collections` bypass** (MEDIUM): `exclude_collections` and
+  `include_collections` only filtered the `tools/list` response — an attacker
+  who knew a collection slug could call `find_<slug>` directly via
+  `tools/call`. Collection filters are now enforced at execution time.
+
+- **Lua `update_many` skipped validation and hooks** (HIGH): The Lua
+  `crap.collections.update_many()` function only ran `BeforeChange` hooks and
+  discarded their return value. It skipped `BeforeValidate` hooks, field
+  validation (`required`, `unique`, custom `validate`), and field-level
+  `before_change`/`after_change` hooks. Now runs the full write lifecycle
+  matching the single `update` and gRPC `UpdateMany` paths.
+
+- **Lua `update_many` field write access bypass** (MEDIUM): When called with
+  `overrideAccess = false`, field-level write access checks were not applied.
+  Now strips denied fields before the DB write.
+
+- **IP rate limiter not cleared on successful login** (MEDIUM): The per-IP
+  rate limiter was never cleared on successful login (only the per-email
+  limiter was). Users behind shared IPs (NAT, VPN) could eventually get
+  locked out despite successful logins. Both limiters are now cleared on
+  success (admin and gRPC).
+
+- **Lua `delete`/`delete_many` orphaned upload files** (MEDIUM): Deleting
+  upload-collection documents via Lua hooks left files on disk. Now cleans up
+  upload files after successful deletion, matching the gRPC path.
+
 ### Fixed
 
 - **Page metadata stomping**: `with_pagination` no longer overwrites the `page`
@@ -261,6 +296,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Hardcoded English in UI components**: Replaced hardcoded "Cancel",
   "Confirm", "OK", "Search..." strings with `t()` translations in confirm,
   richtext, and relationship-search components.
+
+- **`channel_capacity = 0` startup panic**: Setting `live.channel_capacity = 0`
+  in `crap.toml` caused a tokio panic at startup (`broadcast::channel` requires
+  capacity > 0). Now caught by config validation with a clear error message.
+
+- **Missing config validation for pagination limits**: `pagination.default_limit`
+  and `pagination.max_limit` accepted zero or negative values. Negative
+  `default_limit` passed through to SQL `LIMIT`, causing undefined behavior.
+  Now validated: both must be > 0, and `default_limit <= max_limit`.
+
+- **`default_locale` not validated against `locales` list**: Setting
+  `default_locale = "en"` with `locales = ["de", "fr"]` was silently accepted,
+  causing the default locale to have no storage columns. Now errors at startup.
+
+- **Negative depth config accepted**: `depth.default_depth` and `max_depth`
+  accepted negative values. Now validated: both must be >= 0.
+
+- **SSE reconnection created duplicate `EventSource`**: If the SSE connection
+  dropped and the component was reconnected during the 5-second retry window,
+  both the timer callback and `connectedCallback` created new connections.
+  Reconnect timer is now tracked and cleared on disconnect.
+
+- **Array field index collision after row removal**: Removing a row and adding
+  a new one could produce duplicate indices because `_afterRowChange()` did
+  not call `_reindexRows()`. Indices are now resequenced on every row change.
+
+- **Web Component event listener accumulation**: `CrapArrayField`,
+  `CrapConfirm`, `CrapTags`, `CrapDirtyForm`, and all picker components
+  (`CrapThemePicker`, `CrapLocalePicker`, `CrapUiLocalePicker`) did not
+  fully clean up event listeners in `disconnectedCallback()`. HTMX-driven
+  DOM swaps could cause listener accumulation. Added proper cleanup and
+  reconnection guards.
+
+- **Tab keyboard navigation**: `CrapTabs` did not implement WAI-ARIA keyboard
+  navigation. Added ArrowLeft/Right, Home/End key handling with proper
+  `tabindex` management.
+
+- **Relationship search stale dropdown**: A pending `fetch` from `doSearch()`
+  could resolve after `closeDropdown()`, reopening the dropdown. Now
+  increments the generation counter on close to invalidate in-flight searches.
+
+- **Block row label watcher duplicate listeners**: `_setupBlockRowLabelWatcher`
+  lacked the `labelInit` guard present in `_setupRowLabelWatcher`, allowing
+  duplicate `input` listeners on reconnection.
+
+- **Auth page cache-busting**: Login, forgot-password, and reset-password
+  pages linked to `/static/styles.css` without the `?v={{crap.build_hash}}`
+  cache-busting parameter used by other pages.
+
+- **Missing favicon on standalone pages**: Forgot-password, reset-password,
+  auth-required, and admin-denied pages were missing the
+  `<link rel="icon">` tag, causing 404s for `/favicon.ico`.
+
+- **gRPC reflection docs misleading**: Documentation implied reflection was
+  always available. Clarified that `grpc_reflection = true` must be set.
+
+- **Reset token expiry docs hardcoded**: gRPC docs said tokens expire
+  "after 1 hour" instead of referencing the configurable `reset_token_expiry`.
 
 ### Internal
 

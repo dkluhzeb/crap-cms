@@ -65,6 +65,14 @@ class CrapUiLocalePicker extends HTMLElement {
   }
 
   disconnectedCallback() {
+    const toggle = this.querySelector('[data-ui-locale-toggle]');
+    const dropdown = this.querySelector('[data-ui-locale-dropdown]');
+    if (toggle && this._onToggle) {
+      toggle.removeEventListener('click', this._onToggle);
+    }
+    if (dropdown && this._onSelect) {
+      dropdown.removeEventListener('click', this._onSelect);
+    }
     if (this._onOutsideClick) {
       document.removeEventListener('click', this._onOutsideClick);
     }

@@ -144,8 +144,9 @@ impl ContentService {
             Status::internal("Internal error")
         })?;
 
-        // Successful login — clear rate limit state
+        // Successful login — clear rate limit state for both email and IP
         self.login_limiter.clear(&req.email);
+        self.ip_login_limiter.clear(&ip);
 
         Ok(Response::new(content::LoginResponse {
             token,

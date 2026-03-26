@@ -22,9 +22,13 @@ class CrapTags extends HTMLElement {
     this._input = null;
     /** @type {string} */
     this._fieldType = 'text';
+    /** @type {boolean} */
+    this._connected = false;
   }
 
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
     this._hidden = this.querySelector('input[type="hidden"]');
     this._container = this.querySelector('.form__tags');
     this._input = this.querySelector('.form__tags-input');
@@ -69,6 +73,10 @@ class CrapTags extends HTMLElement {
         this._input.focus();
       }
     });
+  }
+
+  disconnectedCallback() {
+    this._connected = false;
   }
 
   /**

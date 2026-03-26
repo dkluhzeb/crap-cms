@@ -12,6 +12,7 @@ use crate::{
         self, HookRunner,
         api::{self, VmLabel},
         lifecycle::{
+            ConfigDir,
             crud::register_crud_functions,
             execution::scan_registered_events,
             types::{DefaultDeny, HookDepth, MaxHookDepth, MaxInstructions},
@@ -118,11 +119,12 @@ fn create_lua_vm(
     // These read the active transaction from Lua app_data when called inside hooks.
     register_crud_functions(&lua, registry, &config.locale, &config.pagination)?;
 
-    // Initialize hook depth tracking
+    // Initialize hook depth tracking and config
     lua.set_app_data(HookDepth(0));
     lua.set_app_data(MaxHookDepth(config.hooks.max_depth));
     lua.set_app_data(DefaultDeny(config.access.default_deny));
     lua.set_app_data(MaxInstructions(config.hooks.max_instructions));
+    lua.set_app_data(ConfigDir(config_dir.to_path_buf()));
 
     // Auto-load collections/*.lua, globals/*.lua, and jobs/*.lua
     let collections_dir = config_dir.join("collections");

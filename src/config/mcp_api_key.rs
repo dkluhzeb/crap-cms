@@ -10,9 +10,20 @@ use serde::{Deserialize, Serialize};
 pub struct McpApiKey(String);
 
 impl McpApiKey {
+    /// Create a new `McpApiKey` from a string.
+    pub fn new(key: impl Into<String>) -> Self {
+        Self(key.into())
+    }
+
     /// Returns `true` if the API key is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+}
+
+impl From<&str> for McpApiKey {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
     }
 }
 

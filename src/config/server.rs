@@ -59,7 +59,7 @@ pub struct ServerConfig {
     #[serde(default, with = "serde_duration_option")]
     pub request_timeout: Option<u64>,
     /// gRPC request timeout in seconds. None = no timeout (default).
-    /// Applies to all unary gRPC RPCs. Subscribe streams are exempt.
+    /// Applies to all gRPC RPCs including Subscribe streams.
     /// Accepts integer seconds or human-readable string ("30s", "5m").
     #[serde(default, with = "serde_duration_option")]
     pub grpc_timeout: Option<u64>,

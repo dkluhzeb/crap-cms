@@ -86,6 +86,14 @@ class CrapThemePicker extends HTMLElement {
   }
 
   disconnectedCallback() {
+    const toggle = this.querySelector('[data-theme-toggle]');
+    const dropdown = this.querySelector('[data-theme-dropdown]');
+    if (toggle && this._onToggle) {
+      toggle.removeEventListener('click', this._onToggle);
+    }
+    if (dropdown && this._onSelect) {
+      dropdown.removeEventListener('click', this._onSelect);
+    }
     if (this._onOutsideClick) {
       document.removeEventListener('click', this._onOutsideClick);
     }

@@ -147,8 +147,9 @@ pub struct McpConfig {
     pub http: bool,
     /// Enable config generation tools that can write files to disk (default: false).
     pub config_tools: bool,
-    /// API key for HTTP transport auth. **Strongly recommended** when `http = true`.
-    /// Empty = no auth (all MCP operations are unauthenticated).
+    /// API key for HTTP transport auth. **Required** when `http = true` — the server
+    /// will refuse to start without one. The HTTP handler also rejects all requests
+    /// when the API key is empty as a defense-in-depth measure.
     pub api_key: McpApiKey,
     /// Whitelist of collection slugs to expose (empty = all).
     pub include_collections: Vec<String>,
@@ -209,6 +210,14 @@ impl LocaleConfig {
         Self::validate_locale_code(&self.default_locale)?;
         for locale in &self.locales {
             Self::validate_locale_code(locale)?;
+        }
+        // When locales are enabled, the default locale must be in the list
+        if !self.locales.is_empty() && !self.locales.contains(&self.default_locale) {
+            bail!(
+                "default_locale '{}' must be included in the locales list {:?}",
+                self.default_locale,
+                self.locales
+            );
         }
         Ok(())
     }
@@ -489,6 +498,37 @@ mod tests {
             fallback: true,
         };
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn locale_validation_default_not_in_list_errors() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["de".to_string(), "fr".to_string()],
+            fallback: true,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("default_locale"));
+    }
+
+    #[test]
+    fn locale_validation_default_in_list_passes() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec!["en".to_string(), "de".to_string()],
+            fallback: true,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn locale_validation_empty_locales_skips_inclusion_check() {
+        let config = LocaleConfig {
+            default_locale: "en".to_string(),
+            locales: vec![],
+            fallback: true,
+        };
+        assert!(config.validate().is_ok());
     }
 
     #[test]

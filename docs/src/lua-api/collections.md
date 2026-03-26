@@ -197,7 +197,7 @@ This matches the behavior of the gRPC API and admin UI.
 
 ## crap.collections.delete(collection, id, opts?)
 
-Delete a document. Returns `true` on success.
+Delete a document. Returns `true` on success. For upload collections, associated files (original + resized + format variants) are automatically cleaned up from disk.
 
 **Only available inside hooks with transaction context.**
 
@@ -222,8 +222,8 @@ Lua CRUD operations run the **same lifecycle hooks** as the gRPC API and admin U
 - **`create`**: before_validate → validate → before_change → DB insert → after_change
 - **`update`**: before_validate → validate → before_change → DB update → after_change
 - **`update_many`**: per-document: before_validate → validate → before_change → DB update → after_change
-- **`delete`**: before_delete → DB delete → after_delete
-- **`delete_many`**: per-document: before_delete → DB delete → after_delete
+- **`delete`**: before_delete → DB delete → upload file cleanup → after_delete
+- **`delete_many`**: per-document: before_delete → DB delete → upload file cleanup → after_delete
 - **`find` / `find_by_id`**: before_read → DB query → after_read
 
 All hooks have full CRUD access within the same transaction.
@@ -353,7 +353,7 @@ The `data` table contains fields to update on all matched documents (partial upd
 
 ## crap.collections.delete_many(collection, query, opts?)
 
-Delete multiple documents matching a query. Returns `{ deleted = N }`.
+Delete multiple documents matching a query. Returns `{ deleted = N }`. For upload collections, associated files are automatically cleaned up from disk for each deleted document.
 
 **All-or-nothing semantics:** finds all matching documents, checks delete access for each (if `overrideAccess = false`), and only proceeds if all pass.
 

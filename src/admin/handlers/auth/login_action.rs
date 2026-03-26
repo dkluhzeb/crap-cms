@@ -169,9 +169,11 @@ pub async fn login_action(
         }
     };
 
-    // Successful login — clear email rate limit (don't clear IP: legitimate users
-    // from the same IP shouldn't reset an attacker's count)
+    // Successful login — clear rate limit state for both email and IP.
+    // Without clearing IP, successful logins still accumulate toward the IP threshold,
+    // eventually locking out all users behind that IP (e.g., shared NAT/VPN).
     state.login_limiter.clear(&form.email);
+    state.ip_login_limiter.clear(&ip);
 
     build_session_response(&state, &user, &form, &def)
 }
@@ -223,5 +225,55 @@ mod tests {
         limiter.record_failure("1.2.3.4");
         std::thread::sleep(Duration::from_millis(10));
         assert!(!limiter.is_blocked("1.2.3.4"));
+    }
+
+    /// Regression: successful login must clear the IP rate limiter, not just the
+    /// email limiter. Without this, users behind a shared IP (NAT/VPN) eventually
+    /// get locked out even when logging in successfully.
+    #[test]
+    fn ip_limiter_cleared_on_success() {
+        let ip_limiter = LoginRateLimiter::new(3, 60);
+        let ip = "10.0.0.1";
+
+        // Accumulate 2 failures (one below threshold)
+        ip_limiter.record_failure(ip);
+        ip_limiter.record_failure(ip);
+        assert!(!ip_limiter.is_blocked(ip));
+
+        // Simulate successful login clearing the IP limiter
+        ip_limiter.clear(ip);
+
+        // After clearing, 2 more failures should not trigger the block
+        // (would have been 4 total without clear, exceeding threshold of 3)
+        ip_limiter.record_failure(ip);
+        ip_limiter.record_failure(ip);
+        assert!(!ip_limiter.is_blocked(ip));
+    }
+
+    /// Regression: email and IP limiters must both be cleared on success.
+    /// Verifies the coordinated clear pattern used in the login handler.
+    #[test]
+    fn both_limiters_cleared_on_success() {
+        let email_limiter = LoginRateLimiter::new(2, 60);
+        let ip_limiter = LoginRateLimiter::new(3, 60);
+        let email = "user@example.com";
+        let ip = "192.168.1.1";
+
+        // Record failures on both
+        email_limiter.record_failure(email);
+        ip_limiter.record_failure(ip);
+        ip_limiter.record_failure(ip);
+
+        // Simulate successful login — clear both
+        email_limiter.clear(email);
+        ip_limiter.clear(ip);
+
+        // Both should be unblocked even after more failures up to threshold
+        email_limiter.record_failure(email);
+        assert!(!email_limiter.is_blocked(email));
+
+        ip_limiter.record_failure(ip);
+        ip_limiter.record_failure(ip);
+        assert!(!ip_limiter.is_blocked(ip));
     }
 }

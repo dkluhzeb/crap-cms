@@ -107,6 +107,11 @@ class CrapDirtyForm extends HTMLElement {
   }
 
   disconnectedCallback() {
+    const form = this.querySelector('#edit-form');
+    if (form) {
+      form.removeEventListener('input', this._markDirty);
+      form.removeEventListener('change', this._markDirty);
+    }
     this.removeEventListener('crap:change', this._markDirty);
     document.removeEventListener('click', this._onRowAction);
     document.removeEventListener('htmx:configRequest', this._onConfigRequest);

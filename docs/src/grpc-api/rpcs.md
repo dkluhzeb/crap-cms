@@ -377,7 +377,7 @@ grpcurl -plaintext -d '{
 }' localhost:50051 crap.ContentAPI/ResetPassword
 ```
 
-Tokens are single-use and expire after 1 hour.
+Tokens are single-use and expire after `reset_token_expiry` seconds (default: 3600 = 1 hour, configurable in `[auth]`).
 
 ## VerifyEmail
 
