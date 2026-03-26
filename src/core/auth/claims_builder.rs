@@ -13,6 +13,7 @@ pub struct ClaimsBuilder {
     collection: Slug,
     email: Option<String>,
     exp: Option<u64>,
+    session_version: u64,
 }
 
 impl ClaimsBuilder {
@@ -23,6 +24,7 @@ impl ClaimsBuilder {
             collection: collection.into(),
             email: None,
             exp: None,
+            session_version: 0,
         }
     }
 
@@ -38,6 +40,12 @@ impl ClaimsBuilder {
         self
     }
 
+    /// Set the session version (incremented on password change).
+    pub fn session_version(mut self, version: u64) -> Self {
+        self.session_version = version;
+        self
+    }
+
     /// Build the final `Claims` instance.
     ///
     /// # Panics
@@ -50,6 +58,7 @@ impl ClaimsBuilder {
             email: self.email.expect("ClaimsBuilder: email is required"),
             exp: self.exp.expect("ClaimsBuilder: exp is required"),
             iat: Some(Utc::now().timestamp() as u64),
+            session_version: self.session_version,
         }
     }
 }
@@ -70,11 +79,22 @@ mod tests {
         assert_eq!(claims.collection, "users");
         assert_eq!(claims.email, "user@example.com");
         assert_eq!(claims.exp, 9999999999);
+        assert_eq!(claims.session_version, 0, "default session_version is 0");
         let iat = claims.iat.expect("iat should be set");
         assert!(
             iat >= before && iat <= after,
             "iat should be current timestamp"
         );
+    }
+
+    #[test]
+    fn session_version_set_via_builder() {
+        let claims = ClaimsBuilder::new("user-id", "users")
+            .email("user@example.com")
+            .exp(9999999999)
+            .session_version(42)
+            .build();
+        assert_eq!(claims.session_version, 42);
     }
 
     #[test]

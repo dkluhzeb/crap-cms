@@ -17,20 +17,21 @@ pub fn is_valid_identifier(s: &str) -> bool {
 /// Sanitize a locale string for safe use in SQL identifiers (column names, defaults).
 /// Converts dashes to underscores (e.g. "de-DE" → "de_DE") and strips anything
 /// except alphanumeric + underscore.
-pub fn sanitize_locale(locale: &str) -> String {
+pub fn sanitize_locale(locale: &str) -> Result<String> {
     let result: String = locale
         .chars()
         .map(|c| if c == '-' { '_' } else { c })
         .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
         .collect();
 
-    debug_assert!(
-        !result.is_empty(),
-        "sanitize_locale produced empty string from input: {:?}",
-        locale
-    );
+    if result.is_empty() {
+        bail!(
+            "sanitize_locale produced empty string from input: {:?}",
+            locale
+        );
+    }
 
-    result
+    Ok(result)
 }
 
 /// Validate a slug: lowercase alphanumeric + underscores, not empty, no leading underscore.
@@ -206,24 +207,17 @@ mod tests {
 
     #[test]
     fn sanitize_locale_strips_dangerous_chars() {
-        assert_eq!(sanitize_locale("en"), "en");
-        assert_eq!(sanitize_locale("de-DE"), "de_DE");
-        assert_eq!(sanitize_locale("en_US"), "en_US");
+        assert_eq!(sanitize_locale("en").unwrap(), "en");
+        assert_eq!(sanitize_locale("de-DE").unwrap(), "de_DE");
+        assert_eq!(sanitize_locale("en_US").unwrap(), "en_US");
         // Dashes map to underscores, everything else non-alphanumeric is stripped
-        assert_eq!(sanitize_locale("'; DROP TABLE --"), "DROPTABLE__");
+        assert_eq!(sanitize_locale("'; DROP TABLE --").unwrap(), "DROPTABLE__");
     }
 
-    /// Documents that sanitize_locale returns empty for pathological all-special-char input.
-    /// The debug_assert in sanitize_locale will panic in debug builds to catch misuse.
     #[test]
-    #[cfg_attr(
-        debug_assertions,
-        should_panic(expected = "sanitize_locale produced empty string")
-    )]
-    fn sanitize_locale_pathological_input_is_empty() {
+    fn sanitize_locale_pathological_input_returns_error() {
         let result = sanitize_locale("!@#$%^&*()");
-        // In release builds, returns empty string (debug_assert is a no-op)
-        assert!(result.is_empty());
+        assert!(result.is_err());
     }
 
     #[test]

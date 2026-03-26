@@ -60,7 +60,7 @@ pub fn update_password(
     let hash = hash_password(password)?;
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
-        "UPDATE {} SET _password_hash = {} WHERE id = {}",
+        "UPDATE {} SET _password_hash = {}, _session_version = COALESCE(_session_version, 0) + 1 WHERE id = {}",
         slug, p1, p2
     );
     conn.execute(
@@ -328,6 +328,20 @@ pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> 
     Ok(())
 }
 
+/// Get the session version for a user. Returns 0 if no version set (NULL or missing).
+pub fn get_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<u64> {
+    let sql = format!(
+        "SELECT COALESCE(_session_version, 0) AS sv FROM {} WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
+
+    match conn.query_one(&sql, &[DbValue::Text(id.to_string())])? {
+        Some(row) => Ok(row.get_i64("sv")? as u64),
+        None => Ok(0),
+    }
+}
+
 /// Check if a user account is locked.
 pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
@@ -394,6 +408,7 @@ mod tests {
                 _reset_token_exp INTEGER,
                 _locked INTEGER DEFAULT 0,
                 _settings TEXT,
+                _session_version INTEGER DEFAULT 0,
                 _verification_token TEXT,
                 _verification_token_exp INTEGER,
                 _verified INTEGER DEFAULT 0,
@@ -823,5 +838,72 @@ mod tests {
         setup_user_settings_table(&conn);
         let result = get_user_settings(&conn, "nonexistent").unwrap();
         assert!(result.is_none(), "Non-existent user should return None");
+    }
+
+    // ── session version tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn get_session_version_default_zero() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        let version = get_session_version(&conn, "users", "user1").unwrap();
+        assert_eq!(version, 0, "Default session version should be 0");
+    }
+
+    #[test]
+    fn get_session_version_nonexistent_user() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        let version = get_session_version(&conn, "users", "nonexistent").unwrap();
+        assert_eq!(version, 0, "Non-existent user should return 0");
+    }
+
+    #[test]
+    fn update_password_increments_session_version() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+
+        assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 0);
+
+        update_password(&conn, "users", "user1", "pass1").unwrap();
+        assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 1);
+
+        update_password(&conn, "users", "user1", "pass2").unwrap();
+        assert_eq!(get_session_version(&conn, "users", "user1").unwrap(), 2);
+    }
+
+    #[test]
+    fn update_password_increments_from_null_session_version() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+
+        // Set _session_version to NULL to simulate pre-migration rows
+        conn.execute(
+            "UPDATE users SET _session_version = NULL WHERE id = 'user1'",
+            &[],
+        )
+        .unwrap();
+
+        update_password(&conn, "users", "user1", "newpass").unwrap();
+        assert_eq!(
+            get_session_version(&conn, "users", "user1").unwrap(),
+            1,
+            "COALESCE should treat NULL as 0 then increment to 1"
+        );
+    }
+
+    #[test]
+    fn get_session_version_null_returns_zero() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+
+        conn.execute(
+            "UPDATE users SET _session_version = NULL WHERE id = 'user1'",
+            &[],
+        )
+        .unwrap();
+
+        let version = get_session_version(&conn, "users", "user1").unwrap();
+        assert_eq!(version, 0, "NULL _session_version should return 0");
     }
 }

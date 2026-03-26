@@ -95,7 +95,9 @@ impl ContentService {
                     return Ok(Err("Please verify your email before logging in"));
                 }
 
-                Ok::<_, anyhow::Error>(Ok(Some(doc)))
+                let session_version = query::get_session_version(&conn, &slug, &doc.id)?;
+
+                Ok::<_, anyhow::Error>(Ok(Some((doc, session_version))))
             })
             .await
             .map_err(|e| {
@@ -107,7 +109,7 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
 
-        let user = match login_result {
+        let (user, session_version) = match login_result {
             Ok(Some(u)) => u,
             Ok(None) => {
                 self.login_limiter.record_failure(&req.email);
@@ -137,6 +139,7 @@ impl ContentService {
         let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&req.collection))
             .email(user_email)
             .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+            .session_version(session_version)
             .build();
 
         let token = auth::create_token(&claims, self.jwt_secret.as_ref()).map_err(|e| {
@@ -177,9 +180,13 @@ impl ContentService {
         let pool = self.pool.clone();
         let collection = claims.collection.clone();
         let id = claims.sub.clone();
-        let doc = tokio::task::spawn_blocking(move || {
+        let session_version = claims.session_version;
+
+        let (doc, db_session_version) = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
-            query::find_by_id(&conn, &collection, &def, &id, None)
+            let doc = query::find_by_id(&conn, &collection, &def, &id, None)?;
+            let sv = query::get_session_version(&conn, &collection, &id)?;
+            Ok::<_, anyhow::Error>((doc, sv))
         })
         .await
         .map_err(|e| {
@@ -192,6 +199,11 @@ impl ContentService {
         })?;
 
         let doc = doc.ok_or_else(|| Status::not_found("User not found"))?;
+
+        // Reject tokens with stale session version (password was changed)
+        if session_version != db_session_version {
+            return Err(Status::unauthenticated("Session invalidated"));
+        }
 
         // Reject locked users even if their JWT is still valid
         let locked = doc

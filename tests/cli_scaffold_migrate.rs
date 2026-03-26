@@ -1890,7 +1890,7 @@ fn nested_fields_with_locales_e2e() {
     // Verify FTS columns are properly expanded for localized text fields
     let reg = registry.read().unwrap();
     let def = reg.get_collection("pages").unwrap();
-    let fts_cols = crap_cms::db::query::fts::get_fts_columns(def, &cfg.locale);
+    let fts_cols = crap_cms::db::query::fts::get_fts_columns(def, &cfg.locale).unwrap();
     // "title" is localized text → should expand to title__en, title__de
     assert!(
         fts_cols.contains(&"title__en".to_string()),

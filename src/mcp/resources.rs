@@ -62,7 +62,13 @@ pub fn read_resource(
             Some(ResourceContent {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),
-                text: serde_json::to_string_pretty(&schemas).unwrap_or_default(),
+                text: match serde_json::to_string_pretty(&schemas) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("Failed to serialize MCP collection schemas: {}", e);
+                        "{}".to_string()
+                    }
+                },
             })
         }
         "crap://schema/globals" => {
@@ -80,7 +86,13 @@ pub fn read_resource(
             Some(ResourceContent {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),
-                text: serde_json::to_string_pretty(&schemas).unwrap_or_default(),
+                text: match serde_json::to_string_pretty(&schemas) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("Failed to serialize MCP global schemas: {}", e);
+                        "{}".to_string()
+                    }
+                },
             })
         }
         "crap://config" => {
@@ -91,7 +103,13 @@ pub fn read_resource(
             Some(ResourceContent {
                 uri: uri.to_string(),
                 mime_type: Some("application/json".to_string()),
-                text: serde_json::to_string_pretty(&config_json).unwrap_or_default(),
+                text: match serde_json::to_string_pretty(&config_json) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("Failed to serialize MCP config: {}", e);
+                        "{}".to_string()
+                    }
+                },
             })
         }
         _ => None,

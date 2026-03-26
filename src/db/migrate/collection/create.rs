@@ -23,7 +23,7 @@ pub fn create_collection_table(
     for spec in &collect_column_specs(&def.fields, locale_config) {
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
+                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
                 let mut col = format!(
                     "{} {}",
                     col_name,
@@ -72,6 +72,7 @@ pub fn create_collection_table(
         columns.push("_reset_token_exp INTEGER".to_string());
         columns.push("_locked INTEGER DEFAULT 0".to_string());
         columns.push("_settings TEXT".to_string());
+        columns.push("_session_version INTEGER DEFAULT 0".to_string());
 
         if def.auth.as_ref().is_some_and(|a| a.verify_email) {
             columns.push("_verified INTEGER DEFAULT 0".to_string());
@@ -194,6 +195,7 @@ mod tests {
         assert!(cols.contains("_reset_token_exp"));
         assert!(cols.contains("_locked"));
         assert!(cols.contains("_settings"));
+        assert!(cols.contains("_session_version"));
         assert!(cols.contains("_verified"));
         assert!(cols.contains("_verification_token"));
     }

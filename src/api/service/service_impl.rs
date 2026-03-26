@@ -185,6 +185,15 @@ impl ContentService {
             Ok(Some(d)) => d,
             _ => return Ok(None),
         };
+
+        // Reject tokens with stale session version (password was changed)
+        let db_session_version =
+            query::get_session_version(conn, &claims.collection, &claims.sub).unwrap_or(0);
+
+        if claims.session_version != db_session_version {
+            return Err(Status::unauthenticated("Session invalidated"));
+        }
+
         Ok(Some(AuthUser::new(claims, doc)))
     }
 

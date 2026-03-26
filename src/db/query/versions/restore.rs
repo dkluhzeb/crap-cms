@@ -145,7 +145,7 @@ fn restore_locale_and_join_data(
                         &mut set_clauses,
                         &mut params,
                         &mut idx,
-                    );
+                    )?;
                 }
                 continue;
             }
@@ -160,7 +160,7 @@ fn restore_locale_and_join_data(
                     &mut set_clauses,
                     &mut params,
                     &mut idx,
-                );
+                )?;
                 continue;
             }
             // Tabs fields promote sub-fields from all tabs as top-level columns (no prefix).
@@ -175,7 +175,7 @@ fn restore_locale_and_join_data(
                         &mut set_clauses,
                         &mut params,
                         &mut idx,
-                    );
+                    )?;
                 }
                 continue;
             }
@@ -190,7 +190,7 @@ fn restore_locale_and_join_data(
                 &mut set_clauses,
                 &mut params,
                 &mut idx,
-            );
+            )?;
         }
 
         if !set_clauses.is_empty() {
@@ -226,7 +226,7 @@ fn collect_locale_restore_fields(
     set_clauses: &mut Vec<String>,
     params: &mut Vec<DbValue>,
     idx: &mut usize,
-) {
+) -> Result<()> {
     for field in fields {
         if field.field_type == FieldType::Group {
             let nested_obj = obj.get(&field.name).and_then(|v| v.as_object());
@@ -240,7 +240,7 @@ fn collect_locale_restore_fields(
                 let val = obj
                     .get(&base)
                     .or_else(|| nested_obj.and_then(|n| n.get(&sub.name)));
-                restore_locale_columns(conn, val, &base, locale_config, set_clauses, params, idx);
+                restore_locale_columns(conn, val, &base, locale_config, set_clauses, params, idx)?;
             }
         } else if field.field_type == FieldType::Row || field.field_type == FieldType::Collapsible {
             collect_locale_restore_fields(
@@ -251,7 +251,7 @@ fn collect_locale_restore_fields(
                 set_clauses,
                 params,
                 idx,
-            );
+            )?;
         } else if field.field_type == FieldType::Tabs {
             for tab in &field.tabs {
                 collect_locale_restore_fields(
@@ -262,7 +262,7 @@ fn collect_locale_restore_fields(
                     set_clauses,
                     params,
                     idx,
-                );
+                )?;
             }
         } else if field.localized && field.has_parent_column() {
             restore_locale_columns(
@@ -273,9 +273,11 @@ fn collect_locale_restore_fields(
                 set_clauses,
                 params,
                 idx,
-            );
+            )?;
         }
     }
+
+    Ok(())
 }
 
 /// Emit SET clauses that NULL all locale columns for a field, then set the
@@ -288,9 +290,9 @@ fn restore_locale_columns(
     set_clauses: &mut Vec<String>,
     params: &mut Vec<DbValue>,
     idx: &mut usize,
-) {
+) -> Result<()> {
     for locale in &locale_config.locales {
-        let col = format!("{}__{}", field_name, sanitize_locale(locale));
+        let col = format!("{}__{}", field_name, sanitize_locale(locale)?);
 
         if *locale == locale_config.default_locale {
             // Set default locale from snapshot
@@ -319,6 +321,8 @@ fn restore_locale_columns(
             set_clauses.push(format!("{} = NULL", col));
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

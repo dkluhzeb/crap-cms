@@ -155,34 +155,36 @@ pub fn resolve_filters(
     filters: &[FilterClause],
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
-) -> Vec<FilterClause> {
+) -> Result<Vec<FilterClause>> {
     filters
         .iter()
         .map(|clause| match clause {
             FilterClause::Single(f) => {
-                let resolved = resolve_filter_column(&f.field, def, locale_ctx);
-                FilterClause::Single(Filter {
+                let resolved = resolve_filter_column(&f.field, def, locale_ctx)?;
+                Ok(FilterClause::Single(Filter {
                     field: resolved,
                     op: f.op.clone(),
-                })
+                }))
             }
-            FilterClause::Or(groups) => FilterClause::Or(
-                groups
+            FilterClause::Or(groups) => {
+                let resolved_groups: Result<Vec<Vec<Filter>>> = groups
                     .iter()
                     .map(|group| {
                         group
                             .iter()
                             .map(|f| {
-                                let resolved = resolve_filter_column(&f.field, def, locale_ctx);
-                                Filter {
+                                let resolved = resolve_filter_column(&f.field, def, locale_ctx)?;
+                                Ok(Filter {
                                     field: resolved,
                                     op: f.op.clone(),
-                                }
+                                })
                             })
                             .collect()
                     })
-                    .collect(),
-            ),
+                    .collect();
+
+                Ok(FilterClause::Or(resolved_groups?))
+            }
         })
         .collect()
 }
@@ -201,17 +203,18 @@ pub fn resolve_filter_column(
     field_name: &str,
     def: &CollectionDefinition,
     locale_ctx: Option<&LocaleContext>,
-) -> String {
+) -> Result<String> {
     if let Some(ctx) = locale_ctx
         && ctx.config.is_enabled()
     {
         for field in &def.fields {
             if let Some(locale) = check_field_locale(field, field_name, ctx) {
-                return format!("{}__{}", field_name, sanitize_locale(locale));
+                return Ok(format!("{}__{}", field_name, sanitize_locale(locale)?));
             }
         }
     }
-    field_name.to_string()
+
+    Ok(field_name.to_string())
 }
 
 fn get_locale(ctx: &LocaleContext) -> &str {
@@ -607,7 +610,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title");
     }
 
@@ -618,7 +621,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title__de");
     }
 
@@ -633,7 +636,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("meta__description", &def, Some(&ctx));
+        let result = resolve_filter_column("meta__description", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "meta__description__de");
     }
 
@@ -644,7 +647,7 @@ mod tests {
             mode: LocaleMode::Default,
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title__en");
     }
 
@@ -657,14 +660,14 @@ mod tests {
             mode: LocaleMode::Default,
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("meta__title", &def, Some(&ctx));
+        let result = resolve_filter_column("meta__title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "meta__title__en");
     }
 
     #[test]
     fn resolve_column_no_locale_ctx() {
         let def = make_collection(vec![make_field("title", FieldType::Text, true)]);
-        let result = resolve_filter_column("title", &def, None);
+        let result = resolve_filter_column("title", &def, None).unwrap();
         assert_eq!(result, "title");
     }
 
@@ -681,7 +684,7 @@ mod tests {
             config: locale_config_en_de(),
         };
         // Filtering by "slug" should resolve to "slug__de" because it's localized inside a Row
-        let result = resolve_filter_column("slug", &def, Some(&ctx));
+        let result = resolve_filter_column("slug", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "slug__de");
     }
 
@@ -697,7 +700,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("slug", &def, Some(&ctx));
+        let result = resolve_filter_column("slug", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "slug");
     }
 
@@ -713,7 +716,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("summary", &def, Some(&ctx));
+        let result = resolve_filter_column("summary", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "summary__de");
     }
 
@@ -731,7 +734,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("description", &def, Some(&ctx));
+        let result = resolve_filter_column("description", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "description__de");
     }
 
@@ -749,7 +752,7 @@ mod tests {
             mode: LocaleMode::Single("de".into()),
             config: locale_config_en_de(),
         };
-        let result = resolve_filter_column("description", &def, Some(&ctx));
+        let result = resolve_filter_column("description", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "description");
     }
 
@@ -765,7 +768,7 @@ mod tests {
                 fallback: false,
             },
         };
-        let result = resolve_filter_column("title", &def, Some(&ctx));
+        let result = resolve_filter_column("title", &def, Some(&ctx)).unwrap();
         assert_eq!(result, "title");
     }
 
@@ -782,7 +785,7 @@ mod tests {
             field: "status".into(),
             op: FilterOp::Equals("active".into()),
         })];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx));
+        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "status"),
             other => panic!("Expected Single, got {:?}", other),
@@ -806,7 +809,7 @@ mod tests {
                 op: FilterOp::Equals("B".into()),
             }],
         ])];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx));
+        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Or(groups) => {
                 assert_eq!(groups[0][0].field, "title__de");
@@ -827,7 +830,7 @@ mod tests {
             field: "title".into(),
             op: FilterOp::Equals("Hallo".into()),
         })];
-        let resolved = resolve_filters(&filters, &def, Some(&ctx));
+        let resolved = resolve_filters(&filters, &def, Some(&ctx)).unwrap();
         match &resolved[0] {
             FilterClause::Single(f) => assert_eq!(f.field, "title__de"),
             other => panic!("Expected Single, got {:?}", other),

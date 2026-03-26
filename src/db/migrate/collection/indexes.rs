@@ -32,7 +32,7 @@ pub(super) fn sync_indexes(
         }
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale));
+                let col = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
                 let idx_name = format!("idx_{}_{}", slug, col);
                 create_stmts.push(format!(
                     "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
@@ -75,7 +75,7 @@ pub(super) fn sync_indexes(
                     expanded_cols.push(format!(
                         "{}__{}",
                         field_name,
-                        sanitize_locale(&locale_config.default_locale)
+                        sanitize_locale(&locale_config.default_locale)?
                     ));
                 }
                 _ => {

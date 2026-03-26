@@ -24,7 +24,7 @@ pub fn update(
 
     let mut col = UpdateCollector::new();
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "");
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "")?;
 
     if def.timestamps {
         col.set_clauses
@@ -69,7 +69,7 @@ pub fn update_partial(
 
     let mut col = UpdateCollector::new_partial();
 
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "");
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "")?;
 
     if def.timestamps {
         col.set_clauses
@@ -138,7 +138,7 @@ pub(in crate::db::query) fn collect_update_params(
     collector: &mut UpdateCollector,
     conn: &dyn DbConnection,
     prefix: &str,
-) {
+) -> Result<()> {
     for field in fields {
         match field.field_type {
             FieldType::Group => {
@@ -154,14 +154,14 @@ pub(in crate::db::query) fn collect_update_params(
                     collector,
                     conn,
                     &new_prefix,
-                );
+                )?;
             }
             FieldType::Row | FieldType::Collapsible => {
-                collect_update_params(&field.fields, data, locale_ctx, collector, conn, prefix);
+                collect_update_params(&field.fields, data, locale_ctx, collector, conn, prefix)?;
             }
             FieldType::Tabs => {
                 for tab in &field.tabs {
-                    collect_update_params(&tab.fields, data, locale_ctx, collector, conn, prefix);
+                    collect_update_params(&tab.fields, data, locale_ctx, collector, conn, prefix)?;
                 }
             }
             _ => {
@@ -173,7 +173,7 @@ pub(in crate::db::query) fn collect_update_params(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
-                let col_name = locale_write_column(&data_key, field, locale_ctx);
+                let col_name = locale_write_column(&data_key, field, locale_ctx)?;
 
                 if let Some(value) = data.get(&data_key) {
                     collector.set_clauses.push(format!(
@@ -199,6 +199,8 @@ pub(in crate::db::query) fn collect_update_params(
             }
         }
     }
+
+    Ok(())
 }
 
 #[cfg(test)]

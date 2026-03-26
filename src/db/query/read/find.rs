@@ -39,7 +39,7 @@ pub fn find(
 
     let (select_exprs, result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+            get_locale_select_columns(&def.fields, def.timestamps, ctx)?
         }
         _ => {
             let names = get_column_names(def);
@@ -54,7 +54,7 @@ pub fn find(
     let mut params: Vec<DbValue> = Vec::new();
 
     // Build WHERE with locale-resolved column names
-    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx);
+    let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
     let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
 
     if !where_clause.is_empty() {
@@ -125,7 +125,7 @@ pub fn find(
             ("DESC", false) | ("ASC", true) => "<",
             _ => ">",
         };
-        let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
+        let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx)?;
         // Keyset: (col OP ?val) OR (col = ?val AND id OP ?id)
         let ph1 = conn.placeholder(params.len() + 1);
         let ph2 = conn.placeholder(params.len() + 2);
@@ -173,7 +173,7 @@ pub fn find(
         "ASC"
     };
 
-    let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx);
+    let resolved_col = resolve_filter_column(&sort_col, def, locale_ctx)?;
 
     if sort_col != "id" {
         // Stable ordering: primary sort + id tiebreaker
@@ -207,7 +207,7 @@ pub fn find(
             && ctx.config.is_enabled()
             && let LocaleMode::All = ctx.mode
         {
-            group_locale_fields(&mut doc, &def.fields, &ctx.config);
+            group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
         }
         documents.push(doc);
     }

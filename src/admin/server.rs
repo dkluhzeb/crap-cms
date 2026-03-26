@@ -924,6 +924,15 @@ pub(crate) fn load_auth_user(
     )
     .ok()??;
 
+    // Reject tokens with stale session version (password was changed)
+    let db_session_version = query::get_session_version(&conn, &claims.collection, &claims.sub)
+        .ok()
+        .unwrap_or(0);
+
+    if claims.session_version != db_session_version {
+        return None;
+    }
+
     // Load ui_locale from _crap_user_settings
     let ui_locale = query::get_user_settings(&conn, &claims.sub)
         .ok()

@@ -143,7 +143,7 @@ class CrapLiveEvents extends HTMLElement {
       reloadBtn.type = 'button';
       reloadBtn.className = 'stale-warning__reload button button--ghost button--small';
       reloadBtn.textContent = t('reload');
-      reloadBtn.onclick = () => location.reload();
+      reloadBtn.addEventListener('click', () => location.reload());
       actions.appendChild(reloadBtn);
     }
 
@@ -151,7 +151,7 @@ class CrapLiveEvents extends HTMLElement {
     dismissBtn.type = 'button';
     dismissBtn.className = 'stale-warning__dismiss';
     dismissBtn.textContent = '\u00d7';
-    dismissBtn.onclick = () => banner.remove();
+    dismissBtn.addEventListener('click', () => banner.remove());
     actions.appendChild(dismissBtn);
 
     banner.appendChild(actions);

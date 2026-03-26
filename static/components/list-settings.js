@@ -328,8 +328,11 @@ class CrapListSettings extends HTMLElement {
       // Add new filters
       const filterRows = rows.querySelectorAll('.filter-builder__row');
       for (const row of filterRows) {
-        const field = /** @type {HTMLSelectElement} */ (row.querySelector('.filter-builder__field')).value;
-        const op = /** @type {HTMLSelectElement} */ (row.querySelector('.filter-builder__op')).value;
+        const fieldEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__field'));
+        const opEl = /** @type {HTMLSelectElement|null} */ (row.querySelector('.filter-builder__op'));
+        if (!fieldEl || !opEl) continue;
+        const field = fieldEl.value;
+        const op = opEl.value;
         const valueEl = row.querySelector('[name="filter-value"]');
         const value = valueEl ? /** @type {HTMLInputElement} */ (valueEl).value : '';
         url.searchParams.append(`where[${field}][${op}]`, value);

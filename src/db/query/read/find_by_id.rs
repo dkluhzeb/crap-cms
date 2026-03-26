@@ -51,7 +51,7 @@ pub fn find_by_ids(
 
     let (select_exprs, _result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+            get_locale_select_columns(&def.fields, def.timestamps, ctx)?
         }
         _ => {
             let names = get_column_names(def);
@@ -80,7 +80,7 @@ pub fn find_by_ids(
             && ctx.config.is_enabled()
             && let LocaleMode::All = ctx.mode
         {
-            group_locale_fields(&mut doc, &def.fields, &ctx.config);
+            group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
         }
         super::super::hydrate_document(conn, slug, &def.fields, &mut doc, None, locale_ctx)?;
         documents.push(doc);
@@ -103,7 +103,7 @@ pub(crate) fn find_by_id_raw(
 ) -> Result<Option<Document>> {
     let (select_exprs, _result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns(&def.fields, def.timestamps, ctx)
+            get_locale_select_columns(&def.fields, def.timestamps, ctx)?
         }
         _ => {
             let names = get_column_names(def);
@@ -130,7 +130,7 @@ pub(crate) fn find_by_id_raw(
                 && ctx.config.is_enabled()
                 && let LocaleMode::All = ctx.mode
             {
-                group_locale_fields(&mut doc, &def.fields, &ctx.config);
+                group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
             }
             Ok(Some(doc))
         }

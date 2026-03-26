@@ -254,7 +254,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   upload-collection documents via Lua hooks left files on disk. Now cleans up
   upload files after successful deletion, matching the gRPC path.
 
+- **`sanitize_locale` empty string passes in release builds** (HIGH):
+  `sanitize_locale` used `debug_assert!` which only fires in debug builds.
+  An all-special-character locale string silently produced `""` in release,
+  which gets interpolated into SQL as an empty identifier. Now returns
+  `Result<String>` with a proper error, propagated through all callers.
+
+- **Non-existent locale silently accepted**: `LocaleContext::from_locale_string`
+  accepted any locale code without checking it exists in the config's locale
+  list. Requesting a non-existent locale (e.g. `"fr"` when only `"en"` and
+  `"de"` are configured) silently created a `Single("fr")` context. Now
+  returns `None` for unknown locale codes.
+
+- **Sessions not invalidated on password change** (HIGH): After a password
+  reset, existing JWTs remained valid until expiry. Added a
+  `_session_version` counter to auth tables that increments on password
+  change. The version is embedded in JWT claims and checked on every
+  authenticated request — stale tokens are rejected immediately.
+
 ### Fixed
+
+- **Cursor encoding error silently dropped**: `cursor.encode().ok()` discarded
+  serialization errors, causing pagination to silently break. Now logs the
+  error before returning `None`.
+
+- **MCP resources returned empty JSON on serialization failure**: Three
+  `unwrap_or_default()` calls in MCP resource endpoints silently produced
+  empty strings when schema serialization failed. Now logs the error.
+
+- **Richtext link dialog null dereferences**: Four `querySelector()` calls in
+  the link modal's `applyLink()` function accessed `.value`/`.checked`
+  without null checks, causing crashes if modal DOM was malformed.
+
+- **Filter builder null dereferences**: `list-settings.js` filter builder
+  accessed `.value` on `querySelector()` results without null checks.
+
+- **Stale warning buttons used `onclick` property assignment**:
+  `live-events.js` used `btn.onclick =` instead of `addEventListener()`,
+  overwriting any existing click handlers.
 
 - **Cursor pagination broken on numeric fields**: Cursor sort values were always
   bound as `TEXT`, so numeric columns compared lexicographically (`"9" > "10"`).

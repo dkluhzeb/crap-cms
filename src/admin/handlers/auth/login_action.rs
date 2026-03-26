@@ -17,10 +17,16 @@ use crate::{
     db::{DbPool, query},
 };
 
+/// Successful login result containing the user document and session version.
+struct LoginSuccess {
+    user: Document,
+    session_version: u64,
+}
+
 /// Authenticate a user by email/password inside a blocking task.
 ///
 /// Returns:
-/// - `Ok(Some(Ok(user)))` — credentials valid, account active
+/// - `Ok(Some(Ok(success)))` — credentials valid, account active
 /// - `Ok(Some(Err(msg)))` — credentials valid but account locked/unverified
 /// - `Ok(None)` — invalid credentials (user not found or wrong password)
 /// - `Err(_)` — internal/DB error
@@ -31,7 +37,7 @@ async fn verify_credentials(
     email: String,
     password: String,
     verify_email: bool,
-) -> Result<Result<Option<Result<Document, String>>, anyhow::Error>, task::JoinError> {
+) -> Result<Result<Option<Result<LoginSuccess, String>>, anyhow::Error>, task::JoinError> {
     task::spawn_blocking(move || {
         let conn = pool.get()?;
 
@@ -57,7 +63,12 @@ async fn verify_credentials(
             return Ok(Some(Err("error_verify_email".to_string())));
         }
 
-        Ok::<_, anyhow::Error>(Some(Ok(user)))
+        let session_version = query::get_session_version(&conn, &slug, &user.id)?;
+
+        Ok::<_, anyhow::Error>(Some(Ok(LoginSuccess {
+            user,
+            session_version,
+        })))
     })
     .await
 }
@@ -68,6 +79,7 @@ fn build_session_response(
     user: &Document,
     form: &LoginForm,
     def: &CollectionDefinition,
+    session_version: u64,
 ) -> Response {
     let user_email = user
         .fields
@@ -85,6 +97,7 @@ fn build_session_response(
     let claims = ClaimsBuilder::new(user.id.clone(), Slug::new(&form.collection))
         .email(user_email)
         .exp((chrono::Utc::now().timestamp() as u64) + expiry)
+        .session_version(session_version)
         .build();
 
     let token = match create_token(&claims, state.jwt_secret.as_ref()) {
@@ -147,8 +160,8 @@ pub async fn login_action(
     )
     .await;
 
-    let user = match result {
-        Ok(Ok(Some(Ok(user)))) => user,
+    let login = match result {
+        Ok(Ok(Some(Ok(success)))) => success,
         Ok(Ok(Some(Err(msg)))) => {
             state.login_limiter.record_failure(&form.email);
             state.ip_login_limiter.record_failure(&ip);
@@ -175,7 +188,7 @@ pub async fn login_action(
     state.login_limiter.clear(&form.email);
     state.ip_login_limiter.clear(&ip);
 
-    build_session_response(&state, &user, &form, &def)
+    build_session_response(&state, &login.user, &form, &def, login.session_version)
 }
 
 #[cfg(test)]

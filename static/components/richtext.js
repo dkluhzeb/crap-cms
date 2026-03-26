@@ -613,12 +613,16 @@ class CrapRichtext extends HTMLElement {
     const close = () => { modal.close(); modal.remove(); };
 
     const applyLink = () => {
-      const href = modal.querySelector('[data-field="href"]').value.trim();
+      const hrefEl = modal.querySelector('[data-field="href"]');
+      const href = hrefEl ? hrefEl.value.trim() : '';
       if (!href) return;
 
-      const title = modal.querySelector('[data-field="title"]').value.trim() || null;
-      const target = modal.querySelector('[data-field="target"]').checked ? '_blank' : null;
-      const rel = modal.querySelector('[data-field="rel"]').checked ? 'nofollow' : null;
+      const titleEl = modal.querySelector('[data-field="title"]');
+      const title = titleEl ? titleEl.value.trim() || null : null;
+      const targetEl = modal.querySelector('[data-field="target"]');
+      const target = targetEl && targetEl.checked ? '_blank' : null;
+      const relEl = modal.querySelector('[data-field="rel"]');
+      const rel = relEl && relEl.checked ? 'nofollow' : null;
 
       const markType = schema.marks.link;
       let { tr } = this._view.state;

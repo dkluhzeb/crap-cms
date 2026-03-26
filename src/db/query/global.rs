@@ -20,7 +20,7 @@ pub fn get_global(
     let table_name = format!("_global_{}", slug);
 
     let (select_exprs, result_names) = match locale_ctx {
-        Some(ctx) if ctx.config.is_enabled() => get_global_locale_columns(def, ctx),
+        Some(ctx) if ctx.config.is_enabled() => get_global_locale_columns(def, ctx)?,
         _ => {
             let names = get_global_column_names(def);
             (names.clone(), names)
@@ -50,7 +50,7 @@ pub fn get_global(
         && ctx.config.is_enabled()
         && let LocaleMode::All = ctx.mode
     {
-        group_locale_fields(&mut doc, &def.fields, &ctx.config);
+        group_locale_fields(&mut doc, &def.fields, &ctx.config)?;
     }
 
     // Hydrate join table data (arrays, blocks, has-many relationships)
@@ -73,7 +73,7 @@ pub fn update_global(
         .to_string();
 
     let mut col = UpdateCollector::new();
-    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "");
+    collect_update_params(&def.fields, data, &locale_ctx, &mut col, conn, "")?;
 
     if col.set_clauses.is_empty() {
         return get_global(conn, slug, def, locale_ctx);
@@ -112,9 +112,9 @@ fn get_global_column_names(def: &GlobalDefinition) -> Vec<String> {
 fn get_global_locale_columns(
     def: &GlobalDefinition,
     ctx: &LocaleContext,
-) -> (Vec<String>, Vec<String>) {
+) -> Result<(Vec<String>, Vec<String>)> {
     let (mut select_exprs, mut result_names) =
-        super::get_locale_select_columns(&def.fields, true, ctx);
+        super::get_locale_select_columns(&def.fields, true, ctx)?;
 
     // Insert _status before timestamps if present
     if def.has_drafts() {
@@ -123,7 +123,7 @@ fn get_global_locale_columns(
         result_names.insert(ts_pos, "_status".to_string());
     }
 
-    (select_exprs, result_names)
+    Ok((select_exprs, result_names))
 }
 
 #[cfg(test)]

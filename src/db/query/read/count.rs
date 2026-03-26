@@ -50,7 +50,7 @@ pub fn count_with_search(
     let mut sql = format!("SELECT COUNT(*) FROM {slug}");
     let mut params: Vec<DbValue> = Vec::new();
 
-    let resolved_filters = resolve_filters(filters, def, locale_ctx);
+    let resolved_filters = resolve_filters(filters, def, locale_ctx)?;
     let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
 
     if !where_clause.is_empty() {

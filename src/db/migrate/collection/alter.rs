@@ -97,7 +97,7 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
 
         if spec.is_localized {
             for locale in &locale_config.locales {
-                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
+                let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
 
                 if ctx.existing.contains(&col_name) {
                     warn_type_mismatch(ctx, &col_name, expected_type);
@@ -163,6 +163,7 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
             "_reset_token_exp INTEGER",
             "_locked INTEGER DEFAULT 0",
             "_settings TEXT",
+            "_session_version INTEGER DEFAULT 0",
         ] {
             let col_name = col
                 .split_whitespace()
@@ -248,6 +249,7 @@ const SYSTEM_COLUMNS: &[&str] = &[
     "_locked",
     "_status",
     "_settings",
+    "_session_version",
 ];
 
 pub(super) fn alter_collection_table(
@@ -329,6 +331,7 @@ mod tests {
         assert!(cols.contains("_reset_token_exp"));
         assert!(cols.contains("_locked"));
         assert!(cols.contains("_settings"));
+        assert!(cols.contains("_session_version"));
         assert!(cols.contains("_verified"));
         assert!(cols.contains("_verification_token"));
     }

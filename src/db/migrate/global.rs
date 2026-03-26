@@ -27,7 +27,7 @@ pub(super) fn sync_global_table(
                     let col = format!(
                         "{}__{} {}",
                         spec.col_name,
-                        sanitize_locale(locale),
+                        sanitize_locale(locale)?,
                         conn.column_type_for(&spec.field.field_type)
                     );
                     columns.push(col);
@@ -68,7 +68,7 @@ pub(super) fn sync_global_table(
         for spec in &collect_column_specs(&def.fields, locale_config) {
             if spec.is_localized {
                 for locale in &locale_config.locales {
-                    let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale));
+                    let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
 
                     if !existing_columns.contains(&col_name) {
                         let sql = format!(

@@ -39,7 +39,7 @@ pub(super) fn ensure_locale_column(
         let sql = format!(
             "ALTER TABLE {} ADD COLUMN _locale TEXT NOT NULL DEFAULT '{}'",
             table_name,
-            sanitize_locale(default_locale)
+            sanitize_locale(default_locale)?
         );
         tracing::info!("Adding _locale column to {}", table_name);
         conn.execute(&sql, &[])
@@ -210,7 +210,7 @@ fn sync_join_tables_inner(
                                 table_name,
                                 collection_slug,
                                 poly_col,
-                                sanitize_locale(&locale_config.default_locale),
+                                sanitize_locale(&locale_config.default_locale)?,
                                 poly_pk
                             )
                         } else {
@@ -262,7 +262,7 @@ fn sync_join_tables_inner(
                     if has_locale_col {
                         columns.push(format!(
                             "_locale TEXT NOT NULL DEFAULT '{}'",
-                            sanitize_locale(&locale_config.default_locale)
+                            sanitize_locale(&locale_config.default_locale)?
                         ));
                     }
                     for sub_field in &flat_subs {
@@ -303,10 +303,8 @@ fn sync_join_tables_inner(
 
                 if !table_exists(conn, &table_name)? {
                     let locale_col = if has_locale_col {
-                        format!(
-                            ", _locale TEXT NOT NULL DEFAULT '{}'",
-                            sanitize_locale(&locale_config.default_locale)
-                        )
+                        let default_loc = sanitize_locale(&locale_config.default_locale)?;
+                        format!(", _locale TEXT NOT NULL DEFAULT '{}'", default_loc)
                     } else {
                         String::new()
                     };

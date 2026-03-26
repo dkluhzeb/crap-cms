@@ -54,7 +54,7 @@ pub fn sync_fts_table(
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let fts_table = fts_table_name(slug);
-    let fts_fields = get_fts_columns(def, locale_config);
+    let fts_fields = get_fts_columns(def, locale_config)?;
 
     // Always drop existing FTS table first
     conn.execute_batch(&format!("DROP TABLE IF EXISTS {}", fts_table))

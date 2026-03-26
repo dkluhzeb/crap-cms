@@ -159,7 +159,10 @@ fn validate_scalar_field(
             LocaleMode::Single(l) => l.as_str(),
             _ => lctx.config.default_locale.as_str(),
         };
-        format!("{}__{}", data_key, sanitize_locale(locale))
+        match sanitize_locale(locale) {
+            Ok(l) => format!("{}__{}", data_key, l),
+            Err(_) => data_key.clone(),
+        }
     } else {
         data_key.clone()
     };

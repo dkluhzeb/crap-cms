@@ -243,4 +243,37 @@ mod tests {
         assert_eq!(decoded.email, claims.email);
         assert_eq!(decoded.exp, claims.exp);
     }
+
+    #[test]
+    fn session_version_roundtrips_through_jwt() {
+        let exp = (chrono::Utc::now().timestamp() as u64) + 7200;
+        let claims = Claims::builder("user1", "users")
+            .email("test@example.com")
+            .exp(exp)
+            .session_version(5)
+            .build();
+
+        let token = create_token(&claims, "sv-secret").unwrap();
+        let decoded = validate_token(&token, "sv-secret").unwrap();
+        assert_eq!(decoded.session_version, 5);
+    }
+
+    #[test]
+    fn legacy_token_without_session_version_defaults_to_zero() {
+        // Simulate a legacy JWT payload without session_version
+        use serde_json::json;
+
+        let payload = json!({
+            "sub": "user1",
+            "collection": "users",
+            "email": "test@example.com",
+            "exp": (chrono::Utc::now().timestamp() as u64) + 7200,
+        });
+
+        let claims: Claims = serde_json::from_value(payload).unwrap();
+        assert_eq!(
+            claims.session_version, 0,
+            "Missing session_version should default to 0"
+        );
+    }
 }
