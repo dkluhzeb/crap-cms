@@ -144,6 +144,11 @@ class CrapArrayField extends HTMLElement {
         el.id = el.id.replaceAll('__INDEX__', String(index));
       }
     );
+    root.querySelectorAll('label[for*="__INDEX__"]').forEach(
+      /** @param {HTMLLabelElement} el */ (el) => {
+        el.setAttribute('for', el.getAttribute('for').replaceAll('__INDEX__', String(index)));
+      }
+    );
     root.querySelectorAll('[data-template-id*="__INDEX__"]').forEach(
       /** @param {HTMLElement} el */ (el) => {
         const tid = el.getAttribute('data-template-id');
@@ -225,6 +230,18 @@ class CrapArrayField extends HTMLElement {
           /** @param {HTMLElement} el */ (el) => {
             const fn = el.getAttribute('data-field-name');
             if (fn) el.setAttribute('data-field-name', fn.replace(pattern, `$1${idx}$2`));
+          }
+        );
+        const idPattern = new RegExp('(field-' + this._escapeRegex(fieldName) + '\\[)\\d+(\\])');
+        child.querySelectorAll('[id]').forEach(
+          /** @param {HTMLElement} el */ (el) => {
+            el.id = el.id.replace(idPattern, `$1${idx}$2`);
+          }
+        );
+        child.querySelectorAll('label[for]').forEach(
+          /** @param {HTMLLabelElement} el */ (el) => {
+            const f = el.getAttribute('for');
+            if (f) el.setAttribute('for', f.replace(idPattern, `$1${idx}$2`));
           }
         );
       }

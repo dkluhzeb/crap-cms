@@ -354,6 +354,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   a new one could produce duplicate indices because `_afterRowChange()` did
   not call `_reindexRows()`. Indices are now resequenced on every row change.
 
+- **Array checkbox/label association broken on new rows**: `_replaceIndexInSubtree`
+  did not replace `__INDEX__` in `label[for]` attributes, so newly added array
+  rows had non-functional checkbox labels. `_reindexRows` also did not update
+  `id` or `label[for]` attributes, breaking label association after drag-reorder.
+  Both methods now update all relevant attributes.
+
 - **Web Component event listener accumulation**: `CrapArrayField`,
   `CrapConfirm`, `CrapTags`, `CrapDirtyForm`, and all picker components
   (`CrapThemePicker`, `CrapLocalePicker`, `CrapUiLocalePicker`) did not
