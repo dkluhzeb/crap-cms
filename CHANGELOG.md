@@ -158,6 +158,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   value slicing used `&val[..10]` which panics if the byte offset falls
   within a multi-byte character. Changed to `.get(..10).unwrap_or(val)`.
 
+- **String slicing panics on multi-byte UTF-8** (HIGH): Eight locations
+  across the codebase used `find()` + byte-offset slicing (`&s[..pos]`)
+  which panics when the offset falls within a multi-byte character.
+  Affected: polymorphic ref parsing (3 sites), form bracket parsing,
+  CLI key=value parsing, template path splitting, richtext attribute
+  extraction, and timestamp normalization. All converted to `split_once`
+  or guarded with `is_char_boundary`.
+
+- **gRPC Subscribe connection limit TOCTOU race** (MEDIUM): The
+  `fetch_add` + check pattern allowed concurrent requests to exceed the
+  configured `max_subscribe_connections`. Replaced with a
+  `compare_exchange_weak` CAS loop matching the SSE implementation.
+
 - **`url_decode` garbled multi-byte UTF-8** (HIGH): Percent-encoded multi-byte
   sequences (e.g. `%C3%A9` for `é`, CJK, emoji) were decoded byte-by-byte as
   individual `char`s, producing mojibake. Malformed `%XX` sequences silently
@@ -330,6 +343,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   authenticated request — stale tokens are rejected immediately.
 
 ### Fixed
+
+- **JSON API responses missing `charset=utf-8`**: Upload API `json_error`
+  and `json_ok` helpers set `Content-Type: application/json` without
+  charset, which could cause encoding issues with older clients. Now
+  includes `charset=utf-8`.
+
+- **MCP HTTP errors returned plain text instead of JSON-RPC**: Auth
+  failures (missing/invalid API key) and body-too-large errors on the
+  MCP HTTP endpoint returned plain text responses. MCP clients expecting
+  JSON-RPC 2.0 format couldn't parse these errors. Now returns proper
+  `JsonRpcResponse::error` with appropriate error codes.
 
 - **Empty IN/NOT IN filter generated invalid SQL**: `FilterOp::In(vec![])`
   produced `field IN ()` which is invalid SQL. Empty IN now returns `FALSE`

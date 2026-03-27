@@ -5,10 +5,10 @@ use std::path::PathBuf;
 
 /// Parse a key=value pair for --field arguments.
 pub fn parse_key_val(s: &str) -> Result<(String, String), String> {
-    let pos = s
-        .find('=')
+    let (key, value) = s
+        .split_once('=')
         .ok_or_else(|| format!("invalid KEY=VALUE: no `=` found in `{s}`"))?;
-    Ok((s[..pos].to_string(), s[pos + 1..].to_string()))
+    Ok((key.to_string(), value.to_string()))
 }
 
 /// Actions for the `make` subcommand.
@@ -479,6 +479,23 @@ mod tests {
         assert_eq!(
             parse_key_val("=value"),
             Ok((String::new(), "value".to_string()))
+        );
+    }
+
+    /// Regression: multi-byte UTF-8 in key or value must not panic from string slicing.
+    #[test]
+    fn multibyte_utf8_does_not_panic() {
+        assert_eq!(
+            parse_key_val("clé=valeur"),
+            Ok(("clé".to_string(), "valeur".to_string()))
+        );
+        assert_eq!(
+            parse_key_val("key=日本語"),
+            Ok(("key".to_string(), "日本語".to_string()))
+        );
+        assert_eq!(
+            parse_key_val("キー=値"),
+            Ok(("キー".to_string(), "値".to_string()))
         );
     }
 }

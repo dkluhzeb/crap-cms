@@ -110,7 +110,11 @@ const SQLITE_SIDECAR_EXTENSIONS: &[&str] = &["db-wal", "db-shm"];
 /// Normalize SQLite's `"YYYY-MM-DD HH:MM:SS"` to ISO 8601 `"YYYY-MM-DDTHH:MM:SS.000Z"`.
 /// Already-normalized values pass through unchanged.
 fn sqlite_normalize_timestamp(ts: &str) -> String {
-    if ts.len() == 19 && ts.as_bytes().get(10) == Some(&b' ') {
+    if ts.len() == 19
+        && ts.as_bytes().get(10) == Some(&b' ')
+        && ts.is_char_boundary(10)
+        && ts.is_char_boundary(11)
+    {
         format!("{}T{}.000Z", &ts[..10], &ts[11..])
     } else {
         ts.to_string()
@@ -1255,5 +1259,27 @@ mod tests {
 
         let rows = conn.query_all("SELECT id FROM t", &[]).unwrap();
         assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn normalize_timestamp_sqlite_format() {
+        assert_eq!(
+            sqlite_normalize_timestamp("2024-01-15 12:30:45"),
+            "2024-01-15T12:30:45.000Z"
+        );
+    }
+
+    #[test]
+    fn normalize_timestamp_already_iso() {
+        let iso = "2024-01-15T12:30:45.000Z";
+        assert_eq!(sqlite_normalize_timestamp(iso), iso);
+    }
+
+    /// Regression: multi-byte UTF-8 input must not panic from string slicing.
+    #[test]
+    fn normalize_timestamp_multibyte_utf8_no_panic() {
+        // 19-byte string with multi-byte chars -- should pass through unchanged
+        let input = "日本語テスト入力値";
+        assert_eq!(sqlite_normalize_timestamp(input), input);
     }
 }

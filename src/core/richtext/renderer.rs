@@ -181,12 +181,12 @@ where
     let mut result = String::with_capacity(html.len());
     let mut remaining = html;
 
-    while let Some(start) = remaining.find("<crap-node ") {
+    while let Some((before, _)) = remaining.split_once("<crap-node ") {
         // Add everything before the tag
-        result.push_str(&remaining[..start]);
+        result.push_str(before);
 
-        // Find the end of the opening tag
-        let after_start = &remaining[start..];
+        // Find the end of the opening tag — reconstruct from the split point
+        let after_start = &remaining[before.len()..];
         let close_pos = match (after_start.find("/>"), after_start.find("</crap-node>")) {
             (Some(sc), Some(et)) => {
                 if sc < et {
@@ -240,12 +240,11 @@ pub(crate) fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
     let patterns = [format!("{}=\"", attr_name), format!("{}='", attr_name)];
 
     for pattern in &patterns {
-        if let Some(start) = tag.find(pattern.as_str()) {
-            let value_start = start + pattern.len();
+        if let Some((_before, after)) = tag.split_once(pattern.as_str()) {
             let quote_char = if pattern.ends_with('"') { '"' } else { '\'' };
 
-            if let Some(end) = tag[value_start..].find(quote_char) {
-                return Some(tag[value_start..value_start + end].to_string());
+            if let Some((value, _rest)) = after.split_once(quote_char) {
+                return Some(value.to_string());
             }
         }
     }
@@ -550,6 +549,35 @@ mod tests {
         let result = render_prosemirror_to_html(json, &no_custom).unwrap();
         assert!(result.contains("&quot;"));
         assert!(!result.contains(r#"onload="alert(1)"#));
+    }
+
+    /// Regression: multi-byte UTF-8 in attr values must not panic from string slicing.
+    #[test]
+    fn extract_attr_value_multibyte_utf8() {
+        let tag = r#"<crap-node data-type="日本語ノード" data-attrs='{}'></crap-node>"#;
+        assert_eq!(
+            extract_attr_value(tag, "data-type"),
+            Some("日本語ノード".to_string())
+        );
+    }
+
+    /// Regression: multi-byte UTF-8 in HTML must not panic during crap-node replacement.
+    #[test]
+    fn html_custom_nodes_multibyte_utf8_surrounding() {
+        let html = r#"<p>日本語テキスト</p><crap-node data-type="cta" data-attrs='{"text":"ボタン"}'></crap-node><p>もっとテキスト</p>"#;
+        let renderer = |name: &str, attrs: &Value| -> Option<String> {
+            if name == "cta" {
+                let text = attrs.get("text").and_then(|t| t.as_str()).unwrap_or("");
+                Some(format!("<button>{}</button>", text))
+            } else {
+                None
+            }
+        };
+        let result = render_html_custom_nodes(html, &renderer);
+        assert_eq!(
+            result,
+            "<p>日本語テキスト</p><button>ボタン</button><p>もっとテキスト</p>"
+        );
     }
 
     #[test]

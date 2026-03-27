@@ -41,9 +41,9 @@ fn parse_polymorphic_values(val: &Value) -> Vec<(String, String)> {
         .into_iter()
         .filter_map(|item| {
             // Parse "collection/id" format
-            if let Some(pos) = item.find('/') {
-                let col = item[..pos].to_string();
-                let id = item[pos + 1..].to_string();
+            if let Some((col_str, id_str)) = item.split_once('/') {
+                let col = col_str.to_string();
+                let id = id_str.to_string();
 
                 if !col.is_empty() && !id.is_empty() {
                     return Some((col, id));

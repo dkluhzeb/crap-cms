@@ -49,7 +49,10 @@ use crate::{
     hooks::HookRunner,
     mcp::{
         McpServer,
-        protocol::{INTERNAL_ERROR, JsonRpcError, JsonRpcRequest, JsonRpcResponse, PARSE_ERROR},
+        protocol::{
+            INTERNAL_ERROR, INVALID_REQUEST, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
+            PARSE_ERROR,
+        },
     },
 };
 
@@ -975,11 +978,12 @@ async fn mcp_http_handler(State(state): State<AdminState>, request: Request<Body
     // The startup check in commands/serve.rs already bails if http=true and api_key is empty,
     // but this guard protects against programmatic construction of AdminState without that check.
     if state.config.mcp.api_key.is_empty() {
-        return (
-            StatusCode::FORBIDDEN,
+        return Json(JsonRpcResponse::error(
+            None,
+            INVALID_REQUEST,
             "MCP HTTP endpoint requires an API key — set mcp.api_key in crap.toml",
-        )
-            .into_response();
+        ))
+        .into_response();
     }
 
     // API key auth — constant-time comparison to prevent timing attacks
@@ -992,12 +996,24 @@ async fn mcp_http_handler(State(state): State<AdminState>, request: Request<Body
     let is_valid = auth_header.as_bytes().ct_eq(expected.as_bytes());
 
     if !bool::from(is_valid) {
-        return (StatusCode::UNAUTHORIZED, "Invalid or missing API key").into_response();
+        return Json(JsonRpcResponse::error(
+            None,
+            INVALID_REQUEST,
+            "Invalid or missing API key",
+        ))
+        .into_response();
     }
 
     let body_bytes = match body::to_bytes(request.into_body(), 1024 * 1024).await {
         Ok(b) => b,
-        Err(_) => return (StatusCode::BAD_REQUEST, "Request body too large").into_response(),
+        Err(_) => {
+            return Json(JsonRpcResponse::error(
+                None,
+                PARSE_ERROR,
+                "Request body too large",
+            ))
+            .into_response();
+        }
     };
 
     let rpc_request: JsonRpcRequest = match serde_json::from_slice(&body_bytes) {

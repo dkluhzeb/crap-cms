@@ -93,7 +93,7 @@ fn json_error(status: StatusCode, message: &str) -> Response {
     let body = json!({ "error": message });
     (
         status,
-        [(header::CONTENT_TYPE, "application/json")],
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
         body.to_string(),
     )
         .into_response()
@@ -103,7 +103,7 @@ fn json_error(status: StatusCode, message: &str) -> Response {
 fn json_ok(status: StatusCode, body: &Value) -> Response {
     (
         status,
-        [(header::CONTENT_TYPE, "application/json")],
+        [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
         body.to_string(),
     )
         .into_response()
@@ -704,7 +704,7 @@ mod tests {
         let resp = json_error(StatusCode::INTERNAL_SERVER_ERROR, "oops");
         assert_eq!(
             resp.headers().get("content-type").unwrap(),
-            "application/json"
+            "application/json; charset=utf-8"
         );
     }
 

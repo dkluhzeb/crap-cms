@@ -37,6 +37,29 @@ use super::{
     },
 };
 
+/// Atomically try to acquire a Subscribe connection slot.
+///
+/// Returns `true` if a slot was acquired (counter incremented), `false` if the
+/// limit has been reached. When `max == 0`, no limit is enforced (always succeeds).
+/// Uses `compare_exchange_weak` in a loop to avoid the TOCTOU race inherent in
+/// `fetch_add` + check + `fetch_sub`.
+fn try_acquire_subscribe_slot(counter: &AtomicUsize, max: usize) -> bool {
+    loop {
+        let current = counter.load(Ordering::Relaxed);
+
+        if max > 0 && current >= max {
+            return false;
+        }
+
+        if counter
+            .compare_exchange_weak(current, current + 1, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return true;
+        }
+    }
+}
+
 /// RAII guard that decrements the Subscribe connection counter on drop.
 struct SubscribeConnectionGuard {
     counter: Arc<AtomicUsize>,
@@ -398,21 +421,15 @@ impl ContentService {
         Response<Pin<Box<dyn Stream<Item = Result<content::MutationEvent, Status>> + Send>>>,
         Status,
     > {
-        // Enforce Subscribe connection limit
+        // Enforce Subscribe connection limit (race-free via compare_exchange)
         let max = self.max_subscribe_connections;
-        if max > 0 {
-            let current = self.subscribe_connections.fetch_add(1, Ordering::Relaxed);
-            if current >= max {
-                self.subscribe_connections.fetch_sub(1, Ordering::Relaxed);
-                tracing::warn!(
-                    "Subscribe connection limit reached ({}/{}), rejecting",
-                    current,
-                    max
-                );
-                return Err(Status::resource_exhausted("Too many Subscribe streams"));
-            }
-        } else {
-            self.subscribe_connections.fetch_add(1, Ordering::Relaxed);
+        if !try_acquire_subscribe_slot(&self.subscribe_connections, max) {
+            tracing::warn!(
+                "Subscribe connection limit reached ({}/{}), rejecting",
+                max,
+                max
+            );
+            return Err(Status::resource_exhausted("Too many Subscribe streams"));
         }
         let subscribe_guard = SubscribeConnectionGuard {
             counter: self.subscribe_connections.clone(),
@@ -977,5 +994,41 @@ fn job_run_to_proto(run: &JobRun) -> content::GetJobRunResponse {
         created_at: run.created_at.clone(),
         started_at: run.started_at.clone(),
         completed_at: run.completed_at.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn subscribe_slot_acquire_within_limit() {
+        let counter = AtomicUsize::new(0);
+        assert!(try_acquire_subscribe_slot(&counter, 10));
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn subscribe_slot_acquire_at_limit() {
+        let counter = AtomicUsize::new(5);
+        assert!(!try_acquire_subscribe_slot(&counter, 5));
+        assert_eq!(counter.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn subscribe_slot_acquire_no_limit() {
+        let counter = AtomicUsize::new(1000);
+        assert!(try_acquire_subscribe_slot(&counter, 0));
+        assert_eq!(counter.load(Ordering::Relaxed), 1001);
+    }
+
+    #[test]
+    fn subscribe_slot_fills_to_limit() {
+        let counter = AtomicUsize::new(0);
+        for _ in 0..3 {
+            assert!(try_acquire_subscribe_slot(&counter, 3));
+        }
+        assert!(!try_acquire_subscribe_slot(&counter, 3));
+        assert_eq!(counter.load(Ordering::Relaxed), 3);
     }
 }

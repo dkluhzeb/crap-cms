@@ -6,9 +6,7 @@ use crate::core::Document;
 
 /// Parse a polymorphic reference "collection/id" into `(collection, id)`.
 pub(crate) fn parse_poly_ref(s: &str) -> Option<(String, String)> {
-    let pos = s.find('/')?;
-    let col = &s[..pos];
-    let id = &s[pos + 1..];
+    let (col, id) = s.split_once('/')?;
 
     if col.is_empty() || id.is_empty() {
         return None;
@@ -163,5 +161,18 @@ mod tests {
     fn parse_poly_ref_empty_id_returns_none() {
         // "col/" — id portion is empty
         assert_eq!(parse_poly_ref("col/"), None);
+    }
+
+    /// Regression: multi-byte UTF-8 in collection or id must not panic from string slicing.
+    #[test]
+    fn parse_poly_ref_multibyte_utf8() {
+        assert_eq!(
+            parse_poly_ref("記事/id1"),
+            Some(("記事".to_string(), "id1".to_string()))
+        );
+        assert_eq!(
+            parse_poly_ref("posts/日本語id"),
+            Some(("posts".to_string(), "日本語id".to_string()))
+        );
     }
 }

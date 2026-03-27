@@ -37,9 +37,7 @@ pub fn enrich_polymorphic_selected(
                 .iter()
                 .filter_map(|v| {
                     v.as_str().and_then(|s| {
-                        let pos = s.find('/')?;
-                        let col = &s[..pos];
-                        let id = &s[pos + 1..];
+                        let (col, id) = s.split_once('/')?;
                         if col.is_empty() || id.is_empty() {
                             return None;
                         }
@@ -52,9 +50,7 @@ pub fn enrich_polymorphic_selected(
     } else {
         match doc_fields.get(field_name) {
             Some(Value::String(s)) if !s.is_empty() => {
-                if let Some(pos) = s.find('/') {
-                    let col = &s[..pos];
-                    let id = &s[pos + 1..];
+                if let Some((col, id)) = s.split_once('/') {
                     if !col.is_empty() && !id.is_empty() {
                         vec![(col.to_string(), id.to_string())]
                     } else {
