@@ -177,6 +177,19 @@ pub fn build_enriched_children_from_data(
                         .depth(depth + 1)
                         .build();
                     apply_field_type_extras(child, &child_val, &mut child_ctx, &extras_ctx);
+
+                    // Inject stored timezone value from parent row for Date fields
+                    if child.field_type == FieldType::Date && child.timezone {
+                        let tz_key = format!("{}_tz", child.name);
+                        let tz_val = data_obj
+                            .and_then(|m| m.get(&tz_key))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        if !tz_val.is_empty() {
+                            child_ctx["timezone_value"] = json!(tz_val);
+                        }
+                    }
                 }
             }
 

@@ -1394,3 +1394,13 @@ select[multiple] {
     flex: 1 1 100%;
   }
 }
+
+/* ── Timezone dropdown ─────────────────────────────────────────── */
+
+.form__timezone {
+  margin-top: var(--space-sm);
+}
+
+.form__timezone-select {
+  max-width: 300px;
+}

@@ -93,7 +93,11 @@ fn warn_type_mismatch(ctx: &AlterCtx, col_name: &str, expected_type: &str) {
 /// Add missing user-defined field columns (including localized variants).
 fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()> {
     for spec in &collect_column_specs(&ctx.def.fields, locale_config) {
-        let expected_type = ctx.conn.column_type_for(&spec.field.field_type);
+        let expected_type = if spec.companion_text {
+            "TEXT"
+        } else {
+            ctx.conn.column_type_for(&spec.field.field_type)
+        };
 
         if spec.is_localized {
             for locale in &locale_config.locales {
@@ -103,11 +107,15 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
                     warn_type_mismatch(ctx, &col_name, expected_type);
                 } else {
                     let mut col_def = expected_type.to_string();
-                    append_default_value(
-                        &mut col_def,
-                        &spec.field.default_value,
-                        &spec.field.field_type,
-                    );
+
+                    if !spec.companion_text {
+                        append_default_value(
+                            &mut col_def,
+                            &spec.field.default_value,
+                            &spec.field.field_type,
+                        );
+                    }
+
                     let sql = format!(
                         "ALTER TABLE {} ADD COLUMN {} {}",
                         ctx.slug, col_name, col_def
@@ -122,11 +130,15 @@ fn add_field_columns(ctx: &AlterCtx, locale_config: &LocaleConfig) -> Result<()>
             warn_type_mismatch(ctx, &spec.col_name, expected_type);
         } else {
             let mut col_def = expected_type.to_string();
-            append_default_value(
-                &mut col_def,
-                &spec.field.default_value,
-                &spec.field.field_type,
-            );
+
+            if !spec.companion_text {
+                append_default_value(
+                    &mut col_def,
+                    &spec.field.default_value,
+                    &spec.field.field_type,
+                );
+            }
+
             let sql = format!(
                 "ALTER TABLE {} ADD COLUMN {} {}",
                 ctx.slug, spec.col_name, col_def
@@ -580,6 +592,32 @@ mod tests {
         assert!(
             names.contains("seo__description"),
             "Group inside Collapsible should be tracked: {names:?}"
+        );
+    }
+
+    #[test]
+    fn alter_adds_timezone_companion_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("events", vec![text_field("title")]);
+        create_collection_table(&conn, "events", &def1, &no_locale()).unwrap();
+
+        let def2 = simple_collection(
+            "events",
+            vec![
+                text_field("title"),
+                FieldDefinition::builder("starts_at", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ],
+        );
+        alter_collection_table(&conn, "events", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "events").unwrap();
+        assert!(cols.contains("starts_at"), "should add main date column");
+        assert!(
+            cols.contains("starts_at_tz"),
+            "should add companion timezone column"
         );
     }
 }

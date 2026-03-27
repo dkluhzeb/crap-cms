@@ -220,7 +220,9 @@
 ---@field description? crap.FilterValue
 ---@field hero_image? crap.FilterValue
 ---@field start_date? crap.FilterValue
+---@field start_date_tz? crap.FilterValue
 ---@field end_date? crap.FilterValue
+---@field end_date_tz? crap.FilterValue
 ---@field online? crap.FilterValue
 ---@field event_url? crap.FilterValue
 ---@field location__venue_name? crap.FilterValue
@@ -238,7 +240,7 @@
 
 ---@class crap.query.Events
 ---@field where? crap.where.Events
----@field order_by? "id"|"-id"|"title"|"-title"|"slug"|"-slug"|"description"|"-description"|"hero_image"|"-hero_image"|"start_date"|"-start_date"|"end_date"|"-end_date"|"online"|"-online"|"event_url"|"-event_url"|"location__venue_name"|"-location__venue_name"|"location__address"|"-location__address"|"location__city"|"-location__city"|"location__country"|"-location__country"|"registration_url"|"-registration_url"|"max_attendees"|"-max_attendees"|"registration_deadline"|"-registration_deadline"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_description"|"-seo__meta_description"|"seo__no_index"|"-seo__no_index"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"title"|"-title"|"slug"|"-slug"|"description"|"-description"|"hero_image"|"-hero_image"|"start_date"|"-start_date"|"start_date_tz"|"-start_date_tz"|"end_date"|"-end_date"|"end_date_tz"|"-end_date_tz"|"online"|"-online"|"event_url"|"-event_url"|"location__venue_name"|"-location__venue_name"|"location__address"|"-location__address"|"location__city"|"-location__city"|"location__country"|"-location__country"|"registration_url"|"-registration_url"|"max_attendees"|"-max_attendees"|"registration_deadline"|"-registration_deadline"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_description"|"-seo__meta_description"|"seo__no_index"|"-seo__no_index"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string

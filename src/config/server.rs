@@ -233,6 +233,10 @@ pub struct AdminConfig {
     pub access: Option<String>,
     /// Content-Security-Policy header configuration.
     pub csp: CspConfig,
+    /// Default IANA timezone for date fields with `timezone = true` that don't
+    /// specify their own `default_timezone`. Empty string means no pre-selection.
+    #[serde(default)]
+    pub default_timezone: String,
 }
 
 impl Default for AdminConfig {
@@ -242,6 +246,7 @@ impl Default for AdminConfig {
             require_auth: true,
             access: None,
             csp: CspConfig::default(),
+            default_timezone: String::new(),
         }
     }
 }

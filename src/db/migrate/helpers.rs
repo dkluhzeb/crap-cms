@@ -57,6 +57,8 @@ pub(super) struct ColumnSpec<'a> {
     pub field: &'a FieldDefinition,
     /// Whether this column is localized (needs per-locale columns)
     pub is_localized: bool,
+    /// Companion column (e.g., timezone). Always TEXT, no constraints.
+    pub companion_text: bool,
 }
 
 /// Recursively collect column specifications from a field tree.
@@ -122,12 +124,24 @@ fn collect_column_specs_inner<'a>(
                 } else {
                     format!("{}__{}", prefix, field.name)
                 };
+                let is_localized =
+                    (inherited_localized || field.localized) && locale_config.is_enabled();
+
                 specs.push(ColumnSpec {
-                    col_name,
+                    col_name: col_name.clone(),
                     field,
-                    is_localized: (inherited_localized || field.localized)
-                        && locale_config.is_enabled(),
+                    is_localized,
+                    companion_text: false,
                 });
+
+                if field.field_type == FieldType::Date && field.timezone {
+                    specs.push(ColumnSpec {
+                        col_name: format!("{}_tz", col_name),
+                        field,
+                        is_localized,
+                        companion_text: true,
+                    });
+                }
             }
         }
     }
@@ -457,7 +471,7 @@ mod tests {
     use crate::config::{CrapConfig, LocaleConfig};
     use crate::core::collection::*;
     use crate::core::field::{FieldDefinition, FieldTab, FieldType, RelationshipConfig};
-    use crate::db::{DbConnection, DbPool, pool};
+    use crate::db::{DbConnection, DbPool, DbValue, pool};
     use tempfile::TempDir;
 
     fn in_memory_pool() -> (TempDir, DbPool) {
@@ -1230,8 +1244,6 @@ mod tests {
 
     #[test]
     fn versions_table_has_unique_parent_version() {
-        use crate::db::DbValue;
-
         let text = |s: &str| DbValue::Text(s.to_string());
         let int = |n: i64| DbValue::Integer(n);
 
@@ -1271,8 +1283,6 @@ mod tests {
 
     #[test]
     fn version_table_indexes_use_ver_prefix() {
-        use crate::db::DbValue;
-
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
         conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
@@ -1307,8 +1317,6 @@ mod tests {
 
     #[test]
     fn polymorphic_upgrade_rebuilds_primary_key() {
-        use crate::db::DbValue;
-
         let text = |s: &str| DbValue::Text(s.to_string());
         let int = |n: i64| DbValue::Integer(n);
 
@@ -1388,8 +1396,6 @@ mod tests {
 
     #[test]
     fn polymorphic_upgrade_with_locale_preserves_data() {
-        use crate::db::DbValue;
-
         let text = |s: &str| DbValue::Text(s.to_string());
         let int = |n: i64| DbValue::Integer(n);
 
@@ -1447,5 +1453,50 @@ mod tests {
         let cols = get_table_columns(&conn, "posts_related").unwrap();
         assert!(cols.contains("related_collection"));
         assert!(cols.contains("_locale"));
+    }
+
+    #[test]
+    fn date_field_with_timezone_produces_two_column_specs() {
+        let fields = vec![
+            FieldDefinition::builder("event_at", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+        let specs = collect_column_specs(&fields, &no_locale());
+
+        assert_eq!(specs.len(), 2, "should produce main + _tz column specs");
+        assert_eq!(specs[0].col_name, "event_at");
+        assert!(!specs[0].companion_text);
+        assert_eq!(specs[1].col_name, "event_at_tz");
+        assert!(specs[1].companion_text);
+    }
+
+    #[test]
+    fn date_field_without_timezone_produces_one_column_spec() {
+        let fields = vec![FieldDefinition::builder("published_at", FieldType::Date).build()];
+        let specs = collect_column_specs(&fields, &no_locale());
+
+        assert_eq!(specs.len(), 1, "should produce only the main column spec");
+        assert_eq!(specs[0].col_name, "published_at");
+        assert!(!specs[0].companion_text);
+    }
+
+    #[test]
+    fn date_timezone_in_group_produces_prefixed_tz_column() {
+        let fields = vec![
+            FieldDefinition::builder("meta", FieldType::Group)
+                .fields(vec![
+                    FieldDefinition::builder("starts_at", FieldType::Date)
+                        .timezone(true)
+                        .build(),
+                ])
+                .build(),
+        ];
+        let specs = collect_column_specs(&fields, &no_locale());
+
+        assert_eq!(specs.len(), 2);
+        assert_eq!(specs[0].col_name, "meta__starts_at");
+        assert_eq!(specs[1].col_name, "meta__starts_at_tz");
+        assert!(specs[1].companion_text);
     }
 }

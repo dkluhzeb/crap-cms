@@ -158,25 +158,30 @@ pub fn apply_field_type_extras(
 
             sub_ctx["picker_appearance"] = json!(appearance);
 
+            let tz_key = format!("{}_tz", name_prefix);
+            let tz_value = values.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
+
+            // Convert UTC back to local time for display if timezone is stored
+            let display_value = if !tz_value.is_empty() && !value.is_empty() {
+                crate::db::query::helpers::utc_to_local(value, tz_value)
+                    .unwrap_or_else(|| value.to_string())
+            } else {
+                value.to_string()
+            };
+
             match appearance {
                 "dayOnly" => {
-                    let date_val = if value.len() >= 10 {
-                        &value[..10]
-                    } else {
-                        value
-                    };
+                    let date_val = display_value.get(..10).unwrap_or(&display_value);
                     sub_ctx["date_only_value"] = json!(date_val);
                 }
                 "dayAndTime" => {
-                    let dt_val = if value.len() >= 16 {
-                        &value[..16]
-                    } else {
-                        value
-                    };
+                    let dt_val = display_value.get(..16).unwrap_or(&display_value);
                     sub_ctx["datetime_local_value"] = json!(dt_val);
                 }
                 _ => {}
             }
+
+            super::super::add_timezone_context(sub_ctx, sf, tz_value, "");
         }
         FieldType::Array => {
             let template_prefix = format!("{}[__INDEX__]", name_prefix);

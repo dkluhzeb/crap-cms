@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
+use chrono_tz::Tz;
 use serde_json::Value;
 
 use crate::core::{FieldDefinition, FieldType, validate::FieldError};
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime};
-use std::collections::HashMap;
 
 /// Validate date format and date bounds (min_date / max_date).
 pub(crate) fn check_date_field(
@@ -106,6 +108,12 @@ pub(crate) fn is_valid_date_format(value: &str) -> bool {
     false
 }
 
+/// Validate that the timezone string is a valid IANA timezone.
+#[allow(dead_code)]
+pub fn validate_timezone(tz: &str) -> bool {
+    tz.parse::<Tz>().is_ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,6 +186,23 @@ mod tests {
     fn test_invalid_date_format_time_like_but_non_digit() {
         assert!(!is_valid_date_format("ab:cd"));
         assert!(!is_valid_date_format("1a:30"));
+    }
+
+    // --- validate_timezone tests ---
+
+    #[test]
+    fn test_validate_timezone_valid() {
+        assert!(validate_timezone("UTC"));
+        assert!(validate_timezone("America/New_York"));
+        assert!(validate_timezone("Europe/London"));
+        assert!(validate_timezone("Asia/Tokyo"));
+    }
+
+    #[test]
+    fn test_validate_timezone_invalid() {
+        assert!(!validate_timezone("Invalid/Zone"));
+        assert!(!validate_timezone(""));
+        assert!(!validate_timezone("NotATimezone"));
     }
 
     // --- validate_fields_inner integration tests ---

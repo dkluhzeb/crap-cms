@@ -96,7 +96,7 @@ pub fn build_enriched_sub_field_context(
         FieldType::Select | FieldType::Radio => {
             field_types::sub_select_radio(&mut sub_ctx, sf, &val)
         }
-        FieldType::Date => field_types::sub_date(&mut sub_ctx, sf, &val),
+        FieldType::Date => field_types::sub_date(&mut sub_ctx, sf, &val, ""),
         FieldType::Relationship => field_types::sub_relationship(&mut sub_ctx, sf),
         FieldType::Upload => field_types::sub_upload(&mut sub_ctx, sf),
         FieldType::Array => {

@@ -9,6 +9,7 @@ path = "data/crap.db"
 
 [admin]
 dev_mode = false
+default_timezone = "America/New_York"
 
 [auth]
 # secret auto-generated on first start

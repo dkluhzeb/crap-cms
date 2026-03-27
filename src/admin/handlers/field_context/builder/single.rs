@@ -374,27 +374,31 @@ pub fn build_single_field_context(
 
             ctx["picker_appearance"] = json!(appearance);
 
+            let tz_key = format!("{}_tz", full_name);
+            let tz_value = values.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
+
+            // If a timezone is stored, convert UTC back to local time for display
+            let tz_value = tz_value.trim();
+            let display_value = if !tz_value.is_empty() && !value.is_empty() {
+                crate::db::query::helpers::utc_to_local(&value, tz_value)
+                    .unwrap_or_else(|| value.clone())
+            } else {
+                value.clone()
+            };
+
             match appearance {
                 "dayOnly" => {
-                    let date_val = if value.len() >= 10 {
-                        &value[..10]
-                    } else {
-                        &value
-                    };
-
+                    let date_val = display_value.get(..10).unwrap_or(&display_value);
                     ctx["date_only_value"] = json!(date_val);
                 }
                 "dayAndTime" => {
-                    let dt_val = if value.len() >= 16 {
-                        &value[..16]
-                    } else {
-                        &value
-                    };
-
+                    let dt_val = display_value.get(..16).unwrap_or(&display_value);
                     ctx["datetime_local_value"] = json!(dt_val);
                 }
                 _ => {}
             }
+
+            super::super::add_timezone_context(&mut ctx, field, tz_value, "");
         }
         FieldType::Upload => {
             if let Some(ref rc) = field.relationship {

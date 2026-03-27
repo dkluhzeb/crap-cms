@@ -1,5 +1,8 @@
 //! Value helpers: pagination limits, date normalization, type coercion.
 
+use anyhow::Result;
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono_tz::Tz;
 use serde_json::Value;
 
 use crate::{core::FieldType, db::DbValue};
@@ -25,8 +28,6 @@ pub fn apply_pagination_limits(requested: Option<i64>, default_limit: i64, max_l
 /// - Month only (`2026-01`) → passthrough
 /// - Anything else → passthrough (validation catches garbage)
 pub fn normalize_date_value(value: &str) -> String {
-    use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, Utc};
-
     // Time only: HH:MM or HH:MM:SS
     if value.len() <= 8 && value.contains(':') && !value.contains('T') {
         return value.to_string();
@@ -71,6 +72,69 @@ pub fn normalize_date_value(value: &str) -> String {
 
     // Anything else: passthrough
     value.to_string()
+}
+
+/// Normalize a date value using a specific IANA timezone.
+/// The input is treated as local time in the given timezone, then converted to UTC.
+/// If the input already has a timezone offset (RFC 3339), it is converted directly.
+pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String> {
+    let tz: Tz = tz_str
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid timezone: {}", tz_str))?;
+
+    let trimmed = value.trim();
+
+    // Date only: "2024-01-15" -> noon in the given timezone -> UTC
+    if trimmed.len() == 10
+        && let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+    {
+        let local_noon = date.and_hms_opt(12, 0, 0).unwrap();
+
+        let utc = tz
+            .from_local_datetime(&local_noon)
+            .earliest()
+            .ok_or_else(|| anyhow::anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+            .with_timezone(&Utc);
+
+        return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+    }
+
+    // datetime-local: "2024-01-15T09:00" or "2024-01-15T09:00:00"
+    let formats = ["%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S"];
+
+    for fmt in &formats {
+        if let Ok(naive) = NaiveDateTime::parse_from_str(trimmed, fmt) {
+            let utc = tz
+                .from_local_datetime(&naive)
+                .earliest()
+                .ok_or_else(|| anyhow::anyhow!("Invalid local time for {} in {}", trimmed, tz_str))?
+                .with_timezone(&Utc);
+
+            return Ok(utc.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+        }
+    }
+
+    // If already has timezone offset (RFC 3339), just normalize to UTC
+    Ok(normalize_date_value(value))
+}
+
+/// Convert a UTC ISO 8601 date string to local time in the given IANA timezone.
+/// Returns the local datetime formatted for `<input type="datetime-local">` (YYYY-MM-DDTHH:MM)
+/// or `<input type="date">` (YYYY-MM-DD, using the 10-char prefix).
+pub fn utc_to_local(utc_value: &str, tz_str: &str) -> Option<String> {
+    let tz: Tz = tz_str.parse().ok()?;
+    let trimmed = utc_value.trim();
+
+    // Parse as RFC 3339 / ISO 8601 (stored format: "2024-01-15T12:00:00.000Z")
+    let dt = DateTime::<FixedOffset>::parse_from_rfc3339(trimmed)
+        .or_else(|_| {
+            // Try with space separator (SQLite format)
+            DateTime::<FixedOffset>::parse_from_rfc3339(&trimmed.replace(' ', "T"))
+        })
+        .ok()?;
+
+    let local = dt.with_timezone(&tz);
+    Some(local.format("%Y-%m-%dT%H:%M").to_string())
 }
 
 /// Coerce a form string value to the appropriate database type.
@@ -381,6 +445,87 @@ mod tests {
             coerce_json_value(&FieldType::Text, &val),
             DbValue::Text(r#"{"key":"value"}"#.into())
         );
+    }
+
+    // ── apply_pagination_limits tests ──────────────────────────────────
+
+    // ── normalize_date_with_timezone tests ───────────────────────────
+
+    #[test]
+    fn normalize_date_with_tz_date_only() {
+        let result = normalize_date_with_timezone("2024-01-15", "America/New_York").unwrap();
+        assert_eq!(result, "2024-01-15T17:00:00.000Z"); // noon EST = 5pm UTC
+    }
+
+    #[test]
+    fn normalize_date_with_tz_datetime() {
+        let result = normalize_date_with_timezone("2024-01-15T09:00", "America/New_York").unwrap();
+        assert_eq!(result, "2024-01-15T14:00:00.000Z"); // 9am EST = 2pm UTC
+    }
+
+    #[test]
+    fn normalize_date_with_tz_sao_paulo() {
+        // Sao Paulo in May is UTC-3 (standard time, no DST)
+        // 09:00 local = 12:00 UTC
+        let result = normalize_date_with_timezone("2026-05-01T09:00", "America/Sao_Paulo").unwrap();
+        assert_eq!(result, "2026-05-01T12:00:00.000Z");
+    }
+
+    #[test]
+    fn normalize_date_with_tz_utc_passthrough() {
+        let result = normalize_date_with_timezone("2024-01-15T09:00", "UTC").unwrap();
+        assert_eq!(result, "2024-01-15T09:00:00.000Z");
+    }
+
+    #[test]
+    fn normalize_date_with_tz_invalid_tz() {
+        let result = normalize_date_with_timezone("2024-01-15", "Invalid/Zone");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn normalize_date_with_tz_already_rfc3339() {
+        let result =
+            normalize_date_with_timezone("2024-01-15T09:00:00+05:00", "America/New_York").unwrap();
+        assert_eq!(result, "2024-01-15T04:00:00.000Z"); // Already has offset, timezone ignored
+    }
+
+    // ── utc_to_local tests ────────────────────────────────────────────
+
+    #[test]
+    fn utc_to_local_sao_paulo() {
+        // 12:00 UTC = 09:00 Sao Paulo (UTC-3)
+        let result = utc_to_local("2026-05-01T12:00:00.000Z", "America/Sao_Paulo");
+        assert_eq!(result.unwrap(), "2026-05-01T09:00");
+    }
+
+    #[test]
+    fn utc_to_local_new_york() {
+        // 14:00 UTC = 09:00 EST (January, UTC-5)
+        let result = utc_to_local("2024-01-15T14:00:00.000Z", "America/New_York");
+        assert_eq!(result.unwrap(), "2024-01-15T09:00");
+    }
+
+    #[test]
+    fn utc_to_local_utc() {
+        let result = utc_to_local("2024-01-15T09:00:00.000Z", "UTC");
+        assert_eq!(result.unwrap(), "2024-01-15T09:00");
+    }
+
+    #[test]
+    fn utc_to_local_invalid_tz_returns_none() {
+        let result = utc_to_local("2024-01-15T09:00:00.000Z", "Invalid/Zone");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn utc_to_local_roundtrip_sao_paulo() {
+        // Roundtrip: local → UTC → back to local must be idempotent
+        let utc = normalize_date_with_timezone("2026-05-01T09:00", "America/Sao_Paulo").unwrap();
+        assert_eq!(utc, "2026-05-01T12:00:00.000Z");
+
+        let local = utc_to_local(&utc, "America/Sao_Paulo").unwrap();
+        assert_eq!(local, "2026-05-01T09:00");
     }
 
     // ── apply_pagination_limits tests ──────────────────────────────────

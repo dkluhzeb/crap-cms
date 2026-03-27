@@ -24,38 +24,48 @@ pub fn create_collection_table(
         if spec.is_localized {
             for locale in &locale_config.locales {
                 let col_name = format!("{}__{}", spec.col_name, sanitize_locale(locale)?);
-                let mut col = format!(
-                    "{} {}",
-                    col_name,
+                let col_type = if spec.companion_text {
+                    "TEXT"
+                } else {
                     conn.column_type_for(&spec.field.field_type)
-                );
+                };
+                let mut col = format!("{} {}", col_name, col_type);
 
-                if spec.field.required
-                    && *locale == locale_config.default_locale
-                    && !def.has_drafts()
-                {
+                if !spec.companion_text {
+                    if spec.field.required
+                        && *locale == locale_config.default_locale
+                        && !def.has_drafts()
+                    {
+                        col.push_str(" NOT NULL");
+                    }
+                    if spec.field.unique {
+                        col.push_str(" UNIQUE");
+                    }
+                    append_default_value(
+                        &mut col,
+                        &spec.field.default_value,
+                        &spec.field.field_type,
+                    );
+                }
+                columns.push(col);
+            }
+        } else {
+            let col_type = if spec.companion_text {
+                "TEXT"
+            } else {
+                conn.column_type_for(&spec.field.field_type)
+            };
+            let mut col = format!("{} {}", spec.col_name, col_type);
+
+            if !spec.companion_text {
+                if spec.field.required && !def.has_drafts() {
                     col.push_str(" NOT NULL");
                 }
                 if spec.field.unique {
                     col.push_str(" UNIQUE");
                 }
                 append_default_value(&mut col, &spec.field.default_value, &spec.field.field_type);
-                columns.push(col);
             }
-        } else {
-            let mut col = format!(
-                "{} {}",
-                spec.col_name,
-                conn.column_type_for(&spec.field.field_type)
-            );
-
-            if spec.field.required && !def.has_drafts() {
-                col.push_str(" NOT NULL");
-            }
-            if spec.field.unique {
-                col.push_str(" UNIQUE");
-            }
-            append_default_value(&mut col, &spec.field.default_value, &spec.field.field_type);
             columns.push(col);
         }
     }
@@ -773,5 +783,67 @@ mod tests {
         let mut col = "name TEXT".to_string();
         append_default_value(&mut col, &None, &FieldType::Text);
         assert!(!col.contains("DEFAULT"));
+    }
+
+    #[test]
+    fn create_date_field_with_timezone_creates_tz_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "events",
+            vec![
+                FieldDefinition::builder("starts_at", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ],
+        );
+        create_collection_table(&conn, "events", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "events").unwrap();
+        assert!(cols.contains("starts_at"), "should have main date column");
+        assert!(
+            cols.contains("starts_at_tz"),
+            "should have companion timezone column"
+        );
+    }
+
+    #[test]
+    fn create_date_field_without_timezone_has_no_tz_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "events",
+            vec![FieldDefinition::builder("starts_at", FieldType::Date).build()],
+        );
+        create_collection_table(&conn, "events", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "events").unwrap();
+        assert!(cols.contains("starts_at"));
+        assert!(
+            !cols.contains("starts_at_tz"),
+            "should NOT have timezone column when timezone is false"
+        );
+    }
+
+    #[test]
+    fn create_localized_date_with_timezone() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "events",
+            vec![
+                FieldDefinition::builder("starts_at", FieldType::Date)
+                    .timezone(true)
+                    .localized(true)
+                    .build(),
+            ],
+        );
+        create_collection_table(&conn, "events", &def, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "events").unwrap();
+        assert!(cols.contains("starts_at__en"));
+        assert!(cols.contains("starts_at__de"));
+        assert!(cols.contains("starts_at_tz__en"));
+        assert!(cols.contains("starts_at_tz__de"));
     }
 }

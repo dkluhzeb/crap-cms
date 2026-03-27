@@ -16,7 +16,7 @@ pub mod versions;
 pub mod write;
 
 mod columns;
-mod helpers;
+pub(crate) mod helpers;
 mod locale;
 mod types;
 mod validation;

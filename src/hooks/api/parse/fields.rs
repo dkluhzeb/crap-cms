@@ -114,6 +114,30 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
             None
         };
 
+        // Parse timezone config for date fields
+        let timezone = if field_type == FieldType::Date {
+            let tz = get_bool(&field_tbl, "timezone", false);
+            let appearance = picker_appearance.as_deref().unwrap_or("dayOnly");
+            if tz && matches!(appearance, "dayOnly" | "timeOnly" | "monthOnly") {
+                tracing::warn!(
+                    "Field '{}': timezone is not supported for '{}' picker; ignoring",
+                    name,
+                    appearance
+                );
+                false
+            } else {
+                tz
+            }
+        } else {
+            false
+        };
+
+        let default_timezone = if timezone {
+            get_string(&field_tbl, "default_timezone")
+        } else {
+            None
+        };
+
         // Parse block definitions for Blocks type
         let block_defs = if field_type == FieldType::Blocks {
             if let Ok(blocks_tbl) = get_table(&field_tbl, "blocks") {
@@ -255,6 +279,12 @@ pub(crate) fn parse_fields(fields_tbl: &Table) -> Result<Vec<FieldDefinition>> {
         }
         if let Some(v) = max_date {
             fd_builder = fd_builder.max_date(v);
+        }
+        if timezone {
+            fd_builder = fd_builder.timezone(true);
+        }
+        if let Some(v) = default_timezone {
+            fd_builder = fd_builder.default_timezone(v);
         }
         if let Some(v) = join {
             fd_builder = fd_builder.join(v);
@@ -652,5 +682,104 @@ mod tests {
         fields_tbl.set(1, field).unwrap();
         let err = parse_fields(&fields_tbl).unwrap_err();
         assert!(err.to_string().contains("min_rows"), "{}", err);
+    }
+
+    #[test]
+    fn test_parse_fields_date_timezone_enabled() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "event_at").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "dayAndTime").unwrap();
+        field.set("timezone", true).unwrap();
+        field.set("default_timezone", "America/New_York").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(fields[0].timezone, "timezone should be true");
+        assert_eq!(
+            fields[0].default_timezone.as_deref(),
+            Some("America/New_York")
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_date_timezone_default_false() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "published_at").unwrap();
+        field.set("type", "date").unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(!fields[0].timezone, "timezone should default to false");
+        assert!(fields[0].default_timezone.is_none());
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_day_only() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "birthday").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "dayOnly").unwrap();
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored for dayOnly"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_default_appearance() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "birthday").unwrap();
+        field.set("type", "date").unwrap();
+        // No picker_appearance set — defaults to dayOnly
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored when picker_appearance defaults to dayOnly"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_time_only() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "alarm").unwrap();
+        field.set("type", "date").unwrap();
+        field.set("picker_appearance", "timeOnly").unwrap();
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored for timeOnly"
+        );
+    }
+
+    #[test]
+    fn test_parse_fields_timezone_ignored_for_non_date() {
+        let lua = Lua::new();
+        let fields_tbl = lua.create_table().unwrap();
+        let field = lua.create_table().unwrap();
+        field.set("name", "title").unwrap();
+        field.set("type", "text").unwrap();
+        field.set("timezone", true).unwrap();
+        fields_tbl.set(1, field).unwrap();
+        let fields = parse_fields(&fields_tbl).unwrap();
+        assert!(
+            !fields[0].timezone,
+            "timezone should be ignored for non-date fields"
+        );
     }
 }

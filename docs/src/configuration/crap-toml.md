@@ -256,6 +256,7 @@ allow_credentials = false # Allow cookies/Authorization. Cannot use with ["*"] o
 | `dev_mode` | boolean | `false` | When true, templates are reloaded from disk on every request. The scaffold sets this to `true` for new projects. Set to `false` in production for cached templates. |
 | `require_auth` | boolean | `true` | When true and no auth collection exists, the admin panel shows a "Setup Required" page (HTTP 503) instead of being open. Set to `false` for fully open dev mode without authentication. |
 | `access` | string | — | Lua function ref (e.g., `"access.admin_panel"`) that gates admin panel access. Called after successful authentication with `{ user }` context. Return `true` to allow, `false`/`nil` to deny (HTTP 403). |
+| `default_timezone` | string | `""` | Default IANA timezone for date fields with `timezone = true` that don't specify their own `default_timezone`. Pre-selects the timezone in the admin dropdown. Example: `"America/New_York"`. |
 | `csp` | table | *(see below)* | Content-Security-Policy header configuration. See `[admin.csp]`. |
 
 ### `[admin.csp]`

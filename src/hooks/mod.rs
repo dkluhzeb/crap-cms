@@ -11,7 +11,7 @@ use std::{fs, path::Path};
 
 use crate::{
     config::CrapConfig,
-    core::{Registry, SharedRegistry},
+    core::{FieldDefinition, FieldType, Registry, SharedRegistry},
 };
 
 /// Initialize the Lua VM, register the crap API, load collections/globals,
@@ -74,7 +74,38 @@ pub fn init_lua(config_dir: &Path, config: &CrapConfig) -> Result<SharedRegistry
         if has_init { ", executed init.lua" } else { "" }
     );
 
+    // Resolve config-level default_timezone into date fields that don't specify their own
+    if !config.admin.default_timezone.is_empty() {
+        let default_tz = config.admin.default_timezone.clone();
+
+        if let Ok(mut reg) = registry.write() {
+            for def in reg.collections.values_mut() {
+                apply_default_timezone(&mut def.fields, &default_tz);
+            }
+            for def in reg.globals.values_mut() {
+                apply_default_timezone(&mut def.fields, &default_tz);
+            }
+        }
+    }
+
     Ok(registry)
+}
+
+/// Recursively set `default_timezone` on Date fields with `timezone: true`
+/// that don't already have their own default_timezone.
+fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
+    for field in fields.iter_mut() {
+        if field.field_type == FieldType::Date && field.timezone && field.default_timezone.is_none()
+        {
+            field.default_timezone = Some(default_tz.to_string());
+        }
+
+        // Recurse into composite fields
+        apply_default_timezone(&mut field.fields, default_tz);
+        for tab in &mut field.tabs {
+            apply_default_timezone(&mut tab.fields, default_tz);
+        }
+    }
 }
 
 fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {

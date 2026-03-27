@@ -124,7 +124,7 @@ pub(super) fn enrich_array(
             .enumerate()
             .map(|(idx, row)| {
                 let row_obj = row.as_object();
-                let sub_values: Vec<_> = field_def
+                let mut sub_values: Vec<_> = field_def
                     .fields
                     .iter()
                     .map(|sf| {
@@ -151,6 +151,12 @@ pub(super) fn enrich_array(
                         )
                     })
                     .collect();
+
+                crate::admin::handlers::field_context::inject_timezone_values_from_row(
+                    &mut sub_values,
+                    &field_def.fields,
+                    row_obj,
+                );
 
                 let row_has_errors = sub_values
                     .iter()
@@ -367,7 +373,7 @@ pub(super) fn enrich_blocks(
                     .iter()
                     .find(|bd| bd.block_type == block_type);
                 let block_label_field = block_def.and_then(|bd| bd.label_field.as_deref());
-                let sub_values: Vec<_> = block_def
+                let mut sub_values: Vec<_> = block_def
                     .map(|bd| {
                         bd.fields
                             .iter()
@@ -397,6 +403,15 @@ pub(super) fn enrich_blocks(
                             .collect()
                     })
                     .unwrap_or_default();
+
+                if let Some(bd) = block_def {
+                    crate::admin::handlers::field_context::inject_timezone_values_from_row(
+                        &mut sub_values,
+                        &bd.fields,
+                        row_obj,
+                    );
+                }
+
                 let row_has_errors = sub_values
                     .iter()
                     .any(|sf_ctx| sf_ctx.get("error").is_some());

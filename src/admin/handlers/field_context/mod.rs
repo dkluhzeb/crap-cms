@@ -80,6 +80,61 @@ pub(super) fn collect_node_attr_errors(
 /// Max nesting depth for recursive field context building (guard against infinite nesting).
 pub(super) const MAX_FIELD_DEPTH: usize = 5;
 
+/// Add timezone dropdown context to a date field's template context.
+///
+/// Sets `timezone_enabled`, `default_timezone`, `timezone_options`, and `timezone_value`
+/// on the given context when the field definition has `timezone: true`.
+pub(super) fn add_timezone_context(
+    ctx: &mut Value,
+    field: &FieldDefinition,
+    tz_value: &str,
+    config_default_tz: &str,
+) {
+    if !field.timezone {
+        return;
+    }
+
+    let default_tz = field
+        .default_timezone
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(config_default_tz);
+
+    ctx["timezone_enabled"] = json!(true);
+    ctx["default_timezone"] = json!(default_tz);
+    ctx["timezone_options"] = json!(
+        crate::core::timezone::TIMEZONE_OPTIONS
+            .iter()
+            .map(|(code, label)| json!({"value": code, "label": label}))
+            .collect::<Vec<_>>()
+    );
+    ctx["timezone_value"] = json!(tz_value);
+}
+
+/// Inject stored timezone values into date sub-field contexts from a parent row object.
+///
+/// For each sub-field definition that is a date field with `timezone: true`, looks up
+/// `{field_name}_tz` in the parent row and sets `timezone_value` on the corresponding context.
+pub(super) fn inject_timezone_values_from_row(
+    sub_ctxs: &mut [Value],
+    field_defs: &[FieldDefinition],
+    parent_row: Option<&serde_json::Map<String, Value>>,
+) {
+    let Some(row_obj) = parent_row else {
+        return;
+    };
+
+    for (ctx, fd) in sub_ctxs.iter_mut().zip(field_defs.iter()) {
+        if fd.field_type == crate::core::FieldType::Date && fd.timezone {
+            let tz_key = format!("{}_tz", fd.name);
+
+            if let Some(tz_val) = row_obj.get(&tz_key).and_then(|v| v.as_str()) {
+                ctx["timezone_value"] = json!(tz_val);
+            }
+        }
+    }
+}
+
 /// Evaluate display conditions for field contexts and inject condition data.
 /// For fields with `admin.condition`, calls the Lua function and sets:
 /// - `condition_visible`: initial visibility (bool)
@@ -135,4 +190,125 @@ pub(super) fn split_sidebar_fields(fields: Vec<Value>) -> (Vec<Value>, Vec<Value
     fields
         .into_iter()
         .partition(|f| f.get("position").and_then(|v| v.as_str()) != Some("sidebar"))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use crate::core::field::{FieldDefinition, FieldType};
+
+    use super::*;
+
+    fn date_field_with_tz(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Date,
+            timezone: true,
+            default_timezone: Some("America/New_York".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn date_field_no_tz(name: &str) -> FieldDefinition {
+        FieldDefinition {
+            name: name.to_string(),
+            field_type: FieldType::Date,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn add_timezone_context_sets_options_when_enabled() {
+        let field = date_field_with_tz("published_at");
+        let mut ctx = json!({});
+
+        add_timezone_context(&mut ctx, &field, "Europe/Berlin", "");
+
+        assert_eq!(ctx["timezone_enabled"], true);
+        assert_eq!(ctx["default_timezone"], "America/New_York");
+        assert_eq!(ctx["timezone_value"], "Europe/Berlin");
+
+        let options = ctx["timezone_options"].as_array().unwrap();
+        assert!(!options.is_empty());
+        assert_eq!(options[0]["value"], "UTC");
+        assert_eq!(options[0]["label"], "UTC");
+    }
+
+    #[test]
+    fn add_timezone_context_noop_when_disabled() {
+        let field = date_field_no_tz("published_at");
+        let mut ctx = json!({});
+
+        add_timezone_context(&mut ctx, &field, "", "");
+
+        assert!(ctx.get("timezone_enabled").is_none());
+        assert!(ctx.get("timezone_options").is_none());
+    }
+
+    #[test]
+    fn add_timezone_context_empty_default_timezone() {
+        let mut field = date_field_with_tz("published_at");
+        field.default_timezone = None;
+        let mut ctx = json!({});
+
+        add_timezone_context(&mut ctx, &field, "", "");
+
+        assert_eq!(ctx["default_timezone"], "");
+        assert_eq!(ctx["timezone_value"], "");
+    }
+
+    #[test]
+    fn add_timezone_context_uses_config_fallback() {
+        let mut field = date_field_with_tz("published_at");
+        field.default_timezone = None;
+        let mut ctx = json!({});
+
+        add_timezone_context(&mut ctx, &field, "", "Europe/London");
+
+        assert_eq!(ctx["default_timezone"], "Europe/London");
+    }
+
+    #[test]
+    fn add_timezone_context_field_overrides_config() {
+        let field = date_field_with_tz("published_at");
+        let mut ctx = json!({});
+
+        add_timezone_context(&mut ctx, &field, "", "Europe/London");
+
+        assert_eq!(ctx["default_timezone"], "America/New_York");
+    }
+
+    #[test]
+    fn inject_timezone_values_from_row_sets_tz_for_date_fields() {
+        let field_defs = vec![date_field_with_tz("starts_at"), date_field_no_tz("ends_at")];
+
+        let mut ctxs = vec![
+            json!({"name": "items[0][starts_at]", "timezone_value": ""}),
+            json!({"name": "items[0][ends_at]"}),
+        ];
+
+        let row: serde_json::Map<String, Value> = serde_json::from_value(json!({
+            "starts_at": "2026-01-15",
+            "starts_at_tz": "Asia/Tokyo",
+            "ends_at": "2026-02-15",
+        }))
+        .unwrap();
+
+        inject_timezone_values_from_row(&mut ctxs, &field_defs, Some(&row));
+
+        assert_eq!(ctxs[0]["timezone_value"], "Asia/Tokyo");
+        // ends_at has no timezone, so no injection
+        assert!(ctxs[1].get("timezone_value").is_none());
+    }
+
+    #[test]
+    fn inject_timezone_values_from_row_noop_when_no_row() {
+        let field_defs = vec![date_field_with_tz("starts_at")];
+        let mut ctxs = vec![json!({"name": "items[0][starts_at]", "timezone_value": ""})];
+
+        inject_timezone_values_from_row(&mut ctxs, &field_defs, None);
+
+        assert_eq!(ctxs[0]["timezone_value"], "");
+    }
 }

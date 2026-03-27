@@ -444,4 +444,94 @@ mod tests {
         let version_count = count_versions(&conn, "posts", "p1").unwrap();
         assert_eq!(version_count, 1);
     }
+
+    #[test]
+    fn restore_version_preserves_timezone_data() {
+        // Regression: version snapshots must include _tz companion columns
+        // and restoring a version must write them back.
+        let (_dir, conn) = setup_conn();
+        conn.execute_batch(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                _status TEXT DEFAULT 'published',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            CREATE TABLE _versions_events (
+                id TEXT PRIMARY KEY,
+                _parent TEXT NOT NULL,
+                _version INTEGER NOT NULL,
+                _status TEXT NOT NULL,
+                _latest INTEGER NOT NULL DEFAULT 0,
+                snapshot TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now'))
+            );
+            INSERT INTO events (id, start_date, start_date_tz, _status)
+                VALUES ('e1', '2024-06-15T14:00:00.000Z', 'America/New_York', 'published');",
+        )
+        .unwrap();
+
+        let no_locale = LocaleConfig::default();
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+        def.versions = Some(VersionsConfig::new(true, 10));
+
+        // Create a snapshot that includes both the date and timezone
+        let snapshot_v1 = json!({
+            "start_date": "2024-06-15T14:00:00.000Z",
+            "start_date_tz": "America/New_York"
+        });
+        create_version(&conn, "events", "e1", "published", &snapshot_v1).unwrap();
+
+        // Simulate updating the document with a different timezone
+        conn.execute_batch(
+            "UPDATE events SET start_date = '2024-06-15T18:00:00.000Z', \
+             start_date_tz = 'Europe/London' WHERE id = 'e1'",
+        )
+        .unwrap();
+
+        // Verify the update took effect
+        let row = conn
+            .query_one("SELECT start_date_tz FROM events WHERE id = 'e1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(row.get_string("start_date_tz").unwrap(), "Europe/London");
+
+        // Restore the original version
+        let doc = restore_version(
+            &conn,
+            "events",
+            &def,
+            "e1",
+            &snapshot_v1,
+            "published",
+            &no_locale,
+        )
+        .unwrap();
+
+        // Verify the restored document has the original date
+        assert_eq!(
+            doc.get_str("start_date"),
+            Some("2024-06-15T14:00:00.000Z"),
+            "Restored date should match the snapshot"
+        );
+
+        // Verify the _tz column was also restored by reading directly from the DB
+        let row = conn
+            .query_one("SELECT start_date_tz FROM events WHERE id = 'e1'", &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            row.get_string("start_date_tz").unwrap(),
+            "America/New_York",
+            "Restored timezone should match the snapshot"
+        );
+    }
 }

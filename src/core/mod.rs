@@ -12,6 +12,7 @@ pub mod rate_limit;
 pub mod registry;
 pub mod richtext;
 pub mod slug;
+pub mod timezone;
 pub mod upload;
 pub mod validate;
 

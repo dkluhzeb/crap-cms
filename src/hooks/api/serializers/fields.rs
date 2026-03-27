@@ -53,6 +53,13 @@ pub(super) fn field_config_to_lua(lua: &Lua, f: &FieldDefinition) -> LuaResult<T
         tbl.set("picker_appearance", pa.as_str())?;
     }
 
+    if f.timezone {
+        tbl.set("timezone", true)?;
+    }
+    if let Some(ref dtz) = f.default_timezone {
+        tbl.set("default_timezone", dtz.as_str())?;
+    }
+
     // has_many for scalar fields (text, number, select — not relationship/upload which use RelationshipConfig)
     if f.has_many && f.relationship.is_none() {
         tbl.set("has_many", true)?;
@@ -546,6 +553,52 @@ mod tests {
         let tbl = field_config_to_lua(&lua, &f).unwrap();
         assert!(tbl.get::<bool>("localized").unwrap());
         assert_eq!(tbl.get::<String>("picker_appearance").unwrap(), "drawer");
+    }
+
+    #[test]
+    fn test_field_config_to_lua_timezone_roundtrip() {
+        let lua = mlua::Lua::new();
+        let f = FieldDefinition::builder("start_date", FieldType::Date)
+            .timezone(true)
+            .default_timezone("America/New_York")
+            .picker_appearance("dayAndTime")
+            .build();
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+
+        assert!(tbl.get::<bool>("timezone").unwrap());
+        assert_eq!(
+            tbl.get::<String>("default_timezone").unwrap(),
+            "America/New_York"
+        );
+
+        // Verify it survives re-parse (simulates plugin round-trip)
+        let fields_tbl = lua.create_table().unwrap();
+        fields_tbl.set(1, tbl).unwrap();
+        let parsed = crate::hooks::api::parse::fields::parse_fields(&fields_tbl).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert!(
+            parsed[0].timezone,
+            "timezone must survive serialization round-trip"
+        );
+        assert_eq!(
+            parsed[0].default_timezone.as_deref(),
+            Some("America/New_York")
+        );
+    }
+
+    #[test]
+    fn test_field_config_to_lua_no_timezone_omitted() {
+        let lua = mlua::Lua::new();
+        let f = FieldDefinition::builder("created_at", FieldType::Date).build();
+        let tbl = field_config_to_lua(&lua, &f).unwrap();
+
+        // timezone should not be present when false
+        assert!(tbl.get::<Option<bool>>("timezone").unwrap().is_none());
+        assert!(
+            tbl.get::<Option<String>>("default_timezone")
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

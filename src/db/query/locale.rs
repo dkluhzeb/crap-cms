@@ -148,7 +148,19 @@ fn collect_locale_columns(
                     add_locale_columns(select_exprs, result_names, &base, locale_ctx)?;
                 } else {
                     select_exprs.push(base.clone());
-                    result_names.push(base);
+                    result_names.push(base.clone());
+                }
+
+                // Timezone companion column for date fields
+                if field.field_type == FieldType::Date && field.timezone {
+                    let tz_col = format!("{}_tz", base);
+
+                    if is_localized {
+                        add_locale_columns(select_exprs, result_names, &tz_col, locale_ctx)?;
+                    } else {
+                        select_exprs.push(tz_col.clone());
+                        result_names.push(tz_col);
+                    }
                 }
             }
         }
@@ -322,7 +334,7 @@ mod tests {
     use crate::config::LocaleConfig;
     use crate::core::{
         Document,
-        field::{FieldTab, FieldType},
+        field::{FieldDefinition, FieldTab, FieldType},
     };
     use crate::db::query::test_helpers::*;
 
@@ -567,5 +579,158 @@ mod tests {
             "Localized Group→Tabs: meta__title__de"
         );
         assert!(names.contains(&"meta__title".to_string()));
+    }
+
+    // ── Timezone companion column tests ──────────────────────────────
+
+    #[test]
+    fn get_locale_select_columns_includes_date_tz_in_row() {
+        // Date field with timezone: true inside a Row should produce both
+        // start_date and start_date_tz in the SELECT columns.
+        let fields = vec![make_row_field(
+            "r",
+            vec![
+                FieldDefinition::builder("start_date", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ],
+        )];
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
+
+        let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
+
+        assert!(
+            exprs.contains(&"start_date".to_string()),
+            "SELECT should include start_date, got: {:?}",
+            exprs
+        );
+        assert!(
+            exprs.contains(&"start_date_tz".to_string()),
+            "SELECT should include start_date_tz, got: {:?}",
+            exprs
+        );
+        assert!(
+            names.contains(&"start_date".to_string()),
+            "Result names should include start_date"
+        );
+        assert!(
+            names.contains(&"start_date_tz".to_string()),
+            "Result names should include start_date_tz"
+        );
+    }
+
+    #[test]
+    fn get_locale_select_columns_date_tz_non_localized_default_mode() {
+        // Non-localized date field with timezone in Default locale mode:
+        // should produce plain start_date and start_date_tz columns.
+        let fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
+
+        let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
+
+        assert_eq!(
+            exprs,
+            vec!["id", "start_date", "start_date_tz"],
+            "Non-localized date+tz should appear as plain columns"
+        );
+        assert_eq!(names, vec!["id", "start_date", "start_date_tz"]);
+    }
+
+    #[test]
+    fn get_locale_select_columns_date_tz_localized_single_mode() {
+        // Localized date field with timezone in Single locale mode:
+        // date column gets locale suffix, _tz column also gets locale handling.
+        let fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .localized(true)
+                .build(),
+        ];
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Single("de".to_string()),
+            config: locale_cfg,
+        };
+
+        let (exprs, _names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
+
+        // The date column should have locale handling (COALESCE for fallback)
+        assert!(
+            exprs.iter().any(|e| e.contains("start_date__de")),
+            "Localized date should include locale-suffixed column, got: {:?}",
+            exprs
+        );
+        // The _tz column should also have locale handling
+        assert!(
+            exprs.iter().any(|e| e.contains("start_date_tz__de")),
+            "Localized _tz should include locale-suffixed column, got: {:?}",
+            exprs
+        );
+    }
+
+    #[test]
+    fn get_locale_select_columns_date_without_tz_no_companion() {
+        // Date field WITHOUT timezone: true should NOT produce a _tz column.
+        let fields = vec![FieldDefinition::builder("event_date", FieldType::Date).build()];
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
+
+        let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
+
+        assert_eq!(exprs, vec!["id", "event_date"]);
+        assert_eq!(names, vec!["id", "event_date"]);
+        assert!(
+            !exprs.iter().any(|e| e.contains("_tz")),
+            "Date without timezone should not have _tz column"
+        );
+    }
+
+    #[test]
+    fn get_locale_select_columns_group_date_tz() {
+        // Date field with timezone inside a Group should produce
+        // group__field and group__field_tz columns.
+        let fields = vec![make_group_field(
+            "schedule",
+            vec![
+                FieldDefinition::builder("start", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ],
+        )];
+        let locale_cfg = make_locale_config();
+        let ctx = LocaleContext {
+            mode: LocaleMode::Default,
+            config: locale_cfg,
+        };
+
+        let (exprs, names) = get_locale_select_columns(&fields, false, &ctx).unwrap();
+
+        assert!(
+            exprs.contains(&"schedule__start".to_string()),
+            "Group date should be prefixed: {:?}",
+            exprs
+        );
+        assert!(
+            exprs.contains(&"schedule__start_tz".to_string()),
+            "Group date _tz should be prefixed: {:?}",
+            exprs
+        );
+        assert!(names.contains(&"schedule__start".to_string()));
+        assert!(names.contains(&"schedule__start_tz".to_string()));
     }
 }

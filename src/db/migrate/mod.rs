@@ -83,6 +83,13 @@ pub fn sync_all(
     ))
     .context("Failed to create _crap_jobs table")?;
 
+    // Ensure retry_after column exists (added in 0.1.0-alpha.3)
+    let job_cols = tx.get_table_columns("_crap_jobs")?;
+    if !job_cols.contains("retry_after") {
+        tx.execute_batch("ALTER TABLE _crap_jobs ADD COLUMN retry_after TEXT")
+            .context("Failed to add retry_after column to _crap_jobs")?;
+    }
+
     // Create user settings table (decoupled from auth collections)
     tx.execute_batch(
         "CREATE TABLE IF NOT EXISTS _crap_user_settings (

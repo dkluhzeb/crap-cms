@@ -8,6 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Optional timezone support for date fields** — `timezone = true` on a
+  date field stores the user's IANA timezone in a companion `_tz` column
+  alongside the UTC value. The admin UI shows a timezone dropdown; the
+  user enters local time and sees local time on reload (no drift). API
+  responses include both `start_date` (UTC) and `start_date_tz` (IANA
+  string). Requires `picker_appearance = "dayAndTime"`. Supports localized
+  fields, Groups, Rows, Arrays, versioning, and a global
+  `[admin] default_timezone` config fallback.
+
 - **Content-Security-Policy header** — configurable `[admin.csp]` section with
   per-directive source lists (`script_src`, `style_src`, `font_src`, etc.).
   Enabled by default with permissive defaults that cover the built-in admin UI.

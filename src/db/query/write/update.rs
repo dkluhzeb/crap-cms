@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use crate::core::{CollectionDefinition, Document, FieldDefinition, FieldType};
 use crate::db::{
     DbConnection, DbValue, LocaleContext,
-    query::{coerce_value, locale_write_column, read::find_by_id_raw},
+    query::{
+        coerce_value, helpers::normalize_date_with_timezone, locale_write_column,
+        read::find_by_id_raw,
+    },
 };
 
 /// Update a document by ID. Returns the updated document.
@@ -181,10 +184,48 @@ pub(in crate::db::query) fn collect_update_params(
                         col_name,
                         conn.placeholder(collector.idx)
                     ));
-                    collector
-                        .params
-                        .push(coerce_value(&field.field_type, value));
+
+                    // For Date fields with timezone, use timezone-aware normalization
+                    let db_val = if field.field_type == FieldType::Date && field.timezone {
+                        let tz_key = format!("{}_tz", data_key);
+                        if let Some(tz) = data.get(&tz_key).filter(|s| !s.is_empty()) {
+                            if value.is_empty() {
+                                DbValue::Null
+                            } else {
+                                match normalize_date_with_timezone(value, tz) {
+                                    Ok(normalized) => DbValue::Text(normalized),
+                                    Err(_) => coerce_value(&field.field_type, value),
+                                }
+                            }
+                        } else {
+                            coerce_value(&field.field_type, value)
+                        }
+                    } else {
+                        coerce_value(&field.field_type, value)
+                    };
+
+                    collector.params.push(db_val);
                     collector.idx += 1;
+
+                    // Timezone companion column for date fields
+                    if field.field_type == FieldType::Date && field.timezone {
+                        let tz_base = format!("{}_tz", data_key);
+                        let tz_col = locale_write_column(&tz_base, field, locale_ctx)?;
+                        let tz_key = format!("{}_tz", data_key);
+                        collector.set_clauses.push(format!(
+                            "{} = {}",
+                            tz_col,
+                            conn.placeholder(collector.idx)
+                        ));
+
+                        let tz_val = data.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
+                        collector.params.push(if tz_val.is_empty() {
+                            DbValue::Null
+                        } else {
+                            DbValue::Text(tz_val.to_string())
+                        });
+                        collector.idx += 1;
+                    }
                 } else if field.field_type == FieldType::Checkbox
                     && !collector.skip_absent_checkboxes
                 {
@@ -575,5 +616,87 @@ mod tests {
             Some(0),
             "Partial update with explicit checkbox value should set it"
         );
+    }
+
+    // ── Timezone companion tests ─────────────────────────────────────
+
+    #[test]
+    fn update_date_with_timezone_normalizes_and_stores_tz() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+        conn.execute(
+            "INSERT INTO events (id, start_date, start_date_tz, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            &[
+                DbValue::Text("e1".into()),
+                DbValue::Text("2024-01-01T12:00:00.000Z".into()),
+                DbValue::Text("UTC".into()),
+                DbValue::Text("2024-01-01".into()),
+                DbValue::Text("2024-01-01".into()),
+            ],
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), "2024-06-15T10:00".to_string());
+        data.insert("start_date_tz".to_string(), "America/Chicago".to_string());
+
+        let doc = update(&conn, "events", &def, "e1", &data, None).unwrap();
+
+        // 10am CDT (summer) = 3pm UTC
+        assert_eq!(doc.get_str("start_date"), Some("2024-06-15T15:00:00.000Z"));
+        assert_eq!(doc.get_str("start_date_tz"), Some("America/Chicago"));
+    }
+
+    #[test]
+    fn update_date_timezone_without_tz_value_falls_back() {
+        let (_dir, conn) = setup_db(
+            "CREATE TABLE events (
+                id TEXT PRIMARY KEY,
+                start_date TEXT,
+                start_date_tz TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            )",
+        );
+        conn.execute(
+            "INSERT INTO events (id, start_date, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
+            &[
+                DbValue::Text("e1".into()),
+                DbValue::Text("2024-01-01T12:00:00.000Z".into()),
+                DbValue::Text("2024-01-01".into()),
+                DbValue::Text("2024-01-01".into()),
+            ],
+        )
+        .unwrap();
+
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![
+            FieldDefinition::builder("start_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let mut data = HashMap::new();
+        data.insert("start_date".to_string(), "2024-06-15T10:00".to_string());
+        // No tz value
+
+        let doc = update(&conn, "events", &def, "e1", &data, None).unwrap();
+
+        // Falls back to normal (treat as UTC)
+        assert_eq!(doc.get_str("start_date"), Some("2024-06-15T10:00:00.000Z"));
     }
 }

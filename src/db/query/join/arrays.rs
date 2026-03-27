@@ -5,7 +5,10 @@ use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 
 use crate::core::{FieldDefinition, FieldType, field::flatten_array_sub_fields};
-use crate::db::{DbConnection, DbValue, query::coerce_value};
+use crate::db::{
+    DbConnection, DbValue,
+    query::{coerce_value, helpers::normalize_date_with_timezone},
+};
 
 /// Set array rows for an array field join table.
 /// Deletes all existing rows for the parent and inserts new ones with nanoid + _order.
@@ -47,10 +50,18 @@ pub fn set_array_rows(
         return Ok(());
     }
 
-    // Build column list from flattened sub-fields
-    let col_names: Vec<&str> = flat_subs.iter().map(|f| f.name.as_str()).collect();
+    // Build column list from flattened sub-fields, including _tz companions
+    let mut col_names: Vec<String> = Vec::new();
+    for sf in &flat_subs {
+        col_names.push(sf.name.clone());
+        if sf.field_type == FieldType::Date && sf.timezone {
+            col_names.push(format!("{}_tz", sf.name));
+        }
+    }
+
+    let col_list = col_names.join(", ");
     let (all_cols, placeholders) = if locale.is_some() {
-        let all_cols = format!("id, parent_id, _order, _locale, {}", col_names.join(", "));
+        let all_cols = format!("id, parent_id, _order, _locale, {}", col_list);
         let placeholders = format!(
             "{}, {}, {}, {}, {}",
             conn.placeholder(1),
@@ -64,7 +75,7 @@ pub fn set_array_rows(
         );
         (all_cols, placeholders)
     } else {
-        let all_cols = format!("id, parent_id, _order, {}", col_names.join(", "));
+        let all_cols = format!("id, parent_id, _order, {}", col_list);
         let placeholders = format!(
             "{}, {}, {}, {}",
             conn.placeholder(1),
@@ -93,10 +104,42 @@ pub fn set_array_rows(
         if let Some(loc) = locale {
             params.push(DbValue::Text(loc.to_string()));
         }
+
         for sf in &flat_subs {
             let value = row.get(&sf.name).cloned().unwrap_or_default();
-            params.push(coerce_value(&sf.field_type, &value));
+
+            // For Date fields with timezone, use timezone-aware normalization
+            let db_val = if sf.field_type == FieldType::Date && sf.timezone {
+                let tz_key = format!("{}_tz", sf.name);
+                if let Some(tz) = row.get(&tz_key).filter(|s| !s.is_empty()) {
+                    if value.is_empty() {
+                        DbValue::Null
+                    } else {
+                        match normalize_date_with_timezone(&value, tz) {
+                            Ok(normalized) => DbValue::Text(normalized),
+                            Err(_) => coerce_value(&sf.field_type, &value),
+                        }
+                    }
+                } else {
+                    coerce_value(&sf.field_type, &value)
+                }
+            } else {
+                coerce_value(&sf.field_type, &value)
+            };
+            params.push(db_val);
+
+            // Push timezone companion value
+            if sf.field_type == FieldType::Date && sf.timezone {
+                let tz_key = format!("{}_tz", sf.name);
+                let tz_val = row.get(&tz_key).map(|s| s.as_str()).unwrap_or("");
+                params.push(if tz_val.is_empty() {
+                    DbValue::Null
+                } else {
+                    DbValue::Text(tz_val.to_string())
+                });
+            }
         }
+
         conn.execute(&sql, &params)?;
     }
     Ok(())
@@ -114,11 +157,19 @@ pub fn find_array_rows(
 ) -> Result<Vec<Value>> {
     let table_name = format!("{}_{}", collection, field_name);
     let flat_subs = flatten_array_sub_fields(sub_fields);
-    let col_names: Vec<&str> = flat_subs.iter().map(|f| f.name.as_str()).collect();
-    let select_cols = if col_names.is_empty() {
+
+    // Build SELECT column list including _tz companions
+    let mut select_col_names: Vec<String> = Vec::new();
+    for sf in &flat_subs {
+        select_col_names.push(sf.name.clone());
+        if sf.field_type == FieldType::Date && sf.timezone {
+            select_col_names.push(format!("{}_tz", sf.name));
+        }
+    }
+    let select_cols = if select_col_names.is_empty() {
         "id".to_string()
     } else {
-        format!("id, {}", col_names.join(", "))
+        format!("id, {}", select_col_names.join(", "))
     };
     let (sql, params) = if let Some(loc) = locale {
         let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
@@ -152,8 +203,12 @@ pub fn find_array_rows(
         if let DbValue::Text(s) = id {
             map.insert("id".to_string(), Value::String(s));
         }
-        for (i, sf) in flat_subs.iter().enumerate() {
-            let val = db_row.get_value(i + 1).cloned().unwrap_or(DbValue::Null);
+
+        let mut col_idx = 1; // starts after "id"
+        for sf in &flat_subs {
+            let val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
+            col_idx += 1;
+
             let json_val = match val {
                 DbValue::Null => Value::Null,
                 DbValue::Integer(n) => json!(n),
@@ -175,7 +230,20 @@ pub fn find_array_rows(
                 DbValue::Blob(_) => Value::Null,
             };
             map.insert(sf.name.clone(), json_val);
+
+            // Read timezone companion column
+            if sf.field_type == FieldType::Date && sf.timezone {
+                let tz_val = db_row.get_value(col_idx).cloned().unwrap_or(DbValue::Null);
+                col_idx += 1;
+
+                let tz_json = match tz_val {
+                    DbValue::Text(s) => Value::String(s),
+                    _ => Value::Null,
+                };
+                map.insert(format!("{}_tz", sf.name), tz_json);
+            }
         }
+
         result.push(Value::Object(map));
     }
     Ok(result)
@@ -380,5 +448,84 @@ mod tests {
         let result = find_array_rows(&conn, "posts", "items", "p1", &[], None).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0]["id"], "item1");
+    }
+
+    // ── Timezone companion tests ─────────────────────────────────────
+
+    #[test]
+    fn set_and_find_array_rows_with_date_timezone() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_schedule (
+                 id TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 _order INTEGER,
+                 event_date TEXT,
+                 event_date_tz TEXT,
+                 label TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');",
+        );
+
+        let sub_fields = vec![
+            FieldDefinition::builder("event_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+            FieldDefinition::builder("label", FieldType::Text).build(),
+        ];
+
+        let rows = vec![HashMap::from([
+            ("event_date".to_string(), "2024-01-15T09:00".to_string()),
+            ("event_date_tz".to_string(), "America/New_York".to_string()),
+            ("label".to_string(), "Meeting".to_string()),
+        ])];
+
+        set_array_rows(&conn, "posts", "schedule", "p1", &rows, &sub_fields, None).unwrap();
+
+        let found = find_array_rows(&conn, "posts", "schedule", "p1", &sub_fields, None).unwrap();
+        assert_eq!(found.len(), 1);
+
+        // 9am EST = 2pm UTC
+        assert_eq!(found[0]["event_date"], "2024-01-15T14:00:00.000Z");
+        assert_eq!(found[0]["event_date_tz"], "America/New_York");
+        assert_eq!(found[0]["label"], "Meeting");
+    }
+
+    #[test]
+    fn set_array_rows_date_tz_without_tz_value() {
+        let (_dir, conn) = setup_conn(
+            "CREATE TABLE posts (id TEXT PRIMARY KEY);
+             CREATE TABLE posts_schedule (
+                 id TEXT PRIMARY KEY,
+                 parent_id TEXT,
+                 _order INTEGER,
+                 event_date TEXT,
+                 event_date_tz TEXT
+             );
+             INSERT INTO posts (id) VALUES ('p1');",
+        );
+
+        let sub_fields = vec![
+            FieldDefinition::builder("event_date", FieldType::Date)
+                .timezone(true)
+                .build(),
+        ];
+
+        let rows = vec![HashMap::from([(
+            "event_date".to_string(),
+            "2024-01-15T09:00".to_string(),
+        )])];
+
+        set_array_rows(&conn, "posts", "schedule", "p1", &rows, &sub_fields, None).unwrap();
+
+        let found = find_array_rows(&conn, "posts", "schedule", "p1", &sub_fields, None).unwrap();
+        assert_eq!(found.len(), 1);
+
+        // No timezone provided — falls back to treat as UTC
+        assert_eq!(found[0]["event_date"], "2024-01-15T09:00:00.000Z");
+        assert!(
+            found[0]["event_date_tz"].is_null(),
+            "tz should be null when not provided"
+        );
     }
 }

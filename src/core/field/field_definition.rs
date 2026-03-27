@@ -122,6 +122,13 @@ pub struct FieldDefinition {
     /// Maximum date value (date fields). ISO format: "2025-12-31". Validated server-side + HTML max attr.
     #[serde(default)]
     pub max_date: Option<String>,
+    /// Whether to store an IANA timezone alongside the date value.
+    /// Only meaningful for dayOnly and dayAndTime picker appearances.
+    #[serde(default)]
+    pub timezone: bool,
+    /// Default IANA timezone for the admin UI dropdown (e.g., "America/New_York").
+    #[serde(default)]
+    pub default_timezone: Option<String>,
     /// Configuration for join (virtual reverse-relationship) fields.
     #[serde(default)]
     pub join: Option<JoinConfig>,
@@ -157,6 +164,8 @@ impl Default for FieldDefinition {
             has_many: false,
             min_date: None,
             max_date: None,
+            timezone: false,
+            default_timezone: None,
             join: None,
         }
     }
