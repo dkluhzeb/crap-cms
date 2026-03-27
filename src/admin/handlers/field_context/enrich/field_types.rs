@@ -73,11 +73,11 @@ pub(super) fn sub_date(sub_ctx: &mut Value, sf: &FieldDefinition, val: &str) {
 
     match appearance {
         "dayOnly" => {
-            let date_val = if val.len() >= 10 { &val[..10] } else { val };
+            let date_val = val.get(..10).unwrap_or(val);
             sub_ctx["date_only_value"] = json!(date_val);
         }
         "dayAndTime" => {
-            let dt_val = if val.len() >= 16 { &val[..16] } else { val };
+            let dt_val = val.get(..16).unwrap_or(val);
             sub_ctx["datetime_local_value"] = json!(dt_val);
         }
         _ => {}

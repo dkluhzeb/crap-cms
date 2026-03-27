@@ -16,12 +16,14 @@ pub(super) fn resize_image(img: &image::DynamicImage, size: &ImageSize) -> image
             let (resize_w, resize_h) = if src_ratio > dst_ratio {
                 // Source is wider — fit height, crop width
                 let h = size.height;
-                let w = (img.width() as f64 * (size.height as f64 / img.height() as f64)) as u32;
+                let w = (img.width() as f64 * (size.height as f64 / img.height() as f64))
+                    .min(u32::MAX as f64) as u32;
                 (w.max(1), h)
             } else {
                 // Source is taller — fit width, crop height
                 let w = size.width;
-                let h = (img.height() as f64 * (size.width as f64 / img.width() as f64)) as u32;
+                let h = (img.height() as f64 * (size.width as f64 / img.width() as f64))
+                    .min(u32::MAX as f64) as u32;
                 (w, h.max(1))
             };
 
@@ -224,6 +226,27 @@ mod tests {
         let result = resize_image(&img, &size);
         assert_eq!(result.width(), 100);
         assert_eq!(result.height(), 50);
+    }
+
+    #[test]
+    fn resize_image_cover_extreme_aspect_ratio_no_overflow() {
+        // Wide source with tall target — the intermediate width calculation
+        // could overflow u32 without the .min(u32::MAX) guard.
+        // We use moderate dimensions to avoid huge memory allocations during
+        // the actual resize, while still exercising the ratio math.
+        let img = image::DynamicImage::ImageRgba8(image::ImageBuffer::from_fn(1000, 1, |_, _| {
+            image::Rgba([0, 0, 0, 255])
+        }));
+        let size = ImageSizeBuilder::new("extreme")
+            .width(1)
+            .height(1000)
+            .fit(ImageFit::Cover)
+            .build();
+
+        // Should not panic from overflow
+        let result = resize_image(&img, &size);
+        assert!(result.width() >= 1);
+        assert!(result.height() >= 1);
     }
 
     #[test]

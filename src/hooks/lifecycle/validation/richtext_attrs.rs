@@ -471,7 +471,7 @@ fn run_before_validate_html(
                 let attrs_json = serde_json::to_string(&attrs).unwrap_or_default();
                 result.push_str(&format!(
                     "<crap-node data-type=\"{}\" data-attrs='{}'></crap-node>",
-                    node_type,
+                    html_escape_attr(&node_type),
                     html_escape_attr(&attrs_json),
                 ));
             } else {

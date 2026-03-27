@@ -127,6 +127,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Security
 
+- **XSS via `javascript:` protocol in richtext links** (CRITICAL): Link
+  marks in ProseMirror content rendered `href` attributes without URL
+  protocol validation. A `javascript:alert('xss')` href executed
+  arbitrary code when clicked. Now only allowlisted protocols (`http`,
+  `https`, `mailto`, `tel`, `ftp`, relative paths) are rendered; all
+  others are replaced with `#`.
+
+- **Unescaped node type in `<crap-node>` tags** (HIGH): Custom node
+  `data-type` attribute used `html_escape` (no quote escaping) instead
+  of `html_escape_attr`. A crafted node type with quotes could break
+  HTML attribute parsing. Fixed in both renderer and validation handler.
+
+- **Session refresh allowed deleted users** (HIGH): The session refresh
+  endpoint checked lock status and session version but never verified the
+  user document still exists. A deleted user's session could be
+  refreshed indefinitely. Now checks user existence first.
+
+- **Locked accounts could reset passwords** (MEDIUM): The password reset
+  flow did not check account lock status. A locked user could reset
+  their password and regain access. Now rejects reset attempts for
+  locked accounts.
+
+- **gRPC reset password used wrong rate limiter** (MEDIUM): The gRPC
+  password reset endpoint used `ip_login_limiter` instead of
+  `ip_forgot_password_limiter`, allowing rate limit pool pollution
+  between login and reset operations.
+
+- **Date string slicing panic on multi-byte UTF-8** (MEDIUM): Date field
+  value slicing used `&val[..10]` which panics if the byte offset falls
+  within a multi-byte character. Changed to `.get(..10).unwrap_or(val)`.
+
 - **`url_decode` garbled multi-byte UTF-8** (HIGH): Percent-encoded multi-byte
   sequences (e.g. `%C3%A9` for `é`, CJK, emoji) were decoded byte-by-byte as
   individual `char`s, producing mojibake. Malformed `%XX` sequences silently
@@ -299,6 +330,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   authenticated request — stale tokens are rejected immediately.
 
 ### Fixed
+
+- **Empty IN/NOT IN filter generated invalid SQL**: `FilterOp::In(vec![])`
+  produced `field IN ()` which is invalid SQL. Empty IN now returns `FALSE`
+  (`0 = 1`) and empty NOT IN returns `TRUE` (`1 = 1`).
+
+- **Image resize integer overflow on extreme aspect ratios**: Resize
+  dimension calculation used unchecked `f64 → u32` cast that could wrap
+  on extreme aspect ratios. Now clamped to `u32::MAX`.
+
+- **SVG CSP strengthened**: Added `default-src 'none'` alongside the
+  existing `sandbox` directive for defense-in-depth on SVG uploads.
+
+- **Group filter normalization missed layout wrappers**: Filtering on a
+  Group field nested inside Row/Tabs/Collapsible failed because
+  `normalize_field_name` only checked top-level fields. Now recursively
+  searches through transparent layout wrappers.
+
+- **Job retry with no backoff**: Failed jobs were immediately re-queued
+  as `pending` with no delay, causing tight retry loops. Now uses
+  exponential backoff (`min(2^attempt * 5, 300)` seconds) via a
+  `retry_after` column.
 
 - **Populate cache not locale-aware — cross-locale data leakage**: The
   relationship populate cache keyed on `(collection, id)` without locale.

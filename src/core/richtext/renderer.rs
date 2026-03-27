@@ -102,7 +102,7 @@ where
                 let attrs_json = serde_json::to_string(&attrs).unwrap_or_default();
                 out.push_str(&format!(
                     "<crap-node data-type=\"{}\" data-attrs='{}'>",
-                    html_escape(node_type),
+                    html_escape_attr(node_type),
                     html_escape_attr(&attrs_json)
                 ));
                 out.push_str("</crap-node>");
@@ -154,7 +154,8 @@ fn render_text_with_marks(text: &str, marks: Option<&Vec<Value>>, out: &mut Stri
                             .and_then(|a| a.get("href"))
                             .and_then(|h| h.as_str())
                             .unwrap_or("#");
-                        out.push_str(&format!("<a href=\"{}\">", html_escape_attr(href)));
+                        let safe_href = if is_safe_url(href) { href } else { "#" };
+                        out.push_str(&format!("<a href=\"{}\">", html_escape_attr(safe_href),));
                         open_tags.push("</a>");
                     }
                     _ => {} // Unknown mark — skip
@@ -250,6 +251,28 @@ pub(crate) fn extract_attr_value(tag: &str, attr_name: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Check if a URL uses a safe protocol (or is relative/anchor).
+fn is_safe_url(url: &str) -> bool {
+    let trimmed = url.trim_start();
+
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Relative URLs, anchors, query strings are safe
+    if trimmed.starts_with('/') || trimmed.starts_with('#') || trimmed.starts_with('?') {
+        return true;
+    }
+
+    // Allowlisted protocols
+    let lower = trimmed.to_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+        || lower.starts_with("ftp://")
 }
 
 pub(crate) fn html_escape(s: &str) -> String {
@@ -461,5 +484,92 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"heading","attrs":{"level":99},"content":[{"type":"text","text":"Title"}]}]}"#;
         let result = render_prosemirror_to_html(json, &no_custom).unwrap();
         assert_eq!(result, "<h6>Title</h6>");
+    }
+
+    // --- XSS / URL safety regression tests ---
+
+    fn make_link_json(href: &str) -> String {
+        format!(
+            r#"{{"type":"doc","content":[{{"type":"paragraph","content":[{{"type":"text","text":"click","marks":[{{"type":"link","attrs":{{"href":"{}"}}}}]}}]}}]}}"#,
+            href
+        )
+    }
+
+    /// Regression: javascript: protocol in link href was rendered as a working XSS payload.
+    #[test]
+    fn link_javascript_protocol_blocked() {
+        let json = make_link_json("javascript:alert('xss')");
+        let result = render_prosemirror_to_html(&json, &no_custom).unwrap();
+        assert_eq!(result, "<p><a href=\"#\">click</a></p>");
+    }
+
+    /// Regression: JAVASCRIPT: (uppercase) bypassed protocol check.
+    #[test]
+    fn link_javascript_protocol_case_insensitive() {
+        let json = make_link_json("JAVASCRIPT:alert(1)");
+        let result = render_prosemirror_to_html(&json, &no_custom).unwrap();
+        assert_eq!(result, "<p><a href=\"#\">click</a></p>");
+    }
+
+    /// Regression: data: protocol in link href was rendered without sanitization.
+    #[test]
+    fn link_data_protocol_blocked() {
+        let json = make_link_json("data:text/html,<script>");
+        let result = render_prosemirror_to_html(&json, &no_custom).unwrap();
+        assert_eq!(result, "<p><a href=\"#\">click</a></p>");
+    }
+
+    #[test]
+    fn link_https_allowed() {
+        let json = make_link_json("https://example.com");
+        let result = render_prosemirror_to_html(&json, &no_custom).unwrap();
+        assert_eq!(result, r#"<p><a href="https://example.com">click</a></p>"#);
+    }
+
+    #[test]
+    fn link_relative_path_allowed() {
+        let json = make_link_json("/relative/path");
+        let result = render_prosemirror_to_html(&json, &no_custom).unwrap();
+        assert_eq!(result, r#"<p><a href="/relative/path">click</a></p>"#);
+    }
+
+    #[test]
+    fn link_mailto_allowed() {
+        let json = make_link_json("mailto:user@example.com");
+        let result = render_prosemirror_to_html(&json, &no_custom).unwrap();
+        assert_eq!(
+            result,
+            r#"<p><a href="mailto:user@example.com">click</a></p>"#
+        );
+    }
+
+    /// Regression: node_type in crap-node passthrough used html_escape (no quote escaping).
+    #[test]
+    fn passthrough_node_type_attr_escaped() {
+        let json = r#"{"type":"doc","content":[{"type":"x\"onload=\"alert(1)","attrs":{}}]}"#;
+        let result = render_prosemirror_to_html(json, &no_custom).unwrap();
+        assert!(result.contains("&quot;"));
+        assert!(!result.contains(r#"onload="alert(1)"#));
+    }
+
+    #[test]
+    fn is_safe_url_cases() {
+        // Safe
+        assert!(is_safe_url("https://example.com"));
+        assert!(is_safe_url("http://example.com"));
+        assert!(is_safe_url("mailto:a@b.com"));
+        assert!(is_safe_url("tel:+1234567890"));
+        assert!(is_safe_url("ftp://files.example.com"));
+        assert!(is_safe_url("/path"));
+        assert!(is_safe_url("#anchor"));
+        assert!(is_safe_url("?query=1"));
+
+        // Unsafe
+        assert!(!is_safe_url("javascript:alert(1)"));
+        assert!(!is_safe_url("JAVASCRIPT:alert(1)"));
+        assert!(!is_safe_url("data:text/html,<script>"));
+        assert!(!is_safe_url("vbscript:msgbox"));
+        assert!(!is_safe_url(""));
+        assert!(!is_safe_url("  javascript:alert(1)"));
     }
 }

@@ -293,7 +293,7 @@ async fn serve_with_headers(
     if mime == "image/svg+xml" {
         response.headers_mut().insert(
             header::CONTENT_SECURITY_POLICY,
-            "sandbox".parse().expect("valid csp"),
+            "sandbox; default-src 'none'".parse().expect("valid csp"),
         );
     }
 
@@ -458,7 +458,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert_eq!(csp, "sandbox");
+        assert_eq!(csp, "sandbox; default-src 'none'");
     }
 
     #[test]

@@ -11,7 +11,7 @@ use super::session_cookies;
 use crate::{
     admin::AdminState,
     core::auth::{Claims, ClaimsBuilder, create_token},
-    db::query,
+    db::query::{self, is_valid_identifier},
 };
 
 /// POST /admin/api/session-refresh — issue a fresh JWT if the current one is still valid.
@@ -28,7 +28,19 @@ pub async fn session_refresh(State(state): State<AdminState>, request: Request<B
     let user_id = claims.sub.clone();
 
     let check_result = task::spawn_blocking(move || {
+        if !is_valid_identifier(&slug) {
+            anyhow::bail!("Invalid collection slug");
+        }
+
         let conn = pool.get()?;
+
+        // Verify user still exists — is_locked and get_session_version both
+        // return defaults (false/0) for missing rows, so a deleted user would
+        // silently pass all checks and refresh their session indefinitely.
+        if !query::user_exists(&conn, &slug, &user_id)? {
+            anyhow::bail!("User no longer exists");
+        }
+
         let locked = query::is_locked(&conn, &slug, &user_id)?;
         let session_version = query::get_session_version(&conn, &slug, &user_id)?;
         anyhow::Ok((locked, session_version))

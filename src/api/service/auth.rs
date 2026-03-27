@@ -354,8 +354,10 @@ impl ContentService {
             .unwrap_or_else(|| "unknown".to_string());
         let req = request.into_inner();
 
-        // Rate limit by IP — prevents brute-forcing reset tokens
-        if self.ip_login_limiter.is_blocked(&ip) {
+        // Rate limit by IP — prevents brute-forcing reset tokens.
+        // Uses the dedicated forgot-password IP limiter (not login limiter) to avoid
+        // reset failures blocking legitimate login attempts from the same IP.
+        if self.ip_forgot_password_limiter.is_blocked(&ip) {
             return Err(Status::resource_exhausted(
                 "Too many attempts, try again later",
             ));
@@ -392,6 +394,14 @@ impl ContentService {
             let (user, exp) = query::find_by_reset_token(&tx, &slug, &def_owned, &token)?
                 .ok_or(ResetTokenError::NotFound)?;
 
+            // Locked accounts must not be able to reset their password.
+            // Return NotFound to avoid leaking that the account exists but is locked.
+            if query::is_locked(&tx, &slug, &user.id)? {
+                query::clear_reset_token(&tx, &slug, &user.id)?;
+                tx.commit()?;
+                return Err(ResetTokenError::NotFound.into());
+            }
+
             if chrono::Utc::now().timestamp() >= exp {
                 query::clear_reset_token(&tx, &slug, &user.id)?;
                 tx.commit()?;
@@ -416,7 +426,7 @@ impl ContentService {
             })),
             Err(e) => {
                 // Record failure on invalid/expired token — not on success
-                self.ip_login_limiter.record_failure(&ip);
+                self.ip_forgot_password_limiter.record_failure(&ip);
 
                 match e.downcast_ref::<ResetTokenError>() {
                     Some(_) => Err(Status::invalid_argument(e.to_string())),

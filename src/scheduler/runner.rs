@@ -68,7 +68,7 @@ pub fn execute_job(
             let c = pool
                 .get()
                 .context("Failed to get DB connection for failure")?;
-            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry)?;
+            job_query::fail_job(&c, &job_run.id, &error_msg, should_retry, job_run.attempt)?;
 
             if should_retry {
                 tracing::warn!(
@@ -459,7 +459,8 @@ mod tests {
                 created_at TEXT DEFAULT (datetime('now')),
                 started_at TEXT,
                 completed_at TEXT,
-                heartbeat_at TEXT
+                heartbeat_at TEXT,
+                retry_after TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
             CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);

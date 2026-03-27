@@ -302,6 +302,15 @@ pub fn set_user_settings(
     Ok(())
 }
 
+/// Check whether a user exists in the given collection.
+pub fn user_exists(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
+    let sql = format!("SELECT 1 FROM {} WHERE id = {}", slug, conn.placeholder(1));
+
+    Ok(conn
+        .query_one(&sql, &[DbValue::Text(id.to_string())])?
+        .is_some())
+}
+
 // ── Lock/unlock functions ─────────────────────────────────────────────────
 
 /// Lock a user account (prevent login).
@@ -599,6 +608,35 @@ mod tests {
         mark_verified(&conn, "users", "user1").unwrap();
         let result = is_verified(&conn, "users", "user1").unwrap();
         assert!(result, "User should be verified after mark_verified");
+    }
+
+    // ── lock/unlock tests ─────────────────────────────────────────────────
+
+    // ── user_exists tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn user_exists_true_for_existing() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        assert!(user_exists(&conn, "users", "user1").unwrap());
+    }
+
+    #[test]
+    fn user_exists_false_for_missing() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        assert!(!user_exists(&conn, "users", "nonexistent").unwrap());
+    }
+
+    /// Regression test: is_locked returns Ok(false) for non-existent users,
+    /// which means a deleted user would appear as "not locked". The session
+    /// refresh handler must check user_exists separately.
+    #[test]
+    fn is_locked_false_for_deleted_user_proves_need_for_existence_check() {
+        let (_dir, conn) = setup_conn();
+        setup_auth_db(&conn);
+        assert!(!is_locked(&conn, "users", "deleted-user-id").unwrap());
+        assert!(!user_exists(&conn, "users", "deleted-user-id").unwrap());
     }
 
     // ── lock/unlock tests ─────────────────────────────────────────────────

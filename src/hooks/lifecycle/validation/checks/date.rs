@@ -26,7 +26,7 @@ pub(crate) fn check_date_field(
         }
         // Date bounds validation (ISO dates sort lexicographically)
         if let Some(ref min_date) = field.min_date {
-            let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+            let date_part = s.get(..10).unwrap_or(s.as_str());
 
             if date_part < min_date.as_str() {
                 errors.push(FieldError::with_key(
@@ -41,7 +41,7 @@ pub(crate) fn check_date_field(
             }
         }
         if let Some(ref max_date) = field.max_date {
-            let date_part = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+            let date_part = s.get(..10).unwrap_or(s.as_str());
 
             if date_part > max_date.as_str() {
                 errors.push(FieldError::with_key(
@@ -348,6 +348,38 @@ mod tests {
             result.unwrap_err().errors[0]
                 .message
                 .contains("on or after")
+        );
+    }
+
+    /// Regression test: date string slicing with multi-byte UTF-8 must not panic.
+    /// Previously used `&s[..10]` which panics on non-ASCII; now uses `.get(..10)`.
+    #[test]
+    fn test_validate_date_bounds_multibyte_does_not_panic() {
+        let lua = mlua::Lua::new();
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE test (id TEXT PRIMARY KEY, d TEXT)")
+            .unwrap();
+        let fields = vec![
+            FieldDefinition::builder("d", FieldType::Date)
+                .min_date("2024-01-01")
+                .build(),
+        ];
+        let mut data = HashMap::new();
+        // Multi-byte string that would panic with &s[..10] byte slicing
+        data.insert(
+            "d".to_string(),
+            json!("\u{00e9}\u{00e9}\u{00e9}\u{00e9}\u{00e9}"),
+        );
+        // Should not panic — just produce a validation error
+        let result = validate_fields_inner(
+            &lua,
+            &fields,
+            &data,
+            &ValidationCtx::builder(&conn, "test").build(),
+        );
+        assert!(
+            result.is_err(),
+            "Invalid date should produce an error, not panic"
         );
     }
 

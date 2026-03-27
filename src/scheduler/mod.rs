@@ -284,8 +284,13 @@ async fn poll_and_execute(
                     );
 
                     if let Ok(c) = pool.get() {
-                        let _ =
-                            job_query::fail_job(&c, &job_run.id, "job definition not found", false);
+                        let _ = job_query::fail_job(
+                            &c,
+                            &job_run.id,
+                            "job definition not found",
+                            false,
+                            job_run.attempt,
+                        );
                     }
                     continue;
                 }
@@ -302,6 +307,7 @@ async fn poll_and_execute(
         let running_jobs = running_jobs.clone();
         let timeout_secs = job_def.timeout;
         let should_retry = job_run.attempt < job_run.max_attempts;
+        let attempt = job_run.attempt;
         let pool_timeout = pool.clone();
         let job_id = job_run.id.clone();
         let id_log = job_run.id.clone();
@@ -346,6 +352,7 @@ async fn poll_and_execute(
                             &id_log,
                             &format!("timeout after {}s", timeout_secs),
                             should_retry,
+                            attempt,
                         );
                     }
                 }

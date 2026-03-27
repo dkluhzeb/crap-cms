@@ -74,7 +74,8 @@ pub fn sync_all(
             created_at {ts_default},
             started_at {ts_type},
             completed_at {ts_type},
-            heartbeat_at {ts_type}
+            heartbeat_at {ts_type},
+            retry_after {ts_type}
         );
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_status ON _crap_jobs(status);
         CREATE INDEX IF NOT EXISTS idx_crap_jobs_queue ON _crap_jobs(queue, status);

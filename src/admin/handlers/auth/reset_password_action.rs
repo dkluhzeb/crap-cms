@@ -84,6 +84,14 @@ pub async fn reset_password_action(
             }
 
             if let Some((user, exp)) = query::find_by_reset_token(&tx, &def.slug, def, &token)? {
+                // Locked accounts must not be able to reset their password.
+                // Return NotFound to avoid leaking that the account exists but is locked.
+                if query::is_locked(&tx, &def.slug, &user.id)? {
+                    query::clear_reset_token(&tx, &def.slug, &user.id)?;
+                    tx.commit()?;
+                    return Err(ResetTokenError::NotFound.into());
+                }
+
                 if Utc::now().timestamp() >= exp {
                     query::clear_reset_token(&tx, &def.slug, &user.id)?;
                     tx.commit()?;

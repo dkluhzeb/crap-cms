@@ -23,6 +23,8 @@ pub struct JobRun {
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
     pub heartbeat_at: Option<String>,
+    /// Earliest time this job can be retried (exponential backoff).
+    pub retry_after: Option<String>,
 }
 
 impl JobRun {
