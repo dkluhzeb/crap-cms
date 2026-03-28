@@ -38,6 +38,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   fields, Groups, Rows, Arrays, versioning, and a global
   `[admin] default_timezone` config fallback.
 
+- **Serve lifecycle management** — `crap-cms serve --stop` gracefully stops a
+  detached instance (SIGTERM with 10s timeout, then SIGKILL). `--restart` stops
+  and re-launches. `--status` shows whether a detached instance is running, with
+  PID and uptime on Linux. Stale PID files are automatically cleaned up.
+
+- **File-based logging** — optional `[logging]` config section writes logs to
+  rotating files in `data/logs/`. Supports daily, hourly, or no rotation with
+  configurable retention (`max_files`). Old log files are pruned on startup.
+  Auto-enabled when running with `--detach` (where stdout is unavailable).
+  New CLI command: `crap-cms logs` to tail log output (`-f` to follow,
+  `-n` for line count), `crap-cms logs clear` to remove old rotated files.
+
 - **Content-Security-Policy header** — configurable `[admin.csp]` section with
   per-directive source lists (`script_src`, `style_src`, `font_src`, etc.).
   Enabled by default with permissive defaults that cover the built-in admin UI.

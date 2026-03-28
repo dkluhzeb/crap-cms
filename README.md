@@ -42,6 +42,7 @@ curl -L https://github.com/dkluhzeb/crap-cms/releases/latest/download/example.ta
 - **Admin UI** — template overlay system, theme switching, Web Components, fully overridable
 - **gRPC API** — full CRUD with filtering, pagination, server reflection. [REST proxy](https://github.com/dkluhzeb/crap-rest) available
 - **MCP server** — Model Context Protocol integration for AI tooling
+- **File logging** — optional rotating file logs with `crap-cms logs` viewer, auto-enabled for detached mode
 - **CLI** — interactive scaffolding, blueprints, data export/import, backups
 
 For full documentation, see the [user manual](https://dkluhzeb.github.io/crap-cms/).

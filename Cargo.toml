@@ -97,6 +97,7 @@ anyhow = "1"
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+tracing-appender = "0.2"
 form_urlencoded = "1.2.2"
 regex = "1.12.3"
 dashmap = "6.1.0"

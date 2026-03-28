@@ -474,6 +474,13 @@ pub enum ImagesAction {
     },
 }
 
+/// Actions for the `logs` subcommand.
+#[derive(Subcommand)]
+pub enum LogsAction {
+    /// Remove old rotated log files (keeps the current log file)
+    Clear,
+}
+
 #[cfg(test)]
 mod tests {
     use super::parse_key_val;

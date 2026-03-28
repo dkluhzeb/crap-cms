@@ -108,6 +108,7 @@ pub fn init(dir: Option<PathBuf>, opts: &InitOptions) -> Result<()> {
     toml.push_str("\n# [jobs]\n# max_concurrent = 10             # max concurrent job executions\n# poll_interval = 1              # seconds between job queue polls\n# cron_interval = 60             # seconds between cron schedule checks\n# heartbeat_interval = 10        # seconds between running job heartbeats\n# auto_purge = 604800            # auto-purge completed/failed jobs older than N seconds (7 days)\n# image_queue_batch_size = 10    # image conversions per scheduler poll\n");
     toml.push_str("\n# [cors]\n# allowed_origins = []           # empty = CORS disabled; [\"*\"] = allow any origin\n# allowed_methods = [\"GET\", \"POST\", \"PUT\", \"DELETE\", \"PATCH\", \"OPTIONS\"]\n# allowed_headers = [\"Content-Type\", \"Authorization\"]\n# exposed_headers = []           # response headers exposed to the browser\n# max_age = 3600                   # seconds or human-readable (\"1h\", \"30m\")\n# allow_credentials = false      # cannot be used with wildcard origin\n");
     toml.push_str("\n# [access]\n# default_deny = false           # when true, collections without access functions deny all\n");
+    toml.push_str("\n# [logging]\n# file = false                   # enable file logging (default: false, auto-enabled with --detach)\n# path = \"data/logs\"             # log directory (relative to config dir, or absolute)\n# rotation = \"daily\"             # rotation strategy: \"daily\", \"hourly\", or \"never\"\n# max_files = 30                 # rotated files to keep (pruned on startup)\n");
     toml.push_str("\n# [mcp]\n# enabled = false                # enable MCP (Model Context Protocol) server\n# http = false                   # enable HTTP transport on /mcp (POST)\n# config_tools = false           # enable config generation tools (write access to config dir)\n# api_key = \"\"                   # API key for HTTP transport auth (empty = no auth)\n# include_collections = []       # whitelist (empty = all)\n# exclude_collections = []       # blacklist (takes precedence over include)\n");
 
     fs::write(&toml_path, &toml).context("Failed to write crap.toml")?;
@@ -223,6 +224,7 @@ mod tests {
         assert!(content.contains("# [jobs]"));
         assert!(content.contains("# [cors]"));
         assert!(content.contains("# [access]"));
+        assert!(content.contains("# [logging]"));
         assert!(content.contains("# [mcp]"));
     }
 

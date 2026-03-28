@@ -427,6 +427,19 @@ When CORS is enabled, the layer is added to both the admin UI (Axum) and gRPC AP
 
 See [MCP Overview](../mcp/overview.md) for usage details.
 
+### `[logging]`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `file` | boolean | `false` | Enable file-based logging. When `false` (default), logs go to stdout only. **Auto-enabled** when running with `--detach` (where stdout is unavailable). |
+| `path` | string | `"data/logs"` | Log directory path. Relative paths are resolved from the config directory. Use an absolute path to log elsewhere. |
+| `rotation` | string | `"daily"` | Log rotation strategy: `"daily"` (one file per day), `"hourly"` (one file per hour), or `"never"` (single file, no rotation). |
+| `max_files` | integer | `30` | Maximum rotated log files to keep. Old files are pruned on startup. |
+
+File logging writes to rotating files in the configured directory. Each project has its own log directory, so multiple instances on the same machine are naturally isolated.
+
+Use `crap-cms logs` to view log output, `crap-cms logs -f` to follow in real time, and `crap-cms logs clear` to remove old rotated files. See the [CLI Reference](../cli/flags.md) for details.
+
 When locales are configured, any field with `localized = true` in its Lua definition gets one column per locale (`title__en`, `title__de`) instead of a single `title` column. The API accepts a `locale` parameter on Find, FindByID, Create, Update, GetGlobal, and UpdateGlobal to control which locale to read/write. The admin UI shows a locale selector in the edit sidebar.
 
 **Special locale values:**
@@ -470,6 +483,12 @@ smtp_user = "noreply@example.com"
 smtp_pass = "your-smtp-password"
 from_address = "noreply@example.com"
 from_name = "My App"
+
+[logging]
+file = true
+# path = "data/logs"
+# rotation = "daily"
+# max_files = 30
 
 [hooks]
 on_init = ["hooks.seed.run"]

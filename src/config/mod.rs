@@ -17,7 +17,7 @@ pub use auth::{AuthConfig, PasswordPolicy};
 pub use cors::CorsConfig;
 pub use features::{
     AccessConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig, LocaleConfig,
-    McpConfig, PaginationConfig, PaginationMode, SmtpTls, UploadConfig,
+    LogRotation, LoggingConfig, McpConfig, PaginationConfig, PaginationMode, SmtpTls, UploadConfig,
 };
 pub use mcp_api_key::McpApiKey;
 pub(crate) use parsing::{parse_duration_string, parse_filesize_string};

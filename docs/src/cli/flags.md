@@ -50,19 +50,27 @@ crap-cms serve
 ### `serve` — Start the server
 
 ```bash
-crap-cms serve [-d] [--json] [--only <admin|api>] [--no-scheduler]
+crap-cms serve [-d] [--stop] [--restart] [--status] [--json] [--only <admin|api>] [--no-scheduler]
 ```
 
 | Flag | Description |
 |------|-------------|
 | `-d`, `--detach` | Run in the background (prints PID and exits) |
+| `--stop` | Stop a running detached instance (SIGTERM, then SIGKILL after 10s) |
+| `--restart` | Restart a running detached instance (stop + start) |
+| `--status` | Show whether a detached instance is running (PID, uptime) |
 | `--json` | Output logs as structured JSON (for log aggregation) |
 | `--only <admin\|api>` | Start only the specified server. Omit to start both. |
 | `--no-scheduler` | Disable the background job scheduler |
 
+`--detach`, `--stop`, `--restart`, and `--status` are mutually exclusive.
+
 ```bash
-crap-cms serve
-crap-cms serve -d
+crap-cms serve                    # foreground
+crap-cms serve -d                 # detached (background)
+crap-cms serve --status           # is it running?
+crap-cms serve --stop             # stop detached instance
+crap-cms serve --restart          # stop + start detached
 crap-cms serve --json
 crap-cms serve --only admin       # admin UI only
 crap-cms serve --only api         # gRPC API only
@@ -724,6 +732,35 @@ crap-cms mcp
 Reads JSON-RPC 2.0 from stdin, writes responses to stdout. Use with Claude Desktop,
 Cursor, VS Code, or any MCP-compatible client. See [MCP Overview](../mcp/overview.md)
 for configuration and usage.
+
+### `logs` — View and manage log files
+
+```bash
+crap-cms logs [-f] [-n <lines>]
+crap-cms logs clear
+```
+
+View log output from file-based logging. Requires `[logging] file = true` in `crap.toml` (auto-enabled when running with `--detach`).
+
+| Flag | Description |
+|------|-------------|
+| `-f`, `--follow` | Follow log output in real time (like `tail -f`) |
+| `-n`, `--lines <N>` | Number of lines to show (default: 100) |
+
+**Subcommands:**
+
+| Subcommand | Description |
+|------------|-------------|
+| `clear` | Remove old rotated log files, keeping only the current one |
+
+```bash
+crap-cms logs                # show last 100 lines
+crap-cms logs -f             # follow in real time
+crap-cms logs -n 50          # show last 50 lines
+crap-cms logs clear          # remove old rotated files
+```
+
+Log files are stored in `data/logs/` (or the path configured in `[logging] path`). Old files are automatically pruned on startup based on `max_files`. See [Configuration Reference](../configuration/crap-toml.md) for all logging options.
 
 ## Environment Variables
 

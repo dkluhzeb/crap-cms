@@ -35,6 +35,21 @@ use crate::{
     scheduler, typegen,
 };
 
+/// Send a signal to a process by PID using the `kill` command.
+fn send_signal(pid: u32, signal: &str) -> Result<()> {
+    let output = process::Command::new("kill")
+        .args([&format!("-{signal}"), &pid.to_string()])
+        .output()
+        .with_context(|| format!("Failed to run kill -{signal} {pid}"))?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("kill -{signal} {pid} failed: {}", stderr.trim());
+    }
+}
+
 /// Bail early if the config directory doesn't look valid.
 fn validate_config_dir(config_dir: &Path) -> Result<()> {
     if !config_dir.join("crap.toml").exists() {
@@ -100,7 +115,7 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
     check_existing_pid(&config_dir);
 
     let mut cmd = process::Command::new(&exe);
-    cmd.arg("serve").arg(&config_dir);
+    cmd.arg("-C").arg(&config_dir).arg("serve");
 
     if let Some(mode) = only {
         cmd.arg("--only");
@@ -112,6 +127,10 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
     if no_scheduler {
         cmd.arg("--no-scheduler");
     }
+
+    // Tell the child it was detached so it can auto-enable file logging
+    // (the child runs without --detach, so it can't detect this itself).
+    cmd.env("_CRAP_DETACHED", "1");
 
     let child = cmd
         .stdin(process::Stdio::null())
@@ -125,6 +144,176 @@ pub fn detach(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) ->
     cli::success(&format!("Started crap-cms in background (PID {})", pid));
 
     Ok(())
+}
+
+/// Read the PID from the PID file. Returns `None` if no file or not parseable.
+fn read_pid(config_dir: &Path) -> Option<u32> {
+    let path = pid_file_path(config_dir);
+
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+}
+
+/// Check if a process with the given PID is running.
+fn is_process_running(pid: u32) -> bool {
+    Path::new(&format!("/proc/{}", pid)).exists()
+}
+
+/// Stop a running detached instance by sending SIGTERM, falling back to SIGKILL.
+pub fn stop(config_dir: &Path) -> Result<()> {
+    validate_config_dir(config_dir)?;
+
+    let pid = read_pid(config_dir).context(
+        "No PID file found — is there a detached instance running?\n\
+         Start one with: crap-cms serve --detach",
+    )?;
+
+    if !is_process_running(pid) {
+        remove_pid_file(config_dir);
+        bail!("Process {} is not running (stale PID file removed)", pid);
+    }
+
+    // Send SIGTERM for graceful shutdown.
+    send_signal(pid, "TERM").with_context(|| format!("Failed to send SIGTERM to PID {pid}"))?;
+
+    // Wait for graceful shutdown (up to 10 seconds).
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+
+    while std::time::Instant::now() < deadline {
+        if !is_process_running(pid) {
+            remove_pid_file(config_dir);
+            cli::success(&format!("Stopped crap-cms (PID {pid})"));
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Still running — force kill.
+    cli::warning(&format!(
+        "Process {pid} did not stop within 10s, sending SIGKILL"
+    ));
+    let _ = send_signal(pid, "KILL");
+
+    // Brief wait for the force kill to take effect.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    remove_pid_file(config_dir);
+    cli::success(&format!("Force-stopped crap-cms (PID {pid})"));
+
+    Ok(())
+}
+
+/// Restart a detached instance: stop the current one, then start a new one.
+pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
+    validate_config_dir(config_dir)?;
+
+    // Stop if running — ignore "not running" errors.
+    if let Some(pid) = read_pid(config_dir) {
+        if is_process_running(pid) {
+            stop(config_dir)?;
+        } else {
+            remove_pid_file(config_dir);
+        }
+    }
+
+    detach(config_dir, only, no_scheduler)
+}
+
+/// Show the status of a detached instance.
+pub fn status(config_dir: &Path) -> Result<()> {
+    validate_config_dir(config_dir)?;
+
+    let pid = match read_pid(config_dir) {
+        Some(pid) => pid,
+        None => {
+            cli::info("Not running (no PID file)");
+            return Ok(());
+        }
+    };
+
+    if !is_process_running(pid) {
+        remove_pid_file(config_dir);
+        cli::info("Not running (stale PID file removed)");
+        return Ok(());
+    }
+
+    cli::success(&format!("Running (PID {pid})"));
+
+    // Try to show uptime from /proc on Linux.
+    #[cfg(target_os = "linux")]
+    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+        show_uptime(&stat);
+    }
+
+    Ok(())
+}
+
+/// Parse process start time from /proc/[pid]/stat and print uptime.
+///
+/// Uses `/proc/uptime` for system uptime and `/proc/[pid]/stat` field 22
+/// (starttime in clock ticks). CLK_TCK is read from `getconf CLK_TCK`.
+#[cfg(target_os = "linux")]
+fn show_uptime(stat: &str) {
+    // Field 22 is starttime in clock ticks since boot.
+    // Fields after ") " (skipping pid and comm which may contain spaces).
+    let fields: Vec<&str> = stat
+        .rsplit(')')
+        .next()
+        .unwrap_or("")
+        .split_whitespace()
+        .collect();
+
+    // Field 22 is at index 19 in the post-comm fields.
+    let start_ticks: u64 = match fields.get(19).and_then(|s| s.parse().ok()) {
+        Some(v) => v,
+        None => return,
+    };
+
+    // Get CLK_TCK via getconf (avoids libc dependency).
+    let clk_tck: u64 = process::Command::new("getconf")
+        .arg("CLK_TCK")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(100); // 100 is the default on Linux
+
+    let uptime_str = match fs::read_to_string("/proc/uptime") {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    let system_uptime_secs: f64 = match uptime_str
+        .split_whitespace()
+        .next()
+        .and_then(|s| s.parse().ok())
+    {
+        Some(v) => v,
+        None => return,
+    };
+
+    let process_start_secs = start_ticks as f64 / clk_tck as f64;
+    let uptime_secs = (system_uptime_secs - process_start_secs).max(0.0) as u64;
+
+    cli::kv("Uptime", &format_duration(uptime_secs));
+}
+
+/// Format seconds into a human-readable duration string.
+fn format_duration(secs: u64) -> String {
+    let days = secs / 86400;
+    let hours = (secs % 86400) / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+
+    if days > 0 {
+        format!("{days}d {hours}h {minutes}m {seconds}s")
+    } else if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 /// Resolve the JWT secret: load from file, generate + persist, or use config value.
@@ -290,6 +479,18 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
     // Check crap_version compatibility
     if let Some(warning) = cfg.check_version() {
         warn!("{}", warning);
+    }
+
+    // Prune old log files if file logging is enabled
+    if cfg.logging.file {
+        let log_dir = cfg.log_dir(&config_dir);
+        if log_dir.exists() {
+            match super::logs::prune_old_logs(&log_dir, cfg.logging.max_files) {
+                Ok(0) => {}
+                Ok(n) => info!("Pruned {n} old log file(s)"),
+                Err(e) => warn!("Failed to prune old log files: {e}"),
+            }
+        }
     }
 
     // Initialize Lua VM and load collections/globals
@@ -627,6 +828,97 @@ mod tests {
         // No file should be written when config provides the secret
         let secret_path = tmp.path().join("data").join(".jwt_secret");
         assert!(!secret_path.exists());
+    }
+
+    #[test]
+    fn read_pid_no_file_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(read_pid(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn read_pid_valid_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        write_pid_file(tmp.path(), 42).unwrap();
+        assert_eq!(read_pid(tmp.path()), Some(42));
+    }
+
+    #[test]
+    fn read_pid_garbage_returns_none() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = pid_file_path(tmp.path());
+        let _ = fs::create_dir_all(path.parent().unwrap());
+        fs::write(&path, "not-a-number").unwrap();
+        assert!(read_pid(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn is_process_running_current_pid() {
+        assert!(is_process_running(process::id()));
+    }
+
+    #[test]
+    fn is_process_running_bogus_pid() {
+        assert!(!is_process_running(999_999_999));
+    }
+
+    #[test]
+    fn stop_no_pid_file_errors() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        let err = stop(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("No PID file"));
+    }
+
+    #[test]
+    fn stop_stale_pid_errors() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        write_pid_file(tmp.path(), 999_999_999).unwrap();
+
+        let err = stop(tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("not running"));
+        // PID file should be cleaned up
+        assert!(!pid_file_path(tmp.path()).exists());
+    }
+
+    #[test]
+    fn status_no_pid_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        // Should not error — just prints "Not running"
+        status(tmp.path()).unwrap();
+    }
+
+    #[test]
+    fn status_stale_pid_cleans_up() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(tmp.path().join("crap.toml"), "").unwrap();
+        write_pid_file(tmp.path(), 999_999_999).unwrap();
+
+        status(tmp.path()).unwrap();
+        // Stale PID file should be removed
+        assert!(!pid_file_path(tmp.path()).exists());
+    }
+
+    #[test]
+    fn format_duration_seconds_only() {
+        assert_eq!(format_duration(45), "45s");
+    }
+
+    #[test]
+    fn format_duration_minutes() {
+        assert_eq!(format_duration(125), "2m 5s");
+    }
+
+    #[test]
+    fn format_duration_hours() {
+        assert_eq!(format_duration(3661), "1h 1m 1s");
+    }
+
+    #[test]
+    fn format_duration_days() {
+        assert_eq!(format_duration(90061), "1d 1h 1m 1s");
     }
 
     #[test]

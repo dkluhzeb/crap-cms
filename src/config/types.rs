@@ -13,7 +13,7 @@ use super::{
     env::substitute_in_value,
     features::{
         AccessConfig, DepthConfig, EmailConfig, HooksConfig, JobsConfig, LiveConfig, LocaleConfig,
-        McpConfig, PaginationConfig, UploadConfig,
+        LoggingConfig, McpConfig, PaginationConfig, UploadConfig,
     },
     server::{AdminConfig, DatabaseConfig, ServerConfig},
 };
@@ -54,6 +54,8 @@ pub struct CrapConfig {
     pub pagination: PaginationConfig,
     /// MCP (Model Context Protocol) settings.
     pub mcp: McpConfig,
+    /// File-based logging settings.
+    pub logging: LoggingConfig,
 }
 
 impl CrapConfig {
@@ -260,6 +262,18 @@ impl CrapConfig {
             config_dir.join(p)
         }
     }
+
+    /// Resolve the log directory path relative to the config directory.
+    #[must_use]
+    pub fn log_dir(&self, config_dir: &Path) -> PathBuf {
+        let p = Path::new(&self.logging.path);
+
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            config_dir.join(p)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -305,6 +319,21 @@ mod tests {
         config.database.path = "/absolute/path.db".to_string();
         let dir = Path::new("/my/config");
         assert_eq!(config.db_path(dir), Path::new("/absolute/path.db"));
+    }
+
+    #[test]
+    fn log_dir_relative() {
+        let config = CrapConfig::default();
+        let dir = Path::new("/my/config");
+        assert_eq!(config.log_dir(dir), Path::new("/my/config/data/logs"));
+    }
+
+    #[test]
+    fn log_dir_absolute() {
+        let mut config = CrapConfig::default();
+        config.logging.path = "/var/log/crap-cms".to_string();
+        let dir = Path::new("/my/config");
+        assert_eq!(config.log_dir(dir), Path::new("/var/log/crap-cms"));
     }
 
     #[test]

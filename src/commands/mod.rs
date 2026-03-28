@@ -6,6 +6,7 @@ pub mod export;
 pub mod images;
 pub mod init;
 pub mod jobs;
+pub mod logs;
 pub mod make;
 pub mod mcp;
 pub mod serve;
@@ -19,7 +20,7 @@ mod cli_types;
 mod helpers;
 
 pub use cli_types::{
-    BlueprintAction, DbAction, ImagesAction, JobsAction, MakeAction, MigrateAction,
+    BlueprintAction, DbAction, ImagesAction, JobsAction, LogsAction, MakeAction, MigrateAction,
     TemplatesAction, TrashAction, UserAction, parse_key_val,
 };
 pub use config_resolve::resolve_config_dir;
