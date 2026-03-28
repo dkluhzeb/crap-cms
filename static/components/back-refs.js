@@ -42,7 +42,7 @@ class CrapBackRefs extends HTMLElement {
           this._render(refs);
         })
         .catch(() => {
-          btn.textContent = t('error') || 'Error';
+          btn.textContent = t('error');
           btn.disabled = false;
           loaded = false;
         });
@@ -57,7 +57,7 @@ class CrapBackRefs extends HTMLElement {
     if (!refs.length) {
       const p = document.createElement('p');
       p.className = 'text--muted text--sm';
-      p.textContent = t('no_details') || 'No details available.';
+      p.textContent = t('no_details');
       this.appendChild(p);
       return;
     }
@@ -75,7 +75,7 @@ class CrapBackRefs extends HTMLElement {
       strong.textContent = item.owner_label;
       li.appendChild(strong);
 
-      const docs = t('documents') || 'document(s)';
+      const docs = t('documents');
       li.appendChild(document.createTextNode(` \u2014 ${item.count} ${docs}`));
 
       if (item.field_label) {

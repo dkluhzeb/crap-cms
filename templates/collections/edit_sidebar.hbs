@@ -108,9 +108,9 @@
     </div>
     <div class="edit-sidebar__panel-body">
       {{#if ref_count}}
-      <div style="margin: 0 0 var(--space-sm);">
-        <p class="text--muted text--sm" style="margin: 0 0 var(--space-xs);">
-          <span class="material-symbols-outlined" style="font-size: 1em; vertical-align: middle;">link</span>
+      <div class="edit-sidebar__ref-info">
+        <p class="text--muted text--sm edit-sidebar__ref-text">
+          <span class="material-symbols-outlined icon--inline">link</span>
           {{t "referenced_by_count" count=ref_count}}
         </p>
         <crap-back-refs slug="{{collection.slug}}" doc-id="{{document.id}}">

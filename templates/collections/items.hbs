@@ -13,7 +13,7 @@
     </a>
     {{#if docs}}
     {{#if collection.can_permanently_delete}}
-    <button type="button" class="button button--danger button--small"
+    <button type="button" class="button button--danger"
       data-empty-trash-slug="{{collection.slug}}"
       data-empty-trash-count="{{pagination.total_docs}}">
       <span class="material-symbols-outlined">delete_forever</span>
@@ -75,12 +75,12 @@
     {{/if}}
   </form>
   <div class="list-toolbar__actions">
-    <button type="button" class="button button--ghost button--small" data-action="open-filter-builder">
+    <button type="button" class="button button--ghost" data-action="open-filter-builder">
       <span class="material-symbols-outlined">filter_list</span>
       {{t "filters"}}
       {{#if active_filter_count}}<span class="list-toolbar__badge">{{active_filter_count}}</span>{{/if}}
     </button>
-    <button type="button" class="button button--ghost button--small" data-action="open-column-picker">
+    <button type="button" class="button button--ghost" data-action="open-column-picker">
       <span class="material-symbols-outlined">view_column</span>
       {{t "columns"}}
     </button>

@@ -20,9 +20,9 @@
   {{/each}}
   <td>
     {{#if is_trash}}
-    <div style="display:flex;gap:4px">
+    <div class="items-row__actions">
       <form method="POST" action="/admin/collections/{{collection.slug}}/{{this.id}}/restore"
-        hx-post="/admin/collections/{{collection.slug}}/{{this.id}}/restore" hx-target="body" style="display:inline">
+        hx-post="/admin/collections/{{collection.slug}}/{{this.id}}/restore" hx-target="body">
         <button type="submit" class="button button--ghost button--small" aria-label="{{t "restore"}}">
           <span class="material-symbols-outlined" aria-hidden="true">restore_from_trash</span>
         </button>

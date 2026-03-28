@@ -1055,7 +1055,7 @@ class CrapRichtext extends HTMLElement {
 
       .richtext--no-resize {
         resize: none;
-        max-height: 600px;
+        max-height: 37.5rem;
       }
 
       .richtext:focus-within {
@@ -1069,7 +1069,7 @@ class CrapRichtext extends HTMLElement {
         display: flex;
         flex-wrap: wrap;
         gap: var(--space-2xs, 2px);
-        padding: 6px var(--space-sm, 8px);
+        padding: 0.375rem var(--space-sm, 8px);
         border-bottom: 1px solid var(--border-color, #e0e0e0);
       }
 
@@ -1090,9 +1090,9 @@ class CrapRichtext extends HTMLElement {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 28px;
-        height: 28px;
-        padding: 0 6px;
+        min-width: 1.75rem;
+        height: 1.75rem;
+        padding: 0 0.375rem;
         border-radius: var(--radius-sm, 4px);
         font-family: inherit;
         font-size: var(--text-xs, 0.75rem);
@@ -1120,14 +1120,14 @@ class CrapRichtext extends HTMLElement {
       /* -- Editor area -- */
 
       .richtext__editor {
-        min-height: 200px;
+        min-height: 12.5rem;
         overflow-y: auto;
         flex: 1;
       }
 
       .richtext__editor .ProseMirror {
         padding: var(--space-md, 0.75rem) var(--space-lg, 1rem);
-        min-height: 200px;
+        min-height: 12.5rem;
         outline: none;
         font-family: inherit;
         font-size: var(--text-base, 0.875rem);
@@ -1236,7 +1236,7 @@ class CrapRichtext extends HTMLElement {
         display: block;
         position: absolute;
         top: -2px;
-        width: 20px;
+        width: 1.25rem;
         border-top: 1px solid var(--text-primary, black);
         animation: ProseMirror-cursor-blink 1.1s steps(2, start) infinite;
       }
@@ -1299,7 +1299,7 @@ class CrapRichtext extends HTMLElement {
       .crap-node-modal {
         border: none;
         padding: 0;
-        width: 400px;
+        width: 25rem;
         max-width: 90vw;
         max-height: 80vh;
         overflow-y: auto;
@@ -1316,14 +1316,14 @@ class CrapRichtext extends HTMLElement {
       }
 
       .crap-node-modal__header {
-        padding: var(--space-lg, 1rem) 20px;
+        padding: var(--space-lg, 1rem) 1.25rem;
         font-weight: 600;
         font-size: 1.05em;
         border-bottom: 1px solid var(--border-color, #e0e0e0);
       }
 
       .crap-node-modal__body {
-        padding: var(--space-lg, 1rem) 20px;
+        padding: var(--space-lg, 1rem) 1.25rem;
         display: flex;
         flex-direction: column;
         gap: var(--space-md, 0.75rem);
@@ -1344,7 +1344,7 @@ class CrapRichtext extends HTMLElement {
       .crap-node-modal__input,
       .crap-node-modal__field select,
       .crap-node-modal__field textarea {
-        padding: 6px 10px;
+        padding: 0.375rem 0.625rem;
         border: 1px solid var(--input-border, #e0e0e0);
         border-radius: var(--radius-sm, 4px);
         font-family: inherit;
@@ -1398,16 +1398,19 @@ class CrapRichtext extends HTMLElement {
         display: flex;
         justify-content: flex-end;
         gap: var(--space-sm, 0.5rem);
-        padding: var(--space-md, 0.75rem) 20px;
+        padding: var(--space-md, 0.75rem) 1.25rem;
         border-top: 1px solid var(--border-color, #e0e0e0);
       }
 
       .crap-node-modal__btn {
         all: unset;
-        padding: 6px 16px;
+        display: inline-flex;
+        align-items: center;
+        height: var(--button-height-sm, 1.75rem);
+        padding: 0 var(--space-lg, 1rem);
         border-radius: var(--radius-sm, 4px);
         font-family: inherit;
-        font-size: 0.85em;
+        font-size: var(--text-sm, 0.8125rem);
         font-weight: 500;
         cursor: pointer;
       }
@@ -1422,7 +1425,7 @@ class CrapRichtext extends HTMLElement {
 
       .crap-node-modal__btn--ok {
         background: var(--color-primary, #1677ff);
-        color: #fff;
+        color: var(--text-on-primary, #fff);
       }
 
       .crap-node-modal__btn--ok:hover {

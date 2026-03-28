@@ -88,12 +88,12 @@ class CrapCode extends HTMLElement {
     // Theme: match admin CSS variables
     extensions.push(CM.EditorView.theme({
       '&': {
-        fontSize: 'var(--text-sm, 13px)',
+        fontSize: 'var(--text-sm, 0.8125rem)',
         fontFamily: 'monospace',
       },
       '.cm-content': {
         fontFamily: 'monospace',
-        padding: 'var(--space-sm, 8px) 0',
+        padding: 'var(--space-sm, 0.5rem) 0',
       },
       '.cm-gutters': {
         backgroundColor: 'var(--bg-secondary, #fafafa)',
@@ -187,8 +187,8 @@ class CrapCode extends HTMLElement {
       }
 
       .code-editor .cm-editor {
-        min-height: 200px;
-        max-height: 600px;
+        min-height: 12.5rem;
+        max-height: 37.5rem;
         overflow: auto;
       }
 

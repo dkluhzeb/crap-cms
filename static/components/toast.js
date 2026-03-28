@@ -43,7 +43,7 @@ class CrapToast extends HTMLElement {
           pointer-events: auto;
           cursor: pointer;
           animation: toast-in 0.3s ease forwards;
-          max-width: 380px;
+          max-width: 23.75rem;
         }
         .toast.removing {
           animation: toast-out 0.25s ease forwards;

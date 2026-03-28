@@ -78,9 +78,10 @@ class CrapConfirm extends HTMLElement {
         }
         button {
           font-family: inherit;
-          font-size: var(--text-base, 0.875rem);
+          font-size: var(--text-sm, 0.8125rem);
           font-weight: 500;
-          padding: var(--space-sm, 0.5rem) var(--space-lg, 1rem);
+          height: var(--button-height, 2.25rem);
+          padding: 0 var(--space-lg, 1rem);
           border-radius: var(--radius-md, 6px);
           border: none;
           cursor: pointer;

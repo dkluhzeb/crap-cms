@@ -1,6 +1,6 @@
 .cards {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--base) * 60), 1fr));
   gap: var(--space-lg);
 }
 
@@ -32,7 +32,7 @@ a.card:hover {
 
 .card__header > .material-symbols-outlined {
   color: var(--color-primary);
-  font-size: 18px;
+  font-size: var(--icon-md);
 }
 
 .card__header h3 {

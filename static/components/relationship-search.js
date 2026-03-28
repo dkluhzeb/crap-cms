@@ -447,7 +447,7 @@ class CrapRelationshipSearch extends HTMLElement {
     browseBtn.type = 'button';
     browseBtn.className = 'relationship-search__browse';
     browseBtn.title = t('browse');
-    browseBtn.innerHTML = '<span style="' + ICON_STYLE + ' font-size: 18px;">folder_open</span>';
+    browseBtn.innerHTML = '<span style="' + ICON_STYLE + ' font-size: var(--icon-md, 1.125rem);">folder_open</span>';
     row.appendChild(browseBtn);
 
     browseBtn.addEventListener('click', () => {
@@ -631,7 +631,7 @@ function createUploadCard(item, currentIds, hasMany, container, drawer) {
     icon.textContent = 'description';
     Object.assign(icon.style, {
       fontFamily: "'Material Symbols Outlined'",
-      fontSize: '36px',
+      fontSize: 'var(--control-lg, 2.25rem)',
       color: 'var(--text-tertiary, rgba(0, 0, 0, 0.45))',
     });
     card.appendChild(icon);
@@ -659,7 +659,7 @@ function createUploadCard(item, currentIds, hasMany, container, drawer) {
       position: 'absolute',
       top: 'var(--space-xs, 4px)',
       right: 'var(--space-xs, 4px)',
-      fontSize: '18px',
+      fontSize: 'var(--icon-md, 1.125rem)',
       color: 'var(--color-primary, #6366f1)',
     });
     card.appendChild(check);
@@ -716,7 +716,7 @@ function createListItem(item, currentIds, hasMany, container, drawer) {
     check.textContent = 'check';
     Object.assign(check.style, {
       fontFamily: "'Material Symbols Outlined'",
-      fontSize: '18px',
+      fontSize: 'var(--icon-md, 1.125rem)',
       color: 'var(--color-primary, #6366f1)',
     });
     row.appendChild(check);

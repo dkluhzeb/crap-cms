@@ -30,7 +30,7 @@ class CrapDrawer extends HTMLElement {
         dialog {
           position: fixed;
           inset: 0 0 0 auto;
-          width: min(540px, 95vw);
+          width: min(33.75rem, 95vw);
           max-width: none;
           max-height: none;
           height: 100vh;
@@ -67,12 +67,12 @@ class CrapDrawer extends HTMLElement {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          width: 32px;
-          height: 32px;
+          width: var(--control-md, 2rem);
+          height: var(--control-md, 2rem);
           border-radius: var(--radius-sm, 4px);
           cursor: pointer;
           color: var(--text-secondary, rgba(0, 0, 0, 0.65));
-          font-size: 20px;
+          font-size: var(--icon-md, 1.125rem);
           font-family: 'Material Symbols Outlined';
         }
         .header__close:hover {
@@ -116,8 +116,8 @@ class CrapDrawer extends HTMLElement {
           padding-right: 2rem;
           background-image: var(--select-arrow);
           background-repeat: no-repeat;
-          background-position: right 10px center;
-          background-size: 16px;
+          background-position: right 0.625rem center;
+          background-size: 1rem;
         }
         .body input:focus,
         .body select:focus,
@@ -144,8 +144,10 @@ class CrapDrawer extends HTMLElement {
         .body .button {
           display: inline-flex;
           align-items: center;
-          gap: var(--space-xs, 0.25rem);
-          padding: var(--space-xs, 0.25rem) var(--space-md, 0.75rem);
+          justify-content: center;
+          gap: var(--space-sm, 0.5rem);
+          height: var(--button-height, 2.25rem);
+          padding: 0 var(--space-md, 0.75rem);
           border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
           border-radius: var(--radius-md, 6px);
           background: var(--bg-elevated, #fff);
@@ -155,7 +157,6 @@ class CrapDrawer extends HTMLElement {
           cursor: pointer;
           text-decoration: none;
           transition: border-color 0.15s ease, background-color 0.15s ease;
-          height: auto;
           width: auto;
           box-shadow: none;
         }
@@ -183,7 +184,8 @@ class CrapDrawer extends HTMLElement {
           color: var(--text-primary, rgba(0, 0, 0, 0.88));
         }
         .body .button--small {
-          padding: var(--space-xs, 0.25rem) var(--space-sm, 0.5rem);
+          height: var(--button-height-sm, 1.75rem);
+          padding: 0 var(--space-sm, 0.5rem);
           font-size: var(--text-xs, 0.75rem);
         }
 
@@ -231,10 +233,10 @@ class CrapDrawer extends HTMLElement {
           flex: 0 0 auto;
         }
         .body .filter-builder__field {
-          min-width: 120px;
+          min-width: 7.5rem;
         }
         .body .filter-builder__op {
-          min-width: 90px;
+          min-width: 5.625rem;
         }
         .body .filter-builder__value-wrap {
           flex: 1;
@@ -259,7 +261,7 @@ class CrapDrawer extends HTMLElement {
           font-family: 'Material Symbols Outlined';
           font-weight: normal;
           font-style: normal;
-          font-size: 20px;
+          font-size: var(--icon-md, 1.125rem);
           line-height: 1;
           letter-spacing: normal;
           text-transform: none;

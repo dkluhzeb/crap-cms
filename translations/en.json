@@ -238,5 +238,7 @@
   "empty_trash": "Empty trash",
   "empty_trash_confirm_title": "Empty trash?",
   "empty_trash_confirm": "Permanently delete all {{count}} items in trash? This cannot be undone.",
-  "trash_emptied": "Trash emptied"
+  "trash_emptied": "Trash emptied",
+  "error": "Error",
+  "no_details": "No details available."
 }

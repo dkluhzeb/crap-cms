@@ -34,15 +34,15 @@
 
 .list-toolbar__search .search-bar__icon {
   position: absolute;
-  left: 10px;
+  left: var(--space-sm2);
   color: var(--text-tertiary);
-  font-size: 20px;
+  font-size: var(--icon-md);
   pointer-events: none;
 }
 
 .list-toolbar__search .search-bar__clear {
   position: absolute;
-  right: 10px;
+  right: var(--space-sm2);
   color: var(--text-tertiary);
   display: inline-flex;
   text-decoration: none;
@@ -62,13 +62,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  min-width: var(--icon-md);
+  height: var(--icon-md);
+  padding: 0 calc(var(--base) * 1.25);
   border-radius: var(--radius-full);
   background: var(--color-primary);
-  color: #fff;
-  font-size: 11px;
+  color: var(--text-on-primary);
+  font-size: calc(var(--base) * 2.75);
   font-weight: 600;
   margin-left: var(--space-xs);
 }
@@ -86,7 +86,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-xs);
-  padding: 3px 6px 3px 10px;
+  padding: calc(var(--base) * 0.75) var(--space-xs2) calc(var(--base) * 0.75) var(--space-sm2);
   background: var(--color-primary-bg);
   border: 1px solid var(--color-primary);
   border-radius: var(--radius-sm);
@@ -110,7 +110,7 @@
 }
 
 .filter-pill__remove .material-symbols-outlined {
-  font-size: 14px;
+  font-size: var(--icon-xs);
 }
 
 .filter-pill__remove:hover {
@@ -171,13 +171,13 @@
 .filter-builder__field {
   flex: 0 0 auto;
   width: auto;
-  min-width: 120px;
+  min-width: calc(var(--base) * 30);
 }
 
 .filter-builder__op {
   flex: 0 0 auto;
   width: auto;
-  min-width: 90px;
+  min-width: calc(var(--base) * 22.5);
 }
 
 .filter-builder__value-wrap {

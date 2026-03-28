@@ -32,7 +32,7 @@ crap-list-settings .table th {
 }
 
 .table td {
-  padding: 6px var(--space-md);
+  padding: var(--space-xs2) var(--space-md);
   border-bottom: 1px solid var(--border-color);
   font-size: var(--text-sm);
   vertical-align: middle;
@@ -74,12 +74,22 @@ crap-list-settings .table th {
 }
 
 .table__sort-icon {
-  font-size: 16px;
+  font-size: var(--icon-sm);
   color: var(--text-quaternary);
 }
 
 .table__sort-icon--active {
   color: var(--color-primary);
+}
+
+/* Trash row action buttons */
+.items-row__actions {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.items-row__actions form {
+  display: inline;
 }
 
 @media (max-width: 768px) {
