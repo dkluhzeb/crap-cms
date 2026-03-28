@@ -31,8 +31,14 @@ use super::get_tx_conn;
 
 /// Register `crap.collections.delete(collection, id, opts?)`.
 #[cfg(not(tarpaulin_include))]
-pub(super) fn register_delete(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
+pub(super) fn register_delete(
+    lua: &Lua,
+    table: &Table,
+    registry: SharedRegistry,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
     let reg = registry;
+    let lc = locale_config.clone();
     let delete_fn = lua.create_function(
         move |lua, (collection, id, opts): (String, String, Option<Table>)| {
             let conn_ptr = get_tx_conn(lua)?;
@@ -112,6 +118,18 @@ pub(super) fn register_delete(lua: &Lua, table: &Table, registry: SharedRegistry
                 None
             };
 
+            // Block deletion of documents that are referenced by other documents.
+            if !force_hard_delete {
+                let ref_count = query::ref_count::get_ref_count(conn, &collection, &id)
+                    .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?;
+                if ref_count > 0 {
+                    return Err(RuntimeError(format!(
+                        "Cannot delete '{}' from '{}': referenced by {} document(s)",
+                        id, collection, ref_count
+                    )));
+                }
+            }
+
             // For upload collections, load the document before deleting to get file paths
             let upload_doc_fields = if def.is_upload_collection() {
                 query::find_by_id(conn, &collection, &def, &id, None)
@@ -130,6 +148,12 @@ pub(super) fn register_delete(lua: &Lua, table: &Table, registry: SharedRegistry
                     .build();
                 run_hooks_inner(lua, &def.hooks, HookEvent::BeforeDelete, hook_ctx)
                     .map_err(|e| RuntimeError(format!("before_delete hook error: {}", e)))?;
+            }
+
+            // Decrement ref counts before hard delete (CASCADE removes junction rows).
+            if !def.soft_delete || force_hard_delete {
+                query::ref_count::before_hard_delete(conn, &collection, &id, &def.fields, &lc)
+                    .map_err(|e| RuntimeError(format!("ref count error: {}", e)))?;
             }
 
             if def.soft_delete && !force_hard_delete {
@@ -499,6 +523,15 @@ pub(super) fn register_update_many(
                     .build()
                     .to_string_map(&def.fields);
 
+                let old_refs = query::ref_count::snapshot_outgoing_refs(
+                    conn,
+                    &collection,
+                    &doc.id,
+                    &def.fields,
+                    &lc,
+                )
+                .map_err(|e| RuntimeError(format!("ref count snapshot error: {}", e)))?;
+
                 let updated = query::update_partial(
                     conn,
                     &collection,
@@ -517,6 +550,17 @@ pub(super) fn register_update_many(
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| RuntimeError(format!("join data error: {}", e)))?;
+
+                query::ref_count::after_update(
+                    conn,
+                    &collection,
+                    &doc.id,
+                    &def.fields,
+                    &lc,
+                    old_refs,
+                )
+                .map_err(|e| RuntimeError(format!("ref count update error: {}", e)))?;
+
                 if conn.supports_fts() {
                     query::fts::fts_upsert(conn, &collection, &updated, Some(&def))
                         .map_err(|e| RuntimeError(format!("FTS upsert error: {}", e)))?;
@@ -709,6 +753,19 @@ pub(super) fn register_delete_many(
 
             let mut deleted = 0i64;
             for doc in &docs {
+                // Skip referenced documents
+                let ref_count = query::ref_count::get_ref_count(conn, &collection, &doc.id)
+                    .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?;
+                if ref_count > 0 {
+                    tracing::debug!(
+                        "Skipping delete of {}/{}: referenced by {} document(s)",
+                        collection,
+                        doc.id,
+                        ref_count
+                    );
+                    continue;
+                }
+
                 if hooks_enabled {
                     let hook_ctx = HookContext::builder(&collection, "delete")
                         .data([("id".to_string(), Value::String(doc.id.to_string()))].into())
@@ -717,6 +774,19 @@ pub(super) fn register_delete_many(
                         .build();
                     run_hooks_inner(lua, &def.hooks, HookEvent::BeforeDelete, hook_ctx)
                         .map_err(|e| RuntimeError(format!("before_delete hook error: {}", e)))?;
+                }
+
+                // Decrement ref counts before hard delete (CASCADE removes junction rows).
+                // Soft delete does NOT adjust ref counts.
+                if !def.soft_delete {
+                    query::ref_count::before_hard_delete(
+                        conn,
+                        &collection,
+                        &doc.id,
+                        &def.fields,
+                        &lc,
+                    )
+                    .map_err(|e| RuntimeError(format!("ref count error: {}", e)))?;
                 }
 
                 if def.soft_delete {

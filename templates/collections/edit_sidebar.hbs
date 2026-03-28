@@ -107,7 +107,21 @@
       {{t "actions"}}
     </div>
     <div class="edit-sidebar__panel-body">
+      {{#if ref_count}}
+      <div style="margin: 0 0 var(--space-sm);">
+        <p class="text--muted text--sm" style="margin: 0 0 var(--space-xs);">
+          <span class="material-symbols-outlined" style="font-size: 1em; vertical-align: middle;">link</span>
+          {{t "referenced_by_count" count=ref_count}}
+        </p>
+        <crap-back-refs slug="{{collection.slug}}" doc-id="{{document.id}}">
+          <button type="button" class="button button--ghost button--small">
+            {{t "show_details"}}
+          </button>
+        </crap-back-refs>
+      </div>
+      {{/if}}
       <button type="button" class="button button--danger button--full"
+        {{#if ref_count}}disabled title="{{t "cannot_delete_referenced"}}"{{/if}}
         data-delete-id="{{document.id}}"
         data-delete-title="{{document_title}}"
         data-delete-slug="{{collection.slug}}"

@@ -304,6 +304,7 @@ pub(super) fn register_create(
             let persist_opts = PersistOptions::builder()
                 .password(password.as_deref())
                 .locale_ctx(locale_ctx.as_ref())
+                .locale_config(&lc)
                 .draft(is_draft)
                 .build();
             let doc = service::persist_create(
@@ -617,6 +618,7 @@ pub(super) fn register_update(
                     &service::PersistOptions::builder()
                         .password(password.as_deref())
                         .locale_ctx(locale_ctx.as_ref())
+                        .locale_config(&lc)
                         .build(),
                 )
                 .map_err(|e| RuntimeError(format!("update error: {}", e)))?;

@@ -634,6 +634,7 @@ async fn delete_upload(
     let id_owned = id.clone();
     let user_doc_owned = auth_user.as_ref().map(|au| au.user_doc.clone());
     let config_dir = state.config_dir.clone();
+    let locale_config = state.config.locale.clone();
     let result = tokio::task::spawn_blocking(move || {
         service::delete_document(
             &pool,
@@ -643,6 +644,7 @@ async fn delete_upload(
             &def_clone,
             user_doc_owned.as_ref(),
             Some(&config_dir),
+            Some(&locale_config),
         )
     })
     .await;

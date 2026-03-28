@@ -215,6 +215,7 @@ pub fn unpublish_document(
 // Excluded from coverage: requires HookRunner (Lua VM) for before/after hooks.
 // Tested indirectly through CLI integration tests and gRPC API tests.
 #[cfg(not(tarpaulin_include))]
+#[allow(clippy::too_many_arguments)]
 pub fn delete_document(
     pool: &DbPool,
     runner: &HookRunner,
@@ -223,6 +224,7 @@ pub fn delete_document(
     def: &CollectionDefinition,
     user: Option<&Document>,
     config_dir: Option<&std::path::Path>,
+    locale_config: Option<&LocaleConfig>,
 ) -> Result<HashMap<String, Value>> {
     let mut conn = pool.get().context("DB connection")?;
 
@@ -240,6 +242,15 @@ pub fn delete_document(
 
     let tx = conn.transaction_immediate().context("Start transaction")?;
 
+    // Block deletion of documents that are referenced by other documents.
+    let ref_count = query::ref_count::get_ref_count(&tx, slug, id)?;
+    if ref_count > 0 {
+        anyhow::bail!(
+            "Cannot delete: this document is referenced by {} other document(s)",
+            ref_count
+        );
+    }
+
     let mut hook_data: HashMap<String, Value> =
         [("id".to_string(), Value::String(id.to_string()))].into();
     if def.soft_delete {
@@ -252,6 +263,13 @@ pub fn delete_document(
         .build();
     let final_ctx =
         runner.run_hooks_with_conn(&def.hooks, HookEvent::BeforeDelete, hook_ctx, &tx)?;
+
+    // Decrement ref counts on targets before hard delete (CASCADE would remove junction rows).
+    // Soft delete does NOT adjust ref counts.
+    if !def.soft_delete {
+        let locale_cfg = locale_config.cloned().unwrap_or_default();
+        query::ref_count::before_hard_delete(&tx, slug, id, &def.fields, &locale_cfg)?;
+    }
 
     if def.soft_delete {
         let deleted = query::soft_delete(&tx, slug, id)?;

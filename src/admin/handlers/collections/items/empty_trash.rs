@@ -82,7 +82,18 @@ pub async fn empty_trash_action(
         let docs = query::find(&tx, &slug_owned, &def, &fq, None)?;
         let count = docs.len();
 
+        let locale_cfg = crate::config::LocaleConfig::default();
+
         for doc in &docs {
+            // Decrement ref counts before hard delete (CASCADE removes junction rows)
+            query::ref_count::before_hard_delete(
+                &tx,
+                &slug_owned,
+                &doc.id,
+                &def.fields,
+                &locale_cfg,
+            )?;
+
             if def.is_upload_collection() {
                 upload::delete_upload_files(&config_dir, &doc.fields);
             }

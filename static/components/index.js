@@ -37,6 +37,7 @@ import './block-picker.js';
 import './array-fields.js';
 import './conditions.js';
 import './dirty-form.js';
+import './back-refs.js';
 import './validate-form.js';
 import './scroll.js';
 import './live-events.js';

@@ -53,7 +53,7 @@ pub(crate) fn register_crud_functions(
     find::register_find_by_id(lua, &collections, registry.clone(), locale_config)?;
     write::register_create(lua, &collections, registry.clone(), locale_config)?;
     write::register_update(lua, &collections, registry.clone(), locale_config)?;
-    delete::register_delete(lua, &collections, registry.clone())?;
+    delete::register_delete(lua, &collections, registry.clone(), locale_config)?;
     delete::register_restore(lua, &collections, registry.clone())?;
     find::register_count(lua, &collections, registry.clone(), locale_config)?;
     delete::register_update_many(lua, &collections, registry.clone(), locale_config)?;

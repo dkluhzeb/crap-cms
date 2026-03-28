@@ -525,32 +525,9 @@ pub(super) async fn delete_action_impl(
         def_clone.soft_delete = false;
     }
 
-    let registry = state.registry.clone();
+    let locale_config = state.config.locale.clone();
 
     let result = task::spawn_blocking(move || {
-        // Block deletion of upload/media documents that are referenced by other documents.
-        // Only checked for upload collections (shared media) and skipped for force-hard-delete
-        // (empty trash) to avoid scanning on bulk operations.
-        if def_clone.is_upload_collection() && !force_hard_delete {
-            let conn = pool.get().context("DB connection for back-ref check")?;
-            let back_refs = query::read::find_back_references(
-                &conn,
-                &registry,
-                &slug_owned,
-                &id_owned,
-                &crate::config::LocaleConfig::default(),
-            );
-            drop(conn);
-
-            if !back_refs.is_empty() {
-                let ref_summary: Vec<String> = back_refs
-                    .iter()
-                    .map(|r| format!("{} ({} docs)", r.owner_label, r.count))
-                    .collect();
-                anyhow::bail!("Cannot delete: referenced by {}", ref_summary.join(", "));
-            }
-        }
-
         service::delete_document(
             &pool,
             &runner,
@@ -559,6 +536,7 @@ pub(super) async fn delete_action_impl(
             &def_clone,
             user_doc.as_ref(),
             Some(&config_dir),
+            Some(&locale_config),
         )
     })
     .await;

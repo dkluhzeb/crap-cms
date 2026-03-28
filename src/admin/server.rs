@@ -249,6 +249,10 @@ fn protected_routes(
             get(collections::delete_confirm),
         )
         .route(
+            "/admin/collections/{slug}/{id}/back-references",
+            get(collections::back_references),
+        )
+        .route(
             "/admin/collections/{slug}/{id}/restore",
             post(collections::restore_action),
         )

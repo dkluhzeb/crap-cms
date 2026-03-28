@@ -52,6 +52,7 @@
 # Relationships
 
 - [Overview](relationships/overview.md)
+- [Delete Protection](relationships/delete-protection.md)
 - [Population Depth](relationships/population-depth.md)
 
 # Query & Filters

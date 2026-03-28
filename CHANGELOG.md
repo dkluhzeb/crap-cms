@@ -105,7 +105,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   `@class`/`@param`/`@return` annotations for the entire `crap.*` API,
   enabling IDE autocompletion and type checking.
 
+- **Reference counting for delete protection** — Every collection table
+  now has a `_ref_count` column that tracks how many documents reference
+  it. Delete protection is O(1) instead of scanning all collections.
+  Covers all relationship types: has-one, has-many, polymorphic, localized,
+  array sub-fields, and block sub-fields. Globals that hold outgoing
+  references also maintain ref counts on their targets. A one-time
+  backfill migration computes initial counts from existing data.
+
 ### Changed
+
+- **Delete protection expanded to all collections** — Previously only
+  upload/media collections were protected from deletion when referenced.
+  Now all collections are protected: attempting to delete a document with
+  `_ref_count > 0` is blocked. Bulk `delete_many` silently skips
+  referenced documents instead of failing.
+
+- **Delete confirmation page uses lazy-loaded details** — The delete
+  confirmation page now shows a fast "Referenced by N document(s)"
+  summary from the `_ref_count` column. A "Show details" button
+  lazy-loads the full back-reference list (which collections/fields
+  reference the document) via a new
+  `GET /admin/collections/{slug}/{id}/back-references` endpoint.
 
 - **Richtext node attrs now use the field system** — `register_node` attrs are now
   defined with `crap.fields.*` factory functions instead of the old `{ name, type }`

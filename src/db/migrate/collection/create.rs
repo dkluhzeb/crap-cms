@@ -84,6 +84,9 @@ pub fn create_collection_table(
         columns.push("_deleted_at TEXT".to_string());
     }
 
+    // All collections get a reference count for delete protection
+    columns.push("_ref_count INTEGER NOT NULL DEFAULT 0".to_string());
+
     // Auth collections get hidden system columns (not regular fields)
     if def.is_auth_collection() {
         columns.push("_password_hash TEXT".to_string());

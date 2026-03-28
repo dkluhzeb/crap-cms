@@ -259,6 +259,15 @@ pub async fn edit_form(
 
     data["document_title"] = json!(doc_title);
 
+    // Add reference count for delete protection UI
+    let ref_count = state
+        .pool
+        .get()
+        .ok()
+        .and_then(|conn| query::ref_count::get_ref_count(&conn, &slug, &id).ok())
+        .unwrap_or(0);
+    data["ref_count"] = json!(ref_count);
+
     // Add upload context for upload collections
     if def.is_upload_collection() {
         data["upload"] = build_upload_context(&def, &document);

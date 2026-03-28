@@ -221,6 +221,18 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
             .with_context(|| format!("Failed to add _deleted_at to {}", ctx.slug))?;
     }
 
+    // All collections: ensure _ref_count column exists for delete protection
+    if !ctx.existing.contains("_ref_count") {
+        let sql = format!(
+            "ALTER TABLE {} ADD COLUMN _ref_count INTEGER NOT NULL DEFAULT 0",
+            ctx.slug
+        );
+        tracing::info!("Adding _ref_count column to {}", ctx.slug);
+        ctx.conn
+            .execute(&sql, &[])
+            .with_context(|| format!("Failed to add _ref_count to {}", ctx.slug))?;
+    }
+
     // Timestamps: ensure created_at/updated_at exist
     // Note: SQLite ALTER TABLE cannot use non-constant defaults like datetime('now'),
     // so we add with no default (NULL for existing rows) — new inserts set these explicitly.
@@ -272,6 +284,7 @@ const SYSTEM_COLUMNS: &[&str] = &[
     "_settings",
     "_session_version",
     "_deleted_at",
+    "_ref_count",
 ];
 
 pub(super) fn alter_collection_table(

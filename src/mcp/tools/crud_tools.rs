@@ -410,7 +410,7 @@ pub(super) fn exec_delete(
         .get(slug)
         .context("Collection not found")?;
 
-    crate::service::delete_document(pool, runner, slug, id, def, None, None)?;
+    crate::service::delete_document(pool, runner, slug, id, def, None, None, None)?;
 
     tracing::info!("MCP delete {}: {}", slug, id);
     Ok(json!({ "deleted": id }).to_string())

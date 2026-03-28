@@ -80,10 +80,20 @@ pub(super) fn register_globals_update(
 
             let data = lua_table_to_hashmap(&data_table)?;
             let join_data = lua_table_to_json_map(lua, &data_table)?;
+
+            let global_table = format!("_global_{}", slug);
+            let old_refs = query::ref_count::snapshot_outgoing_refs(
+                conn,
+                &global_table,
+                "default",
+                &def.fields,
+                &lc,
+            )
+            .map_err(|e| RuntimeError(format!("ref count snapshot error: {}", e)))?;
+
             query::update_global(conn, &slug, &def, &data, locale_ctx.as_ref())
                 .map_err(|e| RuntimeError(format!("update_global error: {}", e)))?;
 
-            let global_table = format!("_global_{}", slug);
             query::save_join_table_data(
                 conn,
                 &global_table,
@@ -93,6 +103,16 @@ pub(super) fn register_globals_update(
                 locale_ctx.as_ref(),
             )
             .map_err(|e| RuntimeError(format!("join data error: {}", e)))?;
+
+            query::ref_count::after_update(
+                conn,
+                &global_table,
+                "default",
+                &def.fields,
+                &lc,
+                old_refs,
+            )
+            .map_err(|e| RuntimeError(format!("ref count update error: {}", e)))?;
 
             // Re-fetch to hydrate join data in the returned document
             let doc = query::get_global(conn, &slug, &def, locale_ctx.as_ref())

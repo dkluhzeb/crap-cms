@@ -61,6 +61,15 @@ pub fn update_global_document(
         )?;
         existing_doc
     } else {
+        let locale_cfg = crate::config::LocaleConfig::default();
+        let old_refs = query::ref_count::snapshot_outgoing_refs(
+            &tx,
+            &global_table,
+            "default",
+            &def.fields,
+            &locale_cfg,
+        )?;
+
         let doc = query::update_global(&tx, slug, def, &final_data, input.locale_ctx)?;
         query::save_join_table_data(
             &tx,
@@ -69,6 +78,15 @@ pub fn update_global_document(
             "default",
             &final_ctx.data,
             input.locale_ctx,
+        )?;
+
+        query::ref_count::after_update(
+            &tx,
+            &global_table,
+            "default",
+            &def.fields,
+            &locale_cfg,
+            old_refs,
         )?;
 
         if def.has_versions() {

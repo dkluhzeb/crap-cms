@@ -18,7 +18,7 @@ pub mod shared;
 pub use api::save_user_settings::save_user_settings;
 pub use api::search::search_collection;
 pub use item::delete_action::delete_action;
-pub use item::delete_confirm::delete_confirm;
+pub use item::delete_confirm::{back_references, delete_confirm};
 pub use item::edit_form::edit_form;
 pub use item::restore_action::restore_action;
 pub use item::update_action::update_action;

@@ -47,6 +47,9 @@ pub(super) fn sync_global_table(
             columns.push("_status TEXT NOT NULL DEFAULT 'published'".to_string());
         }
 
+        // All tables get a reference count for delete protection
+        columns.push("_ref_count INTEGER NOT NULL DEFAULT 0".to_string());
+
         columns.push(format!("created_at {}", conn.timestamp_column_default()));
         columns.push(format!("updated_at {}", conn.timestamp_column_default()));
 
@@ -110,6 +113,21 @@ pub(super) fn sync_global_table(
             tracing::info!("Adding _status column to {}", table_name);
             conn.execute(&sql, &[])
                 .with_context(|| format!("Failed to add _status to {}", table_name))?;
+        }
+    }
+
+    // All globals: ensure _ref_count column exists for delete protection
+    if exists {
+        let existing_columns = get_table_columns(conn, &table_name)?;
+
+        if !existing_columns.contains("_ref_count") {
+            let sql = format!(
+                "ALTER TABLE {} ADD COLUMN _ref_count INTEGER NOT NULL DEFAULT 0",
+                table_name
+            );
+            tracing::info!("Adding _ref_count column to {}", table_name);
+            conn.execute(&sql, &[])
+                .with_context(|| format!("Failed to add _ref_count to {}", table_name))?;
         }
     }
 

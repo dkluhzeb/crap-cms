@@ -1,5 +1,6 @@
 //! Dynamic schema migration: syncs SQLite tables to match Lua collection definitions.
 
+mod backfill_ref_counts;
 mod collection;
 mod global;
 pub mod helpers;
@@ -131,6 +132,9 @@ pub fn sync_all(
     for (slug, def) in &reg.globals {
         global::sync_global_table(&tx, slug, def, locale_config)?;
     }
+
+    // Backfill _ref_count columns from existing relationship data (one-time migration)
+    backfill_ref_counts::backfill_if_needed(&tx, &reg, locale_config)?;
 
     drop(reg);
     tx.commit()

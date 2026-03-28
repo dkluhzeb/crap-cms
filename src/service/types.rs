@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use crate::{core::Document, db::LocaleContext};
+use crate::{config::LocaleConfig, core::Document, db::LocaleContext};
 
 use super::{AfterChangeInputBuilder, PersistOptionsBuilder, WriteInputBuilder};
 
@@ -56,6 +56,7 @@ impl<'a> AfterChangeInput<'a> {
 pub struct PersistOptions<'a> {
     pub password: Option<&'a str>,
     pub locale_ctx: Option<&'a LocaleContext>,
+    pub locale_config: Option<&'a LocaleConfig>,
     pub is_draft: bool,
 }
 

@@ -12,6 +12,7 @@ pub mod join;
 pub mod pagination_result;
 pub mod populate;
 pub mod read;
+pub mod ref_count;
 pub mod versions;
 pub mod write;
 
