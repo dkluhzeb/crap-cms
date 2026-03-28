@@ -35,19 +35,27 @@ use crate::{
     scheduler, typegen,
 };
 
-/// Send a signal to a process by PID using the `kill` command.
-fn send_signal(pid: u32, signal: &str) -> Result<()> {
-    let output = process::Command::new("kill")
-        .args([&format!("-{signal}"), &pid.to_string()])
-        .output()
-        .with_context(|| format!("Failed to run kill -{signal} {pid}"))?;
+/// Send a signal to a process by PID.
+#[cfg(unix)]
+fn send_signal(pid: u32, sig: i32) -> Result<()> {
+    // SAFETY: kill(2) is safe to call with any pid/signal combination.
+    let ret = unsafe { libc::kill(pid as i32, sig) };
 
-    if output.status.success() {
+    if ret == 0 {
         Ok(())
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("kill -{signal} {pid} failed: {}", stderr.trim());
+        Err(std::io::Error::last_os_error())
+            .with_context(|| format!("Failed to send signal {sig} to PID {pid}"))
     }
+}
+
+/// Check if a process with the given PID is running.
+///
+/// Uses `kill(pid, 0)` which checks process existence without sending a signal.
+/// Works across all Unix platforms (not just Linux with /proc).
+#[cfg(unix)]
+fn is_process_running(pid: u32) -> bool {
+    unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
 /// Bail early if the config directory doesn't look valid.
@@ -91,8 +99,7 @@ fn check_existing_pid(config_dir: &Path) {
     if let Ok(contents) = fs::read_to_string(&path)
         && let Ok(pid) = contents.trim().parse::<u32>()
     {
-        // Check if process is still running (kill -0)
-        let running = Path::new(&format!("/proc/{}", pid)).exists();
+        let running = is_process_running(pid);
 
         if running {
             warn!(
@@ -155,11 +162,6 @@ fn read_pid(config_dir: &Path) -> Option<u32> {
         .and_then(|s| s.trim().parse().ok())
 }
 
-/// Check if a process with the given PID is running.
-fn is_process_running(pid: u32) -> bool {
-    Path::new(&format!("/proc/{}", pid)).exists()
-}
-
 /// Stop a running detached instance by sending SIGTERM, falling back to SIGKILL.
 pub fn stop(config_dir: &Path) -> Result<()> {
     validate_config_dir(config_dir)?;
@@ -175,7 +177,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     }
 
     // Send SIGTERM for graceful shutdown.
-    send_signal(pid, "TERM").with_context(|| format!("Failed to send SIGTERM to PID {pid}"))?;
+    send_signal(pid, libc::SIGTERM)?;
 
     // Wait for graceful shutdown (up to 10 seconds).
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -193,7 +195,7 @@ pub fn stop(config_dir: &Path) -> Result<()> {
     cli::warning(&format!(
         "Process {pid} did not stop within 10s, sending SIGKILL"
     ));
-    let _ = send_signal(pid, "KILL");
+    let _ = send_signal(pid, libc::SIGKILL);
 
     // Brief wait for the force kill to take effect.
     std::thread::sleep(std::time::Duration::from_millis(500));
@@ -207,10 +209,13 @@ pub fn stop(config_dir: &Path) -> Result<()> {
 pub fn restart(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool) -> Result<()> {
     validate_config_dir(config_dir)?;
 
-    // Stop if running — ignore "not running" errors.
+    // Stop if running — tolerate "not running" errors (race between check and kill).
     if let Some(pid) = read_pid(config_dir) {
         if is_process_running(pid) {
-            stop(config_dir)?;
+            if let Err(e) = stop(config_dir) {
+                // Process may have exited between check and stop — not an error.
+                tracing::debug!("stop() during restart: {e}");
+            }
         } else {
             remove_pid_file(config_dir);
         }

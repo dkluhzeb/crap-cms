@@ -26,8 +26,10 @@ my-project/
 ├── translations/          # Admin UI translation overrides (JSON per locale)
 │   └── de.json
 ├── static/                # Static file overrides (CSS, JS, fonts)
-├── data/                  # SQLite database (auto-created)
-│   └── crap.db
+├── data/                  # Runtime data (auto-created)
+│   ├── crap.db            # SQLite database
+│   ├── crap.pid           # Process ID file (when running with --detach)
+│   └── logs/              # Rotating log files (when [logging] file = true)
 ├── uploads/               # Uploaded files (auto-created per collection)
 │   └── media/
 └── types/                 # Auto-generated type definitions (see `typegen`)

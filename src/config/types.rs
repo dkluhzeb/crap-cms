@@ -201,6 +201,18 @@ impl CrapConfig {
             bail!("server.grpc_rate_limit_window must be > 0 when grpc_rate_limit_requests > 0");
         }
 
+        // Fatal: empty log path
+        if self.logging.file && self.logging.path.is_empty() {
+            bail!("logging.path must not be empty when file logging is enabled");
+        }
+
+        // Warning: max_files = 0 means all old logs are deleted on every startup
+        if self.logging.file && self.logging.max_files == 0 {
+            tracing::warn!(
+                "logging.max_files = 0 — all rotated log files will be deleted on startup"
+            );
+        }
+
         // Fatal: password min_length > max_length
         if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
             bail!(
@@ -334,6 +346,33 @@ mod tests {
         config.logging.path = "/var/log/crap-cms".to_string();
         let dir = Path::new("/my/config");
         assert_eq!(config.log_dir(dir), Path::new("/var/log/crap-cms"));
+    }
+
+    #[test]
+    fn validate_logging_empty_path_errors() {
+        let mut config = CrapConfig::default();
+        config.logging.file = true;
+        config.logging.path = String::new();
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("logging.path"));
+    }
+
+    #[test]
+    fn validate_logging_max_files_zero_warns_but_passes() {
+        let mut config = CrapConfig::default();
+        config.logging.file = true;
+        config.logging.max_files = 0;
+        // Should warn but not error
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_logging_disabled_empty_path_passes() {
+        let mut config = CrapConfig::default();
+        config.logging.file = false;
+        config.logging.path = String::new();
+        // Validation only applies when file logging is enabled
+        assert!(config.validate().is_ok());
     }
 
     #[test]

@@ -100,6 +100,9 @@ fn clear(log_dir: &Path) -> Result<()> {
 }
 
 /// Read the last N lines from a file using seek-from-end.
+///
+/// Reads backward in chunks, collecting raw bytes into a list of chunks
+/// (reversed at the end) to avoid O(n²) splice operations.
 fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
     let metadata = file.metadata()?;
     let file_size = metadata.len();
@@ -108,12 +111,13 @@ fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
         return Ok(String::new());
     }
 
-    // Read from end in chunks to find enough newlines.
     let mut reader = BufReader::new(file);
     let chunk_size: u64 = 8192;
-    let mut collected = Vec::new();
+    let mut chunks: Vec<Vec<u8>> = Vec::new();
+    let mut newline_count = 0usize;
     let mut pos = file_size;
 
+    // Read backward in chunks, counting newlines as we go.
     loop {
         let read_start = pos.saturating_sub(chunk_size);
         let read_len = (pos - read_start) as usize;
@@ -126,17 +130,19 @@ fn tail_lines(file: &fs::File, n: usize) -> Result<String> {
         let mut buf = vec![0u8; read_len];
         reader.read_exact(&mut buf)?;
 
-        collected.splice(0..0, buf);
+        newline_count += buf.iter().filter(|&&b| b == b'\n').count();
+        chunks.push(buf);
         pos = read_start;
-
-        // Count newlines in collected data.
-        let newline_count = collected.iter().filter(|&&b| b == b'\n').count();
 
         // We need n+1 newlines to have n complete lines (or start of file).
         if newline_count > n || pos == 0 {
             break;
         }
     }
+
+    // Reassemble chunks in forward order.
+    chunks.reverse();
+    let collected: Vec<u8> = chunks.into_iter().flatten().collect();
 
     let text = String::from_utf8_lossy(&collected);
     let all_lines: Vec<&str> = text.lines().collect();

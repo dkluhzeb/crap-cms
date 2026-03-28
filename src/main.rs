@@ -487,7 +487,12 @@ fn build_file_layer(
     use_json: bool,
     guard: &mut Option<WorkerGuard>,
 ) -> Option<Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync>> {
-    let log_dir = resolve_log_dir(config_dir, &logging.path);
+    let p = Path::new(&logging.path);
+    let log_dir = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        config_dir.join(p)
+    };
 
     if let Err(e) = std::fs::create_dir_all(&log_dir) {
         eprintln!(
@@ -526,16 +531,5 @@ fn build_file_layer(
                 .with_filter(file_filter)
                 .boxed(),
         )
-    }
-}
-
-/// Resolve log directory path (relative to config dir, or absolute).
-fn resolve_log_dir(config_dir: &Path, path: &str) -> PathBuf {
-    let p = Path::new(path);
-
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        config_dir.join(p)
     }
 }

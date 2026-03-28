@@ -772,6 +772,7 @@ dependencies = [
  "infer",
  "jsonwebtoken",
  "lettre",
+ "libc",
  "mime_guess",
  "mlua",
  "nanoid",
