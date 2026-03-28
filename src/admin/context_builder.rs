@@ -13,7 +13,7 @@ use crate::{
         auth::{AuthUser, Claims},
         collection::{CollectionDefinition, GlobalDefinition},
     },
-    db::query::PaginationResult,
+    db::query::{AccessResult, PaginationResult},
 };
 
 use crate::admin::context::{Breadcrumb, PageType, build_collection_context, build_global_context};
@@ -111,6 +111,45 @@ impl ContextBuilder {
         } else {
             self
         }
+    }
+
+    /// Filter sidebar nav items to only show collections/globals the user can read.
+    pub fn filter_nav_by_access(
+        mut self,
+        state: &AdminState,
+        auth_user: &Option<Extension<AuthUser>>,
+    ) -> Self {
+        let user_doc = auth_user.as_ref().map(|Extension(au)| &au.user_doc);
+
+        if let Some(nav) = self.data.get_mut("nav").and_then(|v| v.as_object_mut()) {
+            if let Some(Value::Array(cols)) = nav.get_mut("collections") {
+                cols.retain(|c| {
+                    let slug = c["slug"].as_str().unwrap_or("");
+                    let access_ref = state
+                        .registry
+                        .collections
+                        .get(slug)
+                        .and_then(|d| d.access.read.as_deref());
+
+                    has_nav_read_access(state, access_ref, user_doc)
+                });
+            }
+
+            if let Some(Value::Array(globals)) = nav.get_mut("globals") {
+                globals.retain(|g| {
+                    let slug = g["slug"].as_str().unwrap_or("");
+                    let access_ref = state
+                        .registry
+                        .globals
+                        .get(slug)
+                        .and_then(|d| d.access.read.as_deref());
+
+                    has_nav_read_access(state, access_ref, user_doc)
+                });
+            }
+        }
+
+        self
     }
 
     /// Set page metadata (type and title).
@@ -315,6 +354,38 @@ fn build_nav_globals(state: &AdminState) -> Value {
         .collect();
     globals.sort_by(|a, b| a["slug"].as_str().cmp(&b["slug"].as_str()));
     Value::Array(globals)
+}
+
+/// Quick read-access check for sidebar nav visibility.
+fn has_nav_read_access(
+    state: &AdminState,
+    access_ref: Option<&str>,
+    user_doc: Option<&Document>,
+) -> bool {
+    if access_ref.is_none() {
+        return !state.config.access.default_deny;
+    }
+
+    let mut conn = match state.pool.get() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+
+    let result = state
+        .hook_runner
+        .check_access(access_ref, user_doc, None, None, &tx);
+
+    let _ = tx.commit();
+
+    matches!(
+        result,
+        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
+    )
 }
 
 fn has_auth_collections(state: &AdminState) -> bool {

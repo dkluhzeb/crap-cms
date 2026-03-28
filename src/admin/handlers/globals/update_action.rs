@@ -183,6 +183,7 @@ pub async fn update_action(
 
                 let data = ContextBuilder::new(&state, None)
                     .locale_from_auth(&auth_user)
+                    .filter_nav_by_access(&state, &auth_user)
                     .page(PageType::GlobalEdit, def.display_name())
                     .global_def(&def)
                     .fields(main_fields)

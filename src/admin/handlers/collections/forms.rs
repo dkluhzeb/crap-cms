@@ -301,13 +301,10 @@ pub(crate) async fn parse_multipart_form(
                 );
             }
         } else {
-            let text = match field.text().await {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::error!("Failed to read form field '{}': {}", name, e);
-                    String::new()
-                }
-            };
+            let text = field
+                .text()
+                .await
+                .map_err(|e| anyhow!("Failed to read form field '{}': {}", name, e))?;
             form_data.insert(name, text);
         }
     }

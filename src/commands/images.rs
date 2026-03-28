@@ -48,12 +48,12 @@ pub fn run(config_dir: &Path, action: super::ImagesAction) -> Result<()> {
                 } else {
                     e.status.clone()
                 };
-                let id_display = &e.id[..e.id.len().min(22)];
-                let doc_display = &e.document_id[..e.document_id.len().min(10)];
+                let id_display: String = e.id.chars().take(22).collect();
+                let doc_display: String = e.document_id.chars().take(10).collect();
                 table.row(vec![
-                    id_display,
+                    &id_display,
                     &e.collection,
-                    doc_display,
+                    &doc_display,
                     &e.format,
                     created,
                     &status_str,

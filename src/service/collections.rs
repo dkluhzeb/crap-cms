@@ -232,10 +232,19 @@ pub fn delete_document(
     let upload_doc_fields = if def.is_upload_collection() {
         let locale_ctx = LocaleContext::from_locale_string(None, &LocaleConfig::default());
 
-        query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref())
-            .ok()
-            .flatten()
-            .map(|doc| doc.fields.clone())
+        match query::find_by_id(&conn, slug, def, id, locale_ctx.as_ref()) {
+            Ok(Some(doc)) => Some(doc.fields.clone()),
+            Ok(None) => None,
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to load upload document {}/{} for file cleanup: {}",
+                    slug,
+                    id,
+                    e
+                );
+                None
+            }
+        }
     } else {
         None
     };

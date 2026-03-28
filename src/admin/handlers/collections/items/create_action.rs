@@ -267,6 +267,7 @@ pub async fn create_action(
 
                 let mut data = ContextBuilder::new(&state, None)
                     .locale_from_auth(&auth_user)
+                    .filter_nav_by_access(&state, &auth_user)
                     .page(PageType::CollectionCreate, "create_name")
                     .page_title_name(def.singular_name())
                     .collection_def(&def)

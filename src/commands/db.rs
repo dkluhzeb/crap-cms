@@ -37,7 +37,8 @@ pub fn migrate(config_dir: &Path, action: MigrateAction) -> Result<()> {
     let pool = pool::create_pool(&config_dir, &cfg).context("Failed to create database pool")?;
 
     match action {
-        MigrateAction::Create { .. } => unreachable!(),
+        // Handled by early return above; match arm required for exhaustiveness.
+        MigrateAction::Create { .. } => unreachable!("handled by early return above"),
         MigrateAction::Up => {
             // Schema sync from Lua definitions
             let spin = Spinner::new("Syncing schema...");

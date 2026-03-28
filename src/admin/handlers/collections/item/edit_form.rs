@@ -229,6 +229,7 @@ pub async fn edit_form(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
     let mut data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionEdit, "edit_name")
         .page_title_name(def.singular_name())

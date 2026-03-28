@@ -154,6 +154,7 @@ pub async fn edit_form(
 
     let data = ContextBuilder::new(&state, claims_ref)
         .locale_from_auth(&auth_user)
+        .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::GlobalEdit, def.display_name())
         .breadcrumbs(vec![

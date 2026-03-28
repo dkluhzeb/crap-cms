@@ -318,6 +318,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Logout CSRF** (LOW): The `/admin/logout` endpoint accepted GET requests,
   allowing forced logout via `<img src="/admin/logout">`. Now POST-only.
 
+- **Upload serving path traversal hardening** (MEDIUM): The upload file
+  serving endpoint relied solely on string-based `..`/`/`/`\` checks.
+  Added canonicalization verification (`starts_with` on the canonical
+  uploads directory) as defense-in-depth against symlink or encoding-based
+  traversal vectors.
+
+- **Upload file deletion path traversal hardening** (LOW): `delete_upload_files`
+  joined document-stored URLs to the config directory without verifying the
+  resolved path stayed within the uploads directory. A corrupted database
+  record could cause arbitrary file deletion. Now canonicalizes and verifies
+  the path stays within the uploads directory.
+
+- **Lua package path injection** (MEDIUM): `setup_package_paths` interpolated
+  the config directory path into a Lua code string without escaping. A
+  directory name containing `"` or `\` could inject arbitrary Lua code.
+  Replaced string interpolation with direct Lua API calls (`Table::set`).
+
+- **PRAGMA table name validation** (LOW): `sqlite_get_table_columns` and
+  `sqlite_get_table_column_types` interpolated table names into `PRAGMA
+  table_info()` without validation. Added alphanumeric + underscore
+  validation before PRAGMA execution.
+
+- **MCP `safe_config_path` non-existent parent bypass** (LOW): When
+  writing a file with a non-existent parent directory, `safe_config_path`
+  skipped the canonicalization check entirely. Now walks up the parent
+  chain to find the nearest existing ancestor and verifies it stays within
+  the config directory.
+
 - **Sensitive form Debug redaction** (LOW): `LoginForm` and `ResetPasswordForm`
   now redact passwords and tokens in their `Debug` output, preventing
   accidental exposure in logs.
@@ -406,6 +434,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   authenticated request — stale tokens are rejected immediately.
 
 ### Fixed
+
+- **Upload file cleanup silently swallowed DB errors** (HIGH): When
+  deleting an upload-collection document, the pre-delete query to load
+  file paths used `.ok().flatten()`, silently discarding database errors.
+  If the query failed, upload files were never cleaned up — leaking disk
+  space permanently. Now logs a warning on failure.
+
+- **Globals used hardcoded default LocaleConfig** (MEDIUM): The global
+  update path used `LocaleConfig::default()` for reference counting
+  instead of the actual configured locale. This could cause incorrect
+  ref count snapshots in projects with non-default locale settings. Now
+  extracts the locale config from the input's locale context.
+
+- **Dashboard exposed collection metadata without access checks** (MEDIUM):
+  The admin dashboard showed document counts and last-updated timestamps
+  for all collections and globals regardless of the user's read access.
+  Now skips collections/globals the user cannot read.
+
+- **Sidebar navigation ignored access control** (MEDIUM): The sidebar nav
+  listed all collections and globals regardless of the user's read access.
+  Added `filter_nav_by_access()` to all admin page handlers. The collection
+  list page (`/admin/collections`) also now filters by read access.
+
+- **Multipart form field parse failure produced silent empty string**
+  (MEDIUM): If a form field failed to parse (e.g., network interruption),
+  the error was logged but the field was silently set to an empty string.
+  Optional fields would lose data without any user feedback. Now propagates
+  the error as a proper form validation failure.
+
+- **Fragile `unwrap()` after `is_some()` guard in validation** (MEDIUM):
+  `validate_scalar_field` checked `ctx.locale_ctx.is_some()` then called
+  `.unwrap()` on a separate line. Refactored to `if let Some(lctx)` for
+  safety against future refactors.
+
+- **Unsafe UTF-8 byte slicing in image status display** (MEDIUM): Image
+  queue status used `&e.id[..n]` byte slicing for display truncation,
+  which panics if the offset falls within a multi-byte character. Changed
+  to `chars().take(n).collect()`.
+
+- **Regex compiled on every config env-var substitution call** (LOW):
+  `substitute_env_vars` compiled a new `Regex` on each invocation. Moved
+  to a `LazyLock` static for one-time compilation.
+
+- **`from_utf8_lossy` silently replaced invalid UTF-8 in SQLite results**
+  (LOW): SQLite text column values were converted with `from_utf8_lossy`,
+  silently replacing invalid bytes with the replacement character. Now logs
+  a warning when invalid UTF-8 is encountered before falling back to lossy
+  conversion.
 
 - **JSON API responses missing `charset=utf-8`**: Upload API `json_error`
   and `json_ok` helpers set `Content-Type: application/json` without

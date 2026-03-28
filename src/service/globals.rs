@@ -61,7 +61,10 @@ pub fn update_global_document(
         )?;
         existing_doc
     } else {
-        let locale_cfg = crate::config::LocaleConfig::default();
+        let locale_cfg = input
+            .locale_ctx
+            .map(|lctx| lctx.config.clone())
+            .unwrap_or_default();
         let old_refs = query::ref_count::snapshot_outgoing_refs(
             &tx,
             &global_table,

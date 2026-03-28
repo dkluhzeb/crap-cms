@@ -153,8 +153,7 @@ fn validate_scalar_field(
     // Compute the actual DB column name for the unique check.
     // Localized fields store data in suffixed columns (e.g., slug__en).
     let is_localized = (inherited_localized || field.localized) && ctx.locale_ctx.is_some();
-    let col_name = if is_localized {
-        let lctx = ctx.locale_ctx.unwrap();
+    let col_name = if let (true, Some(lctx)) = (is_localized, ctx.locale_ctx) {
         let locale = match &lctx.mode {
             LocaleMode::Single(l) => l.as_str(),
             _ => lctx.config.default_locale.as_str(),

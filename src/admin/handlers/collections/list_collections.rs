@@ -5,9 +5,10 @@ use crate::{
     admin::{
         AdminState,
         context::{ContextBuilder, PageType},
-        handlers::shared::{extract_editor_locale, render_or_error},
+        handlers::shared::{extract_editor_locale, get_user_doc, render_or_error},
     },
-    core::auth::Claims,
+    core::auth::{AuthUser, Claims},
+    db::query::AccessResult,
 };
 
 /// GET /admin/collections — list all registered collections
@@ -15,10 +16,17 @@ pub async fn list_collections(
     State(state): State<AdminState>,
     headers: HeaderMap,
     claims: Option<Extension<Claims>>,
+    auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
+    let user_doc = get_user_doc(&auth_user);
     let mut collections = Vec::new();
 
     for (slug, def) in &state.registry.collections {
+        // Skip collections the user cannot read
+        if !has_list_read_access(&state, def.access.read.as_deref(), user_doc) {
+            continue;
+        }
+
         collections.push(json!({
             "slug": slug,
             "display_name": def.display_name(),
@@ -32,6 +40,7 @@ pub async fn list_collections(
     let claims_ref = claims.as_ref().map(|Extension(c)| c);
 
     let data = ContextBuilder::new(&state, claims_ref)
+        .filter_nav_by_access(&state, &auth_user)
         .editor_locale(editor_locale.as_deref(), &state.config.locale)
         .page(PageType::CollectionList, "collections")
         .set("collections", json!(collections))
@@ -40,4 +49,36 @@ pub async fn list_collections(
     let data = state.hook_runner.run_before_render(data);
 
     render_or_error(&state, "collections/list", &data)
+}
+
+/// Quick read-access check for list visibility.
+fn has_list_read_access(
+    state: &AdminState,
+    access_ref: Option<&str>,
+    user_doc: Option<&crate::core::Document>,
+) -> bool {
+    if access_ref.is_none() {
+        return !state.config.access.default_deny;
+    }
+
+    let mut conn = match state.pool.get() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let tx = match conn.transaction() {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+
+    let result = state
+        .hook_runner
+        .check_access(access_ref, user_doc, None, None, &tx);
+
+    let _ = tx.commit();
+
+    matches!(
+        result,
+        Ok(AccessResult::Allowed | AccessResult::Constrained(_))
+    )
 }

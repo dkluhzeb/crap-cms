@@ -3,6 +3,10 @@
 use anyhow::{Context as _, Result};
 use regex::Regex;
 use std::env;
+use std::sync::LazyLock;
+
+static ENV_VAR_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\$\{([^}]+)\}").expect("env var regex"));
 
 /// Recursively walk a TOML `Value` tree and substitute `${VAR}` / `${VAR:-default}`
 /// in all `String` nodes. Tables and arrays are descended into; other types are untouched.
@@ -31,11 +35,10 @@ pub(crate) fn substitute_in_value(value: &mut toml::Value) -> Result<()> {
 /// - `${VAR}` — replaced with the value of `VAR`. Returns an error if `VAR` is unset.
 /// - `${VAR:-fallback}` — replaced with `VAR` if set and non-empty, otherwise `fallback`.
 pub(super) fn substitute_env_vars(input: &str) -> Result<String> {
-    let re = Regex::new(r"\$\{([^}]+)\}").expect("env var regex");
     let mut result = String::with_capacity(input.len());
     let mut last_end = 0;
 
-    for cap in re.captures_iter(input) {
+    for cap in ENV_VAR_RE.captures_iter(input) {
         let full_match = cap.get(0).expect("regex group 0 always exists");
         result.push_str(&input[last_end..full_match.start()]);
 

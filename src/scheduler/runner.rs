@@ -62,7 +62,7 @@ pub fn execute_job(
             );
         }
         Err(e) => {
-            // Transaction rolls back on drop
+            // Explicit drop triggers rollback (BoxedTransaction rolls back on drop)
             drop(tx);
             let error_msg = e.to_string();
             let should_retry = job_run.attempt < job_run.max_attempts;

@@ -124,6 +124,8 @@ pub fn inject_upload_metadata(
 pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, Value>) {
     // Collect all URL fields that point to upload files
     // These are: url, {size}_url, {size}_webp_url, {size}_avif_url
+    let uploads_dir = config_dir.join("uploads");
+
     for (key, value) in doc_fields {
         if (key == "url" || key.ends_with("_url"))
             && !key.contains("image")
@@ -132,6 +134,18 @@ pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, Value
         {
             let rel_path = url.strip_prefix('/').unwrap_or(url);
             let file_path = config_dir.join(rel_path);
+
+            // Verify the resolved path stays within the uploads directory
+            if let (Ok(canonical_base), Ok(canonical_file)) =
+                (uploads_dir.canonicalize(), file_path.canonicalize())
+                && !canonical_file.starts_with(&canonical_base)
+            {
+                tracing::warn!(
+                    "Skipping file outside uploads directory: {}",
+                    file_path.display()
+                );
+                continue;
+            }
 
             if file_path.exists()
                 && let Err(e) = fs::remove_file(&file_path)

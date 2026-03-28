@@ -110,15 +110,10 @@ fn apply_default_timezone(fields: &mut [FieldDefinition], default_tz: &str) {
 
 fn setup_package_paths(lua: &Lua, config_dir: &Path) -> Result<()> {
     let config_str = config_dir.to_string_lossy();
-    let code = format!(
-        r#"
-        package.path = "{0}/?.lua;{0}/?/init.lua;" .. package.path
-        "#,
-        config_str
-    );
-    lua.load(&code)
-        .exec()
-        .context("Failed to set package paths")?;
+    let pkg: Table = lua.globals().get("package")?;
+    let current_path: String = pkg.get("path")?;
+    let new_path = format!("{0}/?.lua;{0}/?/init.lua;{1}", config_str, current_path);
+    pkg.set("path", new_path)?;
     Ok(())
 }
 

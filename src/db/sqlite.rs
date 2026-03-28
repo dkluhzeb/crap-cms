@@ -5,7 +5,7 @@ use std::{
     ops::Deref,
 };
 
-use anyhow::{Context as _, Result};
+use anyhow::{Context as _, Result, bail};
 use r2d2::PooledConnection;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::types::Value as SqliteValue;
@@ -28,6 +28,9 @@ fn sqlite_table_exists(conn: &dyn DbConnection, name: &str) -> Result<bool> {
 }
 
 fn sqlite_get_table_columns(conn: &dyn DbConnection, table: &str) -> Result<HashSet<String>> {
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!("Invalid table name for PRAGMA: {:?}", table);
+    }
     let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
     Ok(rows
         .into_iter()
@@ -39,6 +42,9 @@ fn sqlite_get_table_column_types(
     conn: &dyn DbConnection,
     table: &str,
 ) -> Result<HashMap<String, String>> {
+    if !table.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!("Invalid table name for PRAGMA: {:?}", table);
+    }
     let rows = conn.query_all(&format!("PRAGMA table_info({})", table), &[])?;
     let mut map = HashMap::new();
     for row in rows {
@@ -904,9 +910,13 @@ fn rusqlite_row_to_dbrow(row: &rusqlite::Row, col_count: usize, col_names: &[Str
                 rusqlite::types::ValueRef::Null => DbValue::Null,
                 rusqlite::types::ValueRef::Integer(i) => DbValue::Integer(i),
                 rusqlite::types::ValueRef::Real(f) => DbValue::Real(f),
-                rusqlite::types::ValueRef::Text(s) => {
-                    DbValue::Text(String::from_utf8_lossy(s).into_owned())
-                }
+                rusqlite::types::ValueRef::Text(s) => match std::str::from_utf8(s) {
+                    Ok(valid) => DbValue::Text(valid.to_owned()),
+                    Err(e) => {
+                        tracing::warn!("Invalid UTF-8 in SQLite text column: {}", e);
+                        DbValue::Text(String::from_utf8_lossy(s).into_owned())
+                    }
+                },
                 rusqlite::types::ValueRef::Blob(b) => DbValue::Blob(b.to_vec()),
             })
             .unwrap_or(DbValue::Null);
