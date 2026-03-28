@@ -16,17 +16,6 @@ use crate::{
     db::document::row_to_document,
 };
 
-/// Convert ISO 8601 timestamp back to SQLite storage format for cursor comparison.
-/// "2024-01-01T12:00:00.000Z" → "2024-01-01 12:00:00"
-pub(super) fn denormalize_timestamp(s: &str) -> String {
-    // Match the ISO format produced by normalize_timestamp in document.rs
-    if s.len() == 24 && s.as_bytes().get(10) == Some(&b'T') && s.ends_with(".000Z") {
-        format!("{} {}", &s[..10], &s[11..19])
-    } else {
-        s.to_string()
-    }
-}
-
 /// Find documents matching a query.
 pub fn find(
     conn: &dyn DbConnection,
@@ -118,6 +107,15 @@ pub fn find(
         ("id".to_string(), "ASC")
     };
 
+    // Validate sort column exists on the table
+    if !is_valid_sort_column(&sort_col, def) {
+        bail!(
+            "Invalid sort column '{}' — not a column on '{}'",
+            sort_col,
+            def.slug
+        );
+    }
+
     // Determine active cursor (after or before) and compute keyset direction
     let active_cursor = query.after_cursor.as_ref().or(query.before_cursor.as_ref());
     let using_before = query.before_cursor.is_some();
@@ -147,11 +145,14 @@ pub fn find(
             op = op,
         );
         // Bind sort_val with the correct DbValue variant for proper comparison.
-        // Strings: denormalize ISO timestamps back to SQLite format.
+        // Strings: pass through as-is (cursor values come from document fields which
+        // match the DB storage format). Do NOT denormalize — the DB stores ISO format
+        // with 'T' separator, and denormalizing to space-separated would create a
+        // string comparison mismatch.
         // Numbers: bind as Integer/Real for correct numeric ordering.
         // Null: bind as SQL NULL, not empty string.
         let sort_val = match &cursor.sort_val {
-            Value::String(s) => DbValue::Text(denormalize_timestamp(s)),
+            Value::String(s) => DbValue::Text(s.clone()),
             Value::Number(n) => {
                 if let Some(i) = n.as_i64() {
                     DbValue::Integer(i)
@@ -230,6 +231,22 @@ pub fn find(
     }
 
     Ok(documents)
+}
+
+/// Check whether a sort column name corresponds to a real column on the collection table.
+fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
+    // System columns that always exist
+    if matches!(
+        col,
+        "id" | "created_at" | "updated_at" | "_status" | "_deleted_at" | "_ref_count"
+    ) {
+        return true;
+    }
+
+    // User-defined fields that have a parent column (has-one scalar fields)
+    def.fields
+        .iter()
+        .any(|f| f.name == col && f.has_parent_column())
 }
 
 #[cfg(test)]
@@ -947,43 +964,6 @@ mod tests {
         // Just verify it executes successfully — order is nanoid-determined
     }
 
-    // ── denormalize_timestamp tests ──────────────────────────────────────
-
-    #[test]
-    fn denormalize_timestamp_iso_to_sqlite() {
-        assert_eq!(
-            denormalize_timestamp("2026-03-01T19:13:04.000Z"),
-            "2026-03-01 19:13:04"
-        );
-    }
-
-    #[test]
-    fn denormalize_timestamp_passthrough() {
-        // Already in SQLite format — unchanged
-        assert_eq!(
-            denormalize_timestamp("2026-03-01 19:13:04"),
-            "2026-03-01 19:13:04"
-        );
-        // Non-timestamp string — unchanged
-        assert_eq!(denormalize_timestamp("hello"), "hello");
-    }
-
-    #[test]
-    fn denormalize_timestamp_wrong_length_passthrough() {
-        // String has T at index 10 but wrong length — passthrough unchanged
-        assert_eq!(
-            denormalize_timestamp("2026-03-01T12:00:00"), // len 19, not 24
-            "2026-03-01T12:00:00"
-        );
-    }
-
-    #[test]
-    fn denormalize_timestamp_no_000z_suffix_passthrough() {
-        // Correct length but does not end in ".000Z"
-        let s = "2026-03-01T12:00:00.999Z"; // ends in .999Z not .000Z
-        assert_eq!(denormalize_timestamp(s), s);
-    }
-
     // ── Soft-delete filtering tests ───────────────────────────────────────
 
     fn setup_soft_delete_db() -> (TempDir, DbPool) {
@@ -1086,5 +1066,161 @@ mod tests {
         };
         let docs = find(&conn, "articles", &def, &query, None).unwrap();
         assert_eq!(docs.len(), 2);
+    }
+
+    // ── Invalid sort column ──────────────────────────────────────────────
+
+    #[test]
+    fn invalid_sort_column_returns_error_not_500() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let query = FindQuery {
+            order_by: Some("nonexistent_column".to_string()),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &query, None);
+        assert!(result.is_err(), "Should reject invalid sort column");
+        // Caught by validate_query_fields before reaching SQL
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Invalid field"),
+            "Should be a validation error, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn valid_cursor_sort_col_succeeds() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let query = FindQuery {
+            order_by: Some("title".to_string()),
+            after_cursor: Some(crate::db::query::cursor::CursorData {
+                sort_col: "title".to_string(),
+                sort_dir: "ASC".to_string(),
+                sort_val: Value::String("test".to_string()),
+                id: "abc".to_string(),
+            }),
+            ..Default::default()
+        };
+        let result = find(&conn, "posts", &def, &query, None);
+        assert!(result.is_ok());
+    }
+
+    // ── Cursor pagination round-trip consistency ─────────────────────────
+
+    #[test]
+    fn cursor_forward_back_forward_consistent() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        // Insert 14 docs with unique sequential created_at (ISO format, matching DB storage)
+        for i in 1..=14 {
+            conn.execute(
+                &format!(
+                    "INSERT INTO posts (id, title, created_at, updated_at) VALUES ('d{:02}', 'Post {}', '2024-01-{:02}T12:00:00.000Z', '2024-01-{:02}T12:00:00.000Z')",
+                    i, i, i, i
+                ),
+                &[],
+            ).unwrap();
+        }
+
+        let limit = 10i64;
+
+        // Page 1: initial load (no cursor, limit=10, default sort: -created_at)
+        let q1 = FindQuery {
+            limit: Some(limit),
+            ..Default::default()
+        };
+        let page1 = find(&conn, "posts", &def, &q1, None).unwrap();
+        assert_eq!(page1.len(), 10, "Page 1 should have 10 items");
+        // DESC: newest first, so d14, d13, ..., d05
+        assert_eq!(page1[0].id.as_ref(), "d14");
+        assert_eq!(page1[9].id.as_ref(), "d05");
+
+        // Page 2: forward with after_cursor (overfetch limit=11)
+        let (_, end_cursor_p1) =
+            crate::db::query::cursor::build_cursors(&page1, "created_at", "DESC");
+        let end_cursor_data =
+            crate::db::query::cursor::CursorData::decode(end_cursor_p1.as_ref().unwrap()).unwrap();
+        let q2 = FindQuery {
+            limit: Some(limit + 1),
+            after_cursor: Some(end_cursor_data),
+            ..Default::default()
+        };
+        let page2 = find(&conn, "posts", &def, &q2, None).unwrap();
+        let page2_count = page2.len().min(limit as usize);
+        assert_eq!(page2_count, 4, "Page 2 should have 4 items");
+        assert_eq!(page2[0].id.as_ref(), "d04");
+
+        // Grab the start_cursor of page 2 for going back
+        let page2_trimmed = &page2[..page2_count];
+        let (start_cursor_p2, _) =
+            crate::db::query::cursor::build_cursors(page2_trimmed, "created_at", "DESC");
+        let start_cursor_data =
+            crate::db::query::cursor::CursorData::decode(start_cursor_p2.as_ref().unwrap())
+                .unwrap();
+
+        // Go back: before_cursor (overfetch limit=11)
+        let q_back = FindQuery {
+            limit: Some(limit + 1),
+            before_cursor: Some(start_cursor_data),
+            ..Default::default()
+        };
+        let page1_again = find(&conn, "posts", &def, &q_back, None).unwrap();
+        // Trim overfetch from front (before_cursor extra is at index 0 after reversal)
+        let page1_trimmed: Vec<_> = if page1_again.len() > limit as usize {
+            page1_again[1..].to_vec()
+        } else {
+            page1_again
+        };
+        assert_eq!(
+            page1_trimmed.len(),
+            10,
+            "Back to page 1 should have 10 items"
+        );
+        assert_eq!(
+            page1_trimmed[0].id.as_ref(),
+            "d14",
+            "First item should be d14"
+        );
+        assert_eq!(
+            page1_trimmed[9].id.as_ref(),
+            "d05",
+            "Last item should be d05"
+        );
+
+        // Forward again: end_cursor of the back-result
+        let (_, end_cursor_p1_again) =
+            crate::db::query::cursor::build_cursors(&page1_trimmed, "created_at", "DESC");
+        let end_cursor_data_again =
+            crate::db::query::cursor::CursorData::decode(end_cursor_p1_again.as_ref().unwrap())
+                .unwrap();
+        let q2_again = FindQuery {
+            limit: Some(limit + 1),
+            after_cursor: Some(end_cursor_data_again),
+            ..Default::default()
+        };
+        let page2_again = find(&conn, "posts", &def, &q2_again, None).unwrap();
+        let page2_again_count = page2_again.len().min(limit as usize);
+        assert_eq!(
+            page2_again_count, page2_count,
+            "Page 2 after back+forward should have same item count"
+        );
+
+        // Verify same IDs
+        let ids_first: Vec<&str> = page2_trimmed.iter().map(|d| d.id.as_ref()).collect();
+        let ids_second: Vec<&str> = page2_again[..page2_again_count]
+            .iter()
+            .map(|d| d.id.as_ref())
+            .collect();
+        assert_eq!(
+            ids_first, ids_second,
+            "Same documents should appear on page 2"
+        );
     }
 }

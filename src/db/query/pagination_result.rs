@@ -84,21 +84,44 @@ impl<'a> PaginationResultBuilder<'a> {
     }
 
     /// Terminal: compute cursor-based pagination result.
+    ///
+    /// When `cursor_has_more` is `Some(true/false)`, it's used as the authoritative
+    /// signal for whether more docs exist in the current direction (from overfetch).
+    /// When `None`, falls back to the `total`-based heuristic.
     pub fn cursor(
         self,
         order_by: Option<&str>,
         has_timestamps: bool,
         had_before_cursor: bool,
         had_any_cursor: bool,
+        cursor_has_more: Option<bool>,
     ) -> PaginationResult {
         let (sort_col, sort_dir) = resolve_sort(order_by, has_timestamps);
         let (start_cursor, end_cursor) = cursor::build_cursors(self.docs, &sort_col, &sort_dir);
 
-        let at_limit = self.docs.len() as i64 >= self.limit && !self.docs.is_empty();
-        let (has_next_page, has_prev_page) = if had_before_cursor {
-            (true, at_limit)
+        let total_pages = if self.limit > 0 {
+            (self.total + self.limit - 1) / self.limit
         } else {
-            (at_limit, had_any_cursor)
+            1
+        };
+        let multiple_pages = total_pages > 1;
+
+        // cursor_has_more (from overfetch) is authoritative when available.
+        // Fallback: at_limit heuristic (docs.len() >= limit implies more pages).
+        let at_limit = self.docs.len() as i64 >= self.limit && !self.docs.is_empty();
+        let more_in_direction = cursor_has_more.unwrap_or(at_limit);
+
+        let (has_next_page, has_prev_page) = if had_before_cursor {
+            // Navigating backwards: always has next (we came from there),
+            // has prev only if overfetch/heuristic says more exist behind us.
+            (true, more_in_direction)
+        } else if had_any_cursor {
+            // Navigating forwards with after_cursor: always has prev (we came from there),
+            // has next if overfetch/heuristic says more exist ahead.
+            (more_in_direction, true)
+        } else {
+            // Initial load (no cursor): no prev, has next if more than one page of total.
+            (multiple_pages, false)
         };
 
         PaginationResult {
@@ -237,7 +260,13 @@ mod tests {
     #[test]
     fn cursor_forward_with_more() {
         let docs: Vec<Document> = (0..10).map(|i| make_doc(&format!("d{}", i))).collect();
-        let pr = PaginationResult::builder(&docs, 50, 10).cursor(Some("title"), true, false, false);
+        let pr = PaginationResult::builder(&docs, 50, 10).cursor(
+            Some("title"),
+            true,
+            false,
+            false,
+            None,
+        );
         assert!(pr.has_next_page);
         assert!(!pr.has_prev_page);
         assert!(pr.start_cursor.is_some());
@@ -249,7 +278,8 @@ mod tests {
     #[test]
     fn cursor_forward_after_cursor() {
         let docs: Vec<Document> = (0..10).map(|i| make_doc(&format!("d{}", i))).collect();
-        let pr = PaginationResult::builder(&docs, 50, 10).cursor(Some("title"), true, false, true);
+        let pr =
+            PaginationResult::builder(&docs, 50, 10).cursor(Some("title"), true, false, true, None);
         assert!(pr.has_next_page);
         assert!(pr.has_prev_page);
     }
@@ -257,7 +287,7 @@ mod tests {
     #[test]
     fn cursor_backward() {
         let docs: Vec<Document> = (0..10).map(|i| make_doc(&format!("d{}", i))).collect();
-        let pr = PaginationResult::builder(&docs, 50, 10).cursor(None, true, true, true);
+        let pr = PaginationResult::builder(&docs, 50, 10).cursor(None, true, true, true, None);
         assert!(pr.has_next_page);
         assert!(pr.has_prev_page); // at_limit=true since 10 >= 10
     }
@@ -265,15 +295,44 @@ mod tests {
     #[test]
     fn cursor_backward_not_at_limit() {
         let docs: Vec<Document> = (0..3).map(|i| make_doc(&format!("d{}", i))).collect();
-        let pr = PaginationResult::builder(&docs, 50, 10).cursor(None, true, true, true);
+        let pr = PaginationResult::builder(&docs, 50, 10).cursor(None, true, true, true, None);
         assert!(pr.has_next_page);
         assert!(!pr.has_prev_page); // at_limit=false since 3 < 10
     }
 
     #[test]
+    fn cursor_initial_load_single_page() {
+        // Exactly one page of results — next should be false
+        let docs: Vec<Document> = (0..10).map(|i| make_doc(&format!("d{}", i))).collect();
+        let pr = PaginationResult::builder(&docs, 10, 10).cursor(None, true, false, false, None);
+        assert!(!pr.has_next_page, "Single page should not have next");
+        assert!(!pr.has_prev_page, "Initial load should not have prev");
+    }
+
+    #[test]
+    fn cursor_back_to_first_page_no_prev() {
+        // Navigated back to first page via before_cursor with overfetch — prev should be false
+        // when overfetch signals no more pages behind
+        let docs: Vec<Document> = (0..10).map(|i| make_doc(&format!("d{}", i))).collect();
+        let pr =
+            PaginationResult::builder(&docs, 10, 10).cursor(None, true, true, true, Some(false));
+        assert!(pr.has_next_page, "Should have next (came from there)");
+        assert!(
+            !pr.has_prev_page,
+            "Should not have prev when overfetch says no more"
+        );
+    }
+
+    #[test]
     fn cursor_empty_results() {
         let docs: Vec<Document> = Vec::new();
-        let pr = PaginationResult::builder(&docs, 0, 10).cursor(Some("title"), false, false, false);
+        let pr = PaginationResult::builder(&docs, 0, 10).cursor(
+            Some("title"),
+            false,
+            false,
+            false,
+            None,
+        );
         assert!(!pr.has_next_page);
         assert!(!pr.has_prev_page);
         assert_eq!(pr.start_cursor, None);
@@ -283,22 +342,27 @@ mod tests {
     #[test]
     fn cursor_default_sort_with_timestamps() {
         let docs = vec![make_doc("a")];
-        let pr = PaginationResult::builder(&docs, 1, 10).cursor(None, true, false, false);
+        let pr = PaginationResult::builder(&docs, 1, 10).cursor(None, true, false, false, None);
         assert!(pr.start_cursor.is_some());
     }
 
     #[test]
     fn cursor_default_sort_without_timestamps() {
         let docs = vec![make_doc("a")];
-        let pr = PaginationResult::builder(&docs, 1, 10).cursor(None, false, false, false);
+        let pr = PaginationResult::builder(&docs, 1, 10).cursor(None, false, false, false, None);
         assert!(pr.start_cursor.is_some());
     }
 
     #[test]
     fn cursor_descending_sort() {
         let docs = vec![make_doc("a")];
-        let pr =
-            PaginationResult::builder(&docs, 1, 10).cursor(Some("-created_at"), true, false, false);
+        let pr = PaginationResult::builder(&docs, 1, 10).cursor(
+            Some("-created_at"),
+            true,
+            false,
+            false,
+            None,
+        );
         assert!(pr.start_cursor.is_some());
     }
 
@@ -324,7 +388,7 @@ mod tests {
     #[test]
     fn serialize_cursor_mode_omits_page_fields() {
         let docs = vec![make_doc("a")];
-        let pr = PaginationResult::builder(&docs, 1, 10).cursor(None, false, false, false);
+        let pr = PaginationResult::builder(&docs, 1, 10).cursor(None, false, false, false, None);
         let json = serde_json::to_value(&pr).unwrap();
 
         // cursor fields present

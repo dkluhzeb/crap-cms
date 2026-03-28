@@ -265,12 +265,20 @@ pub(super) fn register_find(
                 .collect();
 
             let limit = find_query.limit.unwrap_or(pg_default);
+            let had_cursor =
+                find_query.after_cursor.is_some() || find_query.before_cursor.is_some();
+            let cursor_has_more = if had_cursor && (docs.len() as i64) < limit {
+                Some(false)
+            } else {
+                None
+            };
             let pr = if pg_cursor {
                 query::PaginationResult::builder(&docs, total, limit).cursor(
                     find_query.order_by.as_deref(),
                     def.timestamps,
                     find_query.before_cursor.is_some(),
-                    find_query.after_cursor.is_some() || find_query.before_cursor.is_some(),
+                    had_cursor,
+                    cursor_has_more,
                 )
             } else {
                 let offset = find_query.offset.unwrap_or(0);

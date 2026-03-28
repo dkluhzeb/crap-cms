@@ -188,12 +188,18 @@ pub(super) fn exec_find(
         query::populate_relationships_batch(&pop_ctx, &mut docs, &pop_opts)?;
     }
 
+    let cursor_has_more = if pagination.has_cursor() && (docs.len() as i64) < pagination.limit {
+        Some(false)
+    } else {
+        None
+    };
     let pr = if config.pagination.is_cursor() {
         query::PaginationResult::builder(&docs, total, pagination.limit).cursor(
             order_by.as_deref(),
             def.timestamps,
             pagination.before_cursor.is_some(),
             pagination.has_cursor(),
+            cursor_has_more,
         )
     } else {
         query::PaginationResult::builder(&docs, total, pagination.limit)

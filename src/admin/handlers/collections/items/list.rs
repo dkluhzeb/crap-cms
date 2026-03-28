@@ -114,12 +114,20 @@ pub async fn list_items(
         sort.clone().or_else(|| def.admin.default_sort.clone())
     };
 
+    let has_cursor = pagination.has_cursor();
+
     let mut find_query = FindQuery::new();
     find_query.filters = filters.clone();
     find_query.order_by = order_by.clone();
     find_query.include_deleted = is_trash;
-    find_query.limit = Some(pagination.limit);
-    find_query.offset = if pagination.has_cursor() {
+    // Overfetch by 1 when cursor pagination is active to reliably detect
+    // whether more pages exist in the current direction.
+    find_query.limit = Some(if has_cursor {
+        pagination.limit + 1
+    } else {
+        pagination.limit
+    });
+    find_query.offset = if has_cursor {
         None
     } else {
         Some(pagination.offset)
@@ -181,11 +189,11 @@ pub async fn list_items(
         };
         let docs = runner.apply_after_read_many(&ar_ctx, docs);
 
-        Ok::<_, anyhow::Error>((docs, total))
+        Ok::<_, anyhow::Error>((docs, total, has_cursor))
     })
     .await;
 
-    let (documents, total) = match read_result {
+    let (mut documents, total, had_cursor) = match read_result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             tracing::error!("Collection list query error: {}", e);
@@ -195,6 +203,20 @@ pub async fn list_items(
             tracing::error!("Collection list task error: {}", e);
             return server_error(&state, "An internal error occurred.");
         }
+    };
+
+    // Trim the overfetch row and detect whether more pages exist.
+    // For before_cursor (reversed by find()), the extra row is at the front.
+    // For after_cursor, the extra row is at the end.
+    let cursor_has_more = if had_cursor && documents.len() as i64 > pagination.limit {
+        if pagination.before_cursor.is_some() {
+            documents.remove(0);
+        } else {
+            documents.pop();
+        }
+        true
+    } else {
+        false
     };
 
     // Strip field-level read-denied fields from documents
@@ -308,6 +330,11 @@ pub async fn list_items(
             def.timestamps,
             pagination.before_cursor.is_some(),
             pagination.has_cursor(),
+            if had_cursor {
+                Some(cursor_has_more)
+            } else {
+                None
+            },
         )
     } else {
         query::PaginationResult::builder(&documents, total, pagination.limit)

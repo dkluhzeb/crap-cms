@@ -161,32 +161,37 @@ pub(crate) fn build_list_url_with_cursor(
     raw_where: &str,
     cursor: Option<(&str, &str)>,
 ) -> String {
-    let mut url = format!("{}?page={}", base, page);
+    let mut parts: Vec<String> = Vec::new();
+
+    // Cursor pagination doesn't use page numbers — omit page param when a cursor is present
+    if cursor.is_none() {
+        parts.push(format!("page={}", page));
+    }
 
     if let Some(pp) = per_page {
-        url.push_str(&format!("&per_page={}", pp));
+        parts.push(format!("per_page={}", pp));
     }
 
     if let Some(s) = search {
-        url.push_str(&format!("&search={}", url_encode(s)));
+        parts.push(format!("search={}", url_encode(s)));
     }
 
     if let Some(s) = sort {
-        url.push_str(&format!("&sort={}", url_encode(s)));
+        parts.push(format!("sort={}", url_encode(s)));
     }
 
     if let Some((param, value)) = cursor {
-        url.push_str(&format!("&{}={}", param, url_encode(value)));
+        parts.push(format!("{}={}", param, url_encode(value)));
     }
 
     // Preserve where params from original query string
     for part in raw_where.split('&') {
         if part.starts_with("where%5B") || part.starts_with("where[") {
-            url.push('&');
-            url.push_str(part);
+            parts.push(part.to_string());
         }
     }
-    url
+
+    format!("{}?{}", base, parts.join("&"))
 }
 
 /// Simple percent-encoding for URL query values.
@@ -388,7 +393,11 @@ mod tests {
         );
         assert!(url.contains("after_cursor=abc123"));
         assert!(url.contains("sort=title"));
-        assert!(url.contains("page=1"));
+        // Cursor URLs should NOT include page= (cursor replaces page-based pagination)
+        assert!(
+            !url.contains("page="),
+            "Cursor URLs should not include page param"
+        );
     }
 
     #[test]

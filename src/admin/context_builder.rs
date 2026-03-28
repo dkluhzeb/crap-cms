@@ -524,7 +524,7 @@ mod tests {
         let docs: Vec<crate::core::Document> = (0..20)
             .map(|i| crate::core::Document::new(format!("d{}", i)))
             .collect();
-        let pr = PaginationResult::builder(&docs, 100, 20).cursor(None, false, true, true);
+        let pr = PaginationResult::builder(&docs, 100, 20).cursor(None, false, true, true, None);
         let data = Map::new();
         let builder = ContextBuilder { data };
         let result = builder
@@ -546,7 +546,7 @@ mod tests {
     #[test]
     fn context_builder_cursor_pagination_no_navigation() {
         let docs: Vec<crate::core::Document> = Vec::new();
-        let pr = PaginationResult::builder(&docs, 5, 20).cursor(None, false, false, false);
+        let pr = PaginationResult::builder(&docs, 5, 20).cursor(None, false, false, false, None);
         let data = Map::new();
         let builder = ContextBuilder { data };
         let result = builder

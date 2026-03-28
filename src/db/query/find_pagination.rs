@@ -85,8 +85,12 @@ pub fn validate_find_pagination(
     let offset = (page - 1).saturating_mul(limit);
 
     let (after_cursor, before_cursor) = if cursor_enabled {
+        // page=1 is the default and should not conflict with cursors.
+        // Only reject page > 1 combined with a cursor (intentional pagination conflict).
+        let has_explicit_page = req_page.is_some_and(|p| p > 1);
+
         let ac = if let Some(s) = req_after_cursor {
-            if req_page.is_some() {
+            if has_explicit_page {
                 return Err(
                     "Cannot use both after_cursor and page — they are mutually exclusive"
                         .to_string(),
@@ -97,7 +101,7 @@ pub fn validate_find_pagination(
             None
         };
         let bc = if let Some(s) = req_before_cursor {
-            if req_page.is_some() {
+            if has_explicit_page {
                 return Err(
                     "Cannot use both before_cursor and page — they are mutually exclusive"
                         .to_string(),
@@ -190,6 +194,15 @@ mod tests {
         let err = validate_find_pagination(None, Some(2), None, Some(&cursor), 20, 100, true)
             .unwrap_err();
         assert!(err.contains("before_cursor and page"));
+    }
+
+    #[test]
+    fn cursor_with_page_one_is_allowed() {
+        let cursor = make_test_cursor();
+        // page=1 is the default — should not conflict with cursors
+        let p =
+            validate_find_pagination(None, Some(1), Some(&cursor), None, 20, 100, true).unwrap();
+        assert!(p.after_cursor.is_some());
     }
 
     #[test]

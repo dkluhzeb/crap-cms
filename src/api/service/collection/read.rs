@@ -217,11 +217,19 @@ impl ContentService {
 
                 // Build pagination
                 let pr = if cursor_enabled {
+                    // When docs < limit, we know there are no more pages in this direction.
+                    let cursor_has_more =
+                        if pagination.has_cursor() && (docs.len() as i64) < pagination.limit {
+                            Some(false)
+                        } else {
+                            None
+                        };
                     query::PaginationResult::builder(&docs, total, pagination.limit).cursor(
                         order_by.as_deref(),
                         has_timestamps,
                         pagination.before_cursor.is_some(),
                         pagination.has_cursor(),
+                        cursor_has_more,
                     )
                 } else {
                     query::PaginationResult::builder(&docs, total, pagination.limit)

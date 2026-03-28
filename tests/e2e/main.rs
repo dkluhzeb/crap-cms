@@ -9,6 +9,7 @@ mod html_forms;
 mod html_globals;
 mod html_locale;
 mod html_nesting;
+mod html_pagination;
 mod html_validation;
 mod html_versions;
 
