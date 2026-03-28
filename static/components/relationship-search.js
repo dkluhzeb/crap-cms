@@ -38,9 +38,21 @@ class CrapRelationshipSearch extends HTMLElement {
     this._initialized = false;
   }
 
+  static _injectStyles() {
+    if (CrapRelationshipSearch._stylesInjected) return;
+    CrapRelationshipSearch._stylesInjected = true;
+    const s = document.createElement('style');
+    s.textContent = CrapRelationshipSearch._styles();
+    document.head.appendChild(s);
+  }
+
+  /** @type {boolean} */
+  static _stylesInjected = false;
+
   connectedCallback() {
     if (this._initialized) return;
     this._initialized = true;
+    CrapRelationshipSearch._injectStyles();
     /** @type {MutationObserver|null} */
     this._observer = null;
 
@@ -78,28 +90,44 @@ class CrapRelationshipSearch extends HTMLElement {
     hiddenContainer.className = 'relationship-search__hidden';
     this.appendChild(hiddenContainer);
 
-    // Selected items display (chips for has-many)
-    if (hasMany) {
-      const chipsContainer = document.createElement('div');
-      chipsContainer.className = 'relationship-search__chips';
-      this.appendChild(chipsContainer);
-    }
-
     // Search input
     const inputWrapper = document.createElement('div');
     inputWrapper.className = 'relationship-search__input-wrapper';
     const input = document.createElement('input');
     input.type = 'text';
     input.id = 'field-' + fieldName;
-    input.className = 'relationship-search__input' + errorClass;
-    input.placeholder = hasMany ? t('search_to_add') : t('search');
     input.autocomplete = 'off';
     input.setAttribute('role', 'combobox');
     input.setAttribute('aria-expanded', 'false');
     input.setAttribute('aria-autocomplete', 'list');
     input.setAttribute('aria-controls', 'dropdown-' + fieldName);
     if (readonly) input.disabled = true;
-    inputWrapper.appendChild(input);
+
+    // Has-many: tag-style container with chips + inline input
+    if (hasMany) {
+      const tagsContainer = document.createElement('div');
+      tagsContainer.className = 'relationship-search__tags' + (this.hasAttribute('data-error') ? ' relationship-search__tags--error' : '');
+
+      const chipsContainer = document.createElement('div');
+      chipsContainer.className = 'relationship-search__chips';
+      tagsContainer.appendChild(chipsContainer);
+
+      input.className = 'relationship-search__tags-input';
+      input.placeholder = t('search_to_add');
+      tagsContainer.appendChild(input);
+
+      // Click on container focuses input
+      tagsContainer.addEventListener('click', (e) => {
+        if (/** @type {HTMLElement} */ (e.target) === tagsContainer) input.focus();
+      });
+
+      inputWrapper.appendChild(tagsContainer);
+    } else {
+      input.className = 'relationship-search__input' + errorClass;
+      input.placeholder = t('search');
+      inputWrapper.appendChild(input);
+    }
+
     this.appendChild(inputWrapper);
 
     // Dropdown
@@ -194,6 +222,12 @@ class CrapRelationshipSearch extends HTMLElement {
         }
         chipsContainer.appendChild(chip);
       });
+
+      // Toggle error class on tags container
+      const tagsContainer = self.querySelector('.relationship-search__tags');
+      if (tagsContainer) {
+        tagsContainer.classList.toggle('relationship-search__tags--has-items', selected.length > 0);
+      }
     }
 
     function renderHasOneDisplay() {
@@ -366,6 +400,8 @@ class CrapRelationshipSearch extends HTMLElement {
         e.preventDefault();
         if (activeIndex >= 0 && activeIndex < optionCount) {
           selectItem(results[activeIndex]);
+        } else if (optionCount > 0) {
+          selectItem(results[0]);
         }
       } else if (e.key === 'Escape') {
         closeDropdown();
@@ -580,6 +616,208 @@ class CrapRelationshipSearch extends HTMLElement {
     // Initial load
     fetchResults('', false);
     searchInput.focus();
+  }
+
+  static _styles() {
+    return `
+      crap-relationship-search {
+        position: relative;
+        display: block;
+      }
+      .relationship-search__input-wrapper {
+        position: relative;
+      }
+      .relationship-search__input-row {
+        display: flex;
+        gap: var(--space-xs2);
+        align-items: stretch;
+      }
+      .relationship-search__input-row .relationship-search__input-wrapper {
+        flex: 1;
+        min-width: 0;
+      }
+      .relationship-search__browse {
+        all: unset;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--control-sm);
+        flex-shrink: 0;
+        border: 1px solid var(--border-primary, #d9d9d9);
+        border-radius: var(--radius-sm, 4px);
+        background: var(--surface-primary, #fff);
+        color: var(--text-secondary, rgba(0, 0, 0, 0.65));
+        cursor: pointer;
+        transition: border-color var(--transition-fast, 0.15s), color var(--transition-fast, 0.15s);
+      }
+      .relationship-search__browse:hover {
+        border-color: var(--color-primary, #6366f1);
+        color: var(--color-primary, #6366f1);
+      }
+      .relationship-search__input {
+        width: 100%;
+        padding: var(--space-sm) var(--space-md);
+        border: 1px solid var(--border-primary);
+        border-radius: var(--radius-sm);
+        font-size: var(--text-sm);
+        background: var(--surface-primary);
+        color: var(--text-primary);
+        transition: border-color var(--transition-fast);
+        box-sizing: border-box;
+      }
+      .relationship-search__input:focus {
+        outline: none;
+        border-color: var(--color-primary);
+        box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 15%, transparent);
+      }
+      .relationship-search__clear {
+        position: absolute;
+        right: var(--space-sm);
+        top: 50%;
+        transform: translateY(-50%);
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--text-tertiary);
+        font-size: var(--icon-sm);
+        padding: var(--space-2xs) var(--space-xs);
+        line-height: 1;
+      }
+      .relationship-search__clear:hover {
+        color: var(--text-primary);
+      }
+      .relationship-search__dropdown {
+        position: absolute;
+        z-index: 100;
+        top: 100%;
+        left: 0;
+        right: 0;
+        max-height: var(--dropdown-max-height);
+        overflow-y: auto;
+        background: var(--surface-primary);
+        border: 1px solid var(--border-primary);
+        border-top: none;
+        border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+        box-shadow: var(--shadow-md);
+      }
+      .relationship-search__option {
+        padding: var(--space-sm) var(--space-md);
+        cursor: pointer;
+        font-size: var(--text-sm);
+        color: var(--text-primary);
+      }
+      .relationship-search__option:hover,
+      .relationship-search__option--active {
+        background: var(--surface-hover);
+      }
+      .relationship-search__option--selected {
+        color: var(--text-tertiary);
+        font-style: italic;
+      }
+      .relationship-search__empty {
+        padding: var(--space-sm) var(--space-md);
+        color: var(--text-tertiary);
+        font-size: var(--text-sm);
+        font-style: italic;
+      }
+      .relationship-search__tags {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        border: 1px solid var(--border-default);
+        border-radius: var(--radius-md);
+        background: var(--surface-primary);
+        min-height: var(--input-height);
+        cursor: text;
+      }
+      .relationship-search__tags:focus-within {
+        border-color: var(--accent-primary);
+        box-shadow: 0 0 0 2px var(--accent-primary-bg, rgba(59, 130, 246, 0.1));
+      }
+      .relationship-search__tags--error {
+        border-color: var(--color-danger);
+      }
+      .relationship-search__tags--has-items .relationship-search__tags-input {
+        margin-left: var(--space-xs);
+      }
+      .relationship-search__tags-input {
+        flex: 1 1 calc(var(--base) * 20);
+        min-width: calc(var(--base) * 20);
+        height: auto;
+        border: none;
+        outline: none;
+        background: transparent;
+        box-shadow: none;
+        font-size: var(--text-sm);
+        font-family: inherit;
+        padding: var(--space-xs) 0;
+        color: var(--text-primary);
+      }
+      .relationship-search__tags-input:focus {
+        border: none;
+        box-shadow: none;
+      }
+      .relationship-search__tags-input::placeholder {
+        color: var(--text-tertiary);
+      }
+      .relationship-search__chips {
+        display: contents;
+      }
+      .relationship-search__chip {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--space-xs);
+        padding: var(--space-xs) var(--space-sm);
+        background: var(--color-primary-bg);
+        border: 1px solid color-mix(in srgb, var(--color-primary) 20%, transparent);
+        border-radius: var(--radius-md);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        color: var(--text-primary);
+        line-height: 1.4;
+        white-space: nowrap;
+      }
+      .relationship-search__chip-remove {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        background: none;
+        border: none;
+        cursor: pointer;
+        color: var(--text-tertiary);
+        font-size: var(--icon-sm);
+        padding: 0;
+        line-height: 1;
+        margin-left: var(--space-2xs);
+        border-radius: var(--radius-sm);
+        transition: color var(--transition-fast), background var(--transition-fast);
+      }
+      .relationship-search__chip-remove:hover {
+        color: var(--color-danger);
+        background: var(--color-danger-bg);
+      }
+      .relationship-search__chip-collection {
+        font-size: 0.7em;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-secondary);
+        background: var(--surface-secondary);
+        padding: 1px 5px;
+        border-radius: var(--radius-sm);
+        margin-right: var(--space-xs);
+      }
+      .relationship-search__group-header {
+        font-size: var(--text-xs);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--text-secondary);
+        padding: var(--space-xs2) var(--space-sm2) var(--space-xs);
+        border-bottom: 1px solid var(--border-color);
+      }
+    `;
   }
 }
 

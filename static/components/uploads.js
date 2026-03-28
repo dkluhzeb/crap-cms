@@ -35,7 +35,7 @@ class CrapUploadPreview extends HTMLElement {
     // Search widget: listen for crap:change events (bubbles from relationship-search)
     this.addEventListener('crap:change', () => {
       const hidden = /** @type {HTMLInputElement|null} */ (
-        this.querySelector('.relationship-search__hidden input[type="hidden"]')
+        this.querySelector('crap-relationship-search input[type="hidden"]')
       );
       if (!hidden || !hidden.value) {
         this._updatePreview(null, null, false);

@@ -1318,7 +1318,7 @@ class CrapRichtext extends HTMLElement {
       .crap-node-modal__header {
         padding: var(--space-lg, 1rem) 1.25rem;
         font-weight: 600;
-        font-size: 1.05em;
+        font-size: var(--text-base, 0.875rem);
         border-bottom: 1px solid var(--border-color, #e0e0e0);
       }
 
@@ -1336,7 +1336,7 @@ class CrapRichtext extends HTMLElement {
       }
 
       .crap-node-modal__label {
-        font-size: 0.85em;
+        font-size: var(--text-xs, 0.75rem);
         font-weight: 500;
         color: var(--text-secondary, rgba(0, 0, 0, 0.65));
       }
@@ -1348,7 +1348,7 @@ class CrapRichtext extends HTMLElement {
         border: 1px solid var(--input-border, #e0e0e0);
         border-radius: var(--radius-sm, 4px);
         font-family: inherit;
-        font-size: 0.9em;
+        font-size: var(--text-sm, 0.8125rem);
         background: var(--input-bg, #fff);
         color: var(--text-primary, rgba(0, 0, 0, 0.88));
       }
@@ -1365,7 +1365,7 @@ class CrapRichtext extends HTMLElement {
         display: flex;
         align-items: center;
         gap: var(--space-sm, 0.5rem);
-        font-size: 0.9em;
+        font-size: var(--text-sm, 0.8125rem);
         cursor: pointer;
       }
 
@@ -1379,18 +1379,18 @@ class CrapRichtext extends HTMLElement {
         display: flex;
         align-items: center;
         gap: var(--space-sm, 0.5rem);
-        font-size: 0.9em;
+        font-size: var(--text-sm, 0.8125rem);
         cursor: pointer;
       }
 
       .crap-node-modal__input--mono {
         font-family: monospace;
-        font-size: 0.85em;
+        font-size: var(--text-xs, 0.75rem);
       }
 
       .crap-node-modal__help {
         margin: 0;
-        font-size: 0.8em;
+        font-size: var(--text-xs, 0.75rem);
         color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
       }
 
@@ -1469,7 +1469,7 @@ class CrapRichtext extends HTMLElement {
       }
 
       .crap-node-modal__error {
-        font-size: 0.8em;
+        font-size: var(--text-xs, 0.75rem);
         color: var(--color-danger, #dc3545);
         margin: 0;
       }

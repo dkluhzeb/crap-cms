@@ -19,9 +19,16 @@ crap-array-field,
 crap-conditions,
 crap-dirty-form,
 crap-scroll-restore,
-crap-live-events,
 crap-list-settings {
   display: contents;
+}
+
+/* Prevent FOUC for Shadow DOM components that replace their content */
+crap-tags:not(:defined),
+crap-block-picker:not(:defined),
+crap-relationship-search:not(:defined),
+crap-focal-point:not(:defined) {
+  visibility: hidden;
 }
 
 :root {

@@ -21,6 +21,65 @@ class CrapLiveEvents extends HTMLElement {
     this._reconnectTimer = null;
   }
 
+  static _injectStyles() {
+    if (CrapLiveEvents._stylesInjected) return;
+    CrapLiveEvents._stylesInjected = true;
+    const s = document.createElement('style');
+    s.textContent = `
+      .stale-warning {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        padding: var(--space-sm) var(--space-md);
+        background: var(--color-warning-bg, #fef3c7);
+        border: 1px solid var(--color-warning, #f59e0b);
+        border-radius: var(--radius-md);
+        margin-bottom: var(--space-md);
+        font-size: var(--text-sm);
+        color: var(--text-primary);
+      }
+      .stale-warning__icon {
+        font-size: var(--text-lg);
+        flex-shrink: 0;
+      }
+      .stale-warning__text {
+        flex: 1;
+      }
+      .stale-warning__actions {
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+        flex-shrink: 0;
+      }
+      .stale-warning__reload {
+        white-space: nowrap;
+      }
+      .stale-warning__dismiss {
+        all: unset;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: var(--space-xl);
+        height: var(--space-xl);
+        border-radius: var(--radius-sm);
+        cursor: pointer;
+        font-size: var(--icon-md);
+        color: var(--text-secondary);
+      }
+      .stale-warning__dismiss:hover {
+        background: rgba(0, 0, 0, 0.1);
+        color: var(--text-primary);
+      }
+      @media (max-width: 768px) {
+        .stale-warning { flex-wrap: wrap; }
+      }
+    `;
+    document.head.appendChild(s);
+  }
+
+  /** @type {boolean} */
+  static _stylesInjected = false;
+
   connectedCallback() {
     if (typeof EventSource === 'undefined') return;
     if (!document.querySelector('[data-admin-layout]')) return;
@@ -105,6 +164,7 @@ class CrapLiveEvents extends HTMLElement {
    * @param {{ id: string, email: string }|null} editedBy
    */
   _showStaleWarning(action, editedBy) {
+    CrapLiveEvents._injectStyles();
     const form = document.getElementById('edit-form');
     if (!form) return;
 
