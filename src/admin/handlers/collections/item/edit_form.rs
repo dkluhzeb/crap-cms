@@ -252,10 +252,12 @@ pub async fn edit_form(
         .breadcrumbs(vec![
             Breadcrumb::link("collections", "/admin/collections"),
             Breadcrumb::link(def.display_name(), format!("/admin/collections/{}", slug)),
-            Breadcrumb::current(doc_title),
+            Breadcrumb::current(doc_title.clone()),
         ])
         .merge(locale_data)
         .build();
+
+    data["document_title"] = json!(doc_title);
 
     // Add upload context for upload collections
     if def.is_upload_collection() {

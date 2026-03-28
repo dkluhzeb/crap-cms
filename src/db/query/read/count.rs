@@ -19,10 +19,13 @@ pub fn count(
     filters: &[FilterClause],
     locale_ctx: Option<&LocaleContext>,
 ) -> Result<i64> {
-    count_with_search(conn, slug, def, filters, locale_ctx, None)
+    count_with_search(conn, slug, def, filters, locale_ctx, None, false)
 }
 
 /// Count documents with optional FTS search filter.
+///
+/// When `include_deleted` is true, soft-deleted documents are included in the count
+/// (used by the trash view).
 pub fn count_with_search(
     conn: &dyn DbConnection,
     slug: &str,
@@ -30,6 +33,7 @@ pub fn count_with_search(
     filters: &[FilterClause],
     locale_ctx: Option<&LocaleContext>,
     search: Option<&str>,
+    include_deleted: bool,
 ) -> Result<i64> {
     let (exact, prefixes) = super::super::get_valid_filter_paths(def, locale_ctx);
     for clause in filters {
@@ -52,8 +56,9 @@ pub fn count_with_search(
 
     let resolved_filters = resolve_filters(filters, def, locale_ctx)?;
     let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
+    let mut has_where = !where_clause.is_empty();
 
-    if !where_clause.is_empty() {
+    if has_where {
         sql.push_str(&where_clause);
     }
 
@@ -68,13 +73,23 @@ pub fn count_with_search(
                 let ph = conn.placeholder(params.len() + 1);
                 let fts_clause =
                     format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})");
-                if where_clause.is_empty() {
-                    sql.push_str(&format!(" WHERE {fts_clause}"));
-                } else {
+                if has_where {
                     sql.push_str(&format!(" AND {fts_clause}"));
+                } else {
+                    sql.push_str(&format!(" WHERE {fts_clause}"));
+                    has_where = true;
                 }
                 params.push(DbValue::Text(sanitized));
             }
+        }
+    }
+
+    // Exclude soft-deleted documents unless include_deleted is set
+    if def.soft_delete && !include_deleted {
+        if has_where {
+            sql.push_str(" AND _deleted_at IS NULL");
+        } else {
+            sql.push_str(" WHERE _deleted_at IS NULL");
         }
     }
 
@@ -105,6 +120,7 @@ pub fn count_where_field_eq(
     field: &str,
     value: &str,
     exclude_id: Option<&str>,
+    soft_delete: bool,
 ) -> Result<i64> {
     if !is_valid_identifier(field) {
         bail!(
@@ -112,10 +128,19 @@ pub fn count_where_field_eq(
             field
         );
     }
+
+    let soft_filter = if soft_delete {
+        " AND _deleted_at IS NULL"
+    } else {
+        ""
+    };
+
     let row = match exclude_id {
         Some(eid) => {
             let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
-            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {field} = {p1} AND id != {p2}");
+            let sql = format!(
+                "SELECT COUNT(*) FROM {table} WHERE {field} = {p1} AND id != {p2}{soft_filter}"
+            );
             conn.query_one(
                 &sql,
                 &[
@@ -127,7 +152,7 @@ pub fn count_where_field_eq(
         }
         None => {
             let p1 = conn.placeholder(1);
-            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {field} = {p1}");
+            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {field} = {p1}{soft_filter}");
             conn.query_one(&sql, &[DbValue::Text(value.to_string())])
                 .with_context(|| format!("Unique check on {table}.{field}"))?
         }
@@ -248,12 +273,12 @@ mod tests {
         d2.insert("status".to_string(), "draft".to_string());
         let doc2 = create(&conn, "posts", &def, &d2, None).unwrap();
 
-        let c = count_where_field_eq(&conn, "posts", "status", "draft", None).unwrap();
+        let c = count_where_field_eq(&conn, "posts", "status", "draft", None, false).unwrap();
         assert_eq!(c, 2);
 
         // Exclude one
         let c_excl =
-            count_where_field_eq(&conn, "posts", "status", "draft", Some(&doc2.id)).unwrap();
+            count_where_field_eq(&conn, "posts", "status", "draft", Some(&doc2.id), false).unwrap();
         assert_eq!(c_excl, 1);
     }
 
@@ -261,7 +286,7 @@ mod tests {
     fn count_where_field_eq_invalid_field_name() {
         let (_tmp, pool) = setup_db();
         let conn = pool.get().unwrap();
-        let result = count_where_field_eq(&conn, "posts", "bad field!", "val", None);
+        let result = count_where_field_eq(&conn, "posts", "bad field!", "val", None, false);
         assert!(result.is_err(), "Invalid field name should error");
         assert!(
             result
@@ -272,6 +297,121 @@ mod tests {
     }
 
     // ── count_with_search: FTS search path without WHERE clause ──────────
+
+    // ── Soft-delete filtering tests ───────────────────────────────────────
+
+    fn setup_soft_delete_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE articles (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    status TEXT,
+                    _deleted_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
+    }
+
+    fn soft_delete_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("articles");
+        def.fields = vec![
+            FieldDefinition::builder("title", FieldType::Text).build(),
+            FieldDefinition::builder("status", FieldType::Text).build(),
+        ];
+        def.soft_delete = true;
+        def
+    }
+
+    #[test]
+    fn count_excludes_soft_deleted() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+        let def = soft_delete_def();
+
+        // Insert one live and one soft-deleted doc
+        conn.execute(
+            "INSERT INTO articles (id, title, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            &[
+                DbValue::Text("id-live".into()),
+                DbValue::Text("Live".into()),
+                DbValue::Text("draft".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, status, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Deleted".into()),
+                DbValue::Text("draft".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let c = count(&conn, "articles", &def, &[], None).unwrap();
+        assert_eq!(c, 1, "count should exclude soft-deleted documents");
+    }
+
+    #[test]
+    fn count_with_filter_excludes_soft_deleted() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+        let def = soft_delete_def();
+
+        // Two draft docs, one soft-deleted
+        conn.execute(
+            "INSERT INTO articles (id, title, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            &[
+                DbValue::Text("id-live".into()),
+                DbValue::Text("Live".into()),
+                DbValue::Text("draft".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, status, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Deleted".into()),
+                DbValue::Text("draft".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let filters = vec![FilterClause::Single(Filter {
+            field: "status".to_string(),
+            op: FilterOp::Equals("draft".to_string()),
+        })];
+
+        let c = count(&conn, "articles", &def, &filters, None).unwrap();
+        assert_eq!(
+            c, 1,
+            "count with filter should exclude soft-deleted documents"
+        );
+    }
 
     #[test]
     fn count_with_search_no_other_filters() {
@@ -295,7 +435,7 @@ mod tests {
         fts::sync_fts_table(&conn, "posts", &def, &LocaleConfig::default()).unwrap();
 
         // count_with_search with no other filters (exercises the WHERE-less FTS code path)
-        let c = count_with_search(&conn, "posts", &def, &[], None, Some("Rust")).unwrap();
+        let c = count_with_search(&conn, "posts", &def, &[], None, Some("Rust"), false).unwrap();
         assert_eq!(c, 1, "FTS search should find only the Rust post");
     }
 }

@@ -263,6 +263,7 @@ impl HookRunner {
             is_draft: ctx.is_draft,
             locale_ctx: ctx.locale_ctx,
             registry: Some(&self.registry),
+            soft_delete: ctx.soft_delete,
         };
         validate_fields_inner(&lua, fields, data, &enriched_ctx)
     }

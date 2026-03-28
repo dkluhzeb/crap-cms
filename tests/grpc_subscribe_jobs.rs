@@ -436,6 +436,7 @@ async fn subscribe_receives_delete_event() {
         .delete(Request::new(content::DeleteRequest {
             collection: "posts".to_string(),
             id: doc.id.clone(),
+            force_hard_delete: false,
         }))
         .await
         .unwrap();

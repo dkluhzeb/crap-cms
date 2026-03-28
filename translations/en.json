@@ -19,6 +19,7 @@
   "search_placeholder": "Search",
   "no_items_yet": "No {{name}} yet",
   "create_first_item": "Create your first item to get started.",
+  "trash_empty": "Trash is empty.",
   "page_of": "Page {{page}} of {{total}}",
   "previous": "Previous",
   "next": "Next",
@@ -75,6 +76,8 @@
   "status": "Status",
   "restore": "Restore",
   "restore_version": "Restore Version",
+  "trash": "Trash",
+  "back_to_list": "Back to list",
   "published": "Published",
   "draft": "Draft",
   "version": "Version",
@@ -219,5 +222,18 @@
   "ok": "OK",
   "search": "Search...",
   "search_to_add": "Search to add...",
-  "are_you_sure": "Are you sure?"
+  "are_you_sure": "Are you sure?",
+
+  "move_to_trash": "Move to trash",
+  "delete_permanently": "Delete permanently",
+  "delete_confirm_title": "Delete {{name}}?",
+  "delete_confirm_soft": "Move to trash or delete permanently?",
+  "delete_confirm_hard": "This action cannot be undone.",
+  "moved_to_trash": "Moved to trash",
+  "deleted_permanently": "Deleted permanently",
+  "delete_error": "Failed to delete",
+  "empty_trash": "Empty trash",
+  "empty_trash_confirm_title": "Empty trash?",
+  "empty_trash_confirm": "Permanently delete all {{count}} items in trash? This cannot be undone.",
+  "trash_emptied": "Trash emptied"
 }

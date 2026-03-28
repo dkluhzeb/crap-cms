@@ -1,7 +1,7 @@
 //! CLI entrypoint for Crap CMS. Parses flags, loads config, and starts the admin + gRPC servers.
 //!
 //! Subcommands: `serve`, `status`, `user`, `make`, `blueprint`, `db`, `typegen`, `proto`,
-//! `migrate`, `backup`, `export`, `import`, `init`, `templates`, `jobs`, `images`.
+//! `migrate`, `backup`, `export`, `import`, `init`, `templates`, `jobs`, `images`, `trash`.
 //! Running bare `crap-cms` prints help.
 
 use anyhow::{Context as _, Result, bail};
@@ -13,7 +13,7 @@ use crap_cms::{
     cli::{self, crap_theme},
     commands::{
         self, BlueprintAction, DbAction, ImagesAction, JobsAction, MakeAction, MigrateAction,
-        TemplatesAction, UserAction, serve::ServeMode,
+        TemplatesAction, TrashAction, UserAction, serve::ServeMode,
     },
 };
 
@@ -178,6 +178,12 @@ enum Command {
     Images {
         #[command(subcommand)]
         action: ImagesAction,
+    },
+
+    /// Manage soft-deleted documents (trash)
+    Trash {
+        #[command(subcommand)]
+        action: TrashAction,
     },
 
     /// Start the MCP (Model Context Protocol) server (stdio transport)
@@ -353,6 +359,10 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Images { action } => {
             let config = commands::resolve_config_dir(config_flag)?;
             commands::images::run(&config, action)
+        }
+        Command::Trash { action } => {
+            let config = commands::resolve_config_dir(config_flag)?;
+            commands::trash::run(action, &config)
         }
         Command::Mcp => {
             let config = commands::resolve_config_dir(config_flag)?;

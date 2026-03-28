@@ -186,6 +186,7 @@ pub(super) fn register_find(
                 &find_query.filters,
                 locale_ctx.as_ref(),
                 find_query.search.as_deref(),
+                find_query.include_deleted,
             )
             .map_err(|e| RuntimeError(format!("count error: {}", e)))?;
 
@@ -537,6 +538,7 @@ pub(super) fn register_count(
                 &filters,
                 locale_ctx.as_ref(),
                 search.as_deref(),
+                false,
             )
             .map_err(|e| RuntimeError(format!("count error: {}", e)))?;
 

@@ -267,6 +267,13 @@ impl ContentApi for ContentService {
         self.delete_impl(request).await
     }
 
+    async fn restore(
+        &self,
+        request: Request<content::RestoreRequest>,
+    ) -> Result<Response<content::RestoreResponse>, Status> {
+        self.restore_impl(request).await
+    }
+
     async fn count(
         &self,
         request: Request<content::CountRequest>,

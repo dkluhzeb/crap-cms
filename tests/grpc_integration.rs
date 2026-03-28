@@ -334,6 +334,7 @@ async fn delete_document() {
         .delete(Request::new(content::DeleteRequest {
             collection: "posts".to_string(),
             id: doc.id.clone(),
+            force_hard_delete: false,
         }))
         .await
         .unwrap()

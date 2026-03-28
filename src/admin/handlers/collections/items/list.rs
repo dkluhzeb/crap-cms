@@ -30,7 +30,7 @@ use crate::{
         auth::{AuthUser, Claims},
         upload,
     },
-    db::query::{self, AccessResult, FilterClause, FindQuery, LocaleContext},
+    db::query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery, LocaleContext},
     hooks::lifecycle::AfterReadCtx,
 };
 
@@ -64,6 +64,7 @@ pub async fn list_items(
     let raw_query = uri.query().unwrap_or("");
     let cursor_enabled = state.config.pagination.is_cursor();
     let search = params.search.filter(|s| !s.trim().is_empty());
+    let is_trash = def.soft_delete && params.trash.as_deref() == Some("1");
 
     let pg_ctx = query::PaginationCtx::new(
         state.config.pagination.default_limit,
@@ -98,12 +99,25 @@ pub async fn list_items(
     // Merge URL filters
     filters.extend(url_filters.clone());
 
-    // Determine sort order: URL param > default_sort
-    let order_by = sort.clone().or_else(|| def.admin.default_sort.clone());
+    // Trash view: show only soft-deleted documents, sorted by _deleted_at DESC
+    if is_trash {
+        filters.push(FilterClause::Single(Filter {
+            field: "_deleted_at".to_string(),
+            op: FilterOp::Exists,
+        }));
+    }
+
+    // Determine sort order: trash uses _deleted_at DESC, otherwise URL param > default_sort
+    let order_by = if is_trash {
+        Some("-_deleted_at".to_string())
+    } else {
+        sort.clone().or_else(|| def.admin.default_sort.clone())
+    };
 
     let mut find_query = FindQuery::new();
     find_query.filters = filters.clone();
     find_query.order_by = order_by.clone();
+    find_query.include_deleted = is_trash;
     find_query.limit = Some(pagination.limit);
     find_query.offset = if pagination.has_cursor() {
         None
@@ -137,6 +151,7 @@ pub async fn list_items(
             &filters,
             locale_ctx.as_ref(),
             find_query.search.as_deref(),
+            find_query.include_deleted,
         )?;
 
         let mut docs = query::find(
@@ -361,6 +376,8 @@ pub async fn list_items(
 
     let data = ctx
         .set("has_drafts", json!(def.has_drafts()))
+        .set("has_soft_delete", json!(def.soft_delete))
+        .set("is_trash", json!(is_trash))
         .set("search", json!(search))
         .set("sort", json!(sort))
         .set("table_columns", json!(table_columns))

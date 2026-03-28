@@ -52,6 +52,8 @@ pub struct PaginationParams {
     pub after_cursor: Option<String>,
     /// Backward cursor for cursor-based pagination.
     pub before_cursor: Option<String>,
+    /// When "1", show the trash view (soft-deleted documents only).
+    pub trash: Option<String>,
 }
 
 /// Extract the editor locale from the `crap_editor_locale` cookie.

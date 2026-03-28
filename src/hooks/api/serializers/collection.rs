@@ -76,6 +76,9 @@ pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) ->
     if let Some(ref s) = def.access.delete {
         access.set("delete", s.as_str())?;
     }
+    if let Some(ref s) = def.access.trash {
+        access.set("trash", s.as_str())?;
+    }
     tbl.set("access", access)?;
 
     // mcp
@@ -102,6 +105,14 @@ pub(crate) fn collection_config_to_lua(lua: &Lua, def: &CollectionDefinition) ->
         Some(LiveSetting::Function(s)) => {
             tbl.set("live", s.as_str())?;
         }
+    }
+
+    // soft_delete
+    if def.soft_delete {
+        tbl.set("soft_delete", true)?;
+    }
+    if let Some(ref retention) = def.soft_delete_retention {
+        tbl.set("soft_delete_retention", retention.as_str())?;
     }
 
     // versions
@@ -161,6 +172,9 @@ pub(crate) fn global_config_to_lua(lua: &Lua, def: &GlobalDefinition) -> LuaResu
     }
     if let Some(ref s) = def.access.delete {
         access.set("delete", s.as_str())?;
+    }
+    if let Some(ref s) = def.access.trash {
+        access.set("trash", s.as_str())?;
     }
     tbl.set("access", access)?;
 
@@ -401,6 +415,70 @@ mod tests {
             mcp.get::<String>("description").unwrap(),
             "Global site settings"
         );
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_soft_delete() {
+        let lua = Lua::new();
+        let mut def = CollectionDefinition::new("posts");
+        def.soft_delete = true;
+        def.soft_delete_retention = Some("30d".to_string());
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        assert!(tbl.get::<bool>("soft_delete").unwrap());
+        assert_eq!(tbl.get::<String>("soft_delete_retention").unwrap(), "30d");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_soft_delete_disabled() {
+        let lua = Lua::new();
+        let def = CollectionDefinition::new("posts");
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let val: Value = tbl.get("soft_delete").unwrap();
+        assert!(
+            matches!(val, Value::Nil),
+            "soft_delete should not be set when false"
+        );
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_access_trash() {
+        let lua = Lua::new();
+        let mut def = CollectionDefinition::new("posts");
+        def.access = Access {
+            delete: Some("access.admin_only".to_string()),
+            trash: Some("access.editor".to_string()),
+            ..Default::default()
+        };
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let access: mlua::Table = tbl.get("access").unwrap();
+        assert_eq!(access.get::<String>("delete").unwrap(), "access.admin_only");
+        assert_eq!(access.get::<String>("trash").unwrap(), "access.editor");
+    }
+
+    #[test]
+    fn test_collection_config_to_lua_access_trash_absent() {
+        let lua = Lua::new();
+        let def = CollectionDefinition::new("posts");
+        let tbl = collection_config_to_lua(&lua, &def).unwrap();
+        let access: mlua::Table = tbl.get("access").unwrap();
+        let val: Value = access.get("trash").unwrap();
+        assert!(
+            matches!(val, Value::Nil),
+            "trash should not be set when None"
+        );
+    }
+
+    #[test]
+    fn test_global_config_to_lua_access_trash() {
+        let lua = Lua::new();
+        let mut def = GlobalDefinition::new("settings");
+        def.access = Access {
+            trash: Some("access.editor".to_string()),
+            ..Default::default()
+        };
+        let tbl = global_config_to_lua(&lua, &def).unwrap();
+        let access: mlua::Table = tbl.get("access").unwrap();
+        assert_eq!(access.get::<String>("trash").unwrap(), "access.editor");
     }
 
     #[test]

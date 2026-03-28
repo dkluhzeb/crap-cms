@@ -17,6 +17,8 @@ Full reference for every property accepted by `crap.collections.define(slug, con
 | `upload` | boolean or table | `nil` | Upload config (see [Uploads](../uploads/overview.md)) |
 | `access` | table | `{}` | Access control function refs |
 | `versions` | boolean or table | `nil` | Versioning and drafts config (see [Versions & Drafts](versions.md)) |
+| `soft_delete` | boolean | `false` | Enable soft deletes (see [Soft Deletes](soft-deletes.md)) |
+| `soft_delete_retention` | string | `nil` | Auto-purge retention period (e.g., `"30d"`). Requires `soft_delete = true`. |
 | `live` | boolean or string | `nil` | Live update broadcasting (see [Live Updates](../live-updates/overview.md)) |
 | `mcp` | table | `{}` | MCP tool config. `{ description = "..." }` for MCP tool descriptions. |
 | `indexes` | IndexDefinition[] | `{}` | Compound indexes (see [Indexes](#indexes) below) |

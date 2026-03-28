@@ -947,6 +947,7 @@ async fn delete_nonexistent_collection() {
         .delete(Request::new(content::DeleteRequest {
             collection: "nonexistent".to_string(),
             id: "some-id".to_string(),
+            force_hard_delete: false,
         }))
         .await
         .unwrap_err();

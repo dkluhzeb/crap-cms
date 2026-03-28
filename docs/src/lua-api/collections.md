@@ -197,12 +197,16 @@ This matches the behavior of the gRPC API and admin UI.
 
 ## crap.collections.delete(collection, id, opts?)
 
-Delete a document. Returns `true` on success. For upload collections, associated files (original + resized + format variants) are automatically cleaned up from disk.
+Delete a document. Returns `true` on success. For collections with `soft_delete = true`, moves the document to trash by default. For upload collections, associated files are cleaned up on permanent deletion (not on soft delete).
 
 **Only available inside hooks with transaction context.**
 
 ```lua
+-- Soft-delete (moves to trash if collection has soft_delete)
 crap.collections.delete("posts", "abc123")
+
+-- Force permanent delete even on soft-delete collections
+crap.collections.delete("posts", "abc123", { forceHardDelete = true })
 
 -- With access control enforcement
 crap.collections.delete("posts", "abc123", { overrideAccess = false })
@@ -212,8 +216,19 @@ crap.collections.delete("posts", "abc123", { overrideAccess = false })
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level access for the current user. |
-| `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip before_delete and after_delete hooks. The DB operation still executes. |
+| `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce `access.trash` (soft delete) or `access.delete` (permanent delete). |
+| `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip before_delete and after_delete hooks. |
+| `forceHardDelete` | boolean | `false` | Permanently delete even when the collection has `soft_delete = true`. Requires `access.delete` permission when `overrideAccess = false`. |
+
+## crap.collections.restore(collection, id)
+
+Restore a soft-deleted document from trash. Returns `true` on success. Only works on collections with `soft_delete = true`. Re-syncs the FTS index after restore.
+
+**Only available inside hooks with transaction context.**
+
+```lua
+crap.collections.restore("posts", "abc123")
+```
 
 ## Lifecycle Hooks in Lua CRUD
 

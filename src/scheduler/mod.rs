@@ -3,7 +3,7 @@
 
 mod runner;
 
-pub use runner::{check_cron_schedules, execute_job, recover_stale_jobs};
+pub use runner::{check_cron_schedules, execute_job, purge_soft_deleted, recover_stale_jobs};
 
 use std::{
     collections::HashMap,
@@ -32,6 +32,7 @@ pub async fn start(
     registry: SharedRegistry,
     config: JobsConfig,
     shutdown: tokio_util::sync::CancellationToken,
+    config_dir: std::path::PathBuf,
 ) -> Result<()> {
     tracing::info!(
         "Scheduler started (poll={}s, cron={}s, max_concurrent={})",
@@ -117,6 +118,16 @@ pub async fn start(
                                 Err(e) => tracing::warn!("Auto-purge error: {}", e),
                             }
                         }
+
+                // Purge expired soft-deleted documents (every 10 cron intervals)
+                if purge_counter.is_multiple_of(10)
+                    && let Ok(conn) = pool.get() {
+                        match purge_soft_deleted(&conn, &registry, &config_dir) {
+                            Ok(n) if n > 0 => tracing::info!("Purged {} expired soft-deleted doc(s)", n),
+                            Ok(_) => {}
+                            Err(e) => tracing::warn!("Soft-delete purge error: {}", e),
+                        }
+                    }
             }
             _ = heartbeat_ticker.tick() => {
                 // Update heartbeats for all running jobs

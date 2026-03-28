@@ -113,6 +113,8 @@ pub fn build_collection_context(def: &CollectionDefinition) -> Value {
         "is_upload": def.is_upload_collection(),
         "has_drafts": def.has_drafts(),
         "has_versions": def.has_versions(),
+        "soft_delete": def.soft_delete,
+        "can_permanently_delete": def.access.delete.is_some(),
         "admin": {
             "use_as_title": def.admin.use_as_title,
             "default_sort": def.admin.default_sort,
@@ -248,9 +250,33 @@ mod tests {
         assert_eq!(ctx["is_upload"], false);
         assert_eq!(ctx["has_drafts"], false);
         assert_eq!(ctx["has_versions"], false);
+        assert_eq!(ctx["soft_delete"], false);
         let meta = ctx["fields_meta"].as_array().unwrap();
         assert_eq!(meta.len(), 1);
         assert_eq!(meta[0]["name"], "title");
+    }
+
+    #[test]
+    fn build_collection_context_soft_delete_enabled() {
+        let mut def = CollectionDefinition::new("pages");
+        def.soft_delete = true;
+        let ctx = build_collection_context(&def);
+        assert_eq!(ctx["soft_delete"], true);
+    }
+
+    #[test]
+    fn build_collection_context_can_permanently_delete_true() {
+        let mut def = CollectionDefinition::new("pages");
+        def.access.delete = Some("access.admin_only".to_string());
+        let ctx = build_collection_context(&def);
+        assert_eq!(ctx["can_permanently_delete"], true);
+    }
+
+    #[test]
+    fn build_collection_context_can_permanently_delete_false() {
+        let def = CollectionDefinition::new("pages");
+        let ctx = build_collection_context(&def);
+        assert_eq!(ctx["can_permanently_delete"], false);
     }
 
     // --- build_global_context ---

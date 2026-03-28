@@ -2,6 +2,8 @@ crap.collections.define("pages", {
   labels = { singular = "Page", plural = "Pages" },
   timestamps = true,
   versions = true,
+  soft_delete = true,
+  soft_delete_retention = "90d",
   admin = {
     use_as_title = "title",
     default_sort = "title",

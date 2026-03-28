@@ -64,8 +64,12 @@ fn access_config_parsed_from_lua() {
         Some("access.author_or_editor")
     );
     assert_eq!(
-        posts.access.delete.as_deref(),
+        posts.access.trash.as_deref(),
         Some("access.editor_or_above")
+    );
+    assert_eq!(
+        posts.access.delete.as_deref(),
+        Some("access.admin_or_director")
     );
 }
 

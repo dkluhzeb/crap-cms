@@ -11,6 +11,7 @@ pub mod mcp;
 pub mod serve;
 pub mod status;
 pub mod templates;
+pub mod trash;
 pub mod typegen;
 pub mod user;
 
@@ -19,7 +20,7 @@ mod helpers;
 
 pub use cli_types::{
     BlueprintAction, DbAction, ImagesAction, JobsAction, MakeAction, MigrateAction,
-    TemplatesAction, UserAction, parse_key_val,
+    TemplatesAction, TrashAction, UserAction, parse_key_val,
 };
 pub use config_resolve::resolve_config_dir;
 pub use helpers::load_config_and_sync;

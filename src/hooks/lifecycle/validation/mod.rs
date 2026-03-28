@@ -29,6 +29,8 @@ pub struct ValidationCtx<'a> {
     pub locale_ctx: Option<&'a LocaleContext>,
     /// Registry for looking up richtext node definitions during node attr validation.
     pub registry: Option<&'a Registry>,
+    /// When true, unique constraint checks exclude soft-deleted documents.
+    pub soft_delete: bool,
 }
 
 impl<'a> ValidationCtx<'a> {
@@ -46,6 +48,7 @@ pub struct ValidationCtxBuilder<'a> {
     is_draft: bool,
     locale_ctx: Option<&'a LocaleContext>,
     registry: Option<&'a Registry>,
+    soft_delete: bool,
 }
 
 impl<'a> ValidationCtxBuilder<'a> {
@@ -57,6 +60,7 @@ impl<'a> ValidationCtxBuilder<'a> {
             is_draft: false,
             locale_ctx: None,
             registry: None,
+            soft_delete: false,
         }
     }
 
@@ -80,6 +84,11 @@ impl<'a> ValidationCtxBuilder<'a> {
         self
     }
 
+    pub fn soft_delete(mut self, soft_delete: bool) -> Self {
+        self.soft_delete = soft_delete;
+        self
+    }
+
     pub fn build(self) -> ValidationCtx<'a> {
         ValidationCtx {
             conn: self.conn,
@@ -88,6 +97,7 @@ impl<'a> ValidationCtxBuilder<'a> {
             is_draft: self.is_draft,
             locale_ctx: self.locale_ctx,
             registry: self.registry,
+            soft_delete: self.soft_delete,
         }
     }
 }

@@ -142,16 +142,48 @@ grpcurl -plaintext -d '{
 
 ## Delete
 
-Delete a document by ID.
+Delete a document by ID. For collections with `soft_delete = true`, moves to trash by default. Set `force_hard_delete = true` to permanently delete.
 
 ```protobuf
 message DeleteRequest {
   string collection = 1;
   string id = 2;
+  bool force_hard_delete = 3;  // permanently delete even with soft_delete
 }
 
 message DeleteResponse {
   bool success = 1;
+  bool soft_deleted = 2;       // true if moved to trash (not permanently deleted)
+}
+```
+
+```bash
+# Soft delete (moves to trash)
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "id": "abc123"
+}' localhost:50051 crap.ContentAPI/Delete
+
+# Force permanent delete
+grpcurl -plaintext -d '{
+    "collection": "posts",
+    "id": "abc123",
+    "force_hard_delete": true
+}' localhost:50051 crap.ContentAPI/Delete
+```
+
+## Restore
+
+Restore a soft-deleted document from trash. Only works on collections with `soft_delete = true`.
+
+```protobuf
+message RestoreRequest {
+  string collection = 1;
+  string id = 2;
+}
+
+message RestoreResponse {
+  Document document = 1;
 }
 ```
 
@@ -159,7 +191,7 @@ message DeleteResponse {
 grpcurl -plaintext -d '{
     "collection": "posts",
     "id": "abc123"
-}' localhost:50051 crap.ContentAPI/Delete
+}' localhost:50051 crap.ContentAPI/Restore
 ```
 
 ## Count

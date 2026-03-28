@@ -132,6 +132,14 @@ pub fn parse_collection_definition(
     // Parse compound indexes: indexes = { { fields = { "a", "b" }, unique = true }, ... }
     let indexes = parse_indexes(config);
 
+    // Parse soft delete config
+    let soft_delete = get_bool(config, "soft_delete", false);
+    let soft_delete_retention = if soft_delete {
+        get_string(config, "soft_delete_retention")
+    } else {
+        None
+    };
+
     // If auth enabled and no email field defined, inject one at index 0
     if let Some(ref a) = auth
         && a.enabled
@@ -171,6 +179,8 @@ pub fn parse_collection_definition(
     def.live = live;
     def.versions = versions;
     def.indexes = indexes;
+    def.soft_delete = soft_delete;
+    def.soft_delete_retention = soft_delete_retention;
     Ok(def)
 }
 
@@ -323,6 +333,7 @@ pub(super) fn parse_access_config(config: &Table) -> Access {
         .create(get_string(&access_tbl, "create"))
         .update(get_string(&access_tbl, "update"))
         .delete(get_string(&access_tbl, "delete"))
+        .trash(get_string(&access_tbl, "trash"))
         .build()
 }
 
@@ -444,6 +455,7 @@ mod tests {
         assert!(access.create.is_none());
         assert!(access.update.is_none());
         assert!(access.delete.is_none());
+        assert!(access.trash.is_none());
     }
 
     #[test]
@@ -459,6 +471,25 @@ mod tests {
         assert_eq!(access.create.as_deref(), Some("hooks.access.admin_only"));
         assert!(access.update.is_none());
         assert!(access.delete.is_none());
+        assert!(access.trash.is_none());
+    }
+
+    #[test]
+    fn test_parse_access_config_trash() {
+        let lua = Lua::new();
+        let tbl = lua.create_table().unwrap();
+        let access_tbl = lua.create_table().unwrap();
+        access_tbl.set("delete", "hooks.access.admin_only").unwrap();
+        access_tbl
+            .set("trash", "hooks.access.editor_or_above")
+            .unwrap();
+        tbl.set("access", access_tbl).unwrap();
+        let access = parse_access_config(&tbl);
+        assert_eq!(access.delete.as_deref(), Some("hooks.access.admin_only"));
+        assert_eq!(
+            access.trash.as_deref(),
+            Some("hooks.access.editor_or_above")
+        );
     }
 
     #[test]
@@ -584,6 +615,40 @@ mod tests {
         let def = parse_global_definition(&lua, "settings", &config).unwrap();
         assert!(def.fields[0].index);
         assert!(def.fields[0].unique);
+    }
+
+    #[test]
+    fn test_parse_soft_delete_enabled() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        config.set("soft_delete", true).unwrap();
+        config.set("soft_delete_retention", "30d").unwrap();
+        let def = parse_collection_definition(&lua, "posts", &config).unwrap();
+        assert!(def.soft_delete);
+        assert_eq!(def.soft_delete_retention.as_deref(), Some("30d"));
+    }
+
+    #[test]
+    fn test_parse_soft_delete_disabled_ignores_retention() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        config.set("soft_delete", false).unwrap();
+        config.set("soft_delete_retention", "30d").unwrap();
+        let def = parse_collection_definition(&lua, "posts", &config).unwrap();
+        assert!(!def.soft_delete);
+        assert!(
+            def.soft_delete_retention.is_none(),
+            "retention should be None when soft_delete is false"
+        );
+    }
+
+    #[test]
+    fn test_parse_soft_delete_absent() {
+        let lua = Lua::new();
+        let config = lua.create_table().unwrap();
+        let def = parse_collection_definition(&lua, "posts", &config).unwrap();
+        assert!(!def.soft_delete);
+        assert!(def.soft_delete_retention.is_none());
     }
 
     #[test]

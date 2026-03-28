@@ -19,6 +19,7 @@
 - [Overview](collections/overview.md)
 - [Definition Schema](collections/definition-schema.md)
 - [Versions & Drafts](collections/versions.md)
+- [Soft Deletes](collections/soft-deletes.md)
 
 # Fields
 

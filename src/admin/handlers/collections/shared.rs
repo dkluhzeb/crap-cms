@@ -459,38 +459,98 @@ pub(super) async fn delete_action_impl(
     slug: &str,
     id: &str,
     auth_user: &Option<Extension<AuthUser>>,
+    force_hard_delete: bool,
+    json_response: bool,
 ) -> axum::response::Response {
     let def = match state.registry.get_collection(slug) {
         Some(d) => d.clone(),
-        None => return Redirect::to("/admin/collections").into_response(),
+        None => {
+            if json_response {
+                return json_error_response("Collection not found");
+            }
+            return Redirect::to("/admin/collections").into_response();
+        }
     };
 
-    // Check delete access
-    match check_access_or_forbid(
-        state,
-        def.access.delete.as_deref(),
-        auth_user,
-        Some(id),
-        None,
-    ) {
-        Ok(AccessResult::Denied) => {
-            return forbidden(state, "You don't have permission to delete this item")
-                .into_response();
+    // Permission check depends on the type of deletion:
+    // - Soft delete (trash): check access.trash, falling back to access.update
+    // - Permanent delete: check access.delete (explicit permission required)
+    if def.soft_delete && !force_hard_delete {
+        // Soft delete / move to trash
+        let trash_access = def.access.resolve_trash();
+
+        match check_access_or_forbid(state, trash_access, auth_user, Some(id), None) {
+            Ok(AccessResult::Denied) => {
+                let msg = "You don't have permission to trash this item";
+                if json_response {
+                    return json_error_response(msg);
+                }
+                return forbidden(state, msg).into_response();
+            }
+            Err(resp) => return *resp,
+            _ => {}
         }
-        Err(resp) => return *resp,
-        _ => {}
+    } else {
+        // Permanent deletion (no soft_delete, or force_hard_delete)
+        match check_access_or_forbid(
+            state,
+            def.access.delete.as_deref(),
+            auth_user,
+            Some(id),
+            None,
+        ) {
+            Ok(AccessResult::Denied) => {
+                let msg = "You don't have permission to permanently delete this item";
+                if json_response {
+                    return json_error_response(msg);
+                }
+                return forbidden(state, msg).into_response();
+            }
+            Err(resp) => return *resp,
+            _ => {}
+        }
     }
 
     // Before hooks + delete + upload cleanup in a single transaction
     let pool = state.pool.clone();
     let runner = state.hook_runner.clone();
-    let def_clone = def.clone();
+    let mut def_clone = def.clone();
     let slug_owned = slug.to_string();
     let id_owned = id.to_string();
     let user_doc = get_user_doc(auth_user).cloned();
     let config_dir = state.config_dir.clone();
 
+    // When force_hard_delete is requested, temporarily override soft_delete
+    if force_hard_delete {
+        def_clone.soft_delete = false;
+    }
+
+    let registry = state.registry.clone();
+
     let result = task::spawn_blocking(move || {
+        // Block deletion of upload/media documents that are referenced by other documents.
+        // Only checked for upload collections (shared media) and skipped for force-hard-delete
+        // (empty trash) to avoid scanning on bulk operations.
+        if def_clone.is_upload_collection() && !force_hard_delete {
+            let conn = pool.get().context("DB connection for back-ref check")?;
+            let back_refs = query::read::find_back_references(
+                &conn,
+                &registry,
+                &slug_owned,
+                &id_owned,
+                &crate::config::LocaleConfig::default(),
+            );
+            drop(conn);
+
+            if !back_refs.is_empty() {
+                let ref_summary: Vec<String> = back_refs
+                    .iter()
+                    .map(|r| format!("{} ({} docs)", r.owner_label, r.count))
+                    .collect();
+                anyhow::bail!("Cannot delete: referenced by {}", ref_summary.join(", "));
+            }
+        }
+
         service::delete_document(
             &pool,
             &runner,
@@ -515,16 +575,42 @@ pub(super) async fn delete_action_impl(
                     .edited_by(get_event_user(auth_user))
                     .build(),
             );
+
+            if json_response {
+                return json_ok_response();
+            }
         }
         Ok(Err(e)) => {
             tracing::error!("Delete error: {}", e);
+
+            if json_response {
+                return json_error_response(&e.to_string());
+            }
         }
         Err(e) => {
             tracing::error!("Delete task error: {}", e);
+
+            if json_response {
+                return json_error_response(&e.to_string());
+            }
         }
     }
 
     htmx_redirect(&format!("/admin/collections/{}", slug))
+}
+
+/// Build a JSON `{"ok": true}` success response.
+fn json_ok_response() -> Response {
+    axum::response::Json(json!({"ok": true})).into_response()
+}
+
+/// Build a JSON `{"error": "..."}` error response with 400 status.
+fn json_error_response(msg: &str) -> Response {
+    (
+        axum::http::StatusCode::BAD_REQUEST,
+        axum::response::Json(json!({"error": msg})),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -610,5 +696,42 @@ mod tests {
         let form_data = HashMap::new();
         let result = collect_upload_hidden_fields(&fields, &form_data);
         assert_eq!(result.as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn json_ok_response_returns_200() {
+        let resp = json_ok_response();
+        assert_eq!(resp.status(), axum::http::StatusCode::OK);
+    }
+
+    #[test]
+    fn json_error_response_returns_400() {
+        let resp = json_error_response("something went wrong");
+        assert_eq!(resp.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn trash_access_falls_back_to_update() {
+        use crate::core::collection::Access;
+
+        // When trash is set, it takes priority
+        let access = Access {
+            trash: Some("access.trash_fn".to_string()),
+            update: Some("access.update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("access.trash_fn"));
+
+        // When trash is None, falls back to update
+        let access = Access {
+            trash: None,
+            update: Some("access.update_fn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(access.resolve_trash(), Some("access.update_fn"));
+
+        // When both are None, resolved is None
+        let access = Access::default();
+        assert!(access.resolve_trash().is_none());
     }
 }

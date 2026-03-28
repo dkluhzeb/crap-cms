@@ -16,6 +16,9 @@ pub fn get_column_names(def: &CollectionDefinition) -> Vec<String> {
     if def.has_drafts() {
         names.push("_status".to_string());
     }
+    if def.soft_delete {
+        names.push("_deleted_at".to_string());
+    }
     if def.timestamps {
         names.push("created_at".to_string());
         names.push("updated_at".to_string());
@@ -81,6 +84,9 @@ pub fn get_expected_column_names(
 
     if def.has_drafts() {
         expected.insert("_status".to_string());
+    }
+    if def.soft_delete {
+        expected.insert("_deleted_at".to_string());
     }
     if def.timestamps {
         expected.insert("created_at".to_string());
@@ -182,6 +188,9 @@ pub(crate) fn get_valid_filter_columns(
     if def.timestamps {
         valid.insert("created_at".to_string());
         valid.insert("updated_at".to_string());
+    }
+    if def.soft_delete {
+        valid.insert("_deleted_at".to_string());
     }
     let _ = locale_ctx; // filter validation uses undecorated field names
     valid

@@ -19,6 +19,7 @@
   "search_placeholder": "Suchen",
   "no_items_yet": "Noch keine {{name}} vorhanden",
   "create_first_item": "Erstellen Sie Ihren ersten Eintrag.",
+  "trash_empty": "Papierkorb ist leer.",
   "page_of": "Seite {{page}} von {{total}}",
   "previous": "Zurück",
   "next": "Weiter",
@@ -75,6 +76,8 @@
   "status": "Status",
   "restore": "Wiederherstellen",
   "restore_version": "Version wiederherstellen",
+  "trash": "Papierkorb",
+  "back_to_list": "Zurück zur Liste",
   "published": "Veröffentlicht",
   "draft": "Entwurf",
   "version": "Version",
@@ -219,5 +222,18 @@
   "ok": "OK",
   "search": "Suchen...",
   "search_to_add": "Suchen und hinzufügen...",
-  "are_you_sure": "Sind Sie sicher?"
+  "are_you_sure": "Sind Sie sicher?",
+
+  "move_to_trash": "In den Papierkorb",
+  "delete_permanently": "Endgültig löschen",
+  "delete_confirm_title": "{{name}} löschen?",
+  "delete_confirm_soft": "In den Papierkorb verschieben oder endgültig löschen?",
+  "delete_confirm_hard": "Diese Aktion kann nicht rückgängig gemacht werden.",
+  "moved_to_trash": "In den Papierkorb verschoben",
+  "deleted_permanently": "Endgültig gelöscht",
+  "delete_error": "Löschen fehlgeschlagen",
+  "empty_trash": "Papierkorb leeren",
+  "empty_trash_confirm_title": "Papierkorb leeren?",
+  "empty_trash_confirm": "Alle {{count}} Elemente im Papierkorb endgültig löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
+  "trash_emptied": "Papierkorb geleert"
 }

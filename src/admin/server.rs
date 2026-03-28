@@ -249,6 +249,14 @@ fn protected_routes(
             get(collections::delete_confirm),
         )
         .route(
+            "/admin/collections/{slug}/{id}/restore",
+            post(collections::restore_action),
+        )
+        .route(
+            "/admin/collections/{slug}/empty-trash",
+            post(collections::empty_trash_action),
+        )
+        .route(
             "/admin/collections/{slug}/{id}/versions",
             get(collections::list_versions_page),
         )

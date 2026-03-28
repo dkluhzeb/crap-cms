@@ -489,6 +489,7 @@ pub async fn run(config_dir: &Path, only: Option<ServeMode>, no_scheduler: bool)
                 registry.clone(),
                 cfg.jobs.clone(),
                 shutdown.clone(),
+                config_dir.clone(),
             )
             .await
         } else {

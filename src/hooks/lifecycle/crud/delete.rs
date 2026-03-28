@@ -1,4 +1,4 @@
-//! Registration of `crap.collections.delete`, `update_many`, and `delete_many` Lua functions.
+//! Registration of `crap.collections.delete`, `restore`, `update_many`, and `delete_many` Lua functions.
 
 use std::collections::HashMap;
 
@@ -55,6 +55,11 @@ pub(super) fn register_delete(lua: &Lua, table: &Table, registry: SharedRegistry
                 .and_then(|o| o.get::<Option<bool>>("hooks").ok().flatten())
                 .unwrap_or(true);
 
+            let force_hard_delete: bool = opts
+                .as_ref()
+                .and_then(|o| o.get::<Option<bool>>("forceHardDelete").ok().flatten())
+                .unwrap_or(false);
+
             let def = {
                 let r = reg
                     .read()
@@ -69,14 +74,18 @@ pub(super) fn register_delete(lua: &Lua, table: &Table, registry: SharedRegistry
                 let user_doc = lua
                     .app_data_ref::<UserContext>()
                     .and_then(|uc| uc.0.clone());
-                let result = check_access_with_lua(
-                    lua,
-                    def.access.delete.as_deref(),
-                    user_doc.as_ref(),
-                    Some(&id),
-                    None,
-                )
-                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+
+                // Soft delete uses trash permission (fallback to update);
+                // hard delete uses delete permission
+                let access_ref = if def.soft_delete && !force_hard_delete {
+                    def.access.resolve_trash()
+                } else {
+                    def.access.delete.as_deref()
+                };
+
+                let result =
+                    check_access_with_lua(lua, access_ref, user_doc.as_ref(), Some(&id), None)
+                        .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
 
                 if matches!(result, AccessResult::Denied) {
                     return Err(RuntimeError("Delete access denied".into()));
@@ -123,17 +132,29 @@ pub(super) fn register_delete(lua: &Lua, table: &Table, registry: SharedRegistry
                     .map_err(|e| RuntimeError(format!("before_delete hook error: {}", e)))?;
             }
 
-            query::delete(conn, &collection, &id)
-                .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+            if def.soft_delete && !force_hard_delete {
+                let deleted = query::soft_delete(conn, &collection, &id)
+                    .map_err(|e| RuntimeError(format!("soft_delete error: {}", e)))?;
+                if !deleted {
+                    return Err(RuntimeError(format!(
+                        "Document '{}' not found or already deleted in '{}'",
+                        id, collection
+                    )));
+                }
+            } else {
+                query::delete(conn, &collection, &id)
+                    .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+            }
 
-            // Sync FTS index
+            // Sync FTS index (remove from FTS for both hard and soft delete)
             if conn.supports_fts() {
                 query::fts::fts_delete(conn, &collection, &id)
                     .map_err(|e| RuntimeError(format!("FTS delete error: {}", e)))?;
             }
 
-            // Clean up upload files after successful DB delete
-            if let Some(fields) = upload_doc_fields
+            // Clean up upload files after successful DB delete (skip for soft-delete)
+            if !def.soft_delete
+                && let Some(fields) = upload_doc_fields
                 && let Some(config_dir) = lua.app_data_ref::<ConfigDir>()
             {
                 upload::delete_upload_files(&config_dir.0, &fields);
@@ -153,6 +174,81 @@ pub(super) fn register_delete(lua: &Lua, table: &Table, registry: SharedRegistry
         },
     )?;
     table.set("delete", delete_fn)?;
+    Ok(())
+}
+
+/// Register `crap.collections.restore(collection, id, opts?)`.
+#[cfg(not(tarpaulin_include))]
+pub(super) fn register_restore(lua: &Lua, table: &Table, registry: SharedRegistry) -> Result<()> {
+    let reg = registry;
+    let restore_fn = lua.create_function(
+        move |lua, (collection, id, opts): (String, String, Option<Table>)| {
+            let conn_ptr = get_tx_conn(lua)?;
+            let conn = unsafe { &*conn_ptr };
+
+            let override_access: bool = opts
+                .as_ref()
+                .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
+                .unwrap_or(true);
+
+            let def = {
+                let r = reg
+                    .read()
+                    .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
+                r.get_collection(&collection)
+                    .cloned()
+                    .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
+            };
+
+            if !def.soft_delete {
+                return Err(RuntimeError(format!(
+                    "Collection '{}' does not have soft_delete enabled",
+                    collection
+                )));
+            }
+
+            // Check trash access (restore is the inverse of soft-delete)
+            if !override_access {
+                let user_doc = lua
+                    .app_data_ref::<UserContext>()
+                    .and_then(|uc| uc.0.clone());
+                let result = check_access_with_lua(
+                    lua,
+                    def.access.resolve_trash(),
+                    user_doc.as_ref(),
+                    Some(&id),
+                    None,
+                )
+                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+
+                if matches!(result, AccessResult::Denied) {
+                    return Err(RuntimeError("Restore access denied".into()));
+                }
+            }
+
+            let restored = query::restore(conn, &collection, &id)
+                .map_err(|e| RuntimeError(format!("restore error: {}", e)))?;
+
+            if !restored {
+                return Err(RuntimeError(format!(
+                    "Document '{}' not found or not deleted in '{}'",
+                    id, collection
+                )));
+            }
+
+            // Re-sync FTS index
+            if conn.supports_fts()
+                && let Ok(Some(doc)) =
+                    query::find_by_id_unfiltered(conn, &collection, &def, &id, None)
+            {
+                query::fts::fts_upsert(conn, &collection, &doc, Some(&def))
+                    .map_err(|e| RuntimeError(format!("FTS upsert error: {}", e)))?;
+            }
+
+            Ok(true)
+        },
+    )?;
+    table.set("restore", restore_fn)?;
     Ok(())
 }
 
@@ -532,18 +628,20 @@ pub(super) fn register_delete_many(
                 }));
             }
 
+            // Soft delete uses trash permission (fallback to update);
+            // hard delete uses delete permission
+            let access_ref = if def.soft_delete {
+                def.access.resolve_trash()
+            } else {
+                def.access.delete.as_deref()
+            };
+
             if !override_access {
                 let user_doc = lua
                     .app_data_ref::<UserContext>()
                     .and_then(|uc| uc.0.clone());
-                let result = check_access_with_lua(
-                    lua,
-                    def.access.delete.as_deref(),
-                    user_doc.as_ref(),
-                    None,
-                    None,
-                )
-                .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
+                let result = check_access_with_lua(lua, access_ref, user_doc.as_ref(), None, None)
+                    .map_err(|e| RuntimeError(format!("access check error: {}", e)))?;
                 match result {
                     AccessResult::Denied => {
                         return Err(RuntimeError("Delete access denied".into()));
@@ -566,7 +664,7 @@ pub(super) fn register_delete_many(
                 for doc in &docs {
                     let result = check_access_with_lua(
                         lua,
-                        def.access.delete.as_deref(),
+                        access_ref,
                         user_doc.as_ref(),
                         Some(&doc.id),
                         None,
@@ -621,15 +719,23 @@ pub(super) fn register_delete_many(
                         .map_err(|e| RuntimeError(format!("before_delete hook error: {}", e)))?;
                 }
 
-                query::delete(conn, &collection, &doc.id)
-                    .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+                if def.soft_delete {
+                    query::soft_delete(conn, &collection, &doc.id)
+                        .map_err(|e| RuntimeError(format!("soft_delete error: {}", e)))?;
+                } else {
+                    query::delete(conn, &collection, &doc.id)
+                        .map_err(|e| RuntimeError(format!("delete error: {}", e)))?;
+                }
+
                 if conn.supports_fts() {
                     query::fts::fts_delete(conn, &collection, &doc.id)
                         .map_err(|e| RuntimeError(format!("FTS delete error: {}", e)))?;
                 }
 
-                // Clean up upload files after successful DB delete
-                if let Some(dir) = &config_dir_path {
+                // Clean up upload files after successful DB delete (skip for soft-delete)
+                if !def.soft_delete
+                    && let Some(dir) = &config_dir_path
+                {
                     upload::delete_upload_files(dir, &doc.fields);
                 }
 

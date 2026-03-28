@@ -7,7 +7,7 @@ use crate::db::{
     DbConnection, DbValue, FindQuery, LocaleContext, LocaleMode,
     query::{
         filter::{build_where_clause, resolve_filter_column, resolve_filters},
-        fts, get_column_names, get_locale_select_columns, group_locale_fields,
+        fts, get_column_names, get_locale_select_columns_with_opts, group_locale_fields,
         validate_query_fields,
     },
 };
@@ -39,7 +39,7 @@ pub fn find(
 
     let (select_exprs, result_names) = match locale_ctx {
         Some(ctx) if ctx.config.is_enabled() => {
-            get_locale_select_columns(&def.fields, def.timestamps, ctx)?
+            get_locale_select_columns_with_opts(&def.fields, def.timestamps, def.soft_delete, ctx)?
         }
         _ => {
             let names = get_column_names(def);
@@ -56,8 +56,9 @@ pub fn find(
     // Build WHERE with locale-resolved column names
     let resolved_filters = resolve_filters(&query.filters, def, locale_ctx)?;
     let where_clause = build_where_clause(conn, &resolved_filters, slug, &def.fields, &mut params)?;
+    let mut has_where = !where_clause.is_empty();
 
-    if !where_clause.is_empty() {
+    if has_where {
         sql.push_str(&where_clause);
     }
 
@@ -72,13 +73,24 @@ pub fn find(
                 let ph = conn.placeholder(params.len() + 1);
                 let fts_clause =
                     format!("id IN (SELECT id FROM {fts_table} WHERE {fts_table} MATCH {ph})");
-                if where_clause.is_empty() {
-                    sql.push_str(&format!(" WHERE {fts_clause}"));
-                } else {
+                if has_where {
                     sql.push_str(&format!(" AND {fts_clause}"));
+                } else {
+                    sql.push_str(&format!(" WHERE {fts_clause}"));
+                    has_where = true;
                 }
                 params.push(DbValue::Text(sanitized));
             }
+        }
+    }
+
+    // Exclude soft-deleted documents unless explicitly requested
+    if def.soft_delete && !query.include_deleted {
+        if has_where {
+            sql.push_str(" AND _deleted_at IS NULL");
+        } else {
+            sql.push_str(" WHERE _deleted_at IS NULL");
+            has_where = true;
         }
     }
 
@@ -155,11 +167,11 @@ pub fn find(
         params.push(sort_val);
         params.push(DbValue::Text(cursor.id.clone()));
         // Append to existing WHERE or start WHERE
-        if where_clause.is_empty() {
+        if has_where {
+            sql.push_str(&keyset);
+        } else {
             // Replace leading " AND " with " WHERE "
             sql.push_str(&keyset.replacen(" AND ", " WHERE ", 1));
-        } else {
-            sql.push_str(&keyset);
         }
     }
 
@@ -970,5 +982,109 @@ mod tests {
         // Correct length but does not end in ".000Z"
         let s = "2026-03-01T12:00:00.999Z"; // ends in .999Z not .000Z
         assert_eq!(denormalize_timestamp(s), s);
+    }
+
+    // ── Soft-delete filtering tests ───────────────────────────────────────
+
+    fn setup_soft_delete_db() -> (TempDir, DbPool) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let config = CrapConfig {
+            database: DatabaseConfig {
+                path: "test.db".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let db_pool = pool::create_pool(tmp.path(), &config).expect("pool");
+        db_pool
+            .get()
+            .unwrap()
+            .execute_batch(
+                "CREATE TABLE articles (
+                    id TEXT PRIMARY KEY,
+                    title TEXT,
+                    _deleted_at TEXT,
+                    created_at TEXT,
+                    updated_at TEXT
+                )",
+            )
+            .unwrap();
+        (tmp, db_pool)
+    }
+
+    fn soft_delete_def() -> CollectionDefinition {
+        let mut def = CollectionDefinition::new("articles");
+        def.fields = vec![FieldDefinition::builder("title", FieldType::Text).build()];
+        def.soft_delete = true;
+        def
+    }
+
+    #[test]
+    fn find_excludes_soft_deleted_by_default() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+        let def = soft_delete_def();
+
+        // Insert a normal doc and a soft-deleted doc
+        conn.execute(
+            "INSERT INTO articles (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+            &[
+                DbValue::Text("id-live".into()),
+                DbValue::Text("Live Post".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Deleted Post".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let query = FindQuery::default();
+        let docs = find(&conn, "articles", &def, &query, None).unwrap();
+        assert_eq!(docs.len(), 1);
+        assert_eq!(docs[0].get_str("title"), Some("Live Post"));
+    }
+
+    #[test]
+    fn find_includes_soft_deleted_when_requested() {
+        let (_tmp, pool) = setup_soft_delete_db();
+        let conn = pool.get().unwrap();
+        let def = soft_delete_def();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?3)",
+            &[
+                DbValue::Text("id-live".into()),
+                DbValue::Text("Live Post".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO articles (id, title, _deleted_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?4)",
+            &[
+                DbValue::Text("id-deleted".into()),
+                DbValue::Text("Deleted Post".into()),
+                DbValue::Text("2026-01-02 00:00:00".into()),
+                DbValue::Text("2026-01-01 00:00:00".into()),
+            ],
+        )
+        .unwrap();
+
+        let query = FindQuery {
+            include_deleted: true,
+            ..Default::default()
+        };
+        let docs = find(&conn, "articles", &def, &query, None).unwrap();
+        assert_eq!(docs.len(), 2);
     }
 }

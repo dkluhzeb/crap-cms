@@ -8,6 +8,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
+- **Soft deletes** — Collections can opt into soft deletes with
+  `soft_delete = true`. Deleted documents are moved to trash (`_deleted_at`
+  timestamp) instead of being permanently removed. Soft-deleted documents
+  are excluded from all reads, counts, and search. The admin UI shows a
+  **Trash** tab with restore and permanent-delete buttons, plus an
+  **Empty trash** action. Upload files are preserved until hard purge.
+  Configurable retention (`soft_delete_retention = "30d"`) auto-purges
+  expired documents. Granular permissions: `access.trash` controls
+  soft-delete and restore (falls back to `access.update`), while
+  `access.delete` controls permanent deletion. Available in admin UI,
+  gRPC (`Delete` with `force_hard_delete`, new `Restore` RPC), and Lua
+  (`crap.collections.delete/restore` with `forceHardDelete` option).
+
+- **Delete confirmation dialog** — Replaces the old two-step confirmation
+  page with a single modal dialog. For soft-delete collections, shows
+  "Move to trash" and "Delete permanently" options. For hard-delete
+  collections, shows "Delete permanently" only. "Delete permanently"
+  and "Empty trash" buttons are hidden when `access.delete` is not
+  configured. Upload collections block deletion when other documents
+  reference them.
+
 - **Optional timezone support for date fields** — `timezone = true` on a
   date field stores the user's IANA timezone in a companion `_tz` column
   alongside the UTC value. The admin UI shows a timezone dropdown; the

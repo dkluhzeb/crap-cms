@@ -62,6 +62,17 @@ pub fn get_locale_select_columns(
     timestamps: bool,
     locale_ctx: &LocaleContext,
 ) -> Result<(Vec<String>, Vec<String>)> {
+    get_locale_select_columns_with_opts(fields, timestamps, false, locale_ctx)
+}
+
+/// Like [`get_locale_select_columns`] but with additional options.
+/// When `soft_delete` is true, includes the `_deleted_at` column.
+pub fn get_locale_select_columns_with_opts(
+    fields: &[FieldDefinition],
+    timestamps: bool,
+    soft_delete: bool,
+    locale_ctx: &LocaleContext,
+) -> Result<(Vec<String>, Vec<String>)> {
     let mut select_exprs = vec!["id".to_string()];
     let mut result_names = vec!["id".to_string()];
 
@@ -73,6 +84,11 @@ pub fn get_locale_select_columns(
         "",
         false,
     )?;
+
+    if soft_delete {
+        select_exprs.push("_deleted_at".to_string());
+        result_names.push("_deleted_at".to_string());
+    }
 
     if timestamps {
         select_exprs.push("created_at".to_string());

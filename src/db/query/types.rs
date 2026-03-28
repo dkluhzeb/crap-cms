@@ -62,6 +62,9 @@ pub struct FindQuery {
     /// FTS5 full-text search query. When set, results are filtered to documents
     /// matching this search term via the FTS5 index.
     pub search: Option<String>,
+    /// When true, include soft-deleted documents in results.
+    /// Default false — soft-deleted docs are excluded from normal queries.
+    pub include_deleted: bool,
 }
 
 impl FindQuery {

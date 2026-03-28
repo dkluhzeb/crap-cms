@@ -399,6 +399,44 @@ pub enum JobsAction {
     Healthcheck,
 }
 
+/// Actions for the `trash` subcommand.
+#[derive(Subcommand)]
+pub enum TrashAction {
+    /// List trashed documents
+    List {
+        /// Filter by collection slug
+        #[arg(short, long)]
+        collection: Option<String>,
+    },
+    /// Permanently delete trashed documents
+    Purge {
+        /// Filter by collection slug
+        #[arg(short, long)]
+        collection: Option<String>,
+        /// Delete documents older than this (e.g., "30d", "24h", "30m"), or "all"
+        #[arg(long, default_value = "all")]
+        older_than: String,
+        /// Print what would be deleted without actually deleting
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Restore a trashed document
+    Restore {
+        /// Collection slug
+        collection: String,
+        /// Document ID
+        id: String,
+    },
+    /// Permanently delete all trash in a collection
+    Empty {
+        /// Collection slug
+        collection: String,
+        /// Confirm destructive operation (required)
+        #[arg(short = 'y', long)]
+        confirm: bool,
+    },
+}
+
 /// Actions for the `images` subcommand.
 #[derive(Subcommand)]
 pub enum ImagesAction {

@@ -59,9 +59,10 @@ pub fn fts_search(
         return Ok(Vec::new());
     }
 
+    let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
-        "SELECT id FROM {} WHERE {} MATCH ?1 ORDER BY rank LIMIT ?2",
-        fts_table, fts_table
+        "SELECT id FROM {} WHERE {} MATCH {} ORDER BY rank LIMIT {}",
+        fts_table, fts_table, p1, p2
     );
 
     let rows = conn

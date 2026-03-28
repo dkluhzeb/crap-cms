@@ -135,6 +135,7 @@ impl ContentService {
                     &filters,
                     locale_ctx.as_ref(),
                     find_query.search.as_deref(),
+                    find_query.include_deleted,
                 )
                 .map_err(|e| map_db_error(e, "Count error", &db_kind))?;
 
@@ -468,6 +469,7 @@ impl ContentService {
                 &filters,
                 locale_ctx.as_ref(),
                 search.as_deref(),
+                false,
             )
             .map_err(|e| map_db_error(e, "Count error", &db_kind))
         })

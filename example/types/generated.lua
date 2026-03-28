@@ -502,12 +502,13 @@
 ---@field show_in_nav? crap.FilterValue
 ---@field nav_order? crap.FilterValue
 ---@field _status? crap.FilterValue
+---@field _deleted_at? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
 
 ---@class crap.query.Pages
 ---@field where? crap.where.Pages
----@field order_by? "id"|"-id"|"title"|"-title"|"slug"|"-slug"|"parent"|"-parent"|"template"|"-template"|"show_in_nav"|"-show_in_nav"|"nav_order"|"-nav_order"|"_status"|"-_status"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"title"|"-title"|"slug"|"-slug"|"parent"|"-parent"|"template"|"-template"|"show_in_nav"|"-show_in_nav"|"nav_order"|"-nav_order"|"_status"|"-_status"|"_deleted_at"|"-_deleted_at"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string
@@ -595,12 +596,13 @@
 ---@field seo__meta_description? crap.FilterValue
 ---@field seo__no_index? crap.FilterValue
 ---@field _status? crap.FilterValue
+---@field _deleted_at? crap.FilterValue
 ---@field created_at? crap.FilterValue
 ---@field updated_at? crap.FilterValue
 
 ---@class crap.query.Posts
 ---@field where? crap.where.Posts
----@field order_by? "id"|"-id"|"title"|"-title"|"slug"|"-slug"|"excerpt"|"-excerpt"|"post_type"|"-post_type"|"published_at"|"-published_at"|"external_url"|"-external_url"|"author"|"-author"|"hero_image"|"-hero_image"|"content"|"-content"|"reading_time"|"-reading_time"|"featured"|"-featured"|"pinned"|"-pinned"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_description"|"-seo__meta_description"|"seo__no_index"|"-seo__no_index"|"_status"|"-_status"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
+---@field order_by? "id"|"-id"|"title"|"-title"|"slug"|"-slug"|"excerpt"|"-excerpt"|"post_type"|"-post_type"|"published_at"|"-published_at"|"external_url"|"-external_url"|"author"|"-author"|"hero_image"|"-hero_image"|"content"|"-content"|"reading_time"|"-reading_time"|"featured"|"-featured"|"pinned"|"-pinned"|"seo__meta_title"|"-seo__meta_title"|"seo__meta_description"|"-seo__meta_description"|"seo__no_index"|"-seo__no_index"|"_status"|"-_status"|"_deleted_at"|"-_deleted_at"|"created_at"|"-created_at"|"updated_at"|"-updated_at"
 ---@field limit? integer
 ---@field offset? integer
 ---@field locale? string

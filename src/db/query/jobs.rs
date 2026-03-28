@@ -189,18 +189,24 @@ pub fn fail_job(
 
     if should_retry {
         let delay = backoff_seconds(attempt);
-        let retry_after_expr = format!("datetime('now', '+{} seconds')", delay);
+
+        // Use the date_offset_expr SQL template but with a positive offset (future time).
+        // date_offset_expr returns e.g. ("datetime('now', ?3)", _) — we override the
+        // param to "+N seconds" instead of the default "-N seconds".
+        let (offset_sql, _) = conn.date_offset_expr(delay, 3);
+        let offset_param = DbValue::Text(format!("+{} seconds", delay));
 
         conn.execute(
             &format!(
                 "UPDATE _crap_jobs SET status = 'pending', error = {p2}, \
                  started_at = NULL, completed_at = NULL, heartbeat_at = NULL, \
-                 retry_after = {retry_after_expr} \
+                 retry_after = {offset_sql} \
                  WHERE id = {p1}"
             ),
             &[
                 DbValue::Text(id.to_string()),
                 DbValue::Text(error.to_string()),
+                offset_param,
             ],
         )
         .context("Failed to retry job")?;

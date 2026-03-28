@@ -212,6 +212,15 @@ fn add_system_columns(ctx: &AlterCtx) -> Result<()> {
         }
     }
 
+    // Soft-delete collections: ensure _deleted_at column exists
+    if ctx.def.soft_delete && !ctx.existing.contains("_deleted_at") {
+        let sql = format!("ALTER TABLE {} ADD COLUMN _deleted_at TEXT", ctx.slug);
+        tracing::info!("Adding _deleted_at column to {}", ctx.slug);
+        ctx.conn
+            .execute(&sql, &[])
+            .with_context(|| format!("Failed to add _deleted_at to {}", ctx.slug))?;
+    }
+
     // Timestamps: ensure created_at/updated_at exist
     // Note: SQLite ALTER TABLE cannot use non-constant defaults like datetime('now'),
     // so we add with no default (NULL for existing rows) — new inserts set these explicitly.
@@ -262,6 +271,7 @@ const SYSTEM_COLUMNS: &[&str] = &[
     "_status",
     "_settings",
     "_session_version",
+    "_deleted_at",
 ];
 
 pub(super) fn alter_collection_table(
@@ -271,6 +281,15 @@ pub(super) fn alter_collection_table(
     locale_config: &LocaleConfig,
 ) -> Result<()> {
     let existing = get_table_columns(conn, slug)?;
+
+    // Detect transition: soft_delete just enabled on a table with unique fields.
+    // When a table was created without soft_delete, unique fields have inline UNIQUE
+    // constraints (e.g. `slug TEXT UNIQUE`). SQLite cannot drop inline constraints, so
+    // we must rebuild the table to remove them. The partial unique index created by
+    // sync_indexes will enforce uniqueness for active rows only.
+    let needs_rebuild =
+        def.soft_delete && !existing.contains("_deleted_at") && def.fields.iter().any(|f| f.unique);
+
     let column_types = get_table_column_types(conn, slug)?;
     let ctx = AlterCtx::builder(conn, slug)
         .def(def)
@@ -295,6 +314,62 @@ pub(super) fn alter_collection_table(
         }
     }
 
+    if needs_rebuild {
+        rebuild_without_inline_unique(conn, slug, def, locale_config)?;
+    }
+
+    Ok(())
+}
+
+/// Rebuild a table to remove inline UNIQUE constraints, replacing them with
+/// partial unique indexes managed by `sync_indexes`.
+///
+/// Uses the standard SQLite table rebuild pattern:
+/// 1. Get column list from old table
+/// 2. Rename old table to a temp name
+/// 3. Create new table via `create_collection_table` (no inline UNIQUE for soft-delete)
+/// 4. Copy data from temp to new table
+/// 5. Drop temp table
+fn rebuild_without_inline_unique(
+    conn: &dyn DbConnection,
+    slug: &str,
+    def: &CollectionDefinition,
+    locale_config: &LocaleConfig,
+) -> Result<()> {
+    tracing::info!(
+        "Rebuilding table '{}' to remove inline UNIQUE constraints (soft_delete transition)",
+        slug
+    );
+
+    let old_cols = get_table_columns(conn, slug)?;
+    let temp = format!("_rebuild_{}", slug);
+
+    conn.execute_batch(&format!("ALTER TABLE {} RENAME TO {}", slug, temp))?;
+
+    super::create::create_collection_table(conn, slug, def, locale_config)?;
+
+    let new_cols = get_table_columns(conn, slug)?;
+
+    // Copy only columns that exist in both tables
+    let common: Vec<&String> = old_cols.intersection(&new_cols).collect();
+    let col_list = common
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    conn.execute(
+        &format!(
+            "INSERT INTO {} ({}) SELECT {} FROM {}",
+            slug, col_list, col_list, temp
+        ),
+        &[],
+    )
+    .with_context(|| format!("Failed to copy data during rebuild of '{}'", slug))?;
+
+    conn.execute_batch(&format!("DROP TABLE {}", temp))?;
+
+    tracing::info!("Table '{}' rebuilt successfully", slug);
     Ok(())
 }
 
@@ -593,6 +668,120 @@ mod tests {
             names.contains("seo__description"),
             "Group inside Collapsible should be tracked: {names:?}"
         );
+    }
+
+    #[test]
+    fn alter_adds_deleted_at_for_soft_delete() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        // Enable soft delete on existing collection
+        let mut def2 = simple_collection("posts", vec![text_field("title")]);
+        def2.soft_delete = true;
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("_deleted_at"));
+    }
+
+    #[test]
+    fn alter_rebuilds_table_to_remove_inline_unique_on_soft_delete_transition() {
+        use crate::db::DbValue;
+
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        // Create collection WITHOUT soft_delete — unique fields get inline UNIQUE
+        let def1 = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+                text_field("title"),
+            ],
+        );
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        // Insert a row to verify data survives rebuild
+        conn.execute(
+            "INSERT INTO posts (id, slug, title) VALUES ('a', 'hello', 'Hello World')",
+            &[],
+        )
+        .unwrap();
+
+        // Enable soft_delete — should rebuild the table to remove inline UNIQUE
+        let mut def2 = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+                text_field("title"),
+            ],
+        );
+        def2.soft_delete = true;
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        // Verify data survived
+        let row = conn
+            .query_one(
+                "SELECT title FROM posts WHERE id = ?1",
+                &[DbValue::Text("a".into())],
+            )
+            .unwrap();
+        assert!(row.is_some(), "Data should survive table rebuild");
+
+        // Verify inline UNIQUE is gone: soft-delete a row, then insert duplicate slug
+        conn.execute(
+            "UPDATE posts SET _deleted_at = '2025-01-01' WHERE id = 'a'",
+            &[],
+        )
+        .unwrap();
+
+        let result = conn.execute(
+            "INSERT INTO posts (id, slug, title) VALUES ('b', 'hello', 'Hello Again')",
+            &[],
+        );
+        assert!(
+            result.is_ok(),
+            "Inline UNIQUE should be removed — duplicate slug allowed when one row is soft-deleted"
+        );
+    }
+
+    #[test]
+    fn alter_does_not_rebuild_without_unique_fields() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        // Create collection without unique fields
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        // Enable soft_delete — no rebuild needed (no unique fields)
+        let mut def2 = simple_collection("posts", vec![text_field("title")]);
+        def2.soft_delete = true;
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("_deleted_at"));
+    }
+
+    #[test]
+    fn alter_does_not_add_deleted_at_without_soft_delete() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def1 = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def1, &no_locale()).unwrap();
+
+        // Alter without soft_delete
+        let def2 = simple_collection("posts", vec![text_field("title"), text_field("body")]);
+        alter_collection_table(&conn, "posts", &def2, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(!cols.contains("_deleted_at"));
     }
 
     #[test]

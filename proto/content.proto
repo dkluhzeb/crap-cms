@@ -103,6 +103,18 @@ service ContentAPI {
   //   UNAVAILABLE       — transient DB error; retry
   rpc Delete (DeleteRequest) returns (DeleteResponse);
 
+  // Restore un-deletes a soft-deleted document, moving it out of trash.
+  // Only works on collections with `soft_delete = true`.
+  //
+  // Auth: optional. Trash access functions are evaluated when a token is present.
+  //
+  // Errors:
+  //   NOT_FOUND            — collection or document not found
+  //   PERMISSION_DENIED    — trash access denied
+  //   FAILED_PRECONDITION  — collection does not have soft_delete enabled
+  //   UNAVAILABLE          — transient DB error; retry
+  rpc Restore (RestoreRequest) returns (RestoreResponse);
+
   // GetGlobal retrieves the single document for a global definition. Globals
   // have no collection CRUD; there is exactly one document per global slug.
   // Fires before_read / after_read hooks.
@@ -576,7 +588,34 @@ message UpdateResponse {
 }
 
 // DeleteRequest removes a document by ID.
+// For collections with `soft_delete = true`, this moves the document to trash
+// unless `force_hard_delete` is set. Requires `access.trash` for soft delete
+// or `access.delete` for permanent deletion.
 message DeleteRequest {
+  // The collection slug.
+  string collection = 1;
+
+  // The document's nanoid ID.
+  string id = 2;
+
+  // When true, permanently delete even if the collection has soft_delete enabled.
+  // Requires `access.delete` permission (not just `access.trash`).
+  bool force_hard_delete = 3;
+}
+
+// DeleteResponse confirms the deletion.
+message DeleteResponse {
+  // True if the document was successfully deleted (or soft-deleted).
+  bool success = 1;
+
+  // True if the document was soft-deleted (moved to trash) rather than permanently deleted.
+  bool soft_deleted = 2;
+}
+
+// RestoreRequest restores a soft-deleted document from trash.
+// Only works on collections with `soft_delete = true`.
+// Requires `access.trash` permission (falls back to `access.update`).
+message RestoreRequest {
   // The collection slug.
   string collection = 1;
 
@@ -584,10 +623,10 @@ message DeleteRequest {
   string id = 2;
 }
 
-// DeleteResponse confirms the deletion.
-message DeleteResponse {
-  // True if the document was successfully deleted.
-  bool success = 1;
+// RestoreResponse confirms the restoration.
+message RestoreResponse {
+  // The restored document.
+  Document document = 1;
 }
 
 // GetGlobalRequest retrieves the singleton document for a global.

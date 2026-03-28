@@ -2,12 +2,41 @@
 <crap-list-settings>
 <crap-sticky-header>
 <div class="page-header">
-  <h1>{{collection.display_name}}</h1>
-  <a class="button button--primary" href="/admin/collections/{{collection.slug}}/create"
-    hx-get="/admin/collections/{{collection.slug}}/create" hx-target="body" hx-push-url="true">
-    <span class="material-symbols-outlined">add</span>
-    {{t "create"}} {{collection.singular_name}}
-  </a>
+  <h1>{{collection.display_name}}{{#if is_trash}} — {{t "trash"}}{{/if}}</h1>
+  <div class="page-header__actions">
+    {{#if has_soft_delete}}
+    {{#if is_trash}}
+    <a class="button button--ghost" href="/admin/collections/{{collection.slug}}"
+      hx-get="/admin/collections/{{collection.slug}}" hx-target="body" hx-push-url="true">
+      <span class="material-symbols-outlined">arrow_back</span>
+      {{t "back_to_list"}}
+    </a>
+    {{#if docs}}
+    {{#if collection.can_permanently_delete}}
+    <button type="button" class="button button--danger button--small"
+      data-empty-trash-slug="{{collection.slug}}"
+      data-empty-trash-count="{{pagination.total_docs}}">
+      <span class="material-symbols-outlined">delete_forever</span>
+      {{t "empty_trash"}}
+    </button>
+    {{/if}}
+    {{/if}}
+    {{else}}
+    <a class="button button--ghost" href="/admin/collections/{{collection.slug}}?trash=1"
+      hx-get="/admin/collections/{{collection.slug}}?trash=1" hx-target="body" hx-push-url="true">
+      <span class="material-symbols-outlined">delete</span>
+      {{t "trash"}}
+    </a>
+    {{/if}}
+    {{/if}}
+    {{#unless is_trash}}
+    <a class="button button--primary" href="/admin/collections/{{collection.slug}}/create"
+      hx-get="/admin/collections/{{collection.slug}}/create" hx-target="body" hx-push-url="true">
+      <span class="material-symbols-outlined">add</span>
+      {{t "create"}} {{collection.singular_name}}
+    </a>
+    {{/unless}}
+  </div>
 </div>
 
 <div class="list-toolbar">

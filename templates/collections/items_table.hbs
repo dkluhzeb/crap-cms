@@ -34,7 +34,7 @@
   </thead>
   <tbody>
     {{#each docs}}
-    {{> collections/items_row collection=../collection}}
+    {{> collections/items_row collection=../collection is_trash=../is_trash}}
     {{/each}}
   </tbody>
 </table>

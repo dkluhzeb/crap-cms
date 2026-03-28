@@ -15,6 +15,7 @@ import './i18n.js';
 import './toast.js';
 import './confirm.js';
 import './confirm-dialog.js';
+import './delete-dialog.js';
 import './richtext.js';
 import './code.js';
 import './tags.js';

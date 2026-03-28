@@ -38,7 +38,10 @@ pub fn create_collection_table(
                     {
                         col.push_str(" NOT NULL");
                     }
-                    if spec.field.unique {
+                    // Skip inline UNIQUE for soft-delete collections — a partial
+                    // unique index (WHERE _deleted_at IS NULL) is created instead
+                    // by sync_indexes so that deleted rows don't block new inserts.
+                    if spec.field.unique && !def.soft_delete {
                         col.push_str(" UNIQUE");
                     }
                     append_default_value(
@@ -61,7 +64,8 @@ pub fn create_collection_table(
                 if spec.field.required && !def.has_drafts() {
                     col.push_str(" NOT NULL");
                 }
-                if spec.field.unique {
+                // Skip inline UNIQUE for soft-delete collections (see above).
+                if spec.field.unique && !def.soft_delete {
                     col.push_str(" UNIQUE");
                 }
                 append_default_value(&mut col, &spec.field.default_value, &spec.field.field_type);
@@ -73,6 +77,11 @@ pub fn create_collection_table(
     // Versioned collections with drafts get a _status column
     if def.has_drafts() {
         columns.push("_status TEXT NOT NULL DEFAULT 'published'".to_string());
+    }
+
+    // Soft-delete collections get a _deleted_at column
+    if def.soft_delete {
+        columns.push("_deleted_at TEXT".to_string());
     }
 
     // Auth collections get hidden system columns (not regular fields)
@@ -786,6 +795,29 @@ mod tests {
     }
 
     #[test]
+    fn soft_delete_collection_has_deleted_at_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection("posts", vec![text_field("title")]);
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(cols.contains("_deleted_at"));
+    }
+
+    #[test]
+    fn non_soft_delete_collection_has_no_deleted_at_column() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection("posts", vec![text_field("title")]);
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts").unwrap();
+        assert!(!cols.contains("_deleted_at"));
+    }
+
+    #[test]
     fn create_date_field_with_timezone_creates_tz_column() {
         let (_dir, pool) = in_memory_pool();
         let conn = pool.get().unwrap();
@@ -845,5 +877,60 @@ mod tests {
         assert!(cols.contains("starts_at__de"));
         assert!(cols.contains("starts_at_tz__en"));
         assert!(cols.contains("starts_at_tz__de"));
+    }
+
+    #[test]
+    fn soft_delete_unique_field_skips_inline_unique() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let mut def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        def.soft_delete = true;
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        // Insert two rows with the same slug — inline UNIQUE would block this,
+        // but we skipped it for soft-delete collections.
+        conn.execute(
+            "INSERT INTO posts (id, slug, _deleted_at) VALUES ('a', 'hello', '2025-01-01')",
+            &[],
+        )
+        .unwrap();
+        let result = conn.execute(
+            "INSERT INTO posts (id, slug, _deleted_at) VALUES ('b', 'hello', NULL)",
+            &[],
+        );
+        assert!(
+            result.is_ok(),
+            "Should allow duplicate slug when one row is soft-deleted"
+        );
+    }
+
+    #[test]
+    fn non_soft_delete_unique_field_keeps_inline_unique() {
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("slug", FieldType::Text)
+                    .unique(true)
+                    .build(),
+            ],
+        );
+        create_collection_table(&conn, "posts", &def, &no_locale()).unwrap();
+
+        conn.execute("INSERT INTO posts (id, slug) VALUES ('a', 'hello')", &[])
+            .unwrap();
+        let result = conn.execute("INSERT INTO posts (id, slug) VALUES ('b', 'hello')", &[]);
+        assert!(
+            result.is_err(),
+            "Inline UNIQUE should block duplicate slug on non-soft-delete collection"
+        );
     }
 }

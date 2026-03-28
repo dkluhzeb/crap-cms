@@ -19,10 +19,36 @@
   </td>
   {{/each}}
   <td>
-    <a class="button button--ghost button--small" href="/admin/collections/{{collection.slug}}/{{this.id}}/delete"
-      hx-get="/admin/collections/{{collection.slug}}/{{this.id}}/delete" hx-target="body" hx-push-url="true"
+    {{#if is_trash}}
+    <div style="display:flex;gap:4px">
+      <form method="POST" action="/admin/collections/{{collection.slug}}/{{this.id}}/restore"
+        hx-post="/admin/collections/{{collection.slug}}/{{this.id}}/restore" hx-target="body" style="display:inline">
+        <button type="submit" class="button button--ghost button--small" aria-label="{{t "restore"}}">
+          <span class="material-symbols-outlined" aria-hidden="true">restore_from_trash</span>
+        </button>
+      </form>
+      {{#if collection.can_permanently_delete}}
+      <button type="button" class="button button--ghost button--small"
+        data-delete-id="{{this.id}}"
+        data-delete-title="{{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}"
+        data-delete-slug="{{collection.slug}}"
+        data-delete-soft="false"
+        data-delete-can-perm="true"
+        aria-label="{{t "delete_permanently"}}">
+        <span class="material-symbols-outlined" aria-hidden="true">delete_forever</span>
+      </button>
+      {{/if}}
+    </div>
+    {{else}}
+    <button type="button" class="button button--ghost button--small"
+      data-delete-id="{{this.id}}"
+      data-delete-title="{{#if this.title_value}}{{this.title_value}}{{else}}{{this.id}}{{/if}}"
+      data-delete-slug="{{collection.slug}}"
+      data-delete-soft="{{#if collection.soft_delete}}true{{else}}false{{/if}}"
+      data-delete-can-perm="{{#if collection.can_permanently_delete}}true{{else}}false{{/if}}"
       aria-label="{{t "delete"}}">
       <span class="material-symbols-outlined" aria-hidden="true">delete</span>
-    </a>
+    </button>
+    {{/if}}
   </td>
 </tr>

@@ -27,7 +27,14 @@ pub(crate) fn check_unique(
         Some(other) => other.to_string(),
         None => String::new(),
     };
-    match query::count_where_field_eq(ctx.conn, ctx.table, col_name, &value_str, ctx.exclude_id) {
+    match query::count_where_field_eq(
+        ctx.conn,
+        ctx.table,
+        col_name,
+        &value_str,
+        ctx.exclude_id,
+        ctx.soft_delete,
+    ) {
         Ok(count) if count > 0 => {
             errors.push(FieldError::with_key(
                 data_key.to_owned(),
