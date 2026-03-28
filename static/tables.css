@@ -17,7 +17,7 @@
 /* Sticky table header on list pages — top offset set by JS (<crap-list-settings>) */
 crap-list-settings .table th {
   position: sticky;
-  top: var(--list-header-height, 0px);
+  top: var(--sticky-header-bottom, var(--header-height));
   z-index: 4;
   box-shadow: 0 -2px 0 var(--bg-body);
 }
@@ -92,7 +92,7 @@ crap-list-settings .table th {
   display: inline;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .card {
     min-width: 0;
     overflow-x: auto;

@@ -977,7 +977,7 @@ select[multiple] {
   margin: var(--space-xs) 0 0;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .form__field--half,
   .form__field--third {
     grid-column: span 12;

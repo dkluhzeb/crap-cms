@@ -123,7 +123,7 @@ crap-focal-point:not(:defined) {
 
   /* Layout */
   --sidebar-width: calc(var(--base) * 52);
-  --header-height: calc(var(--base) * 10.25);
+  --header-height: calc(var(--base) * 10);
 
   /* Semantic - Sidebar */
   --sidebar-bg: transparent;

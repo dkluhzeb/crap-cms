@@ -94,6 +94,12 @@
   padding: var(--space-lg);
 }
 
+/* Pages with a sticky header: remove top padding (sticky header provides it) */
+.main:has(> crap-sticky-header),
+.main:has(> crap-list-settings) {
+  padding-top: 0;
+}
+
 /* Edit page two-column layout */
 .edit-layout {
   display: grid;
@@ -117,16 +123,17 @@
 
 .edit-layout__sidebar {
   position: sticky;
-  top: calc(var(--sticky-header-bottom, var(--header-height)) + var(--space-lg));
+  top: var(--sticky-header-bottom, var(--header-height));
 }
 
-@media (max-width: 900px) {
+@media (max-width: 1024px) {
   .edit-layout {
     grid-template-columns: 1fr;
   }
   .edit-layout__sidebar {
     position: static;
     order: -1;
+    align-self: auto;
   }
 }
 
@@ -160,10 +167,12 @@ crap-sticky-header {
   top: var(--header-height);
   z-index: 5;
   background: var(--bg-body);
-  padding-top: var(--space-lg);
-  margin-top: calc(-1 * var(--space-lg));
-  box-shadow: 0 -1px 0 var(--bg-body), 0 1px 3px rgba(0, 0, 0, 0.04);
-  overflow: hidden;
+
+  /* Break out of .main's horizontal padding so background covers edge-to-edge */
+  margin: 0 calc(-1 * var(--space-lg));
+  padding: var(--space-lg);
+
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
 }
 
 /* Page header */
@@ -412,7 +421,7 @@ crap-sticky-header {
   display: none;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .layout {
     grid-template-columns: 1fr;
     grid-template-areas:
@@ -492,6 +501,17 @@ crap-sticky-header {
   .header__toggle:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
+  }
+
+  .header {
+    position: static;
+  }
+
+  crap-sticky-header {
+    position: static;
+    margin: 0;
+    padding: var(--space-md) var(--space-md) 0;
+    box-shadow: none;
   }
 
   .main {
