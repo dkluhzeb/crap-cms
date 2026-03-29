@@ -125,7 +125,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   references also maintain ref counts on their targets. A one-time
   backfill migration computes initial counts from existing data.
 
+- **Design system harmonization** — Unified button, input, and icon sizing
+  across the entire admin UI. All interactive controls now share a consistent
+  height scale derived from a single `--base` unit (4px grid). Buttons and
+  inputs align at 36px (`--control-lg`), small buttons at 28px (`--control-sm`).
+  Icon sizes use a dedicated `--icon-xs/sm/md/lg/xl` scale. All spacing,
+  sizing, and layout values use `rem` units via `calc(var(--base) * n)` for
+  scalability. The `button--secondary` variant (tinted) fills a previously
+  missing gap between primary and ghost buttons.
+
+- **Inline create for relationship fields** — Clicking "Create new" on a
+  relationship or upload field now opens a near-fullpage slideout panel
+  instead of navigating away. The create form loads in the panel with full
+  field support (richtext, code, arrays, blocks). On success, the created
+  item is automatically selected in the relationship field. Form context
+  is preserved — no more losing unsaved work. Works for both has-one and
+  has-many relationships, including polymorphic and upload fields.
+  Ctrl+click still opens in a new tab for progressive enhancement.
+
+- **Tag-style chips for has-many relationships** — Has-many relationship
+  fields now display selected items as chips inside the search input
+  (like a tag input), instead of in a separate row above. Backspace
+  removes the last chip. Enter selects the first search result without
+  requiring arrow-key navigation first.
+
+- **Shadow DOM web components** — `<crap-block-picker>`, `<crap-tags>`,
+  and `<crap-focal-point>` migrated to Shadow DOM with encapsulated
+  styles. `<crap-relationship-search>` and `<crap-live-events>` use
+  injected scoped styles. ~500 lines of CSS removed from global
+  stylesheets and co-located with their components. Dead CSS for
+  filter-builder and column-picker (duplicated in the drawer's Shadow
+  DOM) removed from global sheets.
+
+- **FOUC prevention** — `:not(:defined)` CSS rules hide Shadow DOM
+  components until their JavaScript registers, preventing flash of
+  unstyled content.
+
 ### Changed
+
+- **Responsive breakpoint raised to 1024px** — The mobile layout
+  (hamburger sidebar, stacked edit layout, static headers) now activates
+  at 1024px instead of 768px/900px. Two-sidebar layouts (nav + edit
+  sidebar) were too cramped on tablets and small laptops.
+
+- **Sticky subheader simplified** — Removed duplicate `ResizeObserver`
+  (was in both `sticky-header.js` and `list-settings.js`), eliminated
+  the `--list-header-height` CSS variable (redundant with
+  `--sticky-header-bottom`), and removed direct inline style
+  manipulation fallback on the edit sidebar. The sticky subheader now
+  breaks out of `.main` padding with negative horizontal margins for
+  edge-to-edge coverage, fixing content bleed visible during scroll.
+  On mobile, headers revert to static document flow — no sticky
+  positioning, no overlap issues.
+
+- **Consistent chip styling** — Relationship chips and tag input chips
+  now use the same visual style: primary-tinted background, medium font
+  weight, rounded corners, and a remove button with red hover state.
+
+- **Hardcoded colors replaced with CSS variables** — Bare `#fff` and
+  `white` values in CSS and web components replaced with
+  `var(--text-on-primary)` or `var(--bg-elevated)` for proper theme
+  support.
+
+- **Button disabled state** — `.button:disabled` now shows 50% opacity
+  with `not-allowed` cursor. Input fields (`input:disabled`,
+  `select:disabled`, `textarea:disabled`) show dimmed text, grayed
+  background, and block pointer events.
+
+- **Missing i18n keys** — Seven JavaScript translation keys
+  (`search_to_add`, `search`, `are_you_sure`, `ok`, `documents`,
+  `error`, `no_details`) were used in web components but missing from
+  the `#crap-i18n` data island. Now included. Added `error` and
+  `no_details` keys to en/de translation files.
+
+- **Email template colors** — Password reset and email verification
+  templates updated from `#2563eb` to `#1677ff` to match the system
+  primary color.
 
 - **Delete protection expanded to all collections** — Previously only
   upload/media collections were protected from deletion when referenced.
