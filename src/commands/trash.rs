@@ -244,7 +244,7 @@ fn find_purge_candidates(
             let (offset_sql, offset_param) = conn.date_offset_expr(secs, 1);
             (
                 format!(
-                    "SELECT id FROM {} WHERE _deleted_at IS NOT NULL \
+                    "SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL \
                      AND _deleted_at < {}",
                     slug, offset_sql
                 ),
@@ -252,7 +252,7 @@ fn find_purge_candidates(
             )
         }
         None => (
-            format!("SELECT id FROM {} WHERE _deleted_at IS NOT NULL", slug),
+            format!("SELECT id FROM \"{}\" WHERE _deleted_at IS NOT NULL", slug),
             vec![],
         ),
     };

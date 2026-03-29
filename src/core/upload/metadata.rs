@@ -128,7 +128,7 @@ pub fn delete_upload_files(config_dir: &Path, doc_fields: &HashMap<String, Value
 
     for (key, value) in doc_fields {
         if (key == "url" || key.ends_with("_url"))
-            && !key.contains("image")
+            && key != "image_url"
             && let Value::String(url) = value
             && url.starts_with("/uploads/")
         {
@@ -557,6 +557,46 @@ mod tests {
 
         delete_upload_files(tmp.path(), &doc_fields);
         assert!(file_path.exists(), "image_url fields should be skipped");
+    }
+
+    #[test]
+    fn delete_upload_files_does_not_skip_prefixed_image_url() {
+        // Regression: the old check used key.contains("image") which incorrectly
+        // skipped fields like "hero_image_url". Only exact "image_url" should be skipped.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let uploads_dir = tmp.path().join("uploads/media");
+        fs::create_dir_all(&uploads_dir).unwrap();
+
+        let hero_file = uploads_dir.join("hero.png");
+        let banner_file = uploads_dir.join("banner.png");
+        let keep_file = uploads_dir.join("keep.png");
+        fs::write(&hero_file, b"hero").unwrap();
+        fs::write(&banner_file, b"banner").unwrap();
+        fs::write(&keep_file, b"keep").unwrap();
+
+        let mut doc_fields = HashMap::new();
+        doc_fields.insert("hero_image_url".into(), json!("/uploads/media/hero.png"));
+        doc_fields.insert(
+            "banner_image_url".into(),
+            json!("/uploads/media/banner.png"),
+        );
+        // Exact "image_url" should still be skipped
+        doc_fields.insert("image_url".into(), json!("/uploads/media/keep.png"));
+
+        delete_upload_files(tmp.path(), &doc_fields);
+
+        assert!(
+            !hero_file.exists(),
+            "hero_image_url should NOT be skipped — only exact 'image_url' is skipped"
+        );
+        assert!(
+            !banner_file.exists(),
+            "banner_image_url should NOT be skipped"
+        );
+        assert!(
+            keep_file.exists(),
+            "Exact 'image_url' should still be skipped"
+        );
     }
 
     #[test]

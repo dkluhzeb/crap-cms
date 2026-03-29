@@ -2,6 +2,8 @@
 
 use std::sync::Arc;
 
+use chrono::Utc;
+use nanoid::nanoid;
 use serde_json::json;
 
 use crate::{
@@ -34,8 +36,8 @@ pub fn send_verification_email(
             return;
         }
 
-        let token = nanoid::nanoid!(32);
-        let exp = chrono::Utc::now().timestamp() + 86400; // 24 hours
+        let token = nanoid!(32);
+        let exp = Utc::now().timestamp() + 86400; // 24 hours
 
         let conn = match pool.get() {
             Ok(c) => c,
@@ -52,10 +54,9 @@ pub fn send_verification_email(
             return;
         }
 
-        let verify_url = format!(
-            "http://{}:{}/admin/verify-email?token={}",
-            server_config.host, server_config.admin_port, token
-        );
+        let fallback = format!("http://{}:{}", server_config.host, server_config.admin_port);
+        let base_url = server_config.public_url.as_deref().unwrap_or(&fallback);
+        let verify_url = format!("{}/admin/verify-email?token={}", base_url, token);
         let data = json!({ "verify_url": verify_url });
         let html = match email_renderer.render("verify_email", &data) {
             Ok(h) => h,

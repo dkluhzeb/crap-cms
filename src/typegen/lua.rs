@@ -41,7 +41,7 @@ fn render_collection(out: &mut String, col: &CollectionDefinition) {
 
     // Sub-type classes (Array rows and Group shapes)
     for stf in collect_sub_type_fields(&col.fields) {
-        let sub_pascal = to_pascal_case(&stf.field.name);
+        let sub_pascal = format!("{}{}", pascal, to_pascal_case(&stf.field.name));
         let namespace = match stf.kind {
             SubTypeKind::Array => "array_row",
             SubTypeKind::Group => "group",
@@ -745,7 +745,7 @@ mod tests {
         ];
         let mut out = String::new();
         render_collection(&mut out, &col);
-        assert!(out.contains("---@class crap.array_row.Items"));
+        assert!(out.contains("---@class crap.array_row.PostsItems"));
         assert!(out.contains("---@field label string"));
         assert!(out.contains("---@field desc? string"));
     }
@@ -873,8 +873,8 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(
-            out.contains("---@class crap.group.Seo"),
-            "group sub-type class should be emitted: {}",
+            out.contains("---@class crap.group.PostsSeo"),
+            "group sub-type class should be emitted with collection prefix: {}",
             out
         );
         assert!(
@@ -886,6 +886,54 @@ mod tests {
             out.contains("---@field description? string"),
             "group sub-field optional: {}",
             out
+        );
+    }
+
+    /// Regression: two collections with identically-named array fields must
+    /// produce distinct sub-type class names (prefixed with the collection's
+    /// PascalCase name) so they don't collide.
+    #[test]
+    fn array_subtype_names_prefixed_with_collection_name() {
+        let mut posts = CollectionDefinition::new("posts");
+        posts.fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("label", true)])
+                .build(),
+        ];
+
+        let mut pages = CollectionDefinition::new("pages");
+        pages.fields = vec![
+            FieldDefinition::builder("items", FieldType::Array)
+                .fields(vec![text_field("url", true)])
+                .build(),
+        ];
+
+        let mut posts_out = String::new();
+        render_collection(&mut posts_out, &posts);
+
+        let mut pages_out = String::new();
+        render_collection(&mut pages_out, &pages);
+
+        // Each collection should produce a uniquely-prefixed class name
+        assert!(
+            posts_out.contains("---@class crap.array_row.PostsItems"),
+            "posts sub-type should be PostsItems, got:\n{}",
+            posts_out
+        );
+        assert!(
+            pages_out.contains("---@class crap.array_row.PagesItems"),
+            "pages sub-type should be PagesItems, got:\n{}",
+            pages_out
+        );
+
+        // The two class names must be different
+        assert!(
+            posts_out.contains("PostsItems"),
+            "posts class name must exist"
+        );
+        assert!(
+            pages_out.contains("PagesItems"),
+            "pages class name must exist"
         );
     }
 
@@ -932,13 +980,13 @@ mod tests {
         let mut out = String::new();
         render_collection(&mut out, &col);
         assert!(
-            out.contains("---@class crap.array_row.Items"),
-            "array inside Row should emit sub-type: {}",
+            out.contains("---@class crap.array_row.PostsItems"),
+            "array inside Row should emit sub-type with collection prefix: {}",
             out
         );
         assert!(
-            out.contains("---@class crap.array_row.TabItems"),
-            "array inside Tabs should emit sub-type: {}",
+            out.contains("---@class crap.array_row.PostsTabItems"),
+            "array inside Tabs should emit sub-type with collection prefix: {}",
             out
         );
     }

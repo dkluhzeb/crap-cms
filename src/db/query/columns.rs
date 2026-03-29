@@ -165,7 +165,19 @@ fn collect_expected_locale_inner(
                     }
 
                     if field.field_type == FieldType::Date && field.timezone {
-                        names.insert(format!("{}_tz", base));
+                        let tz_base = if prefix.is_empty() {
+                            format!("{}_tz", field.name)
+                        } else {
+                            format!("{}__{}_tz", prefix, field.name)
+                        };
+
+                        if field.localized || parent_localized {
+                            for locale in &locale_config.locales {
+                                names.insert(format!("{}__{}", tz_base, locale));
+                            }
+                        } else {
+                            names.insert(tz_base);
+                        }
                     }
                 }
             }
@@ -768,6 +780,9 @@ mod tests {
         assert_eq!(names, vec!["id", "schedule__start", "schedule__start_tz"]);
     }
 
+    /// Regression: when a Date field has timezone=true and is localized,
+    /// the _tz companion columns must also be locale-expanded (e.g.
+    /// `event_date_tz__en`, `event_date_tz__de`) — not bare `event_date_tz`.
     #[test]
     fn expected_columns_date_tz_with_locale() {
         let mut date_field = make_date_tz_field("event_date");
@@ -775,10 +790,28 @@ mod tests {
         let def = make_collection_def("events", vec![date_field], false);
         let expected = get_expected_column_names(&def, &locale_en_de());
 
+        // Date value columns should be locale-expanded
         assert!(expected.contains("event_date__en"));
         assert!(expected.contains("event_date__de"));
-        // _tz column is NOT localized — one per field
-        assert!(expected.contains("event_date_tz"));
+
+        // _tz columns must also be locale-expanded
+        assert!(
+            expected.contains("event_date_tz__en"),
+            "missing event_date_tz__en, got: {:?}",
+            expected
+        );
+        assert!(
+            expected.contains("event_date_tz__de"),
+            "missing event_date_tz__de, got: {:?}",
+            expected
+        );
+
+        // Bare _tz column should NOT exist when localized
+        assert!(
+            !expected.contains("event_date_tz"),
+            "bare event_date_tz should not exist when localized, got: {:?}",
+            expected
+        );
     }
 
     #[test]

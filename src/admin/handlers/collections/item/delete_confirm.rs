@@ -108,7 +108,27 @@ pub async fn delete_confirm(
 pub async fn back_references(
     State(state): State<AdminState>,
     Path((slug, id)): Path<(String, String)>,
+    auth_user: Option<Extension<AuthUser>>,
 ) -> Response {
+    // Check read access on the collection
+    let def = match state.registry.get_collection(&slug) {
+        Some(d) => d.clone(),
+        None => return Json(json!({ "error": "Collection not found" })).into_response(),
+    };
+    match check_access_or_forbid(
+        &state,
+        def.access.read.as_deref(),
+        &auth_user,
+        Some(&id),
+        None,
+    ) {
+        Ok(AccessResult::Denied) => {
+            return Json(json!({ "error": "Access denied" })).into_response();
+        }
+        Err(_) => return Json(json!({ "error": "Access denied" })).into_response(),
+        _ => {}
+    }
+
     let conn = match state.pool.get() {
         Ok(c) => c,
         Err(_) => return Json(json!({ "error": "DB connection error" })).into_response(),

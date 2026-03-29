@@ -110,8 +110,8 @@ fn run_status(pool: &DbPool, id: Option<String>, slug: Option<String>, limit: i6
         cli::kv("Started", run.started_at.as_deref().unwrap_or("-"));
         cli::kv("Completed", run.completed_at.as_deref().unwrap_or("-"));
 
-        if let Some(ref data) = Some(&run.data) {
-            cli::kv("Data", &data.to_string());
+        if !run.data.is_empty() {
+            cli::kv("Data", &run.data);
         }
         if let Some(ref result) = run.result {
             cli::kv("Result", &result.to_string());

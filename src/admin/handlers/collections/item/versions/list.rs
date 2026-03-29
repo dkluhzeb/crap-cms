@@ -125,7 +125,7 @@ pub async fn list_versions_page(
                 "/admin/collections/{}/{}/versions?page={}",
                 slug,
                 id,
-                page - 1
+                page.saturating_sub(1).max(1)
             ),
             format!(
                 "/admin/collections/{}/{}/versions?page={}",

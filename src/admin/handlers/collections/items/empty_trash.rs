@@ -16,7 +16,10 @@ use crate::{
         handlers::shared::{check_access_or_forbid, forbidden},
     },
     core::{auth::AuthUser, upload},
-    db::query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery},
+    db::{
+        DbConnection,
+        query::{self, AccessResult, Filter, FilterClause, FilterOp, FindQuery},
+    },
 };
 
 /// POST /admin/collections/{slug}/empty-trash
@@ -102,7 +105,9 @@ pub async fn empty_trash_action(
                 upload::delete_upload_files(&config_dir, &doc.fields);
             }
 
-            query::fts::fts_delete(&tx, &slug_owned, &doc.id)?;
+            if tx.supports_fts() {
+                query::fts::fts_delete(&tx, &slug_owned, &doc.id)?;
+            }
             query::delete(&tx, &slug_owned, &doc.id)?;
         }
 

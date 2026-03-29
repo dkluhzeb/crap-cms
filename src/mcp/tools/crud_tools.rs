@@ -94,11 +94,18 @@ pub(super) fn parse_where_filters(args: &Value) -> Vec<query::FilterClause> {
                         "not_equals" => query::FilterOp::NotEquals(val_str),
                         "contains" => query::FilterOp::Contains(val_str),
                         "greater_than" => query::FilterOp::GreaterThan(val_str),
-                        "greater_than_equal" => query::FilterOp::GreaterThanOrEqual(val_str),
+                        "greater_than_equal" | "greater_than_or_equal" => {
+                            query::FilterOp::GreaterThanOrEqual(val_str)
+                        }
                         "less_than" => query::FilterOp::LessThan(val_str),
-                        "less_than_equal" => query::FilterOp::LessThanOrEqual(val_str),
+                        "less_than_equal" | "less_than_or_equal" => {
+                            query::FilterOp::LessThanOrEqual(val_str)
+                        }
                         "like" => query::FilterOp::Like(val_str),
-                        _ => continue,
+                        unknown => {
+                            tracing::warn!("Unknown MCP filter operator '{}', skipping", unknown);
+                            continue;
+                        }
                     };
                     clauses.push(query::FilterClause::Single(query::Filter {
                         field: field.clone(),

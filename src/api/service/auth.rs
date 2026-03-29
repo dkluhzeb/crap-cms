@@ -188,7 +188,10 @@ impl ContentService {
 
         let (doc, db_session_version) = tokio::task::spawn_blocking(move || {
             let conn = pool.get().context("DB connection")?;
-            let doc = query::find_by_id(&conn, &collection, &def, &id, None)?;
+            let mut doc = query::find_by_id(&conn, &collection, &def, &id, None)?;
+            if let Some(ref mut d) = doc {
+                query::hydrate_document(&conn, &collection, &def.fields, d, None, None)?;
+            }
             let sv = query::get_session_version(&conn, &collection, &id)?;
             Ok::<_, anyhow::Error>((doc, sv))
         })

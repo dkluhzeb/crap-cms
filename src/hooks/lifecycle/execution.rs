@@ -247,20 +247,19 @@ pub(crate) fn call_before_broadcast_hook(
     match result {
         Value::Boolean(false) | Value::Nil => Ok(None),
         Value::Table(tbl) => {
-            let data_result: LuaResult<Table> = tbl.get("data");
+            let mut ctx = context;
 
-            if let Ok(data_tbl) = data_result {
+            if let Ok(data_tbl) = tbl.get::<Table>("data") {
                 let mut new_data = HashMap::new();
                 for pair in data_tbl.pairs::<String, Value>() {
                     let (k, v) = pair?;
                     new_data.insert(k, api::lua_to_json(lua, &v)?);
                 }
-                let mut ctx = context;
                 ctx.data = new_data;
-                Ok(Some(ctx))
-            } else {
-                Ok(Some(context))
             }
+
+            ctx.read_context_back(lua, &tbl);
+            Ok(Some(ctx))
         }
         other => {
             tracing::warn!(
@@ -310,9 +309,7 @@ pub(crate) fn call_registered_before_broadcast(
         match result {
             Value::Boolean(false) | Value::Nil => return Ok(None),
             Value::Table(tbl) => {
-                let data_result: LuaResult<Table> = tbl.get("data");
-
-                if let Ok(data_tbl) = data_result {
+                if let Ok(data_tbl) = tbl.get::<Table>("data") {
                     let mut new_data = HashMap::new();
                     for pair in data_tbl.pairs::<String, Value>() {
                         let (k, v) = pair?;
@@ -320,15 +317,15 @@ pub(crate) fn call_registered_before_broadcast(
                     }
                     context.data = new_data;
                 }
+                context.read_context_back(lua, &tbl);
             }
-            other if !matches!(other, Value::Boolean(false) | Value::Nil) => {
+            other => {
                 tracing::warn!(
                     "Registered before_broadcast hook #{} returned {} instead of table/false/nil — ignoring",
                     i,
                     other.type_name()
                 );
             }
-            _ => {}
         }
     }
 

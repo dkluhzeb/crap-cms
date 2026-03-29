@@ -179,7 +179,13 @@ class CrapConditions extends HTMLElement {
     const fd = new FormData(form);
     for (const [key, val] of fd.entries()) {
       if (key.startsWith('_')) continue;
-      data[key] = /** @type {string} */ (val);
+      if (key in data) {
+        data[key] = Array.isArray(data[key])
+          ? [...data[key], val]
+          : [data[key], val];
+      } else {
+        data[key] = /** @type {string} */ (val);
+      }
     }
     form.querySelectorAll('input[type="checkbox"]').forEach(
       /** @param {HTMLInputElement} cb */ (cb) => {

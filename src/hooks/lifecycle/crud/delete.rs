@@ -414,6 +414,15 @@ pub(super) fn register_update_many(
             };
 
             let mut data = lua_table_to_hashmap(&data_table)?;
+
+            // Reject password field in update_many for auth collections.
+            // Bulk password changes are not supported — use single update instead.
+            if def.is_auth_collection() && data.contains_key("password") {
+                return Err(RuntimeError(
+                    "Cannot set password via update_many. Use single update instead.".into(),
+                ));
+            }
+
             let join_data = lua_table_to_json_map(lua, &data_table)?;
 
             // Build hook data (JSON values for hooks to see)
@@ -483,9 +492,15 @@ pub(super) fn register_update_many(
 
                 // Validation (always runs unless hooks=false)
                 if run_hooks {
+                    let r = reg
+                        .read()
+                        .map_err(|e| RuntimeError(format!("Registry lock: {}", e)))?;
                     let val_ctx = ValidationCtx::builder(conn, &collection)
                         .exclude_id(Some(&doc.id))
                         .locale_ctx(locale_ctx.as_ref())
+                        .soft_delete(def.soft_delete)
+                        .draft(draft)
+                        .registry(&r)
                         .build();
                     validate_fields_inner(lua, &def.fields, &hook_data, &val_ctx)
                         .map_err(|e| RuntimeError(format!("validation error: {}", e)))?;

@@ -51,11 +51,14 @@ pub fn create_document(
         .build();
     let final_ctx = runner.run_before_write(&def.hooks, &def.fields, hook_ctx, &val_ctx)?;
     let final_data = final_ctx.to_string_map(&def.fields);
-    let persist_opts = crate::service::PersistOptions::builder()
+    let mut persist_builder = crate::service::PersistOptions::builder()
         .password(input.password)
         .locale_ctx(input.locale_ctx)
-        .draft(is_draft)
-        .build();
+        .draft(is_draft);
+    if let Some(lctx) = input.locale_ctx {
+        persist_builder = persist_builder.locale_config(&lctx.config);
+    }
+    let persist_opts = persist_builder.build();
     let doc = crate::service::persist_create(
         &tx,
         slug,
@@ -132,6 +135,12 @@ pub fn update_document(
             input.locale_ctx,
         )?
     } else {
+        let mut update_builder = crate::service::PersistOptions::builder()
+            .password(input.password)
+            .locale_ctx(input.locale_ctx);
+        if let Some(lctx) = input.locale_ctx {
+            update_builder = update_builder.locale_config(&lctx.config);
+        }
         crate::service::persist_update(
             &tx,
             slug,
@@ -139,10 +148,7 @@ pub fn update_document(
             def,
             &final_data,
             &final_ctx.data,
-            &crate::service::PersistOptions::builder()
-                .password(input.password)
-                .locale_ctx(input.locale_ctx)
-                .build(),
+            &update_builder.build(),
         )?
     };
 

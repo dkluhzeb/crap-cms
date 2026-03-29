@@ -92,7 +92,11 @@ pub async fn list_versions_page(
         .with_pagination(
             &query::PaginationResult::builder(&[] as &[Document], total, per_page)
                 .page(page, offset),
-            format!("/admin/globals/{}/versions?page={}", slug, page - 1),
+            format!(
+                "/admin/globals/{}/versions?page={}",
+                slug,
+                page.saturating_sub(1).max(1)
+            ),
             format!("/admin/globals/{}/versions?page={}", slug, page + 1),
         )
         .breadcrumbs(vec![

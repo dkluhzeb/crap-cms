@@ -241,6 +241,158 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   identical to `tz_key` in both `create.rs` and `update.rs` timezone
   companion column handling. Removed the duplicate.
 
+- **`<crap-create-panel>` never instantiated** — The `<crap-create-panel>`
+  Web Component was imported and defined but never placed in the DOM,
+  making the inline-create feature for relationship and upload fields
+  completely non-functional. Added to `templates/layout/base.hbs`.
+
+- **gRPC `get_global_impl` double pool acquisition** — Acquired a
+  connection from the pool and then called `ops::get_global()` which
+  acquired a second one, risking deadlock on small pools. Now uses
+  `query::get_global()` directly on the existing connection.
+
+- **gRPC `update_global_impl` held connection during service call** —
+  Held a pool connection while `service::update_global_document()` tried
+  to acquire its own, risking deadlock. Now drops the connection first.
+
+- **Lua `update_many` accepted password on auth collections** — The Lua
+  `crap.collections.update_many()` did not reject or strip password
+  fields on auth collections. Bulk password changes are now explicitly
+  rejected with a clear error message.
+
+- **gRPC `restore_version_impl` leaked read-denied fields** — The
+  restore-version endpoint returned the full document without stripping
+  fields the user is not permitted to read. Now applies the same
+  `strip_denied_proto_fields` as all other endpoints.
+
+- **Global unpublish bypassed lifecycle hooks** — Unpublishing a global
+  via the admin UI directly called `unpublish_with_snapshot` without
+  running before/after change hooks. Now uses a new
+  `unpublish_global_document()` that follows the same lifecycle as
+  collection unpublish.
+
+- **Lua `update_many` validation missing `soft_delete`, `registry`,
+  `draft`** — The `ValidationCtx` in `update_many` was missing
+  `soft_delete` (causing false-positive unique constraint violations on
+  soft-delete collections), `registry` (skipping richtext node attribute
+  validation), and `draft` (enforcing required-field checks on drafts).
+
+- **`locale_config` not passed to `persist_create`/`persist_update`** —
+  Reference count operations during create and update used a default
+  (empty) `LocaleConfig`, potentially missing locale-specific relationship
+  fields. Now forwards the locale config from the write context.
+
+- **Verification email URL hardcoded `http://`** — The email verification
+  URL always used `http://` regardless of configuration. Now respects
+  `public_url` from server config, matching the forgot-password flow.
+
+- **gRPC `get_global_impl` passed `user: None` to `AfterReadCtx`** —
+  After-read hooks saw no authenticated user, breaking user-dependent
+  transformations. Now passes the resolved auth user.
+
+- **`send_signal` cast u32 PID to i32 via `as`** — PIDs above
+  `i32::MAX` silently wrapped to negative values, which `kill(2)`
+  interprets as process groups. Now uses `i32::try_from()` and returns
+  an error for out-of-range PIDs.
+
+- **MCP filter operators inconsistent with gRPC API** — MCP used
+  `greater_than_equal`/`less_than_equal` while gRPC used
+  `greater_than_or_equal`/`less_than_or_equal`. Both forms are now
+  accepted. Unrecognized operators now log a warning instead of being
+  silently dropped.
+
+- **`me_impl` did not hydrate join table data** — The `/me` endpoint
+  returned documents without hydrating array fields, has-many
+  relationships, or blocks data. Now calls `hydrate_document`.
+
+- **`list_job_runs_impl` had no upper bound on `limit`** — A client
+  could pass an arbitrarily large limit. Now capped at 1000.
+
+- **`empty_trash_action` called `fts_delete` unconditionally** — Did not
+  check `supports_fts()` first, which would fail on non-FTS backends.
+
+- **`delete_upload_files` skipped all `*image*` field names** — The
+  filter `key.contains("image")` incorrectly skipped fields like
+  `hero_image_url`. Changed to exact match on `image_url` only.
+
+- **`ValidationError::to_field_map()` dropped duplicate field errors** —
+  Multiple validation errors for the same field were lost due to
+  `HashMap::collect()`. Now joins them with `"; "`.
+
+- **Richtext custom node attribute roundtrip** — HTML-escaped attribute
+  values (`&#39;`, `&amp;`, etc.) in `<crap-node data-attrs>` were not
+  unescaped before JSON parsing, causing deserialization failures.
+
+- **MIME verification bidirectional match** — The upload MIME check
+  tested both directions (`detected ∈ claimed` OR `claimed ∈ detected`),
+  weakening the security check. Now only verifies `detected ∈ claimed`.
+
+- **`_tz` companion columns not locale-expanded** — When a localized
+  Date field had `timezone = true`, `get_expected_column_names` generated
+  bare `field_tz` instead of per-locale `field_tz__en`, `field_tz__de`.
+  This caused migration drift detection to incorrectly flag columns.
+
+- **Unquoted table names in trash/scheduler SQL** — `find_purge_candidates`
+  and `purge_soft_deleted` used unquoted table names, which would fail
+  for collection slugs that are SQL reserved words.
+
+- **UTF-8 panic in config duration/filesize parsing** — Multi-byte
+  characters (e.g., emoji) in `parse_duration_string` or
+  `parse_filesize_string` could cause a panic from invalid byte-offset
+  slicing. Now uses char-aware splitting and ASCII validation.
+
+- **Inconsistent duration parsing in scheduler** —
+  `parse_retention_seconds` only supported `d`/`h` suffixes. Now also
+  supports `m` (minutes) and `s` (seconds) for consistency with
+  `parse_duration_string`.
+
+- **`before_broadcast` hooks lost `context` table** — The
+  `call_before_broadcast_hook` and `call_registered_before_broadcast`
+  functions did not call `read_context_back()`, silently discarding any
+  shared state set by hooks on `ctx.context`.
+
+- **`password.hbs` double-nested `form__field` wrapper** — The password
+  field template included its own `<div class="form__field">` while the
+  parent (`edit_form.hbs`) already provides one, causing CSS layout issues.
+
+- **`_collectFormData` overwrote multi-value form fields** — Both
+  `conditions.js` and `validate-form.js` used `data[key] = val` which
+  dropped all but the last value for multi-value fields (has-many). Now
+  collects duplicate keys into arrays.
+
+- **Lua typegen sub-type name collisions** — Array/Group sub-type class
+  names in Lua type generation used only the field name (e.g.,
+  `crap.array_row.Items`), colliding when multiple collections had
+  identically named fields. Now prefixed with the collection name.
+
+- **EventBus used `Ordering::Relaxed` for sequence counter** — Could
+  cause out-of-order sequence numbers across threads. Changed to
+  `Ordering::AcqRel`.
+
+- **`back_references` endpoint had no access control** — The endpoint
+  returned back-references for any document without checking collection
+  read access. Now verifies read permissions.
+
+- **Session guard dialog accumulated event listeners** — The `show()`
+  method added click/cancel listeners without removing previous ones.
+  Now cleans up the `cancel` handler alongside click handlers.
+
+- **Version list pagination generated `page=0` URLs** — Previous-page
+  URLs for version lists used `page - 1` which produced `?page=0` on
+  the first page. Now clamps to a minimum of 1.
+
+- **Back-reference self-ref filter compared slug to ID** — The
+  self-reference filter compared `owner_slug` (collection name) with
+  `target_id` (document ID), making it effectively a no-op. Now
+  correctly compares `owner_slug` with `target_collection`.
+
+- **`jobs show` always printed Data field** — Used `if let Some(ref data)
+  = Some(...)` which is always true. Changed to `if !run.data.is_empty()`.
+
+- **Claims builder `iat` cast could wrap on pre-epoch clock** — Cast
+  `i64` timestamp to `u64` via `as` which wraps negative values. Now
+  clamps to 0 first.
+
 - **Relationship search drawer race condition** — The drawer picker
   for relationship fields had no `AbortController`, so rapid searches
   or pagination could resolve out of order. Added abort controller to

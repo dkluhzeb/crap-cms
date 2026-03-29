@@ -14,13 +14,14 @@ pub(crate) fn parse_duration_string(s: &str) -> Option<u64> {
     if let Ok(secs) = s.parse::<u64>() {
         return Some(secs);
     }
-    let (num_str, suffix) = s.split_at(s.len().saturating_sub(1));
+    let suffix = s.chars().last()?;
+    let num_str = &s[..s.len() - suffix.len_utf8()];
     let num: u64 = num_str.parse().ok()?;
     match suffix {
-        "s" => Some(num),
-        "m" => Some(num * 60),
-        "h" => Some(num * 3600),
-        "d" => Some(num * 86400),
+        's' => Some(num),
+        'm' => Some(num * 60),
+        'h' => Some(num * 3600),
+        'd' => Some(num * 86400),
         _ => None,
     }
 }
@@ -34,6 +35,10 @@ pub(crate) fn parse_filesize_string(s: &str) -> Option<u64> {
     let s = s.trim();
 
     if s.is_empty() {
+        return None;
+    }
+    // Only ASCII characters are valid in file size strings
+    if !s.is_ascii() {
         return None;
     }
     let upper = s.to_ascii_uppercase();
@@ -254,6 +259,15 @@ mod tests {
     }
 
     #[test]
+    fn parse_duration_non_ascii_no_panic() {
+        // Multi-byte UTF-8 suffixes must not cause a panic from slicing
+        assert_eq!(parse_duration_string("5ü"), None);
+        assert_eq!(parse_duration_string("5🔥"), None);
+        assert_eq!(parse_duration_string("10日"), None);
+        assert_eq!(parse_duration_string("ü"), None);
+    }
+
+    #[test]
     fn parse_duration_whitespace() {
         assert_eq!(parse_duration_string("  7d  "), Some(7 * 86400));
     }
@@ -306,6 +320,15 @@ mod tests {
         assert_eq!(parse_filesize_string("50"), None);
         assert_eq!(parse_filesize_string("MB"), None);
         assert_eq!(parse_filesize_string("50TB"), None);
+    }
+
+    #[test]
+    fn parse_filesize_non_ascii_no_panic() {
+        // Non-ASCII input must return None without panicking
+        assert_eq!(parse_filesize_string("50MÜ"), None);
+        assert_eq!(parse_filesize_string("100🔥B"), None);
+        assert_eq!(parse_filesize_string("ü"), None);
+        assert_eq!(parse_filesize_string("1日GB"), None);
     }
 
     // -- serde integration tests (load from TOML) --

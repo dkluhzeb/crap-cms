@@ -38,8 +38,9 @@ use crate::{
 /// Send a signal to a process by PID.
 #[cfg(unix)]
 fn send_signal(pid: u32, sig: i32) -> Result<()> {
+    let pid_i32 = i32::try_from(pid).context("PID too large for i32")?;
     // SAFETY: kill(2) is safe to call with any pid/signal combination.
-    let ret = unsafe { libc::kill(pid as i32, sig) };
+    let ret = unsafe { libc::kill(pid_i32, sig) };
 
     if ret == 0 {
         Ok(())
@@ -55,7 +56,10 @@ fn send_signal(pid: u32, sig: i32) -> Result<()> {
 /// Works across all Unix platforms (not just Linux with /proc).
 #[cfg(unix)]
 fn is_process_running(pid: u32) -> bool {
-    unsafe { libc::kill(pid as i32, 0) == 0 }
+    let Ok(pid_i32) = i32::try_from(pid) else {
+        return false;
+    };
+    unsafe { libc::kill(pid_i32, 0) == 0 }
 }
 
 /// Bail early if the config directory doesn't look valid.
@@ -865,6 +869,18 @@ mod tests {
     #[test]
     fn is_process_running_bogus_pid() {
         assert!(!is_process_running(999_999_999));
+    }
+
+    #[test]
+    fn is_process_running_u32_max_returns_false() {
+        // Regression: u32::MAX (4294967295) exceeds i32::MAX and previously
+        // could wrap to a negative PID via `as i32`, potentially matching
+        // a real process group. The fix uses i32::try_from() which returns
+        // false for out-of-range values instead of wrapping.
+        assert!(
+            !is_process_running(u32::MAX),
+            "u32::MAX should not be treated as a valid PID"
+        );
     }
 
     #[test]

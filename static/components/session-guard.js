@@ -127,6 +127,7 @@ class CrapSessionDialog extends HTMLElement {
     const cleanup = () => {
       logoutBtn.removeEventListener('click', handleLogout);
       stayBtn.removeEventListener('click', handleStay);
+      dialog.removeEventListener('cancel', handleCancel);
     };
 
     const handleLogout = () => {
@@ -141,8 +142,14 @@ class CrapSessionDialog extends HTMLElement {
       onStay();
     };
 
+    const handleCancel = (e) => {
+      e.preventDefault();
+      handleStay();
+    };
+
     logoutBtn.addEventListener('click', handleLogout);
     stayBtn.addEventListener('click', handleStay);
+    dialog.addEventListener('cancel', handleCancel);
 
     dialog.showModal();
   }

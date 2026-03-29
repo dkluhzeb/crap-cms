@@ -66,7 +66,7 @@ impl ClaimsBuilder {
             collection: self.collection,
             email,
             exp,
-            iat: Some(Utc::now().timestamp() as u64),
+            iat: Some(Utc::now().timestamp().max(0) as u64),
             session_version: self.session_version,
         })
     }
@@ -116,6 +116,27 @@ mod tests {
             err.to_string().contains("email is required"),
             "unexpected error: {}",
             err
+        );
+    }
+
+    /// Regression: `build()` must produce a non-zero `iat` field that
+    /// represents the current time (guards against `.max(0)` being absent
+    /// or `iat` being left as `None`).
+    #[test]
+    fn build_produces_nonzero_iat() {
+        let claims = ClaimsBuilder::new("u1", "users")
+            .email("test@test.com")
+            .exp(9999999999)
+            .build()
+            .unwrap();
+
+        let iat = claims.iat.expect("iat must be Some");
+        assert!(iat > 0, "iat must be non-zero, got {}", iat);
+        // Sanity: iat should be a reasonable Unix timestamp (after 2020-01-01)
+        assert!(
+            iat > 1_577_836_800,
+            "iat should be after 2020-01-01, got {}",
+            iat
         );
     }
 

@@ -21,7 +21,7 @@ use crate::{
         job::JobRun,
     },
     db::{
-        AccessResult, LocaleContext, ops,
+        AccessResult, LocaleContext,
         query::{self, jobs},
     },
     hooks::lifecycle::{AfterReadCtx, PublishEventInput},
@@ -140,7 +140,7 @@ impl ContentService {
                     tracing::error!("GetGlobal hook error: {}", e);
                     Status::internal("Internal error")
                 })?;
-            let doc = ops::get_global(&pool, &slug, &def, locale_ctx.as_ref()).map_err(|e| {
+            let doc = query::get_global(&conn, &slug, &def, locale_ctx.as_ref()).map_err(|e| {
                 tracing::error!("GetGlobal query error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -149,7 +149,7 @@ impl ContentService {
                 fields: &fields,
                 collection: &slug,
                 operation: "get_global",
-                user: None,
+                user: auth_user.as_ref().map(|au| &au.user_doc),
                 ui_locale: None,
             };
             let doc = runner.apply_after_read(&ar_ctx, doc);
@@ -251,6 +251,7 @@ impl ContentService {
 
             let user_doc = auth_user.as_ref().map(|au| au.user_doc.clone());
             let ui_locale = auth_user.as_ref().map(|au| au.ui_locale.clone());
+            drop(conn);
             let (doc, _req_context) = service::update_global_document(
                 &pool,
                 &runner,
@@ -270,7 +271,11 @@ impl ContentService {
             // Proto conversion + field stripping
             let mut proto_doc = document_to_proto(&doc, &slug);
             let user_doc_ref = auth_user.as_ref().map(|au| &au.user_doc);
-            let tx = conn.transaction().map_err(|e| {
+            let mut conn2 = pool.get().map_err(|e| {
+                tracing::error!("UpdateGlobal field access pool error: {}", e);
+                Status::internal("Internal error")
+            })?;
+            let tx = conn2.transaction().map_err(|e| {
                 tracing::error!("Field read access tx error: {}", e);
                 Status::internal("Internal error")
             })?;
@@ -781,7 +786,42 @@ impl ContentService {
             c.clear();
         }
 
-        let proto_doc = document_to_proto(&doc, &req.collection);
+        let mut proto_doc = document_to_proto(&doc, &req.collection);
+
+        // Strip field-level read-denied fields (parity with other endpoints)
+        {
+            let pool = self.pool.clone();
+            let runner = self.hook_runner.clone();
+            let jwt_secret = self.jwt_secret.clone();
+            let registry = self.registry.clone();
+            let def_fields = def.fields.clone();
+            let metadata2 = metadata.clone();
+            let denied = tokio::task::spawn_blocking(move || -> Result<Vec<String>, Status> {
+                let mut conn = pool.get().map_err(|e| {
+                    tracing::error!("RestoreVersion field access pool error: {}", e);
+                    Status::internal("Internal error")
+                })?;
+                let token = Self::extract_token(&metadata2);
+                let auth_user =
+                    ContentService::resolve_auth_user(token, &jwt_secret, &registry, &conn)?;
+                let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
+                let tx = conn.transaction().map_err(|e| {
+                    tracing::error!("Field access tx error: {}", e);
+                    Status::internal("Internal error")
+                })?;
+                let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
+                if let Err(e) = tx.commit() {
+                    tracing::warn!("tx commit failed: {e}");
+                }
+                Ok(denied)
+            })
+            .await
+            .map_err(|e| {
+                tracing::error!("RestoreVersion field access task error: {}", e);
+                Status::internal("Internal error")
+            })??;
+            strip_denied_proto_fields(&mut proto_doc, &denied);
+        }
 
         Ok(Response::new(content::RestoreVersionResponse {
             document: Some(proto_doc),
@@ -966,7 +1006,7 @@ impl ContentService {
         let registry = self.registry.clone();
         let slug = req.slug.clone();
         let status = req.status.clone();
-        let limit = req.limit.unwrap_or(50);
+        let limit = req.limit.unwrap_or(50).min(1000);
         let offset = req.offset.unwrap_or(0);
         let runs = tokio::task::spawn_blocking(move || -> Result<_, Status> {
             let conn = pool.get().map_err(|e| {

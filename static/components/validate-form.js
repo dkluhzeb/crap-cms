@@ -167,7 +167,13 @@ class CrapValidateForm extends HTMLElement {
         continue;
       }
 
-      data[key] = value;
+      if (key in data) {
+        data[key] = Array.isArray(data[key])
+          ? [...data[key], value]
+          : [data[key], value];
+      } else {
+        data[key] = value;
+      }
     }
 
     return { data, draft, locale };

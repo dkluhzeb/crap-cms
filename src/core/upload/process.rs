@@ -80,9 +80,7 @@ pub fn process_upload(
     if let Some(detected) = infer::get(&file.data) {
         let detected_mime = detected.mime_type();
 
-        if !mime_matches(detected_mime, &file.content_type)
-            && !mime_matches(&file.content_type, detected_mime)
-        {
+        if !mime_matches(detected_mime, &file.content_type) {
             bail!(
                 "File content does not match claimed type '{}' (detected '{}')",
                 file.content_type,
@@ -349,6 +347,39 @@ mod tests {
         assert!(
             !err_msg.contains("does not match claimed type"),
             "Unexpected mismatch: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn mime_verification_is_one_directional() {
+        // Regression: the old bidirectional check allowed bypasses where
+        // mime_matches(claimed, detected) passed even though
+        // mime_matches(detected, claimed) failed.
+        //
+        // A PNG file claimed as "image/jpeg" must be rejected: the detected
+        // MIME "image/png" does not match claimed "image/jpeg".
+        let png_data = create_test_png(10, 10);
+        let file = UploadedFileBuilder::new("fake.jpg", "image/jpeg")
+            .data(png_data)
+            .build();
+        let config = CollectionUpload {
+            enabled: true,
+            mime_types: vec!["image/*".into()],
+            ..Default::default()
+        };
+        let tmp = tempfile::tempdir().unwrap();
+
+        let result = process_upload(file, &config, tmp.path(), "test", 10_000_000);
+        assert!(
+            result.is_err(),
+            "Mismatched detected vs claimed MIME should fail"
+        );
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("does not match claimed type"),
+            "Error should indicate MIME mismatch: {}",
             err_msg
         );
     }

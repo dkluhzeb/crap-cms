@@ -215,6 +215,14 @@ where
         if let Some(ref nt) = node_type {
             let attrs: Value = attrs_str
                 .as_deref()
+                .map(|s| {
+                    s.replace("&#39;", "'")
+                        .replace("&amp;", "&")
+                        .replace("&lt;", "<")
+                        .replace("&gt;", ">")
+                        .replace("&quot;", "\"")
+                })
+                .as_deref()
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or(Value::Object(Map::new()));
 
