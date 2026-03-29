@@ -54,7 +54,7 @@ pub fn create(
     }
 
     let sql = format!(
-        "INSERT INTO {} ({}) VALUES ({})",
+        "INSERT INTO \"{}\" ({}) VALUES ({})",
         slug,
         collector.columns.join(", "),
         collector.placeholders.join(", ")

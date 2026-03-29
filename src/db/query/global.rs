@@ -28,7 +28,7 @@ pub fn get_global(
     };
 
     let sql = format!(
-        "SELECT {} FROM {} WHERE id = 'default'",
+        "SELECT {} FROM \"{}\" WHERE id = 'default'",
         select_exprs.join(", "),
         table_name
     );
@@ -84,7 +84,7 @@ pub fn update_global(
     col.params.push(DbValue::Text(now));
 
     let sql = format!(
-        "UPDATE {} SET {} WHERE id = 'default'",
+        "UPDATE \"{}\" SET {} WHERE id = 'default'",
         table_name,
         col.set_clauses.join(", ")
     );

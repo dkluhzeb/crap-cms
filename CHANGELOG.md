@@ -250,6 +250,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   level instead of being silently swallowed via `.ok()`. Aids
   debugging session issues in production.
 
+- **Array date fields missing timezone columns** — Date sub-fields
+  with `timezone = true` inside Array fields did not get the `_tz`
+  companion column in the join table (both CREATE and ALTER TABLE
+  paths). Main collection tables handled this correctly; array tables
+  were missing the logic. Timezone data for array date fields was
+  silently lost.
+
+- **Inherited localization missing in join tables** — Arrays, Blocks,
+  and has-many Relationships inside a localized Group did not inherit
+  the `_locale` column in their join tables. Only directly-localized
+  fields got the column. The `sync_join_tables_inner` function now
+  propagates `inherited_localized` from parent Groups, matching the
+  existing behavior in `collect_column_specs_inner`.
+
+- **Inconsistent SQL identifier quoting** — Table names in SQL format
+  strings were inconsistently quoted across the query layer. Some files
+  (e.g., `ref_count.rs`) used double-quoted identifiers while most
+  others did not. All table name interpolations now use double-quoted
+  identifiers (`"table"`) for defense-in-depth consistency.
+
 ### Changed
 
 - **Responsive breakpoint raised to 1024px** — The mobile layout

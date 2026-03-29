@@ -42,7 +42,7 @@ pub fn update(
     }
 
     let sql = format!(
-        "UPDATE {} SET {} WHERE id = {}",
+        "UPDATE \"{}\" SET {} WHERE id = {}",
         slug,
         col.set_clauses.join(", "),
         conn.placeholder(col.idx)
@@ -87,7 +87,7 @@ pub fn update_partial(
     }
 
     let sql = format!(
-        "UPDATE {} SET {} WHERE id = {}",
+        "UPDATE \"{}\" SET {} WHERE id = {}",
         slug,
         col.set_clauses.join(", "),
         conn.placeholder(col.idx)

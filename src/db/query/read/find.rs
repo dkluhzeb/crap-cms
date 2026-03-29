@@ -41,7 +41,7 @@ pub fn find(
     let (select_exprs, _result_names) =
         super::select::apply_select_filter(select_exprs, result_names, query.select.as_ref(), def);
 
-    let mut sql = format!("SELECT {} FROM {slug}", select_exprs.join(", "));
+    let mut sql = format!("SELECT {} FROM \"{slug}\"", select_exprs.join(", "));
     let mut params: Vec<DbValue> = Vec::new();
 
     // Build WHERE with locale-resolved column names

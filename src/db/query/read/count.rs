@@ -51,7 +51,7 @@ pub fn count_with_search(
         }
     }
 
-    let mut sql = format!("SELECT COUNT(*) FROM {slug}");
+    let mut sql = format!("SELECT COUNT(*) FROM \"{slug}\"");
     let mut params: Vec<DbValue> = Vec::new();
 
     let resolved_filters = resolve_filters(filters, def, locale_ctx)?;
@@ -139,7 +139,7 @@ pub fn count_where_field_eq(
         Some(eid) => {
             let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
             let sql = format!(
-                "SELECT COUNT(*) FROM {table} WHERE {field} = {p1} AND id != {p2}{soft_filter}"
+                "SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1} AND id != {p2}{soft_filter}"
             );
             conn.query_one(
                 &sql,
@@ -152,7 +152,8 @@ pub fn count_where_field_eq(
         }
         None => {
             let p1 = conn.placeholder(1);
-            let sql = format!("SELECT COUNT(*) FROM {table} WHERE {field} = {p1}{soft_filter}");
+            let sql =
+                format!("SELECT COUNT(*) FROM \"{table}\" WHERE \"{field}\" = {p1}{soft_filter}");
             conn.query_one(&sql, &[DbValue::Text(value.to_string())])
                 .with_context(|| format!("Unique check on {table}.{field}"))?
         }

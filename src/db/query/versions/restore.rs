@@ -215,7 +215,7 @@ fn restore_locale_and_join_data(
 
         if !set_clauses.is_empty() {
             let sql = format!(
-                "UPDATE {} SET {} WHERE id = {}",
+                "UPDATE \"{}\" SET {} WHERE id = {}",
                 table,
                 set_clauses.join(", "),
                 conn.placeholder(idx)

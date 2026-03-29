@@ -154,7 +154,7 @@ pub(super) fn sync_join_tables(
     fields: &[FieldDefinition],
     locale_config: &LocaleConfig,
 ) -> Result<()> {
-    sync_join_tables_inner(conn, collection_slug, fields, locale_config, "")
+    sync_join_tables_inner(conn, collection_slug, fields, locale_config, "", false)
 }
 
 fn sync_join_tables_inner(
@@ -163,9 +163,10 @@ fn sync_join_tables_inner(
     fields: &[FieldDefinition],
     locale_config: &LocaleConfig,
     prefix: &str,
+    inherited_localized: bool,
 ) -> Result<()> {
     for field in fields {
-        let has_locale_col = field.localized && locale_config.is_enabled();
+        let has_locale_col = (inherited_localized || field.localized) && locale_config.is_enabled();
         let full_name = if prefix.is_empty() {
             field.name.clone()
         } else {
@@ -266,6 +267,10 @@ fn sync_join_tables_inner(
                             sub_field.name,
                             conn.column_type_for(&sub_field.field_type)
                         ));
+
+                        if sub_field.field_type == FieldType::Date && sub_field.timezone {
+                            columns.push(format!("{}_tz TEXT", sub_field.name));
+                        }
                     }
                     let sql = format!("CREATE TABLE {} ({})", table_name, columns.join(", "));
                     tracing::info!("Creating array table: {}", table_name);
@@ -289,6 +294,20 @@ fn sync_join_tables_inner(
                             conn.execute(&sql, &[]).with_context(|| {
                                 format!("Failed to add column {} to {}", sub_field.name, table_name)
                             })?;
+                        }
+
+                        if sub_field.field_type == FieldType::Date && sub_field.timezone {
+                            let tz_col = format!("{}_tz", sub_field.name);
+                            if !existing.contains(&tz_col) {
+                                let sql = format!(
+                                    "ALTER TABLE {} ADD COLUMN {} TEXT",
+                                    table_name, tz_col
+                                );
+                                tracing::info!("Adding column to {}: {}", table_name, tz_col);
+                                conn.execute(&sql, &[]).with_context(|| {
+                                    format!("Failed to add column {} to {}", tz_col, table_name)
+                                })?;
+                            }
                         }
                     }
                 }
@@ -328,6 +347,7 @@ fn sync_join_tables_inner(
                     &field.fields,
                     locale_config,
                     &full_name,
+                    inherited_localized || field.localized,
                 )?;
             }
             FieldType::Row | FieldType::Collapsible => {
@@ -337,6 +357,7 @@ fn sync_join_tables_inner(
                     &field.fields,
                     locale_config,
                     prefix,
+                    inherited_localized,
                 )?;
             }
             FieldType::Tabs => {
@@ -347,6 +368,7 @@ fn sync_join_tables_inner(
                         &tab.fields,
                         locale_config,
                         prefix,
+                        inherited_localized,
                     )?;
                 }
             }
@@ -1237,6 +1259,158 @@ mod tests {
         assert!(
             !cols.contains("row_wrap"),
             "row wrapper should NOT be a column"
+        );
+    }
+
+    // ── array timezone companion columns ──────────────────────────────────
+
+    #[test]
+    fn array_date_with_timezone_creates_tz_column() {
+        // Regression: array sub-fields with timezone Date didn't get _tz companion column
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let array_field = FieldDefinition::builder("events", FieldType::Array)
+            .fields(vec![
+                text_field("title"),
+                FieldDefinition::builder("scheduled_at", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ])
+            .build();
+        let def = simple_collection("posts", vec![array_field]);
+        super::super::collection::create_collection_table(&conn, "posts", &def, &no_locale())
+            .unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_events").unwrap();
+        assert!(cols.contains("scheduled_at"), "date column should exist");
+        assert!(
+            cols.contains("scheduled_at_tz"),
+            "timezone companion column should exist for Date+timezone in array"
+        );
+    }
+
+    #[test]
+    fn existing_array_adds_tz_column_on_alter() {
+        // Regression: ALTER path also missed _tz companion columns
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        conn.execute("CREATE TABLE posts (id TEXT PRIMARY KEY)", &[])
+            .unwrap();
+        conn.execute(
+            "CREATE TABLE posts_events (id TEXT PRIMARY KEY, parent_id TEXT, _order INTEGER, title TEXT)",
+            &[],
+        )
+        .unwrap();
+
+        let array_field = FieldDefinition::builder("events", FieldType::Array)
+            .fields(vec![
+                text_field("title"),
+                FieldDefinition::builder("scheduled_at", FieldType::Date)
+                    .timezone(true)
+                    .build(),
+            ])
+            .build();
+        let def = simple_collection("posts", vec![array_field]);
+        sync_join_tables(&conn, "posts", &def.fields, &no_locale()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_events").unwrap();
+        assert!(cols.contains("scheduled_at"), "date column should be added");
+        assert!(
+            cols.contains("scheduled_at_tz"),
+            "timezone companion column should be added on alter"
+        );
+    }
+
+    // ── inherited localization in join tables ────────────────────────────
+
+    #[test]
+    fn localized_group_array_inherits_locale_column() {
+        // Regression: arrays inside localized Groups missed _locale column
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![
+                        FieldDefinition::builder("items", FieldType::Array)
+                            .fields(vec![text_field("label")])
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
+            .unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_meta__items").unwrap();
+        assert!(
+            cols.contains("_locale"),
+            "Array inside localized Group should inherit _locale column"
+        );
+    }
+
+    #[test]
+    fn localized_group_blocks_inherits_locale_column() {
+        // Regression: blocks inside localized Groups missed _locale column
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![
+                        FieldDefinition::builder("content", FieldType::Blocks).build(),
+                    ])
+                    .build(),
+            ],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
+            .unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_meta__content").unwrap();
+        assert!(
+            cols.contains("_locale"),
+            "Blocks inside localized Group should inherit _locale column"
+        );
+    }
+
+    #[test]
+    fn localized_group_has_many_inherits_locale_column() {
+        // Regression: has-many relationships inside localized Groups missed _locale column
+        let (_dir, pool) = in_memory_pool();
+        let conn = pool.get().unwrap();
+
+        let def = simple_collection(
+            "posts",
+            vec![
+                FieldDefinition::builder("meta", FieldType::Group)
+                    .localized(true)
+                    .fields(vec![
+                        FieldDefinition::builder("tags", FieldType::Relationship)
+                            .relationship(RelationshipConfig::new("tags", true))
+                            .build(),
+                    ])
+                    .build(),
+            ],
+        );
+        super::super::collection::create_collection_table(&conn, "posts", &def, &locale_en_de())
+            .unwrap();
+        sync_join_tables(&conn, "posts", &def.fields, &locale_en_de()).unwrap();
+
+        let cols = get_table_columns(&conn, "posts_meta__tags").unwrap();
+        assert!(
+            cols.contains("_locale"),
+            "has-many Relationship inside localized Group should inherit _locale column"
         );
     }
 

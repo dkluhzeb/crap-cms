@@ -13,7 +13,11 @@ use crate::db::{DbConnection, DbValue};
 
 /// Delete a document by ID. Returns `true` if a row was deleted, `false` if not found.
 pub fn delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
-    let sql = format!("DELETE FROM {} WHERE id = {}", slug, conn.placeholder(1));
+    let sql = format!(
+        "DELETE FROM \"{}\" WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
     let affected = conn
         .execute(&sql, &[DbValue::Text(id.to_string())])
         .with_context(|| format!("Failed to delete document {} from '{}'", id, slug))?;
@@ -24,7 +28,7 @@ pub fn delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
 /// Returns `true` if a row was updated, `false` if not found or already deleted.
 pub fn soft_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
-        "UPDATE {} SET _deleted_at = {} WHERE id = {} AND _deleted_at IS NULL",
+        "UPDATE \"{}\" SET _deleted_at = {} WHERE id = {} AND _deleted_at IS NULL",
         slug,
         conn.now_expr(),
         conn.placeholder(1)
@@ -42,7 +46,7 @@ pub fn soft_delete(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool
 /// now has the same value), returns a descriptive error instead of a raw DB error.
 pub fn restore(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
-        "UPDATE {} SET _deleted_at = NULL WHERE id = {} AND _deleted_at IS NOT NULL",
+        "UPDATE \"{}\" SET _deleted_at = NULL WHERE id = {} AND _deleted_at IS NOT NULL",
         slug,
         conn.placeholder(1)
     );

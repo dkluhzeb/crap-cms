@@ -57,14 +57,14 @@ fn build_subquery_sql(
             }
             let cond = build_op_condition(conn, col, op, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE parent_id = {}.id AND {})",
+                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {})",
                 join_table, parent_table, cond
             ))
         }
         SubqueryCondition::BlockType => {
             let cond = build_op_condition(conn, "_block_type", op, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE parent_id = {}.id AND {})",
+                "EXISTS (SELECT 1 FROM \"{}\" WHERE parent_id = \"{}\".id AND {})",
                 join_table, parent_table, cond
             ))
         }
@@ -72,13 +72,13 @@ fn build_subquery_sql(
             each_joins,
             extract_expr,
         } => {
-            let mut from_parts = vec![join_table.to_string()];
+            let mut from_parts = vec![format!("\"{}\"", join_table)];
             for (source, alias) in each_joins {
                 from_parts.push(conn.json_each_source(source, alias));
             }
             let cond = build_op_condition(conn, extract_expr, op, params);
             Ok(format!(
-                "EXISTS (SELECT 1 FROM {} WHERE {}.parent_id = {}.id AND {})",
+                "EXISTS (SELECT 1 FROM {} WHERE \"{}\".parent_id = \"{}\".id AND {})",
                 from_parts.join(", "),
                 join_table,
                 parent_table,
@@ -449,7 +449,7 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE status = ?1 AND EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?2)"
+            " WHERE status = ?1 AND EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?2)"
         );
         assert_eq!(params.len(), 2);
     }
@@ -475,7 +475,7 @@ mod tests {
         let sql = build_where_clause(&conn, &filters, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            " WHERE (status = ?1 OR EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?2))"
+            " WHERE (status = ?1 OR EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?2))"
         );
         assert_eq!(params.len(), 2);
     }
@@ -497,7 +497,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_items WHERE parent_id = posts.id AND name = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_items\" WHERE parent_id = \"posts\".id AND name = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -514,7 +514,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content WHERE parent_id = posts.id AND _block_type = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE parent_id = \"posts\".id AND _block_type = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -537,7 +537,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content WHERE posts_content.parent_id = posts.id AND json_extract(data, '$.body') LIKE ?1 ESCAPE '\\')"
+            "EXISTS (SELECT 1 FROM \"posts_content\" WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(data, '$.body') LIKE ?1 ESCAPE '\\')"
         );
         assert_eq!(params.len(), 1);
     }
@@ -563,7 +563,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_content, json_each(json_extract(posts_content.data, '$.nested')) AS j0 WHERE posts_content.parent_id = posts.id AND json_extract(j0.value, '$.text') = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_content\", json_each(json_extract(posts_content.data, '$.nested')) AS j0 WHERE \"posts_content\".parent_id = \"posts\".id AND json_extract(j0.value, '$.text') = ?1)"
         );
     }
 
@@ -579,7 +579,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id = ?1)"
+            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id = ?1)"
         );
         assert_eq!(params.len(), 1);
     }
@@ -596,7 +596,7 @@ mod tests {
         let sql = build_filter_sql(&conn, &f, "posts", &fields, &mut params).unwrap();
         assert_eq!(
             sql,
-            "EXISTS (SELECT 1 FROM posts_tags WHERE parent_id = posts.id AND related_id IN (?1, ?2))"
+            "EXISTS (SELECT 1 FROM \"posts_tags\" WHERE parent_id = \"posts\".id AND related_id IN (?1, ?2))"
         );
         assert_eq!(params.len(), 2);
     }

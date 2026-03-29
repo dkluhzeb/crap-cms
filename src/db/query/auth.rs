@@ -17,7 +17,7 @@ pub fn find_by_email(
     let column_names = get_column_names(def);
 
     let sql = format!(
-        "SELECT {} FROM {} WHERE email = {}",
+        "SELECT {} FROM \"{}\" WHERE email = {}",
         column_names.join(", "),
         slug,
         conn.placeholder(1)
@@ -36,7 +36,7 @@ pub fn get_password_hash(
     id: &str,
 ) -> Result<Option<HashedPassword>> {
     let sql = format!(
-        "SELECT _password_hash FROM {} WHERE id = {}",
+        "SELECT _password_hash FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -60,7 +60,7 @@ pub fn update_password(
     let hash = hash_password(password)?;
     let (p1, p2) = (conn.placeholder(1), conn.placeholder(2));
     let sql = format!(
-        "UPDATE {} SET _password_hash = {}, _session_version = COALESCE(_session_version, 0) + 1 WHERE id = {}",
+        "UPDATE \"{}\" SET _password_hash = {}, _session_version = COALESCE(_session_version, 0) + 1 WHERE id = {}",
         slug, p1, p2
     );
     conn.execute(
@@ -77,7 +77,7 @@ pub fn update_password(
 /// Check whether a user has a password set (non-NULL `_password_hash`).
 pub fn has_password(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
-        "SELECT (_password_hash IS NOT NULL) AS has_pw FROM {} WHERE id = {}",
+        "SELECT (_password_hash IS NOT NULL) AS has_pw FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -103,7 +103,7 @@ pub fn set_reset_token(
         conn.placeholder(3),
     );
     let sql = format!(
-        "UPDATE {} SET _reset_token = {}, _reset_token_exp = {} WHERE id = {}",
+        "UPDATE \"{}\" SET _reset_token = {}, _reset_token_exp = {} WHERE id = {}",
         slug, p1, p2, p3
     );
     conn.execute(
@@ -128,7 +128,7 @@ pub fn find_by_reset_token(
     let column_names = get_column_names(def);
     let cols = column_names.join(", ");
     let sql = format!(
-        "SELECT {}, _reset_token_exp FROM {} WHERE _reset_token = {}",
+        "SELECT {}, _reset_token_exp FROM \"{}\" WHERE _reset_token = {}",
         cols,
         slug,
         conn.placeholder(1)
@@ -149,7 +149,7 @@ pub fn find_by_reset_token(
 /// Clear the reset token for a user (after successful reset or expiry).
 pub fn clear_reset_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _reset_token = NULL, _reset_token_exp = NULL WHERE id = {}",
+        "UPDATE \"{}\" SET _reset_token = NULL, _reset_token_exp = NULL WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -174,7 +174,7 @@ pub fn set_verification_token(
         conn.placeholder(3),
     );
     let sql = format!(
-        "UPDATE {} SET _verification_token = {}, _verification_token_exp = {} WHERE id = {}",
+        "UPDATE \"{}\" SET _verification_token = {}, _verification_token_exp = {} WHERE id = {}",
         slug, p1, p2, p3
     );
     conn.execute(
@@ -204,7 +204,7 @@ pub fn find_by_verification_token(
     let column_names = get_column_names(def);
     let cols = column_names.join(", ");
     let sql = format!(
-        "SELECT {}, _verification_token_exp FROM {} WHERE _verification_token = {}",
+        "SELECT {}, _verification_token_exp FROM \"{}\" WHERE _verification_token = {}",
         cols,
         slug,
         conn.placeholder(1)
@@ -225,7 +225,7 @@ pub fn find_by_verification_token(
 /// Clear the verification token for a user (after expiry). Does NOT change `_verified` status.
 pub fn clear_verification_token(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
+        "UPDATE \"{}\" SET _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -242,7 +242,7 @@ pub fn clear_verification_token(conn: &dyn DbConnection, slug: &str, user_id: &s
 /// Mark a user as verified (set _verified = 1, clear token and expiry).
 pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verified = 1, _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
+        "UPDATE \"{}\" SET _verified = 1, _verification_token = NULL, _verification_token_exp = NULL WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -254,7 +254,7 @@ pub fn mark_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Resu
 /// Mark a user as unverified (set _verified = 0). Does NOT touch token fields.
 pub fn mark_unverified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _verified = 0 WHERE id = {}",
+        "UPDATE \"{}\" SET _verified = 0 WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -304,7 +304,11 @@ pub fn set_user_settings(
 
 /// Check whether a user exists in the given collection.
 pub fn user_exists(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
-    let sql = format!("SELECT 1 FROM {} WHERE id = {}", slug, conn.placeholder(1));
+    let sql = format!(
+        "SELECT 1 FROM \"{}\" WHERE id = {}",
+        slug,
+        conn.placeholder(1)
+    );
 
     Ok(conn
         .query_one(&sql, &[DbValue::Text(id.to_string())])?
@@ -316,7 +320,7 @@ pub fn user_exists(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool
 /// Lock a user account (prevent login).
 pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _locked = 1 WHERE id = {}",
+        "UPDATE \"{}\" SET _locked = 1 WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -328,7 +332,7 @@ pub fn lock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
 /// Unlock a user account (allow login).
 pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> {
     let sql = format!(
-        "UPDATE {} SET _locked = 0 WHERE id = {}",
+        "UPDATE \"{}\" SET _locked = 0 WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -340,7 +344,7 @@ pub fn unlock_user(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<()> 
 /// Get the session version for a user. Returns 0 if no version set (NULL or missing).
 pub fn get_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<u64> {
     let sql = format!(
-        "SELECT COALESCE(_session_version, 0) AS sv FROM {} WHERE id = {}",
+        "SELECT COALESCE(_session_version, 0) AS sv FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -354,7 +358,7 @@ pub fn get_session_version(conn: &dyn DbConnection, slug: &str, id: &str) -> Res
 /// Check if a user account is locked.
 pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> {
     let sql = format!(
-        "SELECT _locked FROM {} WHERE id = {}",
+        "SELECT _locked FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );
@@ -367,7 +371,7 @@ pub fn is_locked(conn: &dyn DbConnection, slug: &str, id: &str) -> Result<bool> 
 /// Check if a user is verified.
 pub fn is_verified(conn: &dyn DbConnection, slug: &str, user_id: &str) -> Result<bool> {
     let sql = format!(
-        "SELECT _verified FROM {} WHERE id = {}",
+        "SELECT _verified FROM \"{}\" WHERE id = {}",
         slug,
         conn.placeholder(1)
     );

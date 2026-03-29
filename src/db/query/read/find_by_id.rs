@@ -84,7 +84,7 @@ pub fn find_by_ids(
 
     let placeholders: Vec<String> = (1..=ids.len()).map(|i| conn.placeholder(i)).collect();
     let mut sql = format!(
-        "SELECT {} FROM {} WHERE id IN ({})",
+        "SELECT {} FROM \"{}\" WHERE id IN ({})",
         select_exprs.join(", "),
         slug,
         placeholders.join(", ")
@@ -167,7 +167,7 @@ fn find_by_id_raw_inner(
     };
 
     let mut sql = format!(
-        "SELECT {} FROM {} WHERE id = {}",
+        "SELECT {} FROM \"{}\" WHERE id = {}",
         select_exprs.join(", "),
         slug,
         conn.placeholder(1)

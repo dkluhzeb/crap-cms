@@ -113,7 +113,7 @@ fn bulk_populate_fast(
         .map(|f| format!("COALESCE({}, '')", f))
         .collect();
     let insert_sql = format!(
-        "INSERT INTO {}(id, {}) SELECT id, {} FROM {}",
+        "INSERT INTO {}(id, {}) SELECT id, {} FROM \"{}\"",
         fts_table,
         field_list,
         select_fields.join(", "),
@@ -137,7 +137,7 @@ fn bulk_populate_slow(
         .iter()
         .map(|f| format!("COALESCE({}, '')", f))
         .collect();
-    let select_sql = format!("SELECT id, {} FROM {}", select_fields.join(", "), slug);
+    let select_sql = format!("SELECT id, {} FROM \"{}\"", select_fields.join(", "), slug);
 
     let db_rows = conn
         .query_all(&select_sql, &[])
