@@ -371,14 +371,25 @@ fn rebuild_without_inline_unique(
         .collect::<Vec<_>>()
         .join(", ");
 
-    conn.execute(
+    let copy_result = conn.execute(
         &format!(
             "INSERT INTO \"{}\" ({}) SELECT {} FROM \"{}\"",
             slug, col_list, col_list, temp
         ),
         &[],
-    )
-    .with_context(|| format!("Failed to copy data during rebuild of '{}'", slug))?;
+    );
+
+    if let Err(e) = copy_result {
+        // Recovery: drop the empty new table and restore the old one
+        tracing::error!(
+            "Failed to copy data during rebuild of '{}', attempting recovery: {}",
+            slug,
+            e
+        );
+        let _ = conn.execute_batch(&format!("DROP TABLE IF EXISTS \"{}\"", slug));
+        let _ = conn.execute_batch(&format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp, slug));
+        return Err(e).with_context(|| format!("Failed to copy data during rebuild of '{}'", slug));
+    }
 
     conn.execute_batch(&format!("DROP TABLE \"{}\"", temp))?;
 

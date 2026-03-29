@@ -604,8 +604,20 @@ pub(super) fn register_update(
                 .map_err(|e| RuntimeError(format!("draft version error: {}", e)))?;
 
                 if hooks_enabled {
+                    let mut after_data = existing_doc.fields.clone();
+
+                    run_field_hooks_inner(
+                        lua,
+                        &def.fields,
+                        &FieldHookEvent::AfterChange,
+                        &mut after_data,
+                        &collection,
+                        "update",
+                    )
+                    .map_err(|e| RuntimeError(format!("after_change field hook error: {}", e)))?;
+
                     let after_ctx = HookContext::builder(collection.clone(), "update")
-                        .data(existing_doc.fields.clone())
+                        .data(after_data)
                         .draft(is_draft)
                         .locale(locale_str.clone())
                         .user(hook_user.as_ref())

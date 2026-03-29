@@ -73,7 +73,22 @@ pub async fn empty_trash_action(
         let docs = query::find(&tx, &slug_owned, &def, &fq, None)?;
         let count = docs.len();
 
+        let mut skipped = 0usize;
+
         for doc in &docs {
+            // Skip documents that are still referenced — protect referential integrity
+            let ref_count = query::ref_count::get_ref_count(&tx, &slug_owned, &doc.id)?;
+            if ref_count > 0 {
+                tracing::debug!(
+                    "Skipping permanent delete of {}/{}: referenced by {} document(s)",
+                    slug_owned,
+                    doc.id,
+                    ref_count
+                );
+                skipped += 1;
+                continue;
+            }
+
             // Decrement ref counts before hard delete (CASCADE removes junction rows)
             query::ref_count::before_hard_delete(
                 &tx,
@@ -92,7 +107,7 @@ pub async fn empty_trash_action(
         }
 
         tx.commit().context("Commit empty-trash")?;
-        anyhow::Ok(count)
+        anyhow::Ok(count - skipped)
     })
     .await;
 

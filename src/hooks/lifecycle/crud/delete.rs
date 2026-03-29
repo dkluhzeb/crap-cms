@@ -636,6 +636,11 @@ pub(super) fn register_delete_many(
                 .and_then(|o| o.get::<Option<bool>>("hooks").ok().flatten())
                 .unwrap_or(true);
 
+            let force_hard_delete: bool = opts
+                .as_ref()
+                .and_then(|o| o.get::<Option<bool>>("forceHardDelete").ok().flatten())
+                .unwrap_or(false);
+
             let hook_user = lua
                 .app_data_ref::<UserContext>()
                 .and_then(|uc| uc.0.clone());
@@ -657,6 +662,9 @@ pub(super) fn register_delete_many(
                     .ok_or_else(|| RuntimeError(format!("Collection '{}' not found", collection)))?
             };
 
+            // Determine effective soft_delete behavior
+            let soft_delete = def.soft_delete && !force_hard_delete;
+
             let draft: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("draft").ok().flatten())
@@ -674,7 +682,7 @@ pub(super) fn register_delete_many(
 
             // Soft delete uses trash permission (fallback to update);
             // hard delete uses delete permission
-            let access_ref = if def.soft_delete {
+            let access_ref = if soft_delete {
                 def.access.resolve_trash()
             } else {
                 def.access.delete.as_deref()
@@ -753,17 +761,20 @@ pub(super) fn register_delete_many(
 
             let mut deleted = 0i64;
             for doc in &docs {
-                // Skip referenced documents
-                let ref_count = query::ref_count::get_ref_count(conn, &collection, &doc.id)
-                    .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?;
-                if ref_count > 0 {
-                    tracing::debug!(
-                        "Skipping delete of {}/{}: referenced by {} document(s)",
-                        collection,
-                        doc.id,
-                        ref_count
-                    );
-                    continue;
+                // Ref count protection only applies to hard deletes — soft-deleted
+                // docs remain referenceable (ref counts are NOT decremented).
+                if !soft_delete {
+                    let ref_count = query::ref_count::get_ref_count(conn, &collection, &doc.id)
+                        .map_err(|e| RuntimeError(format!("ref count check error: {}", e)))?;
+                    if ref_count > 0 {
+                        tracing::debug!(
+                            "Skipping delete of {}/{}: referenced by {} document(s)",
+                            collection,
+                            doc.id,
+                            ref_count
+                        );
+                        continue;
+                    }
                 }
 
                 if hooks_enabled {
@@ -778,7 +789,7 @@ pub(super) fn register_delete_many(
 
                 // Decrement ref counts before hard delete (CASCADE removes junction rows).
                 // Soft delete does NOT adjust ref counts.
-                if !def.soft_delete {
+                if !soft_delete {
                     query::ref_count::before_hard_delete(
                         conn,
                         &collection,
@@ -789,7 +800,7 @@ pub(super) fn register_delete_many(
                     .map_err(|e| RuntimeError(format!("ref count error: {}", e)))?;
                 }
 
-                if def.soft_delete {
+                if soft_delete {
                     query::soft_delete(conn, &collection, &doc.id)
                         .map_err(|e| RuntimeError(format!("soft_delete error: {}", e)))?;
                 } else {
@@ -803,9 +814,7 @@ pub(super) fn register_delete_many(
                 }
 
                 // Clean up upload files after successful DB delete (skip for soft-delete)
-                if !def.soft_delete
-                    && let Some(dir) = &config_dir_path
-                {
+                if !soft_delete && let Some(dir) = &config_dir_path {
                     upload::delete_upload_files(dir, &doc.fields);
                 }
 

@@ -138,10 +138,8 @@ class CrapListSettings extends HTMLElement {
       );
       const columns = Array.from(checked).map((cb) => cb.value).join(',');
 
-      const csrfCookie = document.cookie.split(';')
-        .map((c) => c.trim())
-        .find((c) => c.startsWith('crap_csrf='));
-      const csrf = csrfCookie ? csrfCookie.split('=')[1] : '';
+      const csrfMatch = document.cookie.match(/(?:^|; )crap_csrf=([^;]*)/);
+      const csrf = csrfMatch ? csrfMatch[1] : '';
 
       try {
         const resp = await fetch(`/admin/api/user-settings/${slug}`, {
