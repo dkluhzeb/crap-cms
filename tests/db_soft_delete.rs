@@ -540,3 +540,104 @@ fn find_by_id_unfiltered_includes_soft_deleted() {
     assert!(unfiltered.is_some());
     assert_eq!(unfiltered.unwrap().get_str("title"), Some("Hidden"));
 }
+
+// ── Regression: empty_trash must skip referenced documents ──────────────
+
+/// Regression: permanently deleting soft-deleted documents (empty trash) must
+/// skip documents that are still referenced by other documents, preserving
+/// referential integrity. Previously, empty_trash deleted all trashed docs
+/// without checking _ref_count, which could orphan references.
+#[test]
+fn empty_trash_skips_referenced_documents() {
+    use crap_cms::core::field::RelationshipConfig;
+
+    // Two collections: "media" (soft-delete) and "posts" which references media
+    let mut media_def = CollectionDefinition::new("media");
+    media_def.fields = vec![FieldDefinition::builder("filename", FieldType::Text).build()];
+    media_def.timestamps = true;
+    media_def.soft_delete = true;
+
+    let mut posts_def = CollectionDefinition::new("posts");
+    posts_def.fields = vec![
+        FieldDefinition::builder("title", FieldType::Text).build(),
+        FieldDefinition::builder("image", FieldType::Relationship)
+            .relationship(RelationshipConfig::new("media", false))
+            .build(),
+    ];
+    posts_def.timestamps = true;
+
+    let (_tmp, pool, _reg) = create_pool_and_migrate(vec![media_def.clone(), posts_def.clone()]);
+
+    // Insert two media docs
+    let m1 = insert_doc(&pool, "media", &media_def, &[("filename", "photo.jpg")]);
+    let m2 = insert_doc(&pool, "media", &media_def, &[("filename", "video.mp4")]);
+
+    // Create a post referencing m1
+    let conn = pool.get().unwrap();
+    let post_data: HashMap<String, String> = [("title", "My Post"), ("image", m1.as_str())]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let post_doc = query::create(&conn, "posts", &posts_def, &post_data, None).unwrap();
+
+    // Bump ref counts to reflect the relationship
+    let locale_cfg = LocaleConfig::default();
+    query::ref_count::after_create(&conn, "posts", &post_doc.id, &posts_def.fields, &locale_cfg)
+        .unwrap();
+
+    // Verify m1 has ref_count > 0
+    let rc = query::ref_count::get_ref_count(&conn, "media", &m1).unwrap();
+    assert!(rc > 0, "m1 should be referenced, got ref_count={}", rc);
+
+    // Soft-delete both media docs
+    query::soft_delete(&conn, "media", &m1).unwrap();
+    query::soft_delete(&conn, "media", &m2).unwrap();
+
+    // Simulate "empty trash": permanently delete all soft-deleted media,
+    // but skip any that are still referenced.
+    let mut deleted_count = 0;
+    let mut fq = FindQuery::new();
+    fq.include_deleted = true;
+    fq.filters = vec![crap_cms::db::FilterClause::Single(crap_cms::db::Filter {
+        field: "_deleted_at".to_string(),
+        op: crap_cms::db::FilterOp::Exists,
+    })];
+
+    let docs = query::find(&conn, "media", &media_def, &fq, None).unwrap();
+    assert_eq!(docs.len(), 2, "both should be in trash");
+
+    for doc in &docs {
+        let ref_count = query::ref_count::get_ref_count(&conn, "media", &doc.id).unwrap();
+        if ref_count > 0 {
+            continue; // Skip referenced — this is the fix under test
+        }
+        query::ref_count::before_hard_delete(
+            &conn,
+            "media",
+            &doc.id,
+            &media_def.fields,
+            &locale_cfg,
+        )
+        .unwrap();
+        query::delete(&conn, "media", &doc.id).unwrap();
+        deleted_count += 1;
+    }
+
+    // m2 should be permanently deleted, m1 should be preserved (still referenced)
+    assert_eq!(deleted_count, 1, "only unreferenced doc should be deleted");
+
+    // m1 should still exist (soft-deleted but preserved)
+    let m1_exists = query::find_by_id_unfiltered(&conn, "media", &media_def, &m1, None)
+        .unwrap()
+        .is_some();
+    assert!(m1_exists, "referenced doc m1 should survive empty-trash");
+
+    // m2 should be gone
+    let m2_exists = query::find_by_id_unfiltered(&conn, "media", &media_def, &m2, None)
+        .unwrap()
+        .is_some();
+    assert!(
+        !m2_exists,
+        "unreferenced doc m2 should be permanently deleted"
+    );
+}

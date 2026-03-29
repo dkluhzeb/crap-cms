@@ -184,6 +184,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **Empty trash could delete referenced documents** — The "Empty trash"
+  action permanently deleted all soft-deleted documents without checking
+  `_ref_count`, which could break referential integrity. Now skips
+  documents that are still referenced by other documents, matching the
+  behavior of single delete and the gRPC `DeleteMany` endpoint.
+
+- **Lua `delete_many` blocked soft-delete of referenced documents** —
+  `crap.collections.delete_many` checked `_ref_count` for both soft and
+  hard deletes, blocking soft-deletion of referenced documents. This was
+  inconsistent with single `delete()` and the gRPC API, which only check
+  ref counts for hard deletes. Soft-deleted documents remain referenceable
+  by design.
+
+- **Lua `delete_many` missing `forceHardDelete` option** —
+  `crap.collections.delete_many` now supports `{ forceHardDelete = true }`
+  to permanently delete documents even when the collection has
+  `soft_delete` enabled, matching the existing single `delete()` API.
+
+- **Table rebuild could leave database inconsistent on failure** — The
+  SQLite table rebuild (used during `soft_delete` migration) could leave
+  the database with an empty new table and orphaned temp table if the
+  data copy step failed. Now recovers by restoring the original table.
+
+- **Draft versioned updates skipped field-level after_change hooks** —
+  When saving a draft version via Lua `crap.collections.update`, field-
+  level `after_change` hooks were not called, though collection-level
+  hooks were. Now both run consistently.
+
+- **CSRF token extraction in list-settings.js** — The column settings
+  save used `split('=')[1]` to extract the CSRF cookie, which would
+  truncate tokens containing `=`. Now uses the same regex pattern as
+  all other components.
+
 - **API upload DELETE returned 500 for all errors** — The upload DELETE
   endpoint now returns `404 Not Found` when the document doesn't exist
   and `409 Conflict` when the document is referenced by others, instead
