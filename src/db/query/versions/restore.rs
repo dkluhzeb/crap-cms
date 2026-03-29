@@ -50,9 +50,29 @@ pub fn restore_version(
     } else {
         None
     };
+
+    // Snapshot outgoing refs before restore for ref count adjustment
+    let old_refs = super::super::ref_count::snapshot_outgoing_refs(
+        conn,
+        slug,
+        parent_id,
+        &def.fields,
+        locale_config,
+    )?;
+
     let doc = super::super::update(conn, slug, def, parent_id, &data, locale_ctx.as_ref())?;
 
     restore_locale_and_join_data(conn, slug, parent_id, &def.fields, obj, locale_config)?;
+
+    // Adjust ref counts based on before/after diff
+    super::super::ref_count::after_update(
+        conn,
+        slug,
+        parent_id,
+        &def.fields,
+        locale_config,
+        old_refs,
+    )?;
 
     // Update status and create a new version for the restore
     set_document_status(conn, slug, parent_id, status)?;

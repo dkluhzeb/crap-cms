@@ -45,11 +45,15 @@ pub async fn serve_upload(
     // Belt-and-suspenders: verify resolved path stays within uploads directory
     let upload_dir = state.config_dir.join("uploads").join(&collection_slug);
     let file_path = upload_dir.join(&filename);
-    if let (Ok(canonical_base), Ok(canonical_file)) =
-        (upload_dir.canonicalize(), file_path.canonicalize())
-        && !canonical_file.starts_with(&canonical_base)
-    {
-        return StatusCode::NOT_FOUND.into_response();
+    match (upload_dir.canonicalize(), file_path.canonicalize()) {
+        (Ok(canonical_base), Ok(canonical_file)) => {
+            if !canonical_file.starts_with(&canonical_base) {
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
+        // If either path can't be canonicalized (doesn't exist, broken symlink),
+        // reject the request — never serve unchecked paths.
+        _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
     // Parse Accept header for content negotiation

@@ -163,6 +163,20 @@ impl ContentService {
                     (data.clone(), join_data.clone())
                 };
 
+                // Snapshot outgoing refs before mutation for ref count adjustment
+                let locale_cfg = locale_ctx
+                    .as_ref()
+                    .map(|lc| lc.config.clone())
+                    .unwrap_or_default();
+                let old_refs = query::ref_count::snapshot_outgoing_refs(
+                    &tx,
+                    &collection,
+                    &doc.id,
+                    &def_owned.fields,
+                    &locale_cfg,
+                )
+                .map_err(|e| map_db_error(e, "UpdateMany ref snapshot error", &db_kind))?;
+
                 let updated = query::update_partial(
                     &tx,
                     &collection,
@@ -181,6 +195,17 @@ impl ContentService {
                     locale_ctx.as_ref(),
                 )
                 .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
+
+                // Adjust ref counts based on before/after diff
+                query::ref_count::after_update(
+                    &tx,
+                    &collection,
+                    &doc.id,
+                    &def_owned.fields,
+                    &locale_cfg,
+                    old_refs,
+                )
+                .map_err(|e| map_db_error(e, "UpdateMany ref count error", &db_kind))?;
                 if tx.supports_fts() {
                     query::fts::fts_upsert(&tx, &collection, &updated, Some(&def_owned))
                         .map_err(|e| map_db_error(e, "UpdateMany error", &db_kind))?;
@@ -254,6 +279,7 @@ impl ContentService {
         let collection = req.collection.clone();
         let req_where = req.r#where.clone();
         let config_dir = self.config_dir.clone();
+        let locale_cfg = self.locale_config.clone();
         let def_owned = def;
         let deleted = tokio::task::spawn_blocking(move || -> Result<i64, Status> {
             let mut conn = pool.get().map_err(|e| map_db_error(e, "Pool", &db_kind))?;
@@ -328,6 +354,23 @@ impl ContentService {
                         )
                         .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
                 }
+
+                // Skip documents with incoming references (delete protection)
+                let ref_count = query::ref_count::get_ref_count(&tx, &collection, &doc.id)
+                    .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
+                if ref_count > 0 {
+                    continue;
+                }
+
+                // Decrement ref counts on targets before deleting
+                query::ref_count::before_hard_delete(
+                    &tx,
+                    &collection,
+                    &doc.id,
+                    &def_owned.fields,
+                    &locale_cfg,
+                )
+                .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
 
                 query::delete(&tx, &collection, &doc.id)
                     .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;

@@ -205,6 +205,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Fixed by including `[field-name]` in the index replacement
   selectors.
 
+- **Reference counting missing in bulk operations** — `UpdateMany`
+  never adjusted ref counts when relationship fields changed, and
+  `DeleteMany` never decremented target ref counts before deleting.
+  Both could silently corrupt `_ref_count` values, breaking delete
+  protection and creating dangling references. Now both operations
+  snapshot and adjust ref counts per-document. `DeleteMany` also
+  skips documents with `_ref_count > 0` (matching single-delete
+  behavior).
+
+- **Version restore broke reference counts** — Restoring a version
+  snapshot never adjusted ref counts. If a relationship changed
+  between versions, restoring the old version would leave the new
+  target's count too high and the old target's count too low. Now
+  snapshots outgoing refs before restore and applies the diff after.
+
+- **Empty trash used wrong locale config** — The empty trash handler
+  used `LocaleConfig::default()` instead of the site's actual locale
+  configuration. Ref count adjustments for multi-locale sites with
+  localized relationship fields could read the wrong locale columns.
+
+- **FTS search skipped fields inside layout wrappers** — Fields
+  inside Row, Collapsible, or Tabs (which promote children to
+  parent-level columns) were not found by the FTS field validator.
+  `list_searchable_fields` referencing such fields were silently
+  filtered out. Now recurses into layout wrappers for both explicit
+  and default FTS field resolution.
+
+- **Upload path traversal when directory missing** — The
+  canonicalize-based path check in the upload file serve handler was
+  inside an `if let` that silently skipped the check when either path
+  couldn't be canonicalized (e.g., directory doesn't exist). Changed
+  to `match` — canonicalize failures now return 404.
+
+- **Startup validation for field references** — Collection
+  registration now warns when `use_as_title`, `default_sort`, or
+  `list_searchable_fields` reference field names that don't exist in
+  the collection's field definitions (including fields inside layout
+  wrappers). Previously these misconfigurations failed silently at
+  runtime.
+
+- **JWT validation errors now logged** — Failed JWT token validation
+  (expired, invalid signature, malformed) is now logged at debug
+  level instead of being silently swallowed via `.ok()`. Aids
+  debugging session issues in production.
+
 ### Changed
 
 - **Responsive breakpoint raised to 1024px** — The mobile layout

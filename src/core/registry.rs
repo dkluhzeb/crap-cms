@@ -6,8 +6,8 @@ use std::{
 };
 
 use crate::core::{
-    CollectionDefinition, Slug, collection::GlobalDefinition, job::JobDefinition,
-    richtext::RichtextNodeDef,
+    CollectionDefinition, FieldDefinition, FieldType, Slug, collection::GlobalDefinition,
+    job::JobDefinition, richtext::RichtextNodeDef,
 };
 
 /// Holds all collection, global, and job definitions loaded at startup.
@@ -47,7 +47,66 @@ impl Registry {
     /// Register a collection definition, keyed by slug. Overwrites any existing definition.
     pub fn register_collection(&mut self, def: CollectionDefinition) {
         tracing::debug!("Registering collection '{}'", def.slug);
+        Self::warn_invalid_field_refs(&def);
         self.collections.insert(def.slug.clone(), def);
+    }
+
+    /// Log warnings for admin config fields that reference nonexistent field names.
+    fn warn_invalid_field_refs(def: &CollectionDefinition) {
+        let slug = &def.slug;
+
+        if let Some(title) = def.title_field()
+            && !Self::field_exists_recursive(title, &def.fields)
+        {
+            tracing::warn!(
+                "Collection '{}': use_as_title references '{}' which is not a field",
+                slug,
+                title
+            );
+        }
+
+        if let Some(ref sort) = def.admin.default_sort {
+            let col = sort.strip_prefix('-').unwrap_or(sort);
+            if !matches!(
+                col,
+                "id" | "created_at" | "updated_at" | "_status" | "_deleted_at"
+            ) && !Self::field_exists_recursive(col, &def.fields)
+            {
+                tracing::warn!(
+                    "Collection '{}': default_sort references '{}' which is not a field",
+                    slug,
+                    col
+                );
+            }
+        }
+
+        for name in &def.admin.list_searchable_fields {
+            if !Self::field_exists_recursive(name, &def.fields) {
+                tracing::warn!(
+                    "Collection '{}': list_searchable_fields references '{}' which is not a field",
+                    slug,
+                    name
+                );
+            }
+        }
+    }
+
+    /// Check if a field name exists, recursing into layout wrappers.
+    fn field_exists_recursive(name: &str, fields: &[FieldDefinition]) -> bool {
+        fields.iter().any(|f| {
+            if f.name == name {
+                return true;
+            }
+
+            if matches!(
+                f.field_type,
+                FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+            ) {
+                return Self::field_exists_recursive(name, &f.fields);
+            }
+
+            false
+        })
     }
 
     /// Register a global definition, keyed by slug. Overwrites any existing definition.

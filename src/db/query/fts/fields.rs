@@ -6,7 +6,7 @@ use anyhow::Result;
 
 use crate::{
     config::LocaleConfig,
-    core::{CollectionDefinition, FieldType, Registry},
+    core::{CollectionDefinition, FieldDefinition, FieldType, Registry},
     db::query::sanitize_locale,
 };
 
@@ -37,29 +37,58 @@ pub fn get_fts_fields(def: &CollectionDefinition) -> Vec<String> {
             .admin
             .list_searchable_fields
             .iter()
-            .filter(|name| {
-                def.fields
-                    .iter()
-                    .any(|f| f.name == **name && !CONTAINER_FIELD_TYPES.contains(&f.field_type))
-            })
+            .filter(|name| is_fts_eligible_field(name, &def.fields))
             .cloned()
             .collect();
     }
 
-    def.fields
-        .iter()
-        .filter(|f| {
-            matches!(
-                f.field_type,
-                FieldType::Text
-                    | FieldType::Textarea
-                    | FieldType::Richtext
-                    | FieldType::Email
-                    | FieldType::Code
-            )
-        })
-        .map(|f| f.name.clone())
-        .collect()
+    collect_fts_defaults(&def.fields)
+}
+
+/// Check if a field name refers to an FTS-eligible column, recursing into
+/// layout wrappers (Row, Collapsible, Tabs) that promote children.
+fn is_fts_eligible_field(name: &str, fields: &[FieldDefinition]) -> bool {
+    fields.iter().any(|f| {
+        if f.name == name && !CONTAINER_FIELD_TYPES.contains(&f.field_type) {
+            return true;
+        }
+
+        if matches!(
+            f.field_type,
+            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+        ) {
+            return is_fts_eligible_field(name, &f.fields);
+        }
+
+        false
+    })
+}
+
+/// Collect default FTS fields (text-like) from top level and layout wrappers.
+fn collect_fts_defaults(fields: &[FieldDefinition]) -> Vec<String> {
+    let mut result = Vec::new();
+
+    for f in fields {
+        if matches!(
+            f.field_type,
+            FieldType::Text
+                | FieldType::Textarea
+                | FieldType::Richtext
+                | FieldType::Email
+                | FieldType::Code
+        ) {
+            result.push(f.name.clone());
+        }
+
+        if matches!(
+            f.field_type,
+            FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+        ) {
+            result.extend(collect_fts_defaults(&f.fields));
+        }
+    }
+
+    result
 }
 
 /// Expand logical field names to actual database column names.
@@ -297,5 +326,50 @@ mod tests {
         def.admin.list_searchable_fields = vec!["title".into(), "nonexistent".into()];
         // Neither exists as a scalar field — result should be empty
         assert!(get_fts_fields(&def).is_empty());
+    }
+
+    // ── Regression: fields inside layout wrappers ────────────────────
+
+    #[test]
+    fn searchable_field_inside_row() {
+        let mut def = simple_def(vec![FieldDefinition {
+            name: "date_row".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![text_field("title"), text_field("subtitle")],
+            ..Default::default()
+        }]);
+        def.admin.list_searchable_fields = vec!["title".into()];
+
+        assert_eq!(get_fts_fields(&def), vec!["title"]);
+    }
+
+    #[test]
+    fn searchable_field_inside_collapsible() {
+        let mut def = simple_def(vec![FieldDefinition {
+            name: "meta".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![text_field("description")],
+            ..Default::default()
+        }]);
+        def.admin.list_searchable_fields = vec!["description".into()];
+
+        assert_eq!(get_fts_fields(&def), vec!["description"]);
+    }
+
+    #[test]
+    fn default_fts_includes_fields_inside_wrappers() {
+        let def = simple_def(vec![
+            text_field("top_level"),
+            FieldDefinition {
+                name: "row".to_string(),
+                field_type: FieldType::Row,
+                fields: vec![text_field("nested_in_row")],
+                ..Default::default()
+            },
+        ]);
+
+        let fields = get_fts_fields(&def);
+        assert!(fields.contains(&"top_level".to_string()));
+        assert!(fields.contains(&"nested_in_row".to_string()));
     }
 }

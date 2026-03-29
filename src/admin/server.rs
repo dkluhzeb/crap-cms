@@ -669,7 +669,13 @@ fn validate_jwt_and_load_user(
     cookie_header: &str,
 ) -> Option<(auth::Claims, Option<AuthUser>)> {
     let token = extract_cookie(cookie_header, "crap_session")?;
-    let claims = auth::validate_token(token, state.jwt_secret.as_ref()).ok()?;
+    let claims = match auth::validate_token(token, state.jwt_secret.as_ref()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("JWT validation failed: {}", e);
+            return None;
+        }
+    };
     let auth_user = load_auth_user(&state.pool, &state.registry, &claims, &state.config.locale);
 
     // Reject locked users even if their JWT is still valid

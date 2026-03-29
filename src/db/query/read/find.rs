@@ -1242,4 +1242,75 @@ mod tests {
             "Same documents should appear on page 2"
         );
     }
+
+    // ── Regression: is_valid_sort_column with layout wrappers ─────────
+
+    #[test]
+    fn sort_column_inside_row_is_valid() {
+        let mut def = CollectionDefinition::new("events");
+        def.fields = vec![FieldDefinition {
+            name: "date_row".to_string(),
+            field_type: FieldType::Row,
+            fields: vec![FieldDefinition {
+                name: "start_date".to_string(),
+                field_type: FieldType::Date,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+
+        assert!(
+            is_valid_sort_column("start_date", &def),
+            "Field inside Row should be valid sort column"
+        );
+    }
+
+    #[test]
+    fn sort_column_inside_collapsible_is_valid() {
+        let mut def = CollectionDefinition::new("items");
+        def.fields = vec![FieldDefinition {
+            name: "meta".to_string(),
+            field_type: FieldType::Collapsible,
+            fields: vec![FieldDefinition {
+                name: "priority".to_string(),
+                field_type: FieldType::Number,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+
+        assert!(
+            is_valid_sort_column("priority", &def),
+            "Field inside Collapsible should be valid sort column"
+        );
+    }
+
+    #[test]
+    fn sort_column_inside_tabs_is_valid() {
+        let mut def = CollectionDefinition::new("pages");
+        def.fields = vec![FieldDefinition {
+            name: "content_tabs".to_string(),
+            field_type: FieldType::Tabs,
+            fields: vec![FieldDefinition {
+                name: "title".to_string(),
+                field_type: FieldType::Text,
+                ..Default::default()
+            }],
+            ..Default::default()
+        }];
+
+        assert!(
+            is_valid_sort_column("title", &def),
+            "Field inside Tabs should be valid sort column"
+        );
+    }
+
+    #[test]
+    fn sort_column_nonexistent_is_invalid() {
+        let def = test_def();
+        assert!(
+            !is_valid_sort_column("nonexistent", &def),
+            "Nonexistent field should be invalid sort column"
+        );
+    }
 }

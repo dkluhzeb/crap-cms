@@ -65,6 +65,7 @@ pub async fn empty_trash_action(
 
     let pool = state.pool.clone();
     let config_dir = state.config_dir.clone();
+    let locale_cfg = state.config.locale.clone();
     let slug_owned = slug.clone();
 
     let result = task::spawn_blocking(move || {
@@ -81,8 +82,6 @@ pub async fn empty_trash_action(
 
         let docs = query::find(&tx, &slug_owned, &def, &fq, None)?;
         let count = docs.len();
-
-        let locale_cfg = crate::config::LocaleConfig::default();
 
         for doc in &docs {
             // Decrement ref counts before hard delete (CASCADE removes junction rows)
