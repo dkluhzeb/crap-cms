@@ -191,6 +191,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   and textareas show dimmed text, grayed background, and block
   pointer events.
 
+- **Sort on fields inside layout wrappers** — Sorting by a field
+  inside a Row, Collapsible, or Tabs wrapper (e.g. `default_sort =
+  "-start_date"` where `start_date` is in a Row) caused a 500 error
+  ("Invalid sort column"). The sort column validator now recurses into
+  layout wrappers to find promoted fields.
+
+- **Upload fields in new block rows not saving** — When adding a new
+  block row and selecting an upload/relationship, the value was lost
+  on save. The `__INDEX__` placeholder in the `field-name` attribute
+  of `<crap-relationship-search>` was not replaced with the actual
+  row index, so the hidden input submitted an unparseable field name.
+  Fixed by including `[field-name]` in the index replacement
+  selectors.
+
 ### Changed
 
 - **Responsive breakpoint raised to 1024px** — The mobile layout

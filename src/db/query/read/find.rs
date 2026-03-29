@@ -3,6 +3,8 @@
 use anyhow::{Context as _, Result, bail};
 use serde_json::Value;
 
+use crate::core::{FieldDefinition, field::FieldType};
+
 use crate::db::{
     DbConnection, DbValue, FindQuery, LocaleContext, LocaleMode,
     query::{
@@ -243,10 +245,27 @@ fn is_valid_sort_column(col: &str, def: &CollectionDefinition) -> bool {
         return true;
     }
 
-    // User-defined fields that have a parent column (has-one scalar fields)
-    def.fields
-        .iter()
-        .any(|f| f.name == col && f.has_parent_column())
+    // User-defined fields that have a parent column (has-one scalar fields).
+    // Layout wrappers (Row, Collapsible, Tabs) promote their children to
+    // parent-level columns, so we recurse into them.
+    fn check_fields(col: &str, fields: &[FieldDefinition]) -> bool {
+        fields.iter().any(|f| {
+            if f.name == col && f.has_parent_column() {
+                return true;
+            }
+
+            if matches!(
+                f.field_type,
+                FieldType::Row | FieldType::Collapsible | FieldType::Tabs
+            ) {
+                return check_fields(col, &f.fields);
+            }
+
+            false
+        })
+    }
+
+    check_fields(col, &def.fields)
 }
 
 #[cfg(test)]

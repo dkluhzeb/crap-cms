@@ -154,6 +154,13 @@ class CrapArrayField extends HTMLElement {
         if (tid) el.setAttribute('data-template-id', tid.replaceAll('__INDEX__', String(index)));
       }
     );
+    // Custom element attributes (e.g. <crap-relationship-search field-name="...">)
+    root.querySelectorAll('[field-name*="__INDEX__"]').forEach(
+      /** @param {HTMLElement} el */ (el) => {
+        const fn = el.getAttribute('field-name');
+        if (fn) el.setAttribute('field-name', fn.replaceAll('__INDEX__', String(index)));
+      }
+    );
   }
 
   /**
