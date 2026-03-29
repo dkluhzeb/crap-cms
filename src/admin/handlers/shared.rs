@@ -449,6 +449,18 @@ pub(crate) fn htmx_redirect(url: &str) -> Response {
         .unwrap_or_else(|_| Redirect::to(url).into_response())
 }
 
+/// Like `htmx_redirect`, but also includes `X-Created-Id` and `X-Created-Label`
+/// headers so inline create panels can identify the newly created document.
+pub(crate) fn htmx_redirect_with_created(url: &str, id: &str, label: &str) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("HX-Redirect", url)
+        .header("X-Created-Id", id)
+        .header("X-Created-Label", label)
+        .body(axum::body::Body::empty())
+        .unwrap_or_else(|_| Redirect::to(url).into_response())
+}
+
 /// Render a template and set the X-Crap-Toast header for client-side notifications.
 pub(crate) fn html_with_toast(
     state: &AdminState,

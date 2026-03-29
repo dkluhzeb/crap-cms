@@ -240,5 +240,6 @@
   "empty_trash_confirm": "Alle {{count}} Elemente im Papierkorb endgültig löschen? Diese Aktion kann nicht rückgängig gemacht werden.",
   "trash_emptied": "Papierkorb geleert",
   "error": "Fehler",
-  "no_details": "Keine Details verfügbar."
+  "no_details": "Keine Details verfügbar.",
+  "loading": "Laden..."
 }

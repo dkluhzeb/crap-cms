@@ -21,7 +21,7 @@ use crate::{
             shared::{
                 EnrichOptions, apply_display_conditions, build_field_contexts,
                 check_access_or_forbid, enrich_field_contexts, forbidden, get_event_user,
-                get_user_doc, html_with_toast, htmx_redirect, redirect_response,
+                get_user_doc, html_with_toast, htmx_redirect_with_created, redirect_response,
                 split_sidebar_fields, strip_write_denied_string_fields,
                 translate_validation_errors,
             },
@@ -225,7 +225,13 @@ pub async fn create_action(
                 );
             }
 
-            htmx_redirect(&format!("/admin/collections/{}", slug))
+            let label = def
+                .title_field()
+                .and_then(|f| doc.fields.get(f))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&doc.id);
+
+            htmx_redirect_with_created(&format!("/admin/collections/{}", slug), &doc.id, label)
         }
         Ok(Err(e)) => {
             if let Some(ve) = e.downcast_ref::<ValidationError>() {

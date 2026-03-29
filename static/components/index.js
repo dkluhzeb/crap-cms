@@ -22,6 +22,7 @@ import './tags.js';
 import './drawer.js';
 import './relationship-search.js';
 import './session-guard.js';
+import './create-panel.js';
 
 // ── Light DOM Web Components ──
 import './time-format.js';

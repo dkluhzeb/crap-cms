@@ -561,8 +561,7 @@ input[type="checkbox"]:disabled {
   display: flex;
   flex-direction: column;
   gap: var(--space-lg);
-  padding: var(--space-md) var(--space-md);
-  padding-top: 0;
+  padding: var(--space-md);
 }
 
 .form__array-sub-field {

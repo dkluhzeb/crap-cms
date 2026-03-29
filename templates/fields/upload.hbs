@@ -19,7 +19,7 @@
   {{#unless locale_locked}}
   <div class="upload-field__actions">
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
-      hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
+      data-inline-create="{{relationship_collection}}" data-inline-create-label="{{t "upload_new"}}">
       <span class="material-symbols-outlined icon--sm">upload</span>
       {{t "upload_new"}}
     </a>
@@ -61,7 +61,7 @@
   {{#if relationship_collection}}
   <div class="upload-field__actions">
     <a class="relationship-field__action" href="/admin/collections/{{relationship_collection}}/create"
-      hx-get="/admin/collections/{{relationship_collection}}/create" hx-target="body" hx-push-url="true">
+      data-inline-create="{{relationship_collection}}" data-inline-create-label="{{t "upload_new"}}">
       <span class="material-symbols-outlined icon--sm">upload</span>
       {{t "upload_new"}}
     </a>

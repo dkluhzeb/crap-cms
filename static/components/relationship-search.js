@@ -452,6 +452,29 @@ class CrapRelationshipSearch extends HTMLElement {
     if (pickerMode === 'drawer' && !readonly) {
       this._setupDrawerPicker(collection, isUpload, hasMany);
     }
+
+    // ── Inline create (open create form in panel) ──────────────
+    if (!readonly) {
+      const field = this.closest('.relationship-field') || this.closest('.upload-field');
+      if (field) {
+        field.addEventListener('click', (e) => {
+          const link = /** @type {HTMLElement} */ (e.target).closest('[data-inline-create]');
+          if (!link) return;
+
+          e.preventDefault();
+          const col = /** @type {HTMLElement} */ (link).dataset.inlineCreate;
+          const label = /** @type {HTMLElement} */ (link).dataset.inlineCreateLabel || '';
+
+          import('./create-panel.js').then(({ getCreatePanel }) => {
+            getCreatePanel().open({
+              collection: col,
+              title: label,
+              onCreated: (item) => selectItem(item),
+            });
+          });
+        });
+      }
+    }
   }
 
   disconnectedCallback() {
