@@ -117,7 +117,7 @@ class CrapValidateForm extends HTMLElement {
       const errors = await this.getValidationErrors();
 
       if (errors === null) {
-        window.CrapToast?.show(t('validation.server_error'), 'error');
+        document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('validation.server_error'), type: 'error' } }));
         return;
       }
 
@@ -260,7 +260,7 @@ class CrapValidateForm extends HTMLElement {
     }
 
     if (errorCount > 0) {
-      window.CrapToast?.show(t('validation.error_summary'), 'error');
+      document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('validation.error_summary'), type: 'error' } }));
     }
   }
 

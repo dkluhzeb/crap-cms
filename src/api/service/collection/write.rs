@@ -134,7 +134,9 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
             strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))
@@ -303,7 +305,9 @@ impl ContentService {
                         Status::internal("Internal error")
                     })?;
                     let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
-                    let _ = tx.commit();
+                    if let Err(e) = tx.commit() {
+                        tracing::warn!("tx commit failed: {e}");
+                    }
                     strip_denied_proto_fields(&mut proto_doc, &denied);
 
                     Ok((proto_doc, auth_user))
@@ -429,7 +433,9 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
             strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))
@@ -637,7 +643,9 @@ impl ContentService {
                 Status::internal("Internal error")
             })?;
             let denied = runner.check_field_read_access(&def_fields, user_doc_ref, &tx);
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
             strip_denied_proto_fields(&mut proto_doc, &denied);
 
             Ok((proto_doc, auth_user))

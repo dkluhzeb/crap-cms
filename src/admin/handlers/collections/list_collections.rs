@@ -75,7 +75,9 @@ fn has_list_read_access(
         .hook_runner
         .check_access(access_ref, user_doc, None, None, &tx);
 
-    let _ = tx.commit();
+    if let Err(e) = tx.commit() {
+        tracing::warn!("tx commit failed: {e}");
+    }
 
     matches!(
         result,

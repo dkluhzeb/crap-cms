@@ -7,7 +7,6 @@
  * @module list-settings
  */
 
-import { getDrawer } from './drawer.js';
 import { t } from './i18n.js';
 
 /**
@@ -87,7 +86,9 @@ class CrapListSettings extends HTMLElement {
     /** @type {Array<{key: string, label: string, selected: boolean}>} */
     const options = JSON.parse(island.textContent || '[]');
 
-    const drawer = getDrawer();
+    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
+    document.dispatchEvent(drawerEvt);
+    const drawer = drawerEvt.detail.instance;
     drawer.open({ title: t('columns') });
 
     const body = drawer.body;
@@ -174,7 +175,9 @@ class CrapListSettings extends HTMLElement {
 
     const existing = this._parseCurrentFilters();
 
-    const drawer = getDrawer();
+    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
+    document.dispatchEvent(drawerEvt);
+    const drawer = drawerEvt.detail.instance;
     drawer.open({ title: t('filters') });
 
     const body = drawer.body;

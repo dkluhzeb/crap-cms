@@ -145,7 +145,7 @@ class CrapLiveEvents extends HTMLElement {
         /** @type {Record<string, string>} */
         const opLabels = { create: t('op_created'), update: t('op_updated'), delete: t('op_deleted') };
         const msg = `${collection} ${opLabels[op] || op}`;
-        if (window.CrapToast) window.CrapToast.show(msg, 'info');
+        document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: msg, type: 'info' } }));
       } catch {
         // Ignore parse errors
       }

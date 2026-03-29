@@ -316,7 +316,9 @@ pub(crate) fn compute_denied_read_fields(
         .check_field_read_access(fields, user_doc, &tx);
 
     // Read-only access check — commit result is irrelevant, rollback on drop is safe
-    let _ = tx.commit();
+    if let Err(e) = tx.commit() {
+        tracing::warn!("tx commit failed: {e}");
+    }
 
     Ok(denied)
 }
@@ -356,7 +358,9 @@ pub(crate) fn strip_write_denied_string_fields(
         .check_field_write_access(fields, user_doc, operation, &tx);
 
     // Read-only access check — commit result is irrelevant, rollback on drop is safe
-    let _ = tx.commit();
+    if let Err(e) = tx.commit() {
+        tracing::warn!("tx commit failed: {e}");
+    }
 
     for name in &denied {
         form_data.remove(name);

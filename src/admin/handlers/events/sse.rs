@@ -155,7 +155,9 @@ pub async fn sse_handler(
                     }
                 }
                 // Read-only access check — commit result is irrelevant, rollback on drop is safe
-                let _ = tx.commit();
+                if let Err(e) = tx.commit() {
+                    tracing::warn!("tx commit failed: {e}");
+                }
             }
         }
     }

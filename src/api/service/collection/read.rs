@@ -210,7 +210,9 @@ impl ContentService {
                     Status::internal("Internal error")
                 })?;
                 let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
-                let _ = tx.commit();
+                if let Err(e) = tx.commit() {
+                    tracing::warn!("tx commit failed: {e}");
+                }
                 for doc in &mut proto_docs {
                     strip_denied_proto_fields(doc, &denied);
                 }
@@ -400,7 +402,9 @@ impl ContentService {
                         Status::internal("Internal error")
                     })?;
                     let denied = runner.check_field_read_access(&def_fields, user_doc, &tx);
-                    let _ = tx.commit();
+                    if let Err(e) = tx.commit() {
+                        tracing::warn!("tx commit failed: {e}");
+                    }
                     strip_denied_proto_fields(&mut proto_doc, &denied);
 
                     Ok(Some(proto_doc))

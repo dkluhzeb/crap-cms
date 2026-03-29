@@ -161,6 +161,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   components until their JavaScript registers, preventing flash of
   unstyled content.
 
+- **Event-driven component communication** — Removed all global
+  singleton patterns (`window.CrapToast`, `getDrawer()`,
+  `getConfirmDialog()`, `getCreatePanel()`). Components now
+  communicate exclusively via native `CustomEvent` dispatch and
+  document-level listeners. Zero cross-component imports, zero
+  wrapper functions, zero null checks. Events used:
+  `crap:toast` (notifications), `crap:drawer-request` (drawer
+  discovery), `crap:confirm-dialog-request` (confirm dialog
+  discovery), `crap:create-panel-request` (create panel discovery).
+
+### Fixed
+
+- **Invalid SQL in reference counting** — `MAX(0, expr)` is not
+  portable across database backends. Replaced with
+  `conn.greatest_expr()` on the `DbConnection` trait (SQLite uses
+  `MAX(a, b)`, PostgreSQL would use `GREATEST(a, b)`).
+
+- **Panic in date normalization** — `unwrap()` on
+  `date.and_hms_opt()` replaced with proper error propagation via
+  `ok_or_else()`.
+
+- **Silent transaction commit errors** — 22 instances of
+  `let _ = tx.commit()` across the codebase now log failures via
+  `tracing::warn!` instead of silently swallowing errors.
+
+- **Button/input disabled states** — `.button:disabled` now shows
+  50% opacity with `not-allowed` cursor. Disabled inputs, selects,
+  and textareas show dimmed text, grayed background, and block
+  pointer events.
+
 ### Changed
 
 - **Responsive breakpoint raised to 1024px** — The mobile layout

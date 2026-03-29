@@ -7,8 +7,8 @@
  * and returns the created item to the caller.
  *
  * Usage:
- *   const panel = getCreatePanel();
- *   panel.open({
+ *   const panel = getCreatePanel(); // event-based discovery
+ *   panel?.open({
  *     collection: 'posts',
  *     title: 'Create Post',
  *     onCreated: ({ id, label }) => { ... }
@@ -46,6 +46,11 @@ class CrapCreatePanel extends HTMLElement {
     this.appendChild(this._dialog);
 
     this._dialog.querySelector('.create-panel__close').addEventListener('click', () => this.close());
+
+    // Event-based discovery (same pattern as drawer/confirm-dialog)
+    this._handleRequest = (e) => { e.detail.instance = this; };
+    document.addEventListener('crap:create-panel-request', this._handleRequest);
+
     this._dialog.addEventListener('click', (e) => {
       if (e.target === this._dialog) this.close();
     });
@@ -68,7 +73,7 @@ class CrapCreatePanel extends HTMLElement {
     this._dialog.querySelector('.create-panel__title').textContent = opts.title || '';
 
     const body = this._dialog.querySelector('.create-panel__body');
-    body.innerHTML = '<div class="create-panel__loading">' + (t('loading') || 'Loading...') + '</div>';
+    this._setBodyMessage(body, 'create-panel__loading', t('loading') || 'Loading...');
     this._dialog.showModal();
 
     // Abort any previous fetch
@@ -82,7 +87,7 @@ class CrapCreatePanel extends HTMLElement {
       });
 
       if (!resp.ok) {
-        body.innerHTML = '<p class="create-panel__error">' + (t('error') || 'Error') + '</p>';
+        this._setBodyMessage(body, 'create-panel__error', t('error') || 'Error');
         return;
       }
 
@@ -90,7 +95,7 @@ class CrapCreatePanel extends HTMLElement {
       this._injectForm(body, html, opts.collection);
     } catch (e) {
       if (e.name !== 'AbortError') {
-        body.innerHTML = '<p class="create-panel__error">' + (t('error') || 'Error') + '</p>';
+        this._setBodyMessage(body, 'create-panel__error', t('error') || 'Error');
       }
     }
   }
@@ -208,9 +213,7 @@ class CrapCreatePanel extends HTMLElement {
           this._onCreated({ id: createdId, label: createdLabel || createdId });
         }
 
-        if (window.CrapToast) {
-          window.CrapToast.show(createdLabel || createdId, 'success');
-        }
+        document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: createdLabel || createdId, type: 'success' } }));
 
         this.close();
         return;
@@ -222,18 +225,16 @@ class CrapCreatePanel extends HTMLElement {
         this._injectForm(body, html, collection);
 
         // Show toast if present
-        const toast = resp.headers.get('X-Crap-Toast');
-        if (toast && window.CrapToast) {
+        const toastHeader = resp.headers.get('X-Crap-Toast');
+        if (toastHeader) {
           try {
-            const t = JSON.parse(toast);
-            window.CrapToast.show(t.message, t.type || 'error');
+            const parsed = JSON.parse(toastHeader);
+            document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: parsed.message, type: parsed.type || 'error' } }));
           } catch { /* ignore */ }
         }
       }
     } catch {
-      if (window.CrapToast) {
-        window.CrapToast.show(t('error') || 'Error', 'error');
-      }
+      document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('error') || 'Error', type: 'error' } }));
     } finally {
       submitBtns.forEach((btn) => {
         btn.disabled = false;
@@ -242,12 +243,35 @@ class CrapCreatePanel extends HTMLElement {
     }
   }
 
+  /**
+   * Set body to a single text message with a class.
+   * @param {HTMLElement} body
+   * @param {string} className
+   * @param {string} message
+   */
+  _setBodyMessage(body, className, message) {
+    body.innerHTML = '';
+    const el = document.createElement('p');
+    el.className = className;
+    el.textContent = message;
+    body.appendChild(el);
+  }
+
   close() {
     if (!this._dialog) return;
     if (this._abortController) this._abortController.abort();
+    this._abortController = null;
     this._dialog.close();
     this._dialog.querySelector('.create-panel__body').innerHTML = '';
     this._onCreated = null;
+  }
+
+  disconnectedCallback() {
+    if (this._abortController) {
+      this._abortController.abort();
+      this._abortController = null;
+    }
+    document.removeEventListener('crap:create-panel-request', this._handleRequest);
   }
 
   static _stylesInjected = false;
@@ -358,16 +382,3 @@ class CrapCreatePanel extends HTMLElement {
 
 customElements.define('crap-create-panel', CrapCreatePanel);
 
-/**
- * Get the singleton create panel instance.
- *
- * @returns {CrapCreatePanel}
- */
-export function getCreatePanel() {
-  let panel = document.querySelector('crap-create-panel');
-  if (!panel) {
-    panel = document.createElement('crap-create-panel');
-    document.body.appendChild(panel);
-  }
-  return /** @type {CrapCreatePanel} */ (panel);
-}

@@ -88,7 +88,9 @@ pub fn normalize_date_with_timezone(value: &str, tz_str: &str) -> Result<String>
     if trimmed.len() == 10
         && let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
     {
-        let local_noon = date.and_hms_opt(12, 0, 0).unwrap();
+        let local_noon = date
+            .and_hms_opt(12, 0, 0)
+            .ok_or_else(|| anyhow::anyhow!("Failed to construct noon time for {}", trimmed))?;
 
         let utc = tz
             .from_local_datetime(&local_noon)

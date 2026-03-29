@@ -20,7 +20,6 @@
  *   data-error     — boolean attribute for error styling
  */
 
-import { getDrawer } from './drawer.js';
 import { t } from './i18n.js';
 
 const DEBOUNCE_MS = 250;
@@ -465,12 +464,12 @@ class CrapRelationshipSearch extends HTMLElement {
           const col = /** @type {HTMLElement} */ (link).dataset.inlineCreate;
           const label = /** @type {HTMLElement} */ (link).dataset.inlineCreateLabel || '';
 
-          import('./create-panel.js').then(({ getCreatePanel }) => {
-            getCreatePanel().open({
-              collection: col,
-              title: label,
-              onCreated: (item) => selectItem(item),
-            });
+          const panelEvt = new CustomEvent('crap:create-panel-request', { detail: {} });
+          document.dispatchEvent(panelEvt);
+          panelEvt.detail.instance?.open({
+            collection: col,
+            title: label,
+            onCreated: (item) => selectItem(item),
           });
         });
       }
@@ -522,7 +521,9 @@ class CrapRelationshipSearch extends HTMLElement {
    * @param {boolean} hasMany
    */
   _openDrawerPicker(collection, isUpload, hasMany) {
-    const drawer = getDrawer();
+    const drawerEvt = new CustomEvent('crap:drawer-request', { detail: {} });
+    document.dispatchEvent(drawerEvt);
+    const drawer = drawerEvt.detail.instance;
     const label = isUpload ? t('browse_media') : t('browse');
     drawer.open({ title: label });
 

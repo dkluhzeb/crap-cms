@@ -172,15 +172,3 @@ class CrapConfirmDialog extends HTMLElement {
 
 customElements.define('crap-confirm-dialog', CrapConfirmDialog);
 
-/* ── Public API ──────────────────────────────────────────────── */
-
-/**
- * Get a connected <crap-confirm-dialog> instance.
- * Uses a synchronous CustomEvent so each instance self-registers.
- * @returns {CrapConfirmDialog | null}
- */
-export function getConfirmDialog() {
-  const evt = new CustomEvent('crap:confirm-dialog-request', { detail: {} });
-  document.dispatchEvent(evt);
-  return /** @type {CrapConfirmDialog | null} */ (evt.detail.instance || null);
-}

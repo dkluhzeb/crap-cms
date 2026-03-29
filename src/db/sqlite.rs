@@ -286,6 +286,10 @@ impl DbConnection for SqliteConnection {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -474,6 +478,10 @@ impl DbConnection for SqliteTransaction<'_> {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -641,6 +649,10 @@ impl DbConnection for rusqlite::Transaction<'_> {
         "datetime('now')"
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
+    }
+
     fn kind(&self) -> &'static str {
         "sqlite"
     }
@@ -801,6 +813,10 @@ impl DbConnection for rusqlite::Connection {
 
     fn now_expr(&self) -> &'static str {
         "datetime('now')"
+    }
+
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
     }
 
     fn kind(&self) -> &'static str {
@@ -1015,6 +1031,10 @@ impl super::connection::DbConnection for InMemoryConn {
 
     fn now_expr(&self) -> &'static str {
         "datetime('now')"
+    }
+
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        format!("MAX({a}, {b})")
     }
 
     fn kind(&self) -> &'static str {

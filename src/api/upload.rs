@@ -156,7 +156,9 @@ async fn create_upload(
                 .hook_runner
                 .check_access(def.access.create.as_deref(), user_doc, None, None, &tx);
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
+        if let Err(e) = tx.commit() {
+            tracing::warn!("tx commit failed: {e}");
+        }
 
         result
     };
@@ -239,7 +241,9 @@ async fn create_upload(
                     .hook_runner
                     .check_field_write_access(&def.fields, user_doc, "create", &tx);
             // Read-only access check — commit result is irrelevant, rollback on drop is safe
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
 
             for name in &denied {
                 form_data.remove(name);
@@ -371,7 +375,9 @@ async fn update_upload(
             &tx,
         );
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
+        if let Err(e) = tx.commit() {
+            tracing::warn!("tx commit failed: {e}");
+        }
         result
     };
 
@@ -450,7 +456,9 @@ async fn update_upload(
                     .hook_runner
                     .check_field_write_access(&def.fields, user_doc, "update", &tx);
             // Read-only access check — commit result is irrelevant, rollback on drop is safe
-            let _ = tx.commit();
+            if let Err(e) = tx.commit() {
+                tracing::warn!("tx commit failed: {e}");
+            }
             for name in &denied {
                 form_data.remove(name);
             }
@@ -590,7 +598,9 @@ async fn delete_upload(
         );
 
         // Read-only access check — commit result is irrelevant, rollback on drop is safe
-        let _ = tx.commit();
+        if let Err(e) = tx.commit() {
+            tracing::warn!("tx commit failed: {e}");
+        }
 
         result
     };

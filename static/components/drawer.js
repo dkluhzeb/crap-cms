@@ -337,15 +337,3 @@ class CrapDrawer extends HTMLElement {
 
 customElements.define('crap-drawer', CrapDrawer);
 
-/* ── Public API ──────────────────────────────────────────────── */
-
-/**
- * Get a connected <crap-drawer> instance.
- * Uses a synchronous CustomEvent so each instance self-registers.
- * @returns {CrapDrawer | null}
- */
-export function getDrawer() {
-  const evt = new CustomEvent('crap:drawer-request', { detail: {} });
-  document.dispatchEvent(evt);
-  return /** @type {CrapDrawer | null} */ (evt.detail.instance || null);
-}

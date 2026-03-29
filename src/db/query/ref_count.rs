@@ -540,9 +540,10 @@ fn to_delta_map(
 fn apply_deltas(conn: &dyn DbConnection, deltas: &HashMap<(String, String), i64>) -> Result<()> {
     for ((collection, id), delta) in deltas {
         let p1 = conn.placeholder(1);
+        let clamped = conn.greatest_expr("0", &format!("_ref_count + ({})", delta));
         let sql = format!(
-            "UPDATE \"{}\" SET _ref_count = MAX(0, _ref_count + ({})) WHERE id = {p1}",
-            collection, delta
+            "UPDATE \"{}\" SET _ref_count = {} WHERE id = {p1}",
+            collection, clamped
         );
 
         let affected = conn

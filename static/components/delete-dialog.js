@@ -207,7 +207,7 @@ class CrapDeleteDialog extends HTMLElement {
             : action === 'soft_delete'
               ? t('moved_to_trash')
               : t('deleted_permanently');
-          window.CrapToast.show(toastMsg, 'success');
+          document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: toastMsg, type: 'success' } }));
 
           // Navigate back to the collection list
           const listUrl = `/admin/collections/${slug}`;
@@ -225,13 +225,13 @@ class CrapDeleteDialog extends HTMLElement {
           } catch {
             errMsg = await resp.text().catch(() => '');
           }
-          window.CrapToast.show(errMsg || t('delete_error'), 'error');
+          document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: errMsg || t('delete_error'), type: 'error' } }));
         }
       } catch {
         dialog.close();
         pending = null;
         setButtonsDisabled(false);
-        window.CrapToast.show(t('delete_error'), 'error');
+        document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: t('delete_error'), type: 'error' } }));
       }
     };
 

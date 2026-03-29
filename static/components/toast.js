@@ -9,7 +9,7 @@
  * listeners via connectedCallback/disconnectedCallback.
  *
  * @example HTML:  <crap-toast></crap-toast>
- * @example JS:    window.CrapToast.show('Item created', 'success');
+ * @example JS:    document.dispatchEvent(new CustomEvent('crap:toast', { detail: { message: 'Item created', type: 'success' } }));
  * @example Header: X-Crap-Toast: {"message": "Saved", "type": "success"}
  */
 class CrapToast extends HTMLElement {
@@ -133,22 +133,3 @@ class CrapToast extends HTMLElement {
 }
 
 customElements.define('crap-toast', CrapToast);
-
-/**
- * Global toast API.
- * Dispatches a CustomEvent that the connected <crap-toast> instance handles.
- * @namespace
- */
-window.CrapToast = {
-  /**
-   * @param {string} message
-   * @param {'success' | 'error' | 'info'} [type='info']
-   * @param {number} [duration=3000]
-   * @returns {void}
-   */
-  show(message, type = 'info', duration = 3000) {
-    document.dispatchEvent(new CustomEvent('crap:toast', {
-      detail: { message, type, duration },
-    }));
-  },
-};

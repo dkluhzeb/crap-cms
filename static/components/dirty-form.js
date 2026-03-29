@@ -8,7 +8,6 @@
  * @module dirty-form
  */
 
-import { getConfirmDialog } from './confirm-dialog.js';
 import { t } from './i18n.js';
 
 class CrapDirtyForm extends HTMLElement {
@@ -130,7 +129,9 @@ class CrapDirtyForm extends HTMLElement {
    * @returns {Promise<boolean>}
    */
   _askLeave() {
-    const dialog = getConfirmDialog();
+    const confirmEvt = new CustomEvent('crap:confirm-dialog-request', { detail: {} });
+    document.dispatchEvent(confirmEvt);
+    const dialog = confirmEvt.detail.instance;
     if (!dialog) return Promise.resolve(true);
     return dialog.prompt(
       t('unsaved_changes'),

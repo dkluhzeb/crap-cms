@@ -37,6 +37,12 @@ pub trait DbConnection {
     /// PostgreSQL: `"NOW()"`
     fn now_expr(&self) -> &'static str;
 
+    /// Return a SQL expression for `max(a, b)` as a scalar (not aggregate).
+    ///
+    /// SQLite: `"MAX(a, b)"` (SQLite's `MAX` with 2+ args is scalar)
+    /// PostgreSQL: `"GREATEST(a, b)"`
+    fn greatest_expr(&self, a: &str, b: &str) -> String;
+
     /// Return the backend identifier.
     ///
     /// Used to gate backend-specific features (FTS5, `sqlite_master`,
@@ -225,6 +231,10 @@ impl DbConnection for BoxedConnection {
         self.inner.now_expr()
     }
 
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        self.inner.greatest_expr(a, b)
+    }
+
     fn kind(&self) -> &'static str {
         self.inner.kind()
     }
@@ -345,6 +355,10 @@ impl DbConnection for BoxedTransaction<'_> {
 
     fn now_expr(&self) -> &'static str {
         self.inner.now_expr()
+    }
+
+    fn greatest_expr(&self, a: &str, b: &str) -> String {
+        self.inner.greatest_expr(a, b)
     }
 
     fn kind(&self) -> &'static str {
