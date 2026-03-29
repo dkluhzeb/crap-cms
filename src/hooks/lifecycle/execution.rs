@@ -7,7 +7,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     core::{
-        Document, FieldDefinition, collection::Hooks, document::DocumentBuilder, field::FieldHooks,
+        Document, FieldDefinition, FieldType, collection::Hooks, document::DocumentBuilder,
+        field::FieldHooks,
     },
     hooks::{
         api,
@@ -32,7 +33,7 @@ pub struct AfterReadCtx<'a> {
 /// Runs field-level after_read hooks, then collection-level, then global registered.
 /// On error: logs warning, returns original doc unmodified.
 pub(crate) fn apply_after_read_inner(lua: &Lua, ctx: &AfterReadCtx, doc: Document) -> Document {
-    let has_field_hooks = ctx.fields.iter().any(|f| !f.hooks.after_read.is_empty());
+    let has_field_hooks = has_any_field_hook(ctx.fields, &FieldHookEvent::AfterRead);
 
     let has_collection_hooks = !ctx.hooks.after_read.is_empty();
     let has_registered = has_registered_hooks(lua, "after_read");
@@ -205,20 +206,13 @@ pub(crate) fn call_display_condition_with_lua(
     }
 }
 
-/// Check if any fields have hooks registered for the given field-level event.
+/// Check if any fields (including nested sub-fields) have hooks registered
+/// for the given field-level event.
 pub(crate) fn has_field_hooks_for_event(
     fields: &[FieldDefinition],
     event: &FieldHookEvent,
 ) -> bool {
-    fields.iter().any(|f| {
-        let hooks = &f.hooks;
-        match event {
-            FieldHookEvent::BeforeValidate => !hooks.before_validate.is_empty(),
-            FieldHookEvent::BeforeChange => !hooks.before_change.is_empty(),
-            FieldHookEvent::AfterChange => !hooks.after_change.is_empty(),
-            FieldHookEvent::AfterRead => !hooks.after_read.is_empty(),
-        }
-    })
+    has_any_field_hook(fields, event)
 }
 
 /// Scan a Lua VM's `_crap_event_hooks` table and return the set of event names
@@ -417,45 +411,142 @@ pub(crate) fn run_field_hooks_inner(
     collection: &str,
     operation: &str,
 ) -> Result<()> {
+    run_field_hooks_recursive(lua, fields, event, data, collection, operation, "")
+}
+
+/// Recursive field-hook execution with prefix support for nested structures.
+/// Group accumulates prefix (`group__`), Row/Collapsible/Tabs pass through transparently.
+fn run_field_hooks_recursive(
+    lua: &Lua,
+    fields: &[FieldDefinition],
+    event: &FieldHookEvent,
+    data: &mut HashMap<String, JsonValue>,
+    collection: &str,
+    operation: &str,
+    prefix: &str,
+) -> Result<()> {
     for field in fields {
-        let hook_refs = get_field_hook_refs(&field.hooks, event);
+        match field.field_type {
+            FieldType::Group => {
+                let new_prefix = if prefix.is_empty() {
+                    field.name.clone()
+                } else {
+                    format!("{}__{}", prefix, field.name)
+                };
+                run_field_hooks_recursive(
+                    lua,
+                    &field.fields,
+                    event,
+                    data,
+                    collection,
+                    operation,
+                    &new_prefix,
+                )?;
+            }
 
-        if hook_refs.is_empty() {
-            continue;
-        }
+            FieldType::Row | FieldType::Collapsible => {
+                run_field_hooks_recursive(
+                    lua,
+                    &field.fields,
+                    event,
+                    data,
+                    collection,
+                    operation,
+                    prefix,
+                )?;
+            }
 
-        let was_present = data.contains_key(&field.name);
-        let value = data.get(&field.name).cloned().unwrap_or(JsonValue::Null);
+            FieldType::Tabs => {
+                for tab in &field.tabs {
+                    run_field_hooks_recursive(
+                        lua,
+                        &tab.fields,
+                        event,
+                        data,
+                        collection,
+                        operation,
+                        prefix,
+                    )?;
+                }
+            }
 
-        let mut current = value;
-        for hook_ref in hook_refs {
-            tracing::debug!(
-                "Running field hook: {} for {}.{}",
-                hook_ref,
-                collection,
-                field.name
-            );
-            current = call_field_hook_ref(
-                lua,
-                hook_ref,
-                current,
-                &field.name,
-                collection,
-                operation,
-                data,
-            )?;
-        }
-
-        // Only write back if the field was already in the data, or the hook
-        // produced a non-null value (e.g. auto_slug generating a slug on create).
-        // Without this, absent fields on partial updates get coerced to Null,
-        // which breaks the "skip required check for absent fields" logic.
-        if was_present || !current.is_null() {
-            data.insert(field.name.clone(), current);
+            _ => {
+                run_single_field_hook(lua, field, event, data, collection, operation, prefix)?;
+            }
         }
     }
 
     Ok(())
+}
+
+/// Run hooks for a single (non-container) field, using the prefixed data key.
+fn run_single_field_hook(
+    lua: &Lua,
+    field: &FieldDefinition,
+    event: &FieldHookEvent,
+    data: &mut HashMap<String, JsonValue>,
+    collection: &str,
+    operation: &str,
+    prefix: &str,
+) -> Result<()> {
+    let hook_refs = get_field_hook_refs(&field.hooks, event);
+
+    if hook_refs.is_empty() {
+        return Ok(());
+    }
+
+    let data_key = if prefix.is_empty() {
+        field.name.clone()
+    } else {
+        format!("{}__{}", prefix, field.name)
+    };
+
+    let was_present = data.contains_key(&data_key);
+    let value = data.get(&data_key).cloned().unwrap_or(JsonValue::Null);
+
+    let mut current = value;
+    for hook_ref in hook_refs {
+        tracing::debug!(
+            "Running field hook: {} for {}.{}",
+            hook_ref,
+            collection,
+            data_key
+        );
+        current = call_field_hook_ref(
+            lua, hook_ref, current, &data_key, collection, operation, data,
+        )?;
+    }
+
+    // Only write back if the field was already in the data, or the hook
+    // produced a non-null value (e.g. auto_slug generating a slug on create).
+    // Without this, absent fields on partial updates get coerced to Null,
+    // which breaks the "skip required check for absent fields" logic.
+    if was_present || !current.is_null() {
+        data.insert(data_key, current);
+    }
+
+    Ok(())
+}
+
+/// Recursively check if any field (including nested Group/Row/Collapsible/Tabs
+/// children) has hooks registered for the given event.
+fn has_any_field_hook(fields: &[FieldDefinition], event: &FieldHookEvent) -> bool {
+    fields.iter().any(|f| {
+        if !get_field_hook_refs(&f.hooks, event).is_empty() {
+            return true;
+        }
+
+        match f.field_type {
+            FieldType::Group | FieldType::Row | FieldType::Collapsible => {
+                has_any_field_hook(&f.fields, event)
+            }
+            FieldType::Tabs => f
+                .tabs
+                .iter()
+                .any(|tab| has_any_field_hook(&tab.fields, event)),
+            _ => false,
+        }
+    })
 }
 
 /// Get the list of field hook references for a given event.
@@ -952,5 +1043,52 @@ mod tests {
         let lua = mlua::Lua::new();
         let result = call_display_condition_with_lua(&lua, "hooks.nonexistent", &json!({}));
         assert!(result.is_none(), "unresolvable reference should show field");
+    }
+
+    /// Regression: has_any_field_hook must find hooks inside Group/Row/Tabs.
+    #[test]
+    fn has_any_field_hook_finds_nested_hooks() {
+        use crate::core::FieldTab;
+
+        let mut inner = FieldDefinition::builder("inner", FieldType::Text).build();
+        inner.hooks.before_change = vec!["hooks.my_hook".to_string()];
+
+        // Hook on a sub-field inside a Group
+        let group = FieldDefinition::builder("group", FieldType::Group)
+            .fields(vec![inner.clone()])
+            .build();
+        assert!(
+            has_any_field_hook(&[group], &FieldHookEvent::BeforeChange),
+            "should find hook inside Group"
+        );
+
+        // Hook on a sub-field inside a Row
+        let row = FieldDefinition::builder("row", FieldType::Row)
+            .fields(vec![inner.clone()])
+            .build();
+        assert!(
+            has_any_field_hook(&[row], &FieldHookEvent::BeforeChange),
+            "should find hook inside Row"
+        );
+
+        // Hook on a sub-field inside Tabs
+        let tab_field = FieldDefinition::builder("tabs", FieldType::Tabs)
+            .tabs(vec![FieldTab {
+                label: "Tab1".to_string(),
+                description: None,
+                fields: vec![inner],
+            }])
+            .build();
+        assert!(
+            has_any_field_hook(&[tab_field], &FieldHookEvent::BeforeChange),
+            "should find hook inside Tabs"
+        );
+
+        // No hook → false
+        let plain = FieldDefinition::builder("plain", FieldType::Text).build();
+        assert!(
+            !has_any_field_hook(&[plain], &FieldHookEvent::BeforeChange),
+            "should not find hook on plain field without hooks"
+        );
     }
 }

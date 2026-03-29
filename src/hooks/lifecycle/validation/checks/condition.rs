@@ -36,19 +36,24 @@ pub fn evaluate_condition_table(condition: &Value, data: &Value) -> bool {
             {
                 return !condition_is_truthy(field_val);
             }
-            true // unknown operator -> show
+            tracing::warn!(
+                "Unknown display condition operator for field '{}' — defaulting to show",
+                field_name
+            );
+            true
         }
         _ => true,
     }
 }
 
 /// Check if a JSON value is "truthy" for display condition evaluation.
+/// Follows standard truthiness: 0 and 0.0 are falsy, all other numbers are truthy.
 pub(crate) fn condition_is_truthy(val: &Value) -> bool {
     match val {
         Value::Null => false,
         Value::Bool(b) => *b,
         Value::String(s) => !s.is_empty(),
-        Value::Number(_) => true,
+        Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
         Value::Array(a) => !a.is_empty(),
         Value::Object(o) => !o.is_empty(),
     }
@@ -78,9 +83,11 @@ mod tests {
 
     #[test]
     fn test_condition_is_truthy_number() {
-        assert!(condition_is_truthy(&json!(0)));
+        assert!(!condition_is_truthy(&json!(0)));
+        assert!(!condition_is_truthy(&json!(0.0)));
         assert!(condition_is_truthy(&json!(42)));
         assert!(condition_is_truthy(&json!(-1)));
+        assert!(condition_is_truthy(&json!(0.5)));
     }
 
     #[test]

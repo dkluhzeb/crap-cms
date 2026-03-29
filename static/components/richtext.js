@@ -620,6 +620,11 @@ class CrapRichtext extends HTMLElement {
       const href = hrefEl ? hrefEl.value.trim() : '';
       if (!href) return;
 
+      // Block dangerous protocols (javascript:, data:, vbscript:)
+      const proto = href.split(':')[0].toLowerCase().trim();
+      const allowed = ['http', 'https', 'mailto', 'tel', ''];
+      if (href.includes(':') && !allowed.includes(proto)) return;
+
       const titleEl = modal.querySelector('[data-field="title"]');
       const title = titleEl ? titleEl.value.trim() || null : null;
       const targetEl = modal.querySelector('[data-field="target"]');

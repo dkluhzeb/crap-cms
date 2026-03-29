@@ -145,7 +145,7 @@ class CrapConditions extends HTMLElement {
    * @returns {boolean}
    */
   _conditionIsTruthy(val) {
-    if (val == null || val === '' || val === false) return false;
+    if (val == null || val === '' || val === false || val === 0) return false;
     if (Array.isArray(val)) return val.length > 0;
     return true;
   }

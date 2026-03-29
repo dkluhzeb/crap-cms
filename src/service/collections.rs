@@ -185,6 +185,7 @@ pub fn unpublish_document(
 
     let hook_ctx = HookContext::builder(slug, "update")
         .data(doc.fields.clone())
+        .draft(true)
         .locale(None::<String>)
         .user(user)
         .build();

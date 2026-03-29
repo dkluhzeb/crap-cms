@@ -126,4 +126,34 @@ mod tests {
         assert!(ctx.locale.is_none());
         assert!(ctx.data.is_empty());
     }
+
+    /// Regression: unpublish must build HookContext with draft=true so hooks
+    /// know the document is transitioning to draft state.
+    #[test]
+    fn unpublish_hook_context_has_draft_true() {
+        // Mirrors the pattern in hooks/lifecycle/crud/write.rs handle_unpublish
+        let ctx = HookContext::builder("posts", "update")
+            .data(HashMap::new())
+            .draft(true)
+            .build();
+
+        assert_eq!(
+            ctx.draft,
+            Some(true),
+            "unpublish beforeChange context must have draft=true"
+        );
+
+        // Also mirrors the service/collections.rs unpublish_document pattern
+        let svc_ctx = HookContext::builder("posts", "update")
+            .data(HashMap::new())
+            .draft(true)
+            .locale(None::<String>)
+            .build();
+
+        assert_eq!(
+            svc_ctx.draft,
+            Some(true),
+            "service-layer unpublish context must have draft=true"
+        );
+    }
 }

@@ -16,7 +16,7 @@ use crate::{
     hooks::{
         HookContext, HookEvent, HookRunner, ValidationCtx,
         lifecycle::{
-            execution::{AfterReadCtx, apply_after_read_inner},
+            execution::{AfterReadCtx, apply_after_read_inner, has_field_hooks_for_event},
             types::FieldHookEvent,
             validation::validate_fields_inner,
         },
@@ -62,7 +62,7 @@ impl HookRunner {
     /// Fire after_read hooks on a list of documents.
     /// Acquires a single VM for the entire batch instead of one per document.
     pub fn apply_after_read_many(&self, ctx: &AfterReadCtx, docs: Vec<Document>) -> Vec<Document> {
-        let has_field_hooks = ctx.fields.iter().any(|f| !f.hooks.after_read.is_empty());
+        let has_field_hooks = has_field_hooks_for_event(ctx.fields, &FieldHookEvent::AfterRead);
         let has_collection_hooks = !ctx.hooks.after_read.is_empty();
         let has_registered = self.has_registered_hooks_for("after_read");
 
@@ -158,7 +158,7 @@ impl HookRunner {
     ) -> Result<HookContext> {
         // Run field-level after_change hooks (with CRUD access)
         if matches!(event, HookEvent::AfterChange) {
-            let has_field_hooks = fields.iter().any(|f| !f.hooks.after_change.is_empty());
+            let has_field_hooks = has_field_hooks_for_event(fields, &FieldHookEvent::AfterChange);
 
             if has_field_hooks {
                 let mut data = ctx.data.clone();

@@ -650,6 +650,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   Now uses `AbortController` to cancel previous requests before
   issuing a new one.
 
+- **Field-level hooks skipped nested fields** (CRITICAL) — `run_field_hooks_inner`
+  and `has_field_hooks_for_event` only iterated top-level fields, never
+  recursing into Group, Row, Collapsible, or Tabs containers. Field hooks
+  (before_validate, before_change, after_change, after_read) defined on
+  sub-fields inside these containers were silently skipped. Now uses
+  recursive traversal with proper `group__subfield` prefix accumulation,
+  matching the pattern already used by validation.
+
+- **Unpublish before-change hook received `draft=false`** (HIGH) — Both the
+  Lua CRUD `handle_unpublish` and the service-layer `unpublish_document`
+  built the `beforeChange` hook context with `draft(false)` (or omitted it
+  entirely), even though the document is transitioning to draft state. Hooks
+  could not distinguish unpublish from a regular update. Now both paths set
+  `draft(true)`.
+
+- **`condition_is_truthy` treated `Number(0)` as truthy** — The display
+  condition `is_truthy` / `is_falsy` operators treated all numbers
+  (including zero) as truthy, inconsistent with standard truthiness
+  semantics. `0` and `0.0` are now falsy. Both the Rust backend and
+  JavaScript client-side evaluation are fixed.
+
+- **Unknown display condition operators silently showed fields** — A
+  condition object with an unrecognized operator (e.g., a typo like
+  `"greater_than"` instead of `"equals"`) silently defaulted to showing
+  the field. Now logs a warning with the field name.
+
+- **Richtext link modal allowed `javascript:` URLs** — The link insertion
+  dialog accepted any URL protocol, including `javascript:`, `data:`, and
+  `vbscript:`. The server-side renderer already blocked these at output
+  time, but the editor now also validates on input — only `http:`,
+  `https:`, `mailto:`, `tel:`, and relative URLs are accepted.
+
+- **Negative LIMIT/OFFSET passed to SQLite** — `FindQuery` accepted
+  negative `limit` and `offset` values, which have undefined behavior in
+  SQLite. Now clamped to 0 before binding.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

@@ -220,12 +220,12 @@ pub fn find(
 
     if let Some(limit) = query.limit {
         let ph = conn.placeholder(params.len() + 1);
-        params.push(DbValue::Integer(limit));
+        params.push(DbValue::Integer(limit.max(0)));
         sql.push_str(&format!(" LIMIT {ph}"));
     }
     if let Some(offset) = query.offset {
         let ph = conn.placeholder(params.len() + 1);
-        params.push(DbValue::Integer(offset));
+        params.push(DbValue::Integer(offset.max(0)));
         sql.push_str(&format!(" OFFSET {ph}"));
     }
 
@@ -1385,6 +1385,34 @@ mod tests {
         assert!(
             is_valid_sort_column("seo__title", &def),
             "Group sub-field inside Tabs should be valid sort column"
+        );
+    }
+
+    /// Regression: negative limit/offset must be clamped to 0 instead of
+    /// passing undefined values to SQLite.
+    #[test]
+    fn negative_limit_and_offset_clamped_to_zero() {
+        let (_tmp, pool) = setup_db();
+        let conn = pool.get().unwrap();
+        let def = test_def();
+
+        let mut data = HashMap::new();
+        data.insert("title".to_string(), "A".to_string());
+        create(&conn, "posts", &def, &data, None).unwrap();
+
+        let mut data2 = HashMap::new();
+        data2.insert("title".to_string(), "B".to_string());
+        create(&conn, "posts", &def, &data2, None).unwrap();
+
+        let mut query = FindQuery::new();
+        query.limit = Some(-5);
+        query.offset = Some(-10);
+
+        let docs = find(&conn, "posts", &def, &query, None).unwrap();
+        // Negative limit clamped to 0 → returns zero rows
+        assert!(
+            docs.is_empty(),
+            "Negative limit should be clamped to 0, returning no rows"
         );
     }
 }

@@ -303,15 +303,22 @@ fn evaluate_condition_non_object_non_array() {
 fn evaluate_condition_is_truthy_with_numbers_arrays_objects() {
     let data = json!({
         "count": 42,
+        "zero": 0,
         "items": [1, 2],
         "meta": {"key": "val"},
         "empty_arr": [],
         "empty_obj": {}
     });
 
-    // Numbers are truthy
+    // Non-zero numbers are truthy
     let cond = json!({"field": "count", "is_truthy": true});
     assert!(crap_cms::hooks::lifecycle::evaluate_condition_table(
+        &cond, &data
+    ));
+
+    // Zero is falsy
+    let cond = json!({"field": "zero", "is_truthy": true});
+    assert!(!crap_cms::hooks::lifecycle::evaluate_condition_table(
         &cond, &data
     ));
 

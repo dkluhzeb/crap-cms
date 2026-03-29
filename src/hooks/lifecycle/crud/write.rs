@@ -76,7 +76,7 @@ fn handle_unpublish(
     if hooks_enabled {
         let before_ctx = HookContext::builder(ctx.collection, "update")
             .data(existing_doc.fields.clone())
-            .draft(false)
+            .draft(true)
             .locale(ctx.locale_str)
             .user(ctx.hook_user)
             .ui_locale(ctx.hook_ui_locale)

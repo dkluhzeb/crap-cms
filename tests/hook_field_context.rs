@@ -951,3 +951,102 @@ fn field_after_change_modifications_flow_on_update() {
         "Collection-level after_change hook should see field-hook-modified title on update"
     );
 }
+
+// ── 6N. Nested field hooks (group/row sub-fields) ────────────────────────────
+
+/// Regression: field hooks on sub-fields inside Group/Row must execute.
+/// The Group "seo" contains "title" with a trim_value before_change hook,
+/// and the data key is "seo__title".
+#[test]
+fn nested_group_field_hooks_execute() {
+    let (_tmp, pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("nested_hooks").unwrap().clone();
+    drop(reg);
+
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    // before_change hook on seo.title should trim whitespace from seo__title
+    let mut data = HashMap::new();
+    data.insert("seo__title".to_string(), json!("  padded title  "));
+
+    runner
+        .run_field_hooks_with_conn(
+            &def.fields,
+            FieldHookEvent::BeforeChange,
+            &mut data,
+            "nested_hooks",
+            "create",
+            &FieldWriteCtx::builder(&tx).build(),
+        )
+        .expect("field hooks failed");
+
+    assert_eq!(
+        data.get("seo__title").and_then(|v| v.as_str()),
+        Some("padded title"),
+        "Group sub-field before_change hook should trim whitespace"
+    );
+}
+
+/// Regression: field hooks on sub-fields inside Row must execute.
+/// Row is a transparent layout container — sub-fields use no prefix.
+#[test]
+fn nested_row_field_hooks_execute() {
+    let (_tmp, pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("nested_hooks").unwrap().clone();
+    drop(reg);
+
+    let mut conn = pool.get().unwrap();
+    let tx = conn.transaction().unwrap();
+
+    // before_change hook on sidebar (inside Row) should trim whitespace
+    let mut data = HashMap::new();
+    data.insert("sidebar".to_string(), json!("  sidebar text  "));
+
+    runner
+        .run_field_hooks_with_conn(
+            &def.fields,
+            FieldHookEvent::BeforeChange,
+            &mut data,
+            "nested_hooks",
+            "create",
+            &FieldWriteCtx::builder(&tx).build(),
+        )
+        .expect("field hooks failed");
+
+    assert_eq!(
+        data.get("sidebar").and_then(|v| v.as_str()),
+        Some("sidebar text"),
+        "Row sub-field before_change hook should trim whitespace"
+    );
+}
+
+/// Regression: after_read field hooks on Group sub-fields must execute.
+#[test]
+fn nested_group_after_read_hooks_execute() {
+    let (_tmp, _pool, registry, runner) = setup();
+    let reg = registry.read().unwrap();
+    let def = reg.get_collection("nested_hooks").unwrap().clone();
+    drop(reg);
+
+    let mut data = HashMap::new();
+    data.insert("seo__title".to_string(), json!("hello world"));
+
+    runner
+        .run_field_hooks(
+            &def.fields,
+            FieldHookEvent::AfterRead,
+            &mut data,
+            "nested_hooks",
+            "find",
+        )
+        .expect("field hooks failed");
+
+    assert_eq!(
+        data.get("seo__title").and_then(|v| v.as_str()),
+        Some("HELLO WORLD"),
+        "Group sub-field after_read hook should uppercase value"
+    );
+}
