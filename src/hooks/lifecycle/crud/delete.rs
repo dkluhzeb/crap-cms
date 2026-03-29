@@ -54,7 +54,7 @@ pub(super) fn register_delete(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let run_hooks: bool = opts
                 .as_ref()
@@ -213,7 +213,7 @@ pub(super) fn register_restore(lua: &Lua, table: &Table, registry: SharedRegistr
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let def = {
                 let r = reg
@@ -305,7 +305,7 @@ pub(super) fn register_update_many(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let run_hooks: bool = opts
                 .as_ref()
@@ -629,7 +629,7 @@ pub(super) fn register_delete_many(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let run_hooks: bool = opts
                 .as_ref()

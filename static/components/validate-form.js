@@ -22,6 +22,9 @@ import { t } from './i18n.js';
 
 class CrapValidateForm extends HTMLElement {
   connectedCallback() {
+    if (this._connected) return;
+    this._connected = true;
+
     /** @type {boolean} */
     this._validated = false;
 
@@ -59,8 +62,10 @@ class CrapValidateForm extends HTMLElement {
   }
 
   disconnectedCallback() {
+    this._connected = false;
     if (this._onBeforeRequest) {
       document.body.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+      this._onBeforeRequest = null;
     }
   }
 

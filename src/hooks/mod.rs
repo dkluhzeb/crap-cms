@@ -134,7 +134,10 @@ pub(crate) fn sandbox_lua(lua: &Lua) -> Result<()> {
     os.set("setlocale", mlua::Value::Nil)?;
     // Keeps: os.time, os.date, os.clock, os.difftime
 
-    // Remove remaining dangerous globals
+    // Remove remaining dangerous globals that could bypass the sandbox.
+    // `load` and `loadstring` can compile arbitrary code, `loadfile`/`dofile` read from disk.
+    lua.globals().set("load", mlua::Value::Nil)?;
+    lua.globals().set("loadstring", mlua::Value::Nil)?;
     lua.globals().set("loadfile", mlua::Value::Nil)?;
     lua.globals().set("dofile", mlua::Value::Nil)?;
 
@@ -174,4 +177,68 @@ pub(crate) fn load_lua_dir(lua: &Lua, dir: &Path, kind: &str) -> Result<usize> {
     }
 
     Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mlua::{Lua, LuaOptions, StdLib, Value};
+
+    fn sandboxed_lua() -> Lua {
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
+        sandbox_lua(&lua).unwrap();
+        lua
+    }
+
+    #[test]
+    fn sandbox_removes_load() {
+        let lua = sandboxed_lua();
+        let val: Value = lua.globals().get("load").unwrap();
+        assert!(matches!(val, Value::Nil), "load() must be removed");
+    }
+
+    #[test]
+    fn sandbox_removes_loadstring() {
+        let lua = sandboxed_lua();
+        let val: Value = lua.globals().get("loadstring").unwrap();
+        assert!(matches!(val, Value::Nil), "loadstring() must be removed");
+    }
+
+    #[test]
+    fn sandbox_removes_loadfile() {
+        let lua = sandboxed_lua();
+        let val: Value = lua.globals().get("loadfile").unwrap();
+        assert!(matches!(val, Value::Nil), "loadfile() must be removed");
+    }
+
+    #[test]
+    fn sandbox_removes_dofile() {
+        let lua = sandboxed_lua();
+        let val: Value = lua.globals().get("dofile").unwrap();
+        assert!(matches!(val, Value::Nil), "dofile() must be removed");
+    }
+
+    #[test]
+    fn sandbox_removes_os_execute() {
+        let lua = sandboxed_lua();
+        let result = lua.load("os.execute('echo hi')").exec();
+        assert!(result.is_err(), "os.execute must be blocked");
+    }
+
+    #[test]
+    fn sandbox_allows_os_time() {
+        let lua = sandboxed_lua();
+        let result: i64 = lua.load("return os.time()").eval().unwrap();
+        assert!(result > 0);
+    }
+
+    #[test]
+    fn sandbox_load_cannot_bypass() {
+        let lua = sandboxed_lua();
+        let result = lua.load("load('return 1')()").exec();
+        assert!(
+            result.is_err(),
+            "load() must not be usable to bypass sandbox"
+        );
+    }
 }

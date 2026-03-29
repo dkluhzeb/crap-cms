@@ -105,6 +105,7 @@ class CrapLiveEvents extends HTMLElement {
     }
     if (this._onBeforeRequest) {
       document.removeEventListener('htmx:beforeRequest', this._onBeforeRequest);
+      this._onBeforeRequest = null;
     }
   }
 

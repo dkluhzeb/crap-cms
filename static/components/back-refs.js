@@ -28,6 +28,8 @@ class CrapBackRefs extends HTMLElement {
     /** @type {boolean} */
     let loaded = false;
 
+    const originalLabel = btn.textContent;
+
     btn.addEventListener('click', () => {
       if (loaded) return;
       loaded = true;
@@ -42,7 +44,7 @@ class CrapBackRefs extends HTMLElement {
           this._render(refs);
         })
         .catch(() => {
-          btn.textContent = t('error');
+          btn.textContent = originalLabel;
           btn.disabled = false;
           loaded = false;
         });

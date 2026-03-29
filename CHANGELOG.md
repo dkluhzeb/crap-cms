@@ -173,6 +173,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Fixed
 
+- **API upload DELETE returned 500 for all errors** — The upload DELETE
+  endpoint now returns `404 Not Found` when the document doesn't exist
+  and `409 Conflict` when the document is referenced by others, instead
+  of `500 Internal Server Error` for every failure.
+
+- **Display condition errors silently showed fields** — When a Lua
+  display condition function throws an error or returns an unexpected
+  type, the field was shown without any diagnostic. Now logs a warning
+  with the function reference and error details.
+
+- **Access constraint unexpected types silently denied** — When an access
+  function returns an unexpected Lua type (not boolean or table), the
+  request was silently denied without logging. Now logs a warning with
+  the function reference and actual type returned.
+
+- **Transaction commit errors silently continued** — Three instances in
+  the gRPC field-read-access path logged commit failures with
+  `tracing::warn!` but continued execution. Now propagates the error
+  properly via `?`.
+
+- **Redundant timezone variable in create/update** — `tz_base` was
+  identical to `tz_key` in both `create.rs` and `update.rs` timezone
+  companion column handling. Removed the duplicate.
+
+- **Relationship search drawer race condition** — The drawer picker
+  for relationship fields had no `AbortController`, so rapid searches
+  or pagination could resolve out of order. Added abort controller to
+  cancel stale fetches.
+
+- **validate-form.js memory leak on reconnect** — Missing `_connected`
+  guard meant event listeners could be duplicated if the component was
+  disconnected and reconnected by HTMX swaps.
+
+- **sessionStorage errors in private browsing** — `scroll.js` form
+  state save/restore now wraps `sessionStorage` calls in try-catch to
+  handle private browsing and quota exceeded scenarios gracefully.
+
+- **Back-references button stuck on error text** — After a fetch error
+  the "Show details" button displayed "error" permanently. Now restores
+  the original button label on retry.
+
 - **Invalid SQL in reference counting** — `MAX(0, expr)` is not
   portable across database backends. Replaced with
   `conn.greatest_expr()` on the `DbConnection` trait (SQLite uses
@@ -271,6 +312,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   identifiers (`"table"`) for defense-in-depth consistency.
 
 ### Changed
+
+- **`overrideAccess` default changed to `false`** (BREAKING) — All Lua
+  CRUD functions (`find`, `find_by_id`, `create`, `update`, `delete`,
+  `count`, `update_many`, `delete_many`, `restore`) now enforce access
+  control by default. Previously they bypassed access checks unless
+  explicitly set to `false`. This follows the principle of least
+  privilege — hooks that need unrestricted access must explicitly opt in
+  with `overrideAccess = true`. Collections without access functions are
+  unaffected (no restriction configured = allowed).
 
 - **Responsive breakpoint raised to 1024px** — The mobile layout
   (hamburger sidebar, stacked edit layout, static headers) now activates
@@ -373,6 +423,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   old `max_age_seconds` in the commented CORS section.
 
 ### Security
+
+- **Lua sandbox escape via `load()` / `loadstring()`** (CRITICAL): The
+  Lua sandbox removed `loadfile` and `dofile` but not `load()` or
+  `loadstring()`. A malicious hook could compile and execute arbitrary
+  code with `load("os.execute('...')")()`, fully bypassing the sandbox.
+  Now removes `load`, `loadstring`, `loadfile`, and `dofile`. Regression
+  tests added for all four globals and a bypass attempt.
 
 - **XSS via `javascript:` protocol in richtext links** (CRITICAL): Link
   marks in ProseMirror content rendered `href` attributes without URL

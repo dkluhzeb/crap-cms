@@ -121,7 +121,14 @@ pub(crate) fn check_access_with_lua(
             }
             Ok(AccessResult::Constrained(clauses))
         }
-        _ => Ok(AccessResult::Denied),
+        other => {
+            tracing::warn!(
+                "Access function '{}' returned unexpected type '{}', denying access",
+                func_ref,
+                other.type_name()
+            );
+            Ok(AccessResult::Denied)
+        }
     }
 }
 

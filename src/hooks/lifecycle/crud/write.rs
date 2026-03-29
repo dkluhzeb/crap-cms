@@ -133,7 +133,7 @@ pub(super) fn register_create(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let run_hooks: bool = opts
                 .as_ref()
@@ -390,7 +390,7 @@ pub(super) fn register_update(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let run_hooks: bool = opts
                 .as_ref()

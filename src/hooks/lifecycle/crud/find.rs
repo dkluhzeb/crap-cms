@@ -93,7 +93,7 @@ pub(super) fn register_find(
             let override_access: bool = query_table
                 .as_ref()
                 .and_then(|qt| qt.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let def = {
                 let r = reg
@@ -338,7 +338,7 @@ pub(super) fn register_find_by_id(
             let override_access: bool = opts
                 .as_ref()
                 .and_then(|o| o.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let def = {
                 let r = reg
@@ -486,7 +486,7 @@ pub(super) fn register_count(
             let override_access: bool = query_table
                 .as_ref()
                 .and_then(|qt| qt.get::<Option<bool>>("overrideAccess").ok().flatten())
-                .unwrap_or(true);
+                .unwrap_or(false);
 
             let def = {
                 let r = reg

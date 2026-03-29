@@ -185,7 +185,23 @@ pub(crate) fn call_display_condition_with_lua(
                 visible,
             })
         }
-        _ => None, // error or nil → show field (safe default)
+        Ok(Value::Nil) => None, // nil → show field (safe default)
+        Err(e) => {
+            tracing::warn!(
+                "Display condition '{}' failed: {} — showing field as safe default",
+                func_ref,
+                e
+            );
+            None
+        }
+        Ok(other) => {
+            tracing::warn!(
+                "Display condition '{}' returned unexpected type {:?} — showing field as safe default",
+                func_ref,
+                other.type_name()
+            );
+            None
+        }
     }
 }
 
@@ -869,5 +885,72 @@ mod tests {
         .unwrap();
 
         assert_eq!(result, json!("posts:title:create"));
+    }
+
+    // ── call_display_condition_with_lua tests ────────────────────
+
+    #[test]
+    fn display_condition_returns_bool_true() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.show"] = function() return true end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.show", &json!({}));
+        assert!(matches!(result, Some(DisplayConditionResult::Bool(true))));
+    }
+
+    #[test]
+    fn display_condition_returns_bool_false() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.hide"] = function() return false end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.hide", &json!({}));
+        assert!(matches!(result, Some(DisplayConditionResult::Bool(false))));
+    }
+
+    #[test]
+    fn display_condition_returns_nil_shows_field() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.nil_ret"] = function() return nil end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.nil_ret", &json!({}));
+        assert!(result.is_none(), "nil should show field (None)");
+    }
+
+    #[test]
+    fn display_condition_error_shows_field() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.boom"] = function() error("broken") end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.boom", &json!({}));
+        assert!(result.is_none(), "error should show field as safe default");
+    }
+
+    #[test]
+    fn display_condition_unexpected_type_shows_field() {
+        let lua = mlua::Lua::new();
+        lua.load(r#"package.loaded["hooks.num"] = function() return 42 end"#)
+            .exec()
+            .unwrap();
+
+        let result = call_display_condition_with_lua(&lua, "hooks.num", &json!({}));
+        assert!(
+            result.is_none(),
+            "unexpected type (number) should show field as safe default"
+        );
+    }
+
+    #[test]
+    fn display_condition_unresolvable_ref_shows_field() {
+        let lua = mlua::Lua::new();
+        let result = call_display_condition_with_lua(&lua, "hooks.nonexistent", &json!({}));
+        assert!(result.is_none(), "unresolvable reference should show field");
     }
 }

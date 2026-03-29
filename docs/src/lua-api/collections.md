@@ -100,7 +100,7 @@ end
 | `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. When specified, `created_at` and `updated_at` are only included if explicitly listed. |
 | `draft` | boolean | `false` | Include draft documents. Only affects versioned collections with `drafts = true`. |
 | `locale` | string | `nil` | Locale code for localized fields (e.g., `"en"`, `"de"`). |
-| `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level and field-level access for the current user. |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
 | `search` | string | `nil` | FTS5 full-text search query. Filters results to documents matching this search term. |
 
 ## crap.collections.find_by_id(collection, id, opts?)
@@ -130,7 +130,7 @@ local doc = crap.collections.find_by_id("posts", "abc123", { select = { "title",
 | `select` | string[] | `nil` | Fields to return. `nil` = all fields. Always includes `id`. |
 | `draft` | boolean | `false` | Return the latest draft version snapshot instead of the published main-table data. Only affects versioned collections with `drafts = true`. |
 | `locale` | string | `nil` | Locale code for localized fields (e.g., `"en"`, `"de"`). |
-| `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level and field-level access for the current user. |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
 
 ## crap.collections.create(collection, data, opts?)
 
@@ -157,7 +157,7 @@ local draft = crap.collections.create("articles", {
 |-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `draft` | boolean | `false` | Create as draft. Skips required field validation. Only affects versioned collections with `drafts = true`. |
-| `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level and field-level access for the current user. |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
 | `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes. |
 
 ## crap.collections.update(collection, id, data, opts?)
@@ -184,7 +184,7 @@ crap.collections.update("articles", "abc123", {
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `draft` | boolean | `false` | Version-only save. Creates a draft version snapshot without modifying the main table. Only affects versioned collections with `drafts = true`. |
 | `unpublish` | boolean | `false` | Set document status to draft and create a draft version snapshot. Ignores the `data` fields when unpublishing. Only affects versioned collections. |
-| `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce collection-level and field-level access for the current user. |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip collection-level and field-level access for the current user. |
 | `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip all hooks (before_validate, before_change, after_change) and validation. The DB operation still executes. |
 
 ### Auth Collections
@@ -208,15 +208,15 @@ crap.collections.delete("posts", "abc123")
 -- Force permanent delete even on soft-delete collections
 crap.collections.delete("posts", "abc123", { forceHardDelete = true })
 
--- With access control enforcement
-crap.collections.delete("posts", "abc123", { overrideAccess = false })
+-- Bypass access control for internal operations
+crap.collections.delete("posts", "abc123", { overrideAccess = true })
 ```
 
 ### Options
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `overrideAccess` | boolean | `true` | Skip access control checks. Set to `false` to enforce `access.trash` (soft delete) or `access.delete` (permanent delete). |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. Set to `true` to skip `access.trash` (soft delete) or `access.delete` (permanent delete) checks. |
 | `hooks` | boolean | `true` | Run lifecycle hooks. Set to `false` to skip before_delete and after_delete hooks. |
 | `forceHardDelete` | boolean | `false` | Permanently delete even when the collection has `soft_delete = true`. Requires `access.delete` permission when `overrideAccess = false`. |
 
@@ -280,19 +280,25 @@ crap.collections.create("logs", { message = "raw insert" }, { hooks = false })
 
 ## Access Control in Hooks
 
-By default, all Lua CRUD functions bypass access control (`overrideAccess = true`). Hooks are trusted server-side code with full access.
+By default, all Lua CRUD functions **enforce access control** (`overrideAccess = false`). This follows the principle of least privilege — if your hook needs to bypass access checks, it must explicitly opt in with `overrideAccess = true`.
 
-When you set `overrideAccess = false`, the function enforces the same access rules as the external API:
+> **Breaking change (0.1.0-alpha.3):** The default was changed from `true` to `false`. If you have hooks that call CRUD functions without specifying `overrideAccess`, they now enforce access control. Add `overrideAccess = true` to restore the old behavior.
+
+When `overrideAccess` is `false` (the default), the function enforces the same access rules as the external API:
 
 - **Collection-level access** — the relevant access function (`read`, `create`, `update`, `delete`) is called with the authenticated user from the original request.
 - **Field-level access** — for `find`/`find_by_id`, fields the user can't read are stripped from results. For `create`/`update`, fields the user can't write are silently removed from the input data.
 - **Constrained read access** — if a read access function returns a filter table instead of `true`, those filters are merged into the query (same as the gRPC/admin behavior).
 
 ```lua
--- Example: fetch only posts the current user is allowed to see
+-- Default: access control is enforced (only shows posts the user can see)
 local result = crap.collections.find("posts", {
     where = { status = "published" },
-    overrideAccess = false,
+})
+
+-- Bypass access control for internal/admin operations
+local all = crap.collections.find("posts", {
+    overrideAccess = true,
 })
 ```
 
@@ -315,7 +321,7 @@ local published = crap.collections.count("posts", {
 |-------|------|---------|-------------|
 | `where` | table | `{}` | Field filters. Same syntax as `find`. |
 | `locale` | string | `nil` | Locale code for localized fields. |
-| `overrideAccess` | boolean | `true` | Skip access control checks. |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. |
 | `draft` | boolean | `false` | Include draft documents. |
 | `search` | string | `nil` | FTS5 full-text search query (same as `find`). |
 
@@ -358,7 +364,7 @@ local result = crap.collections.update_many("posts", {
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `locale` | string | `nil` | Locale code for localized fields. |
-| `overrideAccess` | boolean | `true` | Skip access control checks. |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. |
 | `draft` | boolean | `false` | Include draft documents. |
 | `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip all hooks (`before_validate`, `before_change`, `after_change`) and field validation. |
 
@@ -382,10 +388,10 @@ local result = crap.collections.delete_many("posts", {
 })
 print(result.deleted)  -- number of deleted documents
 
--- With access control enforcement
+-- Bypass access control for internal operations
 local result = crap.collections.delete_many("posts", {
     where = { status = "archived" },
-}, { overrideAccess = false })
+}, { overrideAccess = true })
 
 -- Skip hooks for performance
 local result = crap.collections.delete_many("posts", {
@@ -403,7 +409,7 @@ local result = crap.collections.delete_many("posts", {
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `overrideAccess` | boolean | `true` | Skip access control checks. |
+| `overrideAccess` | boolean | `false` | Bypass access control checks. |
 | `hooks` | boolean | `true` | Run per-document lifecycle hooks. Set to `false` to skip `before_delete` and `after_delete` hooks. |
 | `locale` | string | `nil` | Locale code for localized fields. |
 | `draft` | boolean | `false` | Include draft documents. |

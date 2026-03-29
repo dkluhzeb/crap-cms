@@ -99,6 +99,17 @@ fn json_error(status: StatusCode, message: &str) -> Response {
         .into_response()
 }
 
+/// Classify a delete error message into the appropriate HTTP status code.
+fn classify_delete_error(msg: &str) -> StatusCode {
+    if msg.contains("not found") {
+        StatusCode::NOT_FOUND
+    } else if msg.contains("Cannot delete") || msg.contains("referenced by") {
+        StatusCode::CONFLICT
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    }
+}
+
 /// Return a JSON success response with the given status and body.
 fn json_ok(status: StatusCode, body: &Value) -> Response {
     (
@@ -678,10 +689,11 @@ async fn delete_upload(
 
             json_ok(StatusCode::OK, &json!({ "success": true }))
         }
-        Ok(Err(e)) => json_error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("Delete error: {}", e),
-        ),
+        Ok(Err(e)) => {
+            let msg = e.to_string();
+            let status = classify_delete_error(&msg);
+            json_error(status, &format!("Delete error: {}", msg))
+        }
         Err(e) => json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("Task error: {}", e),
@@ -763,5 +775,41 @@ mod tests {
     #[test]
     fn bearer_token_no_space() {
         assert_eq!(extract_bearer_token("Bearerabc123"), None);
+    }
+
+    // ── classify_delete_error tests ──────────────────────────────
+
+    #[test]
+    fn delete_error_not_found() {
+        assert_eq!(
+            classify_delete_error("Document not found in collection"),
+            StatusCode::NOT_FOUND,
+        );
+    }
+
+    #[test]
+    fn delete_error_referenced() {
+        assert_eq!(
+            classify_delete_error(
+                "Cannot delete: this document is referenced by 3 other document(s)"
+            ),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    #[test]
+    fn delete_error_referenced_by_keyword() {
+        assert_eq!(
+            classify_delete_error("Still referenced by other documents"),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    #[test]
+    fn delete_error_generic() {
+        assert_eq!(
+            classify_delete_error("Database write failed"),
+            StatusCode::INTERNAL_SERVER_ERROR,
+        );
     }
 }

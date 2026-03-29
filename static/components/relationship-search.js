@@ -595,6 +595,8 @@ class CrapRelationshipSearch extends HTMLElement {
 
     let debounceTimer = null;
     let currentOffset = 0;
+    /** @type {AbortController|null} */
+    let fetchController = null;
 
     /**
      * Fetch results from the search API.
@@ -602,6 +604,9 @@ class CrapRelationshipSearch extends HTMLElement {
      * @param {boolean} append
      */
     async function fetchResults(query, append) {
+      if (fetchController) fetchController.abort();
+      fetchController = new AbortController();
+
       if (!append) {
         results.innerHTML = '';
         currentOffset = 0;
@@ -610,7 +615,7 @@ class CrapRelationshipSearch extends HTMLElement {
       const limit = DRAWER_PAGE_SIZE;
       const url = `/admin/api/search/${encodeURIComponent(collection)}?q=${encodeURIComponent(query)}&limit=${limit}&offset=${currentOffset}`;
       try {
-        const resp = await fetch(url);
+        const resp = await fetch(url, { signal: fetchController.signal });
         if (!resp.ok) return;
         const items = await resp.json();
 

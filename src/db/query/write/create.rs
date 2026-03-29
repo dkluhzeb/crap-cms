@@ -143,8 +143,7 @@ pub(super) fn collect_insert_params(
                     // Timezone companion column for date fields
                     if field.field_type == FieldType::Date && field.timezone {
                         let tz_key = format!("{}_tz", data_key);
-                        let tz_base = format!("{}_tz", data_key);
-                        let tz_col = locale_write_column(&tz_base, field, locale_ctx)?;
+                        let tz_col = locale_write_column(&tz_key, field, locale_ctx)?;
                         collector.columns.push(tz_col);
                         collector.placeholders.push(conn.placeholder(collector.idx));
 
