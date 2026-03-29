@@ -340,7 +340,17 @@ impl ContentService {
 
             let user_doc = auth_user.as_ref().map(|au| &au.user_doc);
             let mut count = 0i64;
-            for doc in &docs {
+            let mut deleted_doc_indices = Vec::new();
+
+            for (idx, doc) in docs.iter().enumerate() {
+                // Check incoming references BEFORE running hooks — skip protected
+                // documents without firing hooks for deletions that won't happen.
+                let ref_count = query::ref_count::get_ref_count(&tx, &collection, &doc.id)
+                    .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
+                if ref_count > 0 {
+                    continue;
+                }
+
                 if run_hooks {
                     let hook_ctx = HookContext::builder(&collection, "delete")
                         .data([("id".to_string(), Value::String(doc.id.to_string()))].into())
@@ -354,13 +364,6 @@ impl ContentService {
                             &tx,
                         )
                         .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
-                }
-
-                // Skip documents with incoming references (delete protection)
-                let ref_count = query::ref_count::get_ref_count(&tx, &collection, &doc.id)
-                    .map_err(|e| map_db_error(e, "DeleteMany ref count error", &db_kind))?;
-                if ref_count > 0 {
-                    continue;
                 }
 
                 // Decrement ref counts on targets before deleting
@@ -395,6 +398,7 @@ impl ContentService {
                         .map_err(|e| map_db_error(e, "DeleteMany hook error", &db_kind))?;
                 }
 
+                deleted_doc_indices.push(idx);
                 count += 1;
             }
 
@@ -402,11 +406,11 @@ impl ContentService {
                 .context("Commit transaction")
                 .map_err(|e| map_db_error(e, "DeleteMany error", &db_kind))?;
 
-            // Clean up upload files AFTER commit — only delete files once the DB
-            // changes have succeeded. Failures are logged but non-fatal.
+            // Clean up upload files AFTER commit — only for docs that were
+            // actually deleted (not skipped due to reference protection).
             if def_owned.is_upload_collection() {
-                for doc in &docs {
-                    upload::delete_upload_files(&config_dir, &doc.fields);
+                for idx in &deleted_doc_indices {
+                    upload::delete_upload_files(&config_dir, &docs[*idx].fields);
                 }
             }
 

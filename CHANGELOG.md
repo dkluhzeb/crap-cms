@@ -345,6 +345,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   the missing `soft_delete` flag in the bulk API `UpdateMany` and
   admin validation handlers.
 
+- **Path traversal in upload file deletion** (CRITICAL) — The
+  canonicalize-based path safety check in `delete_upload_files()` was
+  inside an `if let` guard that only triggered when both canonicalize
+  calls succeeded AND the path was outside the uploads directory. When
+  canonicalize failed (e.g., broken symlink, missing directory), the
+  guard didn't fire and the file was deleted without validation. Changed
+  to an explicit `match` that skips deletion when canonicalize fails.
+
+- **Division by zero in image resize** (CRITICAL) — `resize_image()`
+  divided by `img.height()` and `img.width()` without checking for zero,
+  causing a panic on malformed images with zero dimensions. Now returns
+  `None` for zero-dimension images, and callers skip the size with a
+  warning.
+
+- **Field hook modifications lost in after-change hooks** (CRITICAL) —
+  Both `crap.collections.create()` and `crap.collections.update()` in
+  the Lua API ran field-level `after_change` hooks that modified
+  `after_data`, but then passed `doc.fields.clone()` (the unmodified
+  data) to the collection-level `after_change` hook. Field hook
+  modifications were silently discarded. Now passes `after_data` to
+  the collection-level hook.
+
+- **Unpublish after-change hook received stale data** (HIGH) — The
+  `after_change` hook for unpublish operations received the pre-unpublish
+  document data with `draft: false`. Now re-reads the document after
+  the unpublish and passes the updated state with `draft: true`.
+
+- **DeleteMany deleted upload files for ref-protected documents**
+  (HIGH) — `DeleteMany` iterated all queried documents for file cleanup,
+  including those skipped due to `_ref_count > 0`. Database records
+  survived but their upload files were deleted. Now only deletes files
+  for documents that were actually removed from the database.
+
+- **DeleteMany fired BeforeDelete hook for skipped documents** (HIGH) —
+  `DeleteMany` ran the `BeforeDelete` hook before checking reference
+  counts. Documents with incoming references were skipped (not deleted),
+  but the hook had already fired, causing semantic inconsistency. Moved
+  the reference count check before the hook.
+
+- **Soft-delete purge deleted files before database records** (HIGH) —
+  `purge_collection()` deleted upload files before the corresponding
+  database delete. A crash between the two operations left orphaned
+  database records pointing to missing files. Reversed the order: DB
+  delete first, then file cleanup. A crash now leaves orphaned files
+  (harmless) instead of orphaned records (harmful).
+
+- **Zero scheduler intervals caused busy loops** (HIGH) — `JobsConfig`
+  allowed `poll_interval`, `cron_interval`, and `heartbeat_interval` to
+  be set to 0, causing tokio interval timers to fire continuously and
+  starve the event loop. Added startup validation that all three must
+  be > 0.
+
 ### Changed
 
 - **`overrideAccess` default changed to `false`** (BREAKING) — All Lua

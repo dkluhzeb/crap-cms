@@ -160,7 +160,16 @@ pub fn process_upload(
 
         // Generate image sizes
         for size_def in &upload_config.image_sizes {
-            let resized = resize_image(&img, size_def);
+            let resized = match resize_image(&img, size_def) {
+                Some(r) => r,
+                None => {
+                    tracing::warn!(
+                        "Skipping size '{}' — source image has zero dimensions",
+                        size_def.name
+                    );
+                    continue;
+                }
+            };
             let (stem, ext) = unique_filename
                 .rsplit_once('.')
                 .unwrap_or((&unique_filename, "bin"));

@@ -887,3 +887,67 @@ fn registered_before_broadcast_transforms_data() {
         Some("yes"),
     );
 }
+
+// ── Regression: field hook modifications visible to collection after_change ──
+
+#[test]
+fn field_after_change_modifications_flow_to_collection_hook() {
+    // Regression test for bug where collection-level after_change hook received
+    // doc.fields.clone() (original data) instead of after_data (field-hook-modified).
+    // The field-level after_change_marker appends "_after_changed" to the title.
+    // The collection-level after_change stores the title it received in a global.
+    let (_tmp, pool, _registry, runner) = setup();
+
+    let conn = pool.get().expect("DB connection");
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+            _G._last_after_change_title = nil
+            local doc = crap.collections.create("articles", {
+                title = "FlowTest",
+                body = "body",
+            })
+            return _G._last_after_change_title or "NOT_SET"
+            "#,
+            &conn,
+            None,
+        )
+        .expect("eval failed");
+
+    // The field hook appends "_after_changed", so the collection hook should see it
+    assert_eq!(
+        result, "FlowTest_after_changed",
+        "Collection-level after_change hook should see field-hook-modified title"
+    );
+}
+
+#[test]
+fn field_after_change_modifications_flow_on_update() {
+    // Same regression test but for the update path.
+    let (_tmp, pool, _registry, runner) = setup();
+
+    let conn = pool.get().expect("DB connection");
+    let result = runner
+        .eval_lua_with_conn(
+            r#"
+            local doc = crap.collections.create("articles", {
+                title = "UpdateFlowOriginal",
+                body = "body",
+            }, { hooks = false })
+
+            _G._last_after_change_title = nil
+            crap.collections.update("articles", doc.id, {
+                title = "UpdateFlowNew",
+            })
+            return _G._last_after_change_title or "NOT_SET"
+            "#,
+            &conn,
+            None,
+        )
+        .expect("eval failed");
+
+    assert_eq!(
+        result, "UpdateFlowNew_after_changed",
+        "Collection-level after_change hook should see field-hook-modified title on update"
+    );
+}

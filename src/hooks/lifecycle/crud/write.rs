@@ -88,10 +88,20 @@ fn handle_unpublish(
     service::persist_unpublish(conn, ctx.collection, ctx.id, ctx.def)
         .map_err(|e| RuntimeError(format!("unpublish error: {}", e)))?;
 
+    // Re-read the document after unpublish so hooks see the updated state
+    let updated_doc = query::find_by_id_raw(conn, ctx.collection, ctx.def, ctx.id, None)
+        .map_err(|e| RuntimeError(format!("find error after unpublish: {}", e)))?
+        .ok_or_else(|| {
+            RuntimeError(format!(
+                "Document {} not found after unpublish in {}",
+                ctx.id, ctx.collection
+            ))
+        })?;
+
     if hooks_enabled {
         let after_ctx = HookContext::builder(ctx.collection, "update")
-            .data(existing_doc.fields.clone())
-            .draft(false)
+            .data(updated_doc.fields.clone())
+            .draft(true)
             .locale(ctx.locale_str)
             .user(ctx.hook_user)
             .ui_locale(ctx.hook_ui_locale)
@@ -100,7 +110,7 @@ fn handle_unpublish(
             .map_err(|e| RuntimeError(format!("after_change hook error: {}", e)))?;
     }
 
-    document_to_lua_table(lua, &existing_doc)
+    document_to_lua_table(lua, &updated_doc)
 }
 
 /// Register `crap.collections.create(collection, data, opts?)`.
@@ -336,7 +346,7 @@ pub(super) fn register_create(
                 .map_err(|e| RuntimeError(format!("after_change field hook error: {}", e)))?;
 
                 let after_ctx = HookContext::builder(collection.clone(), "create")
-                    .data(doc.fields.clone())
+                    .data(after_data)
                     .draft(is_draft)
                     .locale(locale_str.clone())
                     .user(hook_user.as_ref())
@@ -646,7 +656,7 @@ pub(super) fn register_update(
                     .map_err(|e| RuntimeError(format!("after_change field hook error: {}", e)))?;
 
                     let after_ctx = HookContext::builder(collection.clone(), "update")
-                        .data(doc.fields.clone())
+                        .data(after_data)
                         .draft(is_draft)
                         .locale(locale_str.clone())
                         .user(hook_user.as_ref())

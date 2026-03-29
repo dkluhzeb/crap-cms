@@ -213,6 +213,17 @@ impl CrapConfig {
             );
         }
 
+        // Fatal: zero scheduler intervals cause busy loops
+        if self.jobs.poll_interval == 0 {
+            bail!("jobs.poll_interval must be > 0");
+        }
+        if self.jobs.cron_interval == 0 {
+            bail!("jobs.cron_interval must be > 0");
+        }
+        if self.jobs.heartbeat_interval == 0 {
+            bail!("jobs.heartbeat_interval must be > 0");
+        }
+
         // Fatal: password min_length > max_length
         if self.auth.password_policy.min_length > self.auth.password_policy.max_length {
             bail!(
@@ -462,6 +473,30 @@ dev_mode = false
         let mut config = CrapConfig::default();
         config.jobs.max_concurrent = 0;
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_poll_interval_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.jobs.poll_interval = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("poll_interval"));
+    }
+
+    #[test]
+    fn validate_cron_interval_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.jobs.cron_interval = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("cron_interval"));
+    }
+
+    #[test]
+    fn validate_heartbeat_interval_zero_errors() {
+        let mut config = CrapConfig::default();
+        config.jobs.heartbeat_interval = 0;
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("heartbeat_interval"));
     }
 
     #[test]

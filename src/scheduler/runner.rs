@@ -253,6 +253,11 @@ pub fn purge_soft_deleted(
 }
 
 /// Purge expired soft-deleted documents from a single collection.
+///
+/// Collects upload file data before deleting from DB, then removes files
+/// from disk after the DB deletes succeed. A crash between DB delete and
+/// file delete leaves orphaned files (safe), rather than orphaned DB records
+/// pointing to deleted files (unsafe).
 fn purge_collection(
     conn: &dyn DbConnection,
     slug: &str,
@@ -270,6 +275,7 @@ fn purge_collection(
     let rows = conn.query_all(&threshold_sql, &[offset_param])?;
 
     let mut purged = 0u64;
+    let mut upload_docs = Vec::new();
 
     for row in &rows {
         let id = match row.get_value(0) {
@@ -277,16 +283,23 @@ fn purge_collection(
             _ => continue,
         };
 
-        // For upload collections, load file paths before hard-deleting
+        // Collect upload file paths BEFORE deleting from DB
         if def.is_upload_collection()
             && let Ok(Some(doc)) = query::find_by_id_unfiltered(conn, slug, def, &id, None)
         {
-            upload::delete_upload_files(config_dir, &doc.fields);
+            upload_docs.push(doc);
         }
 
-        // Hard delete the document
+        // Hard delete the document from DB first
         query::delete(conn, slug, &id)?;
         purged += 1;
+    }
+
+    // Delete files AFTER all DB deletes have succeeded.
+    // If the process crashes here, we get orphaned files (harmless)
+    // rather than DB records pointing to missing files (harmful).
+    for doc in &upload_docs {
+        upload::delete_upload_files(config_dir, &doc.fields);
     }
 
     if purged > 0 {
